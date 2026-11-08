@@ -2,6 +2,7 @@
 单未决批不变式、重启恢复、停止语义、失败分流。受信调用沿 P4 API 测试的 mock 缝
 （proxy_api._read_sessions_call / _task_device）。"""
 
+import asyncio
 import base64
 import json
 from unittest.mock import AsyncMock, patch
@@ -571,3 +572,27 @@ async def test_backlog_too_large_halts_session(tenant_id):
     assert target['status'] == 'halted'
     assert target['halted_reason'] == 'PROXY_BACKLOG_TOO_LARGE'
     assert _batch_rows(tenant_id, task['id']) == []
+
+
+# ==================== 空闲读取轮次计数（P7 评审补充，加性） ====================
+
+@pytest.mark.asyncio
+async def test_idle_read_count_increments_on_empty_reads_only(tenant_id):
+    """空闲读取轮计数：无候选仅推游标的监控轮同事务 +1；建批轮不累加。"""
+    _register(tenant_id, _locator(1))
+    task = _create_started(tenant_id, [_locator(1)])
+    locator = _locator(1)
+    # 两轮空闲（自己消息与空页均无候选），一轮建批
+    await _tick([(_page(locator, [_self(101)], cursor='wb1.idle-1'), None)])
+    await _tick([(_page(locator, [], cursor='wb1.idle-2'), None)])
+    target = _target(tenant_id, task['id'], locator)
+    assert target['idle_read_count'] == 2
+    assert target['wb1_cursor'] == 'wb1.idle-2'  # 空闲轮照常推进游标
+    await _tick([(_page(locator, [_peer(110)], cursor='wb1.pos-2'), None)])
+    target = _target(tenant_id, task['id'], locator)
+    assert target['idle_read_count'] == 2  # 建批轮不累加
+    assert len(_batch_rows(tenant_id, task['id'])) == 1
+    # 目标停住（halt）等路径不经过计数分支，保持原值
+    await asyncio.to_thread(proxy_monitor._halt_target, tenant_id, task['id'],
+                            locator, 'PROXY_CURSOR_MISSING')
+    assert _target(tenant_id, task['id'], locator)['idle_read_count'] == 2

@@ -430,3 +430,103 @@ def test_tenant_isolation_hides_and_blocks_other_users(tenant_id):
         proxy_tasks.complete_start(tenant_id, 'other-user', task['id'], device_id=DEVICE,
                                    self_user_id=ACCOUNT, baselines={})
     assert _code(exc.value) == 'PROXY_NOT_FOUND'
+
+
+# ==================== 批次翻页与列表运行信息（P7 评审补充，加性） ====================
+
+def _insert_batch(tenant_id, task_id, locator, *, end=100, cli_error=None, credit=0.0,
+                  status='succeeded', created_at=None):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''INSERT INTO bs_wecom_proxy_batches
+                   (tenant_id, user_id, task_id, session, batch_end_msg_id, agent_id,
+                    instruction_snapshot, status, end_json, cli_error, credit_cost,
+                    created_at, updated_at, finished_at)
+               VALUES (%s,%s,%s,%s,%s,'agent-a','I',%s,NULL,%s,%s,
+                       COALESCE(%s, CURRENT_TIMESTAMP), COALESCE(%s, CURRENT_TIMESTAMP),
+                       COALESCE(%s, CURRENT_TIMESTAMP)) RETURNING id''',
+            (tenant_id, USER, task_id, locator, end, status, cli_error, credit,
+             created_at, created_at, created_at))
+        batch_id = cursor.fetchone()['id']
+        conn.commit()
+    return batch_id
+
+
+def test_detail_batches_pagination_has_more_and_offset(tenant_id):
+    """批次分页：新批次在前；batches_has_more 按取到条数==limit 判定。"""
+    _register(tenant_id, _locator(1))
+    task = _create(tenant_id, [_locator(1)])
+    ids = [_insert_batch(tenant_id, task['id'], _locator(1), end=100 + index)
+           for index in range(3)]
+    first = proxy_tasks.get_task_detail(tenant_id, USER, task['id'], batch_limit=2)
+    assert [item['id'] for item in first['batches']] == list(reversed(ids))[:2]
+    assert first['batches_has_more'] is True
+    second = proxy_tasks.get_task_detail(tenant_id, USER, task['id'],
+                                         batch_limit=2, batch_offset=2)
+    assert [item['id'] for item in second['batches']] == [ids[0]]
+    assert second['batches_has_more'] is False
+    # 详情投影含 credit_cost 列
+    assert all('credit_cost' in item for item in first['batches'])
+
+
+def test_list_runtime_info_projection(tenant_id):
+    """列表聚合投影：最近检查/最新消息/空闲合计/积分合计；最近错误两臂按时间取最新。"""
+    _register(tenant_id, _locator(1))
+    _register(tenant_id, _locator(2))
+    task = _create(tenant_id, [_locator(1), _locator(2)])
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        # 目标 1：活跃，最近检查 10:00、最新消息 120、空闲 3 轮
+        cursor.execute(
+            '''UPDATE bs_wecom_proxy_task_sessions SET idle_read_count=3,
+                   latest_seen_msg_id=120, wb1_cursor='wb1.x',
+                   updated_at='2026-11-08 10:00:00+08'
+               WHERE tenant_id=%s AND task_id=%s AND session=%s''',
+            (tenant_id, task['id'], _locator(1)))
+        # 目标 2：停住（09:00，含原因），空闲 2 轮
+        cursor.execute(
+            '''UPDATE bs_wecom_proxy_task_sessions SET idle_read_count=2,
+                   status='halted', halted_reason='PROXY_READ_FAILED',
+                   halted_at='2026-11-08 09:00:00+08',
+                   updated_at='2026-11-08 09:00:00+08'
+               WHERE tenant_id=%s AND task_id=%s AND session=%s''',
+            (tenant_id, task['id'], _locator(2)))
+        conn.commit()
+    # 先只插入早于停住时间（08:00）的批次错误 → last_error 取 halted_reason（09:00）
+    _insert_batch(tenant_id, task['id'], _locator(1), status='failed',
+                  cli_error='OLD_BATCH_ERROR', credit=0.5,
+                  created_at='2026-11-08 08:00:00+08')
+    row = [item for item in proxy_tasks.list_tasks(tenant_id, USER)
+           if item['id'] == task['id']][0]
+    assert row['active_target_count'] == 1
+    assert row['idle_read_count'] == 5  # 按任务全部目标 SUM（含 halted）
+    assert row['latest_seen_msg_id'] == 120  # active 目标 MAX
+    assert row['credit_cost'] == pytest.approx(0.5)
+    assert row['last_checked_at'].isoformat().startswith('2026-11-08T10:00:00')  # active 目标 MAX(updated_at)
+    assert row['last_error'] == 'PROXY_READ_FAILED'
+    # 再插入晚于停住时间（11:00）的批次错误 → last_error 翻转为批次 cli_error
+    _insert_batch(tenant_id, task['id'], _locator(1), status='failed',
+                  cli_error='SEND_TIMEOUT', credit=0.1,
+                  created_at='2026-11-08 11:00:00+08')
+    row = [item for item in proxy_tasks.list_tasks(tenant_id, USER)
+           if item['id'] == task['id']][0]
+    assert row['last_error'] == 'SEND_TIMEOUT'
+    assert row['credit_cost'] == pytest.approx(0.6)
+
+
+def test_list_runtime_info_defaults_without_batches_or_errors(tenant_id):
+    """无批次无错误的新任务：合计为 0、最近错误为 None。
+
+    last_checked_at 聚合 MAX(target.updated_at)：未运行任务为目标行创建时间兜底，
+    监控读（空闲或建批）会随读刷新该时间。
+    """
+    _register(tenant_id, _locator(3))
+    task = _create(tenant_id, [_locator(3)])
+    row = [item for item in proxy_tasks.list_tasks(tenant_id, USER)
+           if item['id'] == task['id']][0]
+    assert row['idle_read_count'] == 0
+    assert row['credit_cost'] == 0
+    assert row['last_error'] is None
+    assert row['last_checked_at'] is not None  # 目标行创建时间兜底（未运行）
+    assert row['latest_seen_msg_id'] is None

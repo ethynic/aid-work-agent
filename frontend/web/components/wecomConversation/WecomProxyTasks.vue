@@ -42,6 +42,17 @@
               <template #agent_id="{ row }">
                 <span class="text-xs text-muted break-all">{{ agentName(row.agent_id) }}</span>
               </template>
+              <template #last_checked_at="{ row }">
+                <span v-if="row.last_checked_at">{{ formatTime(row.last_checked_at) }}</span>
+                <span v-else class="text-xs text-muted">—</span>
+              </template>
+              <template #latest_seen_msg_id="{ row }">{{ row.latest_seen_msg_id ?? '—' }}</template>
+              <template #idle_read_count="{ row }">{{ row.idle_read_count ?? 0 }}</template>
+              <template #credit_cost="{ row }">{{ formatCredit(row.credit_cost) }}</template>
+              <template #last_error="{ row }">
+                <span v-if="row.last_error" class="block max-w-36 truncate text-xs text-warning-700" :title="row.last_error">{{ row.last_error }}</span>
+                <span v-else class="text-xs text-muted">—</span>
+              </template>
               <template #updated_at="{ row }">{{ formatTime(row.updated_at) }}</template>
               <template #actions="{ row }">
                 <div class="flex items-center justify-center gap-1 whitespace-nowrap">
@@ -63,6 +74,11 @@
                 <span v-else>暂无代理任务。点击右上角“新建代理任务”创建；已删除任务可勾选上方开关只读查看。</span>
               </template>
             </BaseTable>
+          </div>
+          <div v-if="hasMoreTasks" class="px-4 py-3 border-t border-default text-center">
+            <BaseButton intent="secondary" size="sm" :disabled="loading" data-testid="load-more-tasks" @click="loadMoreTasks">
+              {{ loading ? '加载中…' : '加载更多任务' }}
+            </BaseButton>
           </div>
         </div>
 
@@ -115,7 +131,7 @@
                 <p class="text-xs text-muted m-0 mb-1">任务指令（编辑后的新指令只用于新批次，运行中批次沿其冻结指令）</p>
                 <p class="text-sm text-default m-0 whitespace-pre-wrap break-words rounded-lg border border-default bg-gray-50 px-3 py-2">{{ detailTask.instruction }}</p>
               </div>
-              <p class="text-xs text-muted m-0 mt-3">Runtime、企微账号、智能体在创建后固定；更换任一项须另建任务。空闲读取次数与实际回答积分暂未提供。</p>
+              <p class="text-xs text-muted m-0 mt-3">Runtime、企微账号、智能体在创建后固定；更换任一项须另建任务。空闲读取（零回答的监控轮次）与回答积分按任务累计展示。</p>
             </section>
 
             <section class="px-4 py-4 border-b border-default" aria-label="会话目标">
@@ -133,6 +149,7 @@
                   <template #baseline_origin="{ row }">{{ baselineLabel(row.baseline_origin) }}</template>
                   <template #processed_position="{ row }">{{ row.processed_position ?? '—' }}</template>
                   <template #latest_seen_msg_id="{ row }">{{ row.latest_seen_msg_id ?? '—' }}</template>
+                  <template #idle_read_count="{ row }">{{ row.idle_read_count ?? 0 }}</template>
                   <template #wb1_cursor="{ row }">
                     <span v-if="row.wb1_cursor" class="break-all">{{ shortSession(row.wb1_cursor) }}</span>
                     <span v-else class="text-xs text-muted">未建基线（首次启动时建立）</span>
@@ -151,7 +168,7 @@
                 <header class="px-4 py-3 bg-gray-50 border-b border-default flex items-start justify-between gap-3 flex-wrap">
                   <div class="min-w-0 text-xs text-muted">
                     <p class="m-0"><span class="text-sm text-default font-medium">{{ targetName(batch.session) }}</span> · 批次 #{{ batch.id }} · 冻结上界消息 {{ batch.batch_end_msg_id ?? '—' }}</p>
-                    <p class="m-0 mt-1 break-all">Runner {{ batch.runner_id || '—' }} · 创建 {{ formatTime(batch.created_at) }}<template v-if="batch.finished_at"> · 结束 {{ formatTime(batch.finished_at) }}</template></p>
+                    <p class="m-0 mt-1 break-all">Runner {{ batch.runner_id || '—' }} · 回答积分 {{ formatCredit(batch.credit_cost) }} · 创建 {{ formatTime(batch.created_at) }}<template v-if="batch.finished_at"> · 结束 {{ formatTime(batch.finished_at) }}</template></p>
                   </div>
                   <div class="shrink-0 flex items-center gap-2">
                     <BaseBadge v-if="batch.retry_count > 0" intent="warning">已重试 {{ batch.retry_count }} 次</BaseBadge>
@@ -187,6 +204,11 @@
                   <p v-else-if="!batch.cli_error" class="text-xs text-muted m-0">批次尚未产生结束记录。</p>
                 </div>
               </article>
+              <div v-if="batchesHasMore" class="text-center pt-1">
+                <BaseButton intent="secondary" size="sm" :disabled="detailLoading" data-testid="load-more-batches" @click="loadMoreBatches">
+                  {{ detailLoading ? '加载中…' : '加载更多批次' }}
+                </BaseButton>
+              </div>
             </section>
           </template>
         </div>
@@ -339,6 +361,9 @@ const loading = ref(false)
 const listError = ref('')
 const actionError = ref('')
 const includeDeleted = ref(false)
+// 列表分页（offset 递增；has_more 按返回条数==limit 判定，与 include_deleted 叠加）
+const LIST_PAGE_SIZE = 50
+const hasMoreTasks = ref(false)
 let listSeq = 0
 const actionIds = ref(new Set<number>())
 const startingId = ref<number | null>(null)
@@ -353,8 +378,13 @@ const taskColumns = [
   { key: 'status', label: '状态', width: '92px' },
   { key: 'title', label: '标题' },
   { key: 'active_target_count', label: '监控会话数', width: '96px', tdAlign: 'center' as const },
-  { key: 'agent_id', label: '智能体', width: '180px' },
-  { key: 'updated_at', label: '最近更新', width: '160px' },
+  { key: 'agent_id', label: '智能体', width: '150px' },
+  { key: 'last_checked_at', label: '最近检查', width: '150px' },
+  { key: 'latest_seen_msg_id', label: '最新消息', width: '88px', tdAlign: 'center' as const },
+  { key: 'idle_read_count', label: '空闲读取', width: '84px', tdAlign: 'center' as const },
+  { key: 'credit_cost', label: '回答积分', width: '88px', tdAlign: 'center' as const },
+  { key: 'last_error', label: '最近错误', width: '150px' },
+  { key: 'updated_at', label: '最近更新', width: '150px' },
   { key: 'actions', label: '操作', width: '220px', tdAlign: 'center' as const },
 ]
 
@@ -363,15 +393,37 @@ async function loadList() {
   loading.value = true
   listError.value = ''
   try {
-    const value = await listProxyTasks({ includeDeleted: includeDeleted.value, limit: 200 })
+    const value = await listProxyTasks({ includeDeleted: includeDeleted.value,
+      limit: LIST_PAGE_SIZE, offset: 0 })
     if (seq !== listSeq) return
     tasks.value = value.tasks || []
+    hasMoreTasks.value = tasks.value.length === LIST_PAGE_SIZE
   } catch (error) {
     if (seq === listSeq) listError.value = proxyErrorText(error)
   } finally {
     if (seq === listSeq) loading.value = false
   }
 }
+
+/** 加载更多任务（offset 递增追加；include_deleted 沿用当前开关）。 */
+async function loadMoreTasks() {
+  if (loading.value || !hasMoreTasks.value) return
+  const seq = ++listSeq
+  loading.value = true
+  listError.value = ''
+  try {
+    const value = await listProxyTasks({ includeDeleted: includeDeleted.value,
+      limit: LIST_PAGE_SIZE, offset: tasks.value.length })
+    if (seq !== listSeq) return
+    tasks.value = [...tasks.value, ...(value.tasks || [])]
+    hasMoreTasks.value = (value.tasks || []).length === LIST_PAGE_SIZE
+  } catch (error) {
+    if (seq === listSeq) listError.value = proxyErrorText(error)
+  } finally {
+    if (seq === listSeq) loading.value = false
+  }
+}
+
 function toggleIncludeDeleted() {
   includeDeleted.value = !includeDeleted.value
   void loadList()
@@ -459,6 +511,9 @@ const detailId = computed(() => (typeof route.query.task === 'string' && /^\d+$/
 const detailTask = ref<WecomProxyTask | null>(null)
 const detailLoading = ref(false)
 const detailError = ref('')
+// 批次分页（新批次在前；"加载更多批次"按 offset 追加渲染）
+const BATCH_PAGE_SIZE = 50
+const batchesHasMore = ref(false)
 let detailSeq = 0
 
 function openDetail(id: number) {
@@ -476,17 +531,42 @@ async function loadDetail() {
   detailLoading.value = true
   detailError.value = ''
   try {
-    const value = await getProxyTask(Number(id))
+    const value = await getProxyTask(Number(id), { batchLimit: BATCH_PAGE_SIZE })
     if (seq !== detailSeq || detailId.value !== id) return
     detailTask.value = value.task
+    batchesHasMore.value = value.task.batches_has_more === true
   } catch (error) {
-    if (seq === detailSeq) { detailTask.value = null; detailError.value = proxyErrorText(error) }
+    if (seq === detailSeq) { detailTask.value = null; batchesHasMore.value = false; detailError.value = proxyErrorText(error) }
+  } finally {
+    if (seq === detailSeq) detailLoading.value = false
+  }
+}
+
+/** 加载更多批次：按当前已取条数递增 offset，追加渲染。 */
+async function loadMoreBatches() {
+  const id = detailId.value
+  if (!id || detailLoading.value || !batchesHasMore.value) return
+  const seq = ++detailSeq
+  detailLoading.value = true
+  detailError.value = ''
+  try {
+    const offset = detailTask.value?.batches?.length || 0
+    const value = await getProxyTask(Number(id), { batchLimit: BATCH_PAGE_SIZE, batchOffset: offset })
+    if (seq !== detailSeq || detailId.value !== id) return
+    const current = detailTask.value
+    if (current) {
+      current.batches = [...(current.batches || []), ...(value.task.batches || [])]
+    }
+    batchesHasMore.value = value.task.batches_has_more === true
+  } catch (error) {
+    if (seq === detailSeq) detailError.value = proxyErrorText(error)
   } finally {
     if (seq === detailSeq) detailLoading.value = false
   }
 }
 watch(detailId, id => {
   detailTask.value = null
+  batchesHasMore.value = false
   if (id) void loadDetail()
 })
 
@@ -498,6 +578,7 @@ const targetColumns = [
   { key: 'baseline_origin', label: '基线来源', width: '100px' },
   { key: 'processed_position', label: '已处理位置', width: '100px', tdAlign: 'center' as const },
   { key: 'latest_seen_msg_id', label: '最新消息', width: '96px', tdAlign: 'center' as const },
+  { key: 'idle_read_count', label: '空闲读取', width: '84px', tdAlign: 'center' as const },
   { key: 'wb1_cursor', label: 'wb1 游标', width: '160px' },
 ]
 
@@ -705,6 +786,10 @@ function toggleDirectory(session: string) {
 function shortSession(session: string): string { return session.length > 16 ? `${session.slice(0, 8)}…${session.slice(-6)}` : session }
 function kindLabel(kind: string) { return kind === 'group' ? '群聊' : kind === 'single' ? '单聊' : kind }
 function formatTime(value?: string | null): string { return value ? new Date(value).toLocaleString('zh-CN') : '—' }
+/** 回答积分（批次/列表投影数值，两位小数；缺省展示 —）。 */
+function formatCredit(value?: number | null): string {
+  return value == null ? '—' : Number(value).toFixed(2)
+}
 function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error) }
 
 onMounted(() => {

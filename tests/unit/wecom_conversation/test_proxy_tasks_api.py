@@ -481,12 +481,19 @@ async def test_list_and_detail_delegate_with_tenant_scope():
     with patch.object(proxy_api, '_current_user_and_tenant', AsyncMock(
             return_value=('tenant-1', 'user-1'))), \
          patch.object(proxy_tasks, 'list_tasks', return_value=[{'id': 1}]) as listing, \
-         patch.object(proxy_tasks, 'get_task_detail', return_value=None), \
+         patch.object(proxy_tasks, 'get_task_detail',
+                      return_value={'id': 9, 'batches': [], 'batches_has_more': False}) as detail, \
          patch.object(proxy_api, '_ok', _ok_stub), \
          patch.object(proxy_api, '_err', _err_stub):
         listed = await proxy_api.list_proxy_tasks(Request(), include_deleted=True, limit=5,
                                                   offset=1)
-        detail = await proxy_api.get_proxy_task_detail(9, Request())
+        await proxy_api.get_proxy_task_detail(9, Request())
+        paged = await proxy_api.get_proxy_task_detail(9, Request(), batch_limit=120,
+                                                      batch_offset=40)
     assert listed['ok'] == {'tasks': [{'id': 1}]}
     assert listing.call_args.kwargs['include_deleted'] is True
-    assert detail['code'] == 'PROXY_NOT_FOUND'
+    # 批次分页参数透传到服务层（P7 评审补充；直接调用时 FastAPI Query 默认值
+    # 不经依赖注入展开，默认首页参数由服务层签名兜底，这里核对显式翻页透传）
+    assert paged['ok']['task']['batches_has_more'] is False
+    last_call = detail.call_args_list[-1]
+    assert last_call.kwargs['batch_limit'] == 120 and last_call.kwargs['batch_offset'] == 40

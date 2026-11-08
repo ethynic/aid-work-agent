@@ -54,6 +54,19 @@ describe('wecomProxy API 接缝（响应解包与错误码）', () => {
     expect(value.task.targets?.[0]?.wb1_cursor).toBe('wb1.x')
   })
 
+  it('getProxyTask 批次分页参数走 query（batch_offset/batch_limit）', async () => {
+    server.use(
+      http.get('/api/wecom-proxy-tasks/7', ({ request }) => {
+        const query = new URL(request.url).searchParams
+        expect(query.get('batch_offset')).toBe('50')
+        expect(query.get('batch_limit')).toBe('50')
+        return HttpResponse.json({ success: true, data: { task: { ...task, batches: [], batches_has_more: false } } })
+      }),
+    )
+    const value = await getProxyTask(7, { batchOffset: 50, batchLimit: 50 })
+    expect(value.task.batches_has_more).toBe(false)
+  })
+
   it('editProxyTask PUT 只携带变更字段，stop/start/delete 走各自子路径', async () => {
     server.use(
       http.put('/api/wecom-proxy-tasks/7', async ({ request }) => {

@@ -5902,6 +5902,8 @@ CREATE TABLE IF NOT EXISTS bs_wecom_proxy_task_sessions (
     baseline_origin TEXT,
     processed_position BIGINT,
     latest_seen_msg_id BIGINT,
+    -- P7 评审补充（加性）：无候选仅推游标的监控轮次数（空闲读取，零回答 Runner）
+    idle_read_count INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'active',
     halted_reason TEXT,
     halted_at TIMESTAMPTZ,
@@ -5933,6 +5935,9 @@ CREATE TABLE IF NOT EXISTS bs_wecom_proxy_batches (
     end_json JSONB,
     cli_error TEXT,
     retry_count INTEGER NOT NULL DEFAULT 0,
+    -- P7 评审补充（加性）：本批回答 Runner 结算积分累计（重试跨 attempt 累加；
+    -- 取 Runner 终态 public_result.credit_cost，权威仍在 chat_records）
+    credit_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
     started_at TIMESTAMPTZ,

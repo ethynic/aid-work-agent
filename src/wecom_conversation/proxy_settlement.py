@@ -195,6 +195,21 @@ def _task_self_user_id(tenant_id, task_id):
         return row['self_user_id'] if row else None
 
 
+def _runner_credit_cost(result):
+    """Runner 终态公共结果中的结算积分（finalizer 落 public_result.credit_cost）。
+
+    P7 评审补充：批次 credit_cost 取自该字段（结算路径 `_runner_row` 已查 result，
+    无需额外查询；权威仍在 chat_records，本列仅供页面列表/详情按批次展示）。
+    非终态（中断未 finalize）或字段缺失返回 None，不猜 0。
+    """
+    if not isinstance(result, dict):
+        return None
+    value = result.get('credit_cost')
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
 def _settle_stop_if_requested(cursor, tenant_id, task_id):
     """批次离开 running 后收敛 stop_requested（复用 P4 语义，尽力而为）。"""
     cursor.execute('SELECT * FROM bs_wecom_proxy_tasks WHERE id=%s AND tenant_id=%s FOR UPDATE',
@@ -204,8 +219,13 @@ def _settle_stop_if_requested(cursor, tenant_id, task_id):
         proxy_tasks.settle_stop_in_tx(cursor, dict(task))
 
 
-def _apply_verdict(cursor, batch, verdict, *, cli_error_prefix=''):
-    """裁决落库（调用方事务内）：批次终态＋end_json＋推进/halt/重试。"""
+def _apply_verdict(cursor, batch, verdict, *, cli_error_prefix='', credit_cost=None):
+    """裁决落库（调用方事务内）：批次终态＋end_json＋积分累计＋推进/halt/重试。
+
+    credit_cost（P7 评审补充）：本次被核定 Runner 执行的结算积分，跨重试累加
+    （同一批次行经 failed→pending 后新 Runner 再核定继续累加，页面展示本批
+    实际消耗合计）；None（中断未结算等）不写。
+    """
     tenant_id = batch['tenant_id']
     end_json = verdict['end_json']
     cli_error = (cli_error_prefix + verdict['reason']) if cli_error_prefix else verdict['reason']
@@ -231,6 +251,11 @@ def _apply_verdict(cursor, batch, verdict, *, cli_error_prefix=''):
             end_json=end_json, cli_error=cli_error)
         proxy_tasks.mark_target_halted_in_tx(
             cursor, tenant_id, batch['task_id'], batch['session'], cli_error)
+    if credit_cost is not None:
+        cursor.execute(
+            '''UPDATE bs_wecom_proxy_batches SET credit_cost=credit_cost+%s,
+                   updated_at=CURRENT_TIMESTAMP WHERE id=%s AND tenant_id=%s''',
+            (credit_cost, batch['id'], tenant_id))
     _settle_stop_if_requested(cursor, tenant_id, batch['task_id'])
 
 
@@ -254,12 +279,15 @@ def adjudicate_batch(batch, *, cli_error_prefix=''):
         batch=batch)
     from src.db.database import get_db_connection
 
+    credit_cost = _runner_credit_cost(runner.get('result'))
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        _apply_verdict(cursor, batch, verdict, cli_error_prefix=cli_error_prefix)
+        _apply_verdict(cursor, batch, verdict, cli_error_prefix=cli_error_prefix,
+                       credit_cost=credit_cost)
         conn.commit()
     logger.info(f'后端日志：企微代理批次核定 batch={batch["id"]} action={verdict["action"]} '
-                f'reason={verdict["reason"]} runner={runner_id} mention={explicit_mention}')
+                f'reason={verdict["reason"]} runner={runner_id} mention={explicit_mention} '
+                f'credit={credit_cost}')
     return verdict
 
 
@@ -310,7 +338,8 @@ def resume_exhausted(batch):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         _apply_verdict(cursor, batch, verdict,
-                       cli_error_prefix='interrupted_resume_exhausted:')
+                       cli_error_prefix='interrupted_resume_exhausted:',
+                       credit_cost=_runner_credit_cost(runner.get('result')))
         conn.commit()
     _abandon_runner(batch['runner_id'], batch['tenant_id'], batch['web_session_id'],
                     batch['user_id'])

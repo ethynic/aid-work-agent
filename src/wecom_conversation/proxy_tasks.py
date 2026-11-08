@@ -308,7 +308,18 @@ def get_task(tenant_id, user_id, task_id, *, include_targets=True):
 
 
 def list_tasks(tenant_id, user_id, *, include_deleted=False, limit=50, offset=0):
-    """任务列表（历史含软删除只读可查；最新在前）。"""
+    """任务列表（历史含软删除只读可查；最新在前）。
+
+    P7 评审补充的运行信息聚合（均只读相关子查询，随分页同查询返回）：
+    - active_target_count＝active 目标数；
+    - last_checked_at＝目标行最近更新时间（MAX(updated_at)；监控读每轮刷新，
+      未运行任务以目标行创建/编辑时间兜底）；
+    - latest_seen_msg_id＝目标观测的最新消息位置（MAX，仅 active 目标）；
+    - idle_read_count＝空闲读取轮次合计（SUM，监控无候选推游标时累加）；
+    - credit_cost＝批次回答积分合计（SUM，核定落库跨重试累加）；
+    - last_error＝最近错误（目标 halted_reason 与最近批次 cli_error 按时间
+      最新一条 COALESCE；无错误为 NULL）。
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         clause = '' if include_deleted else " AND status != 'deleted'"
@@ -316,7 +327,38 @@ def list_tasks(tenant_id, user_id, *, include_deleted=False, limit=50, offset=0)
             f'''SELECT t.*, (
                     SELECT count(*) FROM bs_wecom_proxy_task_sessions s
                     WHERE s.tenant_id=t.tenant_id AND s.task_id=t.id AND s.status='active'
-                ) AS active_target_count
+                ) AS active_target_count,
+                (
+                    SELECT MAX(s.updated_at) FROM bs_wecom_proxy_task_sessions s
+                    WHERE s.tenant_id=t.tenant_id AND s.task_id=t.id AND s.status='active'
+                ) AS last_checked_at,
+                (
+                    SELECT MAX(s.latest_seen_msg_id) FROM bs_wecom_proxy_task_sessions s
+                    WHERE s.tenant_id=t.tenant_id AND s.task_id=t.id AND s.status='active'
+                ) AS latest_seen_msg_id,
+                COALESCE((
+                    SELECT SUM(s.idle_read_count) FROM bs_wecom_proxy_task_sessions s
+                    WHERE s.tenant_id=t.tenant_id AND s.task_id=t.id
+                ), 0) AS idle_read_count,
+                COALESCE((
+                    SELECT SUM(b.credit_cost) FROM bs_wecom_proxy_batches b
+                    WHERE b.tenant_id=t.tenant_id AND b.task_id=t.id
+                ), 0) AS credit_cost,
+                (
+                    SELECT v.reason FROM (
+                        (SELECT s.halted_reason AS reason, s.halted_at AS checked_at
+                          FROM bs_wecom_proxy_task_sessions s
+                         WHERE s.tenant_id=t.tenant_id AND s.task_id=t.id
+                           AND s.status='halted' AND s.halted_reason IS NOT NULL
+                         ORDER BY s.halted_at DESC LIMIT 1)
+                        UNION ALL
+                        (SELECT b.cli_error, COALESCE(b.finished_at, b.updated_at) AS checked_at
+                          FROM bs_wecom_proxy_batches b
+                         WHERE b.tenant_id=t.tenant_id AND b.task_id=t.id
+                           AND b.cli_error IS NOT NULL
+                         ORDER BY checked_at DESC LIMIT 1)
+                    ) v ORDER BY v.checked_at DESC NULLS LAST LIMIT 1
+                ) AS last_error
                 FROM bs_wecom_proxy_tasks t
                 WHERE t.tenant_id=%s AND t.user_id=%s{clause}
                 ORDER BY t.updated_at DESC LIMIT %s OFFSET %s''',
@@ -324,8 +366,12 @@ def list_tasks(tenant_id, user_id, *, include_deleted=False, limit=50, offset=0)
         return [_row(item) for item in cursor.fetchall()]
 
 
-def get_task_detail(tenant_id, user_id, task_id, *, batch_limit=50):
-    """任务详情：配置＋每目标位置只读投影＋最近批次（历史只读可查）。"""
+def get_task_detail(tenant_id, user_id, task_id, *, batch_limit=50, batch_offset=0):
+    """任务详情：配置＋每目标位置只读投影＋最近批次（历史只读可查）。
+
+    P7 评审补充：批次分页（batch_offset/batch_limit，新批次在前）；
+    batches_has_more 按取到条数==limit 判定，前端据此渲染"加载更多批次"。
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -337,14 +383,15 @@ def get_task_detail(tenant_id, user_id, task_id, *, batch_limit=50):
         targets = _task_targets(cursor, tenant_id, task_id)
         cursor.execute(
             '''SELECT id, task_id, session, batch_end_msg_id, agent_id, web_session_id,
-                      runner_id, status, end_json, cli_error, retry_count,
+                      runner_id, status, end_json, cli_error, retry_count, credit_cost,
                       created_at, updated_at, started_at, finished_at
                FROM bs_wecom_proxy_batches WHERE tenant_id=%s AND task_id=%s
-               ORDER BY id DESC LIMIT %s''',
-            (tenant_id, task_id, min(int(batch_limit), 200)))
+               ORDER BY id DESC LIMIT %s OFFSET %s''',
+            (tenant_id, task_id, min(int(batch_limit), 200), max(int(batch_offset), 0)))
         batches = [_row(item) for item in cursor.fetchall()]
     task['targets'] = targets
     task['batches'] = batches
+    task['batches_has_more'] = len(batches) == min(int(batch_limit), 200)
     return task
 
 

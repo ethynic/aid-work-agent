@@ -4642,4 +4642,9 @@
   remark: "企微代理批次表补持久化提交意图列 submit_text（P6 评审：Runner 提交受理后回写 runner_id 前重启，孤儿重提原样使用持久化文本，不重读不重渲染；2026-11-08 评审补充，加性；与 src/wecom_conversation/tables.py 同源）"
   statements: |
     ALTER TABLE bs_wecom_proxy_batches ADD COLUMN IF NOT EXISTS submit_text TEXT;
+- datetime: "2026-11-08 18:00:00"
+  remark: "企微代理目标表补空闲读取计数 idle_read_count、批次表补回答积分 credit_cost（P7 评审：列表显示空闲读取次数与累计回答积分；idle_read_count 由监控无候选推游标分支同事务累加，credit_cost 由批次核定取 Runner 终态 public_result.credit_cost 跨重试累加，权威仍在 chat_records；2026-11-08 评审补充，加性；与 src/wecom_conversation/tables.py 同源）"
+  statements: |
+    ALTER TABLE bs_wecom_proxy_task_sessions ADD COLUMN IF NOT EXISTS idle_read_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE bs_wecom_proxy_batches ADD COLUMN IF NOT EXISTS credit_cost DOUBLE PRECISION NOT NULL DEFAULT 0;
 

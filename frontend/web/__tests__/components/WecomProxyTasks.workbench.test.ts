@@ -106,8 +106,6 @@ describe('企微代理任务页', () => {
     expect(rows[1]!.findAll('button').map(button => button.text())).toContain('停止')
     const stoppedDelete = rows[0]!.findAll('button').find(button => button.text() === '删除')
     expect(stoppedDelete).toBeDefined()
-    // 列表不虚构最近检查时间/最新 msg_id/最近错误（后端列表投影未提供，详情页查看）
-    expect(wrapper!.text()).not.toContain('最近错误')
   })
 
   it('勾选显示已删除任务后按 includeDeleted 只读查看，已删除行只有详情', async () => {
@@ -115,7 +113,7 @@ describe('企微代理任务页', () => {
     proxyApi.listProxyTasks.mockResolvedValue({ tasks: [stoppedTask, runningTask, deletedTask] })
     await wrapper!.find('[data-testid="include-deleted"]').setValue()
     await flushPromises()
-    expect(proxyApi.listProxyTasks).toHaveBeenLastCalledWith({ includeDeleted: true, limit: 200 })
+    expect(proxyApi.listProxyTasks).toHaveBeenLastCalledWith({ includeDeleted: true, limit: 50, offset: 0 })
     const rows = wrapper!.findAll('tbody tr')
     expect(rows).toHaveLength(3)
     expect(rows[2]!.text()).toContain('已删除')
@@ -198,7 +196,7 @@ describe('企微代理任务页', () => {
     proxyApi.getProxyTask.mockResolvedValue({ task: { ...stoppedTask, targets: [
       { id: 1, tenant_id: 't1', user_id: 'u1', task_id: 7, session: 'ws1.acc.R%3Aone', web_session_id: 'wecom_proxy_x',
         source_generation: 'gen-a', wb1_cursor: 'wb1.cursor-value', baseline_origin: 'initial',
-        processed_position: 100, latest_seen_msg_id: 110, status: 'active', halted_reason: null,
+        processed_position: 100, latest_seen_msg_id: 110, idle_read_count: 3, status: 'active', halted_reason: null,
         halted_at: null, created_at: '', updated_at: '' },
       { id: 2, tenant_id: 't1', user_id: 'u1', task_id: 7, session: 'ws1.acc.R%3Ahalt', web_session_id: null,
         source_generation: 'gen-a', wb1_cursor: 'wb1.y', baseline_origin: 'edit_join_read',
@@ -207,6 +205,7 @@ describe('企微代理任务页', () => {
     ], batches: [
       { id: 31, task_id: 7, session: 'ws1.acc.R%3Aone', batch_end_msg_id: 100, agent_id: 'agent-a',
         web_session_id: 'wecom_proxy_x', runner_id: 'runner-one', status: 'succeeded', retry_count: 0,
+        credit_cost: 0.42,
         end_json: { schema_version: 1, needs_reply: true, replies: [
           { inbound_msg_ids: [97, 99], text: '您好，两款都有货。', receipt_id: 'rcpt-1',
             verification: 'local-record', verification_detail: { method: 'local-record', message_id: 110, source_generation: 'gen-a' } },
@@ -214,18 +213,20 @@ describe('企微代理任务页', () => {
         cli_error: null, created_at: '2026-11-08T09:00:00Z', updated_at: '', started_at: null, finished_at: '2026-11-08T09:05:00Z' },
       { id: 30, task_id: 7, session: 'ws1.acc.R%3Ahalt', batch_end_msg_id: 6, agent_id: 'agent-a',
         web_session_id: null, runner_id: 'runner-two', status: 'failed', retry_count: 1, end_json: null,
+        credit_cost: 0.55,
         cli_error: 'CLI 发送超时', created_at: '2026-11-08T08:00:00Z', updated_at: '', started_at: null, finished_at: null },
     ] } })
     await mountPage()
-    expect(proxyApi.getProxyTask).toHaveBeenCalledWith(7)
+    expect(proxyApi.getProxyTask).toHaveBeenCalledWith(7, { batchLimit: 50 })
     expect(wrapper!.find('[data-testid="detail-title"]').text()).toBe('售前群代理')
 
-    // 目标列表：游标、位置、基线来源、停住原因
+    // 目标列表：游标、位置、基线来源、停住原因、空闲读取列
     expect(wrapper!.text()).toContain('wb1.cursor-value'.slice(0, 8))
     expect(wrapper!.text()).toContain('100')
     expect(wrapper!.text()).toContain('创建初选')
     expect(wrapper!.text()).toContain('编辑加入')
     expect(wrapper!.text()).toContain('零发送重试再失败')
+    expect(wrapper!.text()).toContain('空闲读取')
 
     // 批次 31：回复文本与 CLI 证据仅称“本机客户端已记录发送”
     const okBatch = wrapper!.find('[data-testid="batch-31"]')
@@ -233,6 +234,7 @@ describe('企微代理任务页', () => {
     expect(okBatch.text()).toContain('本机客户端已记录发送')
     expect(okBatch.text()).toContain('回执 rcpt-1')
     expect(okBatch.text()).toContain('本地库消息 #110')
+    expect(okBatch.text()).toContain('回答积分 0.42')
     expect(okBatch.text()).toContain('消息 #98：发送失败')
     expect(okBatch.text()).toContain('SEND_TIMEOUT')
     expect(okBatch.text()).not.toContain('对方已收到')
@@ -241,8 +243,8 @@ describe('企微代理任务页', () => {
     const failBatch = wrapper!.find('[data-testid="batch-30"]')
     expect(failBatch.text()).toContain('已重试 1 次')
     expect(failBatch.text()).toContain('CLI 发送超时')
-    // 未提供的字段不虚构
-    expect(wrapper!.text()).toContain('暂未提供')
+    // 空闲读取与回答积分按任务累计展示（后端聚合投影）
+    expect(wrapper!.text()).toContain('按任务累计展示')
   })
 
   it('详情中无需回复批次展示判定，运行中任务禁编辑', async () => {
@@ -284,5 +286,59 @@ describe('企微代理任务页', () => {
     expect('add_sessions' in call).toBe(false)
     expect('remove_sessions' in call).toBe(false)
     expect((dialog.querySelector('select[aria-label="选择智能体"]') as HTMLSelectElement).disabled).toBe(true)
+  })
+
+  it('列表运行信息列：最近检查、最新消息、空闲读取、回答积分与最近错误截断悬停', async () => {
+    proxyApi.listProxyTasks.mockResolvedValue({ tasks: [{ ...stoppedTask,
+      last_checked_at: '2026-11-08T10:00:00+08:00', latest_seen_msg_id: 120,
+      idle_read_count: 5, credit_cost: 0.6, last_error: 'PROXY_READ_FAILED' }] })
+    await mountPage()
+    const header = wrapper!.find('thead')
+    expect(header.text()).toContain('最近检查')
+    expect(header.text()).toContain('最新消息')
+    expect(header.text()).toContain('空闲读取')
+    expect(header.text()).toContain('回答积分')
+    expect(header.text()).toContain('最近错误')
+    const row = wrapper!.findAll('tbody tr')[0]!
+    expect(row.text()).toContain('5')
+    expect(row.text()).toContain('0.60')
+    expect(row.text()).toContain('120')
+    const errorCell = row.find('.truncate')
+    expect(errorCell.attributes('title')).toBe('PROXY_READ_FAILED')
+  })
+
+  it('任务列表加载更多：按返回条数判 has_more，追加渲染且不再显示按钮', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) => ({
+      ...stoppedTask, id: index + 1, title: `任务 ${index + 1}` }))
+    proxyApi.listProxyTasks.mockResolvedValueOnce({ tasks: firstPage })
+      .mockResolvedValueOnce({ tasks: [{ ...stoppedTask, id: 51, title: '任务 51' }] })
+    await mountPage()
+    expect(wrapper!.find('[data-testid="load-more-tasks"]').exists()).toBe(true)
+    expect(wrapper!.text()).toContain('任务 50')
+    await wrapper!.find('[data-testid="load-more-tasks"]').trigger('click')
+    await flushPromises()
+    expect(proxyApi.listProxyTasks).toHaveBeenLastCalledWith({ includeDeleted: false, limit: 50, offset: 50 })
+    expect(wrapper!.text()).toContain('任务 51')
+    expect(wrapper!.find('[data-testid="load-more-tasks"]').exists()).toBe(false)
+  })
+
+  it('详情批次加载更多：按 offset 追加渲染新页批次', async () => {
+    routeState.route!.query = { task: '7' }
+    const batch = (id: number) => ({ id, task_id: 7, session: 'ws1.acc.R%3Aone',
+      batch_end_msg_id: 100 + id, agent_id: 'agent-a', web_session_id: null,
+      runner_id: `runner-${id}`, status: 'succeeded', retry_count: 0, credit_cost: 0,
+      end_json: null, cli_error: null, created_at: '', updated_at: '', started_at: null, finished_at: null })
+    proxyApi.getProxyTask.mockResolvedValueOnce({ task: { ...stoppedTask, targets: [],
+      batches: [batch(52), batch(51)], batches_has_more: true } })
+      .mockResolvedValueOnce({ task: { ...stoppedTask, targets: [],
+        batches: [batch(50)], batches_has_more: false } })
+    await mountPage()
+    expect(wrapper!.find('[data-testid="load-more-batches"]').exists()).toBe(true)
+    await wrapper!.find('[data-testid="load-more-batches"]').trigger('click')
+    await flushPromises()
+    expect(proxyApi.getProxyTask).toHaveBeenLastCalledWith(7, { batchLimit: 50, batchOffset: 2 })
+    expect(wrapper!.find('[data-testid="batch-50"]').exists()).toBe(true)
+    expect(wrapper!.find('[data-testid="batch-52"]').exists()).toBe(true)
+    expect(wrapper!.find('[data-testid="load-more-batches"]').exists()).toBe(false)
   })
 })

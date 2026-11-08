@@ -256,11 +256,15 @@ async def list_proxy_tasks(request: Request, include_deleted: bool = False,
 
 
 @router.get('/{task_id}')
-async def get_proxy_task_detail(task_id: int, request: Request):
-    """详情：配置＋每目标位置只读投影＋最近批次。"""
+async def get_proxy_task_detail(task_id: int, request: Request,
+                                batch_limit: int = Query(50, ge=1, le=200),
+                                batch_offset: int = Query(0, ge=0)):
+    """详情：配置＋每目标位置只读投影＋最近批次（批次分页 batch_offset/batch_limit）。"""
     try:
         tenant_id, user_id = await _current_user_and_tenant(request)
-        task = await asyncio.to_thread(proxy_tasks.get_task_detail, tenant_id, user_id, task_id)
+        task = await asyncio.to_thread(proxy_tasks.get_task_detail, tenant_id, user_id,
+                                       task_id, batch_limit=batch_limit,
+                                       batch_offset=batch_offset)
         if task is None:
             return _err(404, '代理任务不存在或无权访问', 'PROXY_NOT_FOUND')
         return _ok({'task': task})

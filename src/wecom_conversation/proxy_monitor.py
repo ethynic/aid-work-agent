@@ -412,7 +412,9 @@ def _persist_read_result(tenant_id, user_id, item, cursor, generation, max_seen,
       不推进（下次启动从保存的游标补读停顿期间的新消息）；
     - wb1_cursor 推进到读取位置；processed_position 保持（推进语义属 P6 核定）；
       latest_seen_msg_id 更新为本轮最大 msg_id；
-    - 无候选零批次；同会话并发建批由部分唯一索引判出（PROXY_BATCH_OCCUPIED）。
+    - 无候选零批次，同事务累加 idle_read_count（P7 评审补充：空闲读取轮次，
+      零回答 Runner 的监控轮）；同会话并发建批由部分唯一索引判出
+      （PROXY_BATCH_OCCUPIED）。
     返回 'batch'（已建批）| 'cursor'（仅推进游标）| 'skipped'（任务已停止等）。
     """
     from src.db.database import get_db_connection
@@ -442,6 +444,9 @@ def _persist_read_result(tenant_id, user_id, item, cursor, generation, max_seen,
                 web_session_id=item['web_session_id'])
         assignments = ['wb1_cursor=%s', 'updated_at=CURRENT_TIMESTAMP']
         params = [cursor]
+        if not candidates:
+            # 空闲读取轮（P7 评审补充）：零回答 Runner 的监控读按轮累加计数
+            assignments.append('idle_read_count=idle_read_count+1')
         if generation:
             assignments.append('source_generation=%s')
             params.append(generation)

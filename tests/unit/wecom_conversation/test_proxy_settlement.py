@@ -92,12 +92,15 @@ _next_runner_seq = [0]
 
 
 def _insert_runner(tenant_id, session, *, status='completed', attempt=1, output=None,
-                   runner_id=None):
+                   runner_id=None, credit_cost=None):
     _next_runner_seq[0] += 1
     runner_id = runner_id or f'runner_{_next_runner_seq[0]:08d}'
-    result = json.dumps({'status': status, 'output': output or '', 'images': [],
-                         'error_code': None if status == 'completed' else 'EXECUTION_FAILED'},
-                        ensure_ascii=False)
+    result = {'status': status, 'output': output or '', 'images': [],
+              'error_code': None if status == 'completed' else 'EXECUTION_FAILED'}
+    # 终态公共结果含结算积分（finalizer 落 public_result.credit_cost 的形状）
+    if credit_cost is not None:
+        result['credit_cost'] = credit_cost
+    result = json.dumps(result, ensure_ascii=False)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -515,3 +518,90 @@ def test_adjudicate_settles_stop_requested(tenant_id):
         cursor.execute('SELECT status FROM bs_wecom_proxy_tasks WHERE id=%s AND tenant_id=%s',
                        (task['id'], tenant_id))
         assert cursor.fetchone()['status'] == 'stopped'
+
+
+# ==================== 批次回答积分落库（P7 评审补充，加性） ====================
+
+def test_adjudicate_persists_runner_credit_cost(tenant_id):
+    """核定推进同事务落 Runner 结算积分（public_result.credit_cost → 批次列）。"""
+    locator = _locator(9)
+    _register(tenant_id, locator)
+    task = _create_started(tenant_id, [locator])
+    batch = _make_batch(tenant_id, task['id'], locator, end=100,
+                        messages=[_peer(99)], runner_id=None)
+    runner_id = _insert_runner(tenant_id, batch['web_session_id'],
+                               output=json.dumps(_end_json(batch, needs_reply=False),
+                                                 ensure_ascii=False),
+                               credit_cost=0.42)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, batch['id'], 'running',
+                                           runner_id=runner_id)
+        conn.commit()
+    verdict = _adjudicate(tenant_id, proxy_tasks.get_batch(tenant_id, batch['id']))
+    assert verdict['action'] == 'advance'
+    row = _batch_row(tenant_id, batch['id'])
+    assert row['status'] == 'succeeded'
+    assert row['credit_cost'] == pytest.approx(0.42)
+
+
+def test_adjudicate_retry_accumulates_credit_across_attempts(tenant_id):
+    """零发送重试再停住：同一批次行 credit_cost 跨 Runner attempt 累加。"""
+    locator = _locator(10)
+    _register(tenant_id, locator)
+    task = _create_started(tenant_id, [locator])
+    batch = _make_batch(tenant_id, task['id'], locator, end=100,
+                        messages=[_peer(99)], runner_id=None)
+    runner_id = _insert_runner(tenant_id, batch['web_session_id'],
+                               output=json.dumps(_end_json(batch, needs_reply=True),
+                                                 ensure_ascii=False),
+                               credit_cost=0.30)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, batch['id'], 'running',
+                                           runner_id=runner_id)
+        conn.commit()
+    assert _adjudicate(tenant_id, proxy_tasks.get_batch(tenant_id, batch['id']))['action'] == 'retry'
+    assert _batch_row(tenant_id, batch['id'])['credit_cost'] == pytest.approx(0.30)
+
+    # 重试 Runner 仍零发送 → halt；积分累加为两次 attempt 合计
+    batch2 = _batch_row(tenant_id, batch['id'])
+    runner2 = _insert_runner(tenant_id, batch2['web_session_id'],
+                             output=json.dumps(_end_json(batch2, needs_reply=True),
+                                               ensure_ascii=False),
+                             credit_cost=0.25)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, batch['id'], 'running',
+                                           runner_id=runner2)
+        conn.commit()
+    assert _adjudicate(tenant_id, proxy_tasks.get_batch(tenant_id, batch['id']))['action'] == 'halt'
+    assert _batch_row(tenant_id, batch['id'])['credit_cost'] == pytest.approx(0.55)
+
+
+def test_adjudicate_without_terminal_result_writes_no_credit(tenant_id):
+    """中断 Runner 无终态 result（无 credit_cost 字段）：不写不猜 0，保持原值。"""
+    locator = _locator(11)
+    _register(tenant_id, locator)
+    task = _create_started(tenant_id, [locator])
+    batch = _make_batch(tenant_id, task['id'], locator, end=100,
+                        messages=[_peer(99)], runner_id=None)
+    runner_id = _insert_runner(tenant_id, batch['web_session_id'], status='interrupted',
+                               attempt=5)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, batch['id'], 'running',
+                                           runner_id=runner_id)
+        conn.commit()
+    assert _adjudicate(tenant_id, proxy_tasks.get_batch(tenant_id, batch['id']))['action'] == 'retry'
+    assert _batch_row(tenant_id, batch['id'])['credit_cost'] == 0
+
+
+def test_runner_credit_cost_pure_extraction():
+    """非数值/缺字段返回 None；布尔与字符串不当作积分。"""
+    assert proxy_settlement._runner_credit_cost({'credit_cost': 1.5}) == 1.5
+    assert proxy_settlement._runner_credit_cost({'credit_cost': 2}) == 2.0
+    assert proxy_settlement._runner_credit_cost({'credit_cost': True}) is None
+    assert proxy_settlement._runner_credit_cost({'credit_cost': '0.5'}) is None
+    assert proxy_settlement._runner_credit_cost({'output': 'x'}) is None
+    assert proxy_settlement._runner_credit_cost(None) is None

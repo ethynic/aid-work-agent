@@ -2,9 +2,11 @@
  * 企微代理任务 API（/api/wecom-proxy-tasks 前缀，代理任务契约 §2/§3/§4）。
  *
  * 字段以后端投影实际返回为准（proxy_api.py / proxy_tasks.py）：
- * - 列表 = 任务行 + active_target_count；详情 = 配置 + targets + batches；
- * - stop 响应额外带 stop_settled（本次是否立即落 stopped）；
- * - 空闲读取次数与实际回答积分后端暂未提供，前端不虚构（留后续后端补充）。
+ * - 列表 = 任务行 + active_target_count + 运行信息聚合（last_checked_at/
+ *   latest_seen_msg_id/idle_read_count/credit_cost/last_error，P7 评审补充）；
+ * - 详情 = 配置 + targets + batches（批次分页 batch_offset/batch_limit，
+ *   batches_has_more 按取到条数==limit 判定）；
+ * - stop 响应额外带 stop_settled（本次是否立即落 stopped）。
  * 失败抛 WecomProxyApiError（含 code/status/field_errors），页面按码映射可读文案。
  */
 
@@ -89,10 +91,22 @@ export interface WecomProxyTask {
   deleted_at: string | null
   /** 仅列表投影返回：active 状态目标数 */
   active_target_count?: number
+  /** 仅列表投影返回：active 目标最近一次监控读落库时间 */
+  last_checked_at?: string | null
+  /** 仅列表投影返回：active 目标观测的最新消息位置 */
+  latest_seen_msg_id?: number | null
+  /** 仅列表投影返回：空闲读取轮次合计（监控无候选推游标累加） */
+  idle_read_count?: number
+  /** 仅列表投影返回：批次回答积分合计 */
+  credit_cost?: number
+  /** 仅列表投影返回：最近错误（目标 halted_reason 或最近批次 cli_error，取时间最新） */
+  last_error?: string | null
   /** 仅详情投影返回 */
   targets?: WecomProxyTarget[]
-  /** 仅详情投影返回 */
+  /** 仅详情投影返回（按 batch_offset/batch_limit 分页） */
   batches?: WecomProxyBatch[]
+  /** 仅详情投影返回：是否还有更多批次 */
+  batches_has_more?: boolean
   /** 仅停止响应返回：本次是否立即落 stopped */
   stop_settled?: boolean
 }
@@ -111,6 +125,8 @@ export interface WecomProxyTarget {
   baseline_origin: string | null
   processed_position: number | null
   latest_seen_msg_id: number | null
+  /** 空闲读取轮次（监控无候选推游标时累加；P7 评审补充） */
+  idle_read_count: number
   status: ProxyTargetStatus
   halted_reason: string | null
   halted_at: string | null
@@ -130,6 +146,8 @@ export interface WecomProxyBatch {
   end_json: ProxyBatchEndJson | null
   cli_error: string | null
   retry_count: number
+  /** 本批回答积分累计（核定落库跨重试累加；P7 评审补充） */
+  credit_cost: number
   created_at: string
   updated_at: string
   started_at: string | null
@@ -238,8 +256,11 @@ export function listProxyTasks(options: ProxyTaskListOptions = {}): Promise<{ ta
   return request('GET', `/${query.size ? `?${query}` : ''}`)
 }
 
-export function getProxyTask(taskId: number): Promise<{ task: WecomProxyTask }> {
-  return request('GET', `/${taskId}`)
+export function getProxyTask(taskId: number, options: { batchOffset?: number; batchLimit?: number } = {}): Promise<{ task: WecomProxyTask }> {
+  const query = new URLSearchParams()
+  if (options.batchLimit) query.set('batch_limit', String(options.batchLimit))
+  if (options.batchOffset) query.set('batch_offset', String(options.batchOffset))
+  return request('GET', `/${taskId}${query.size ? `?${query}` : ''}`)
 }
 
 export function createProxyTask(input: ProxyTaskCreateInput): Promise<{ task: WecomProxyTask }> {
