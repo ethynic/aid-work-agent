@@ -176,6 +176,8 @@ CREATE TABLE IF NOT EXISTS bs_wecom_proxy_task_sessions (
     latest_seen_msg_id BIGINT,
     -- P7 评审补充（加性）：无候选仅推游标的监控轮次数（空闲读取，零回答 Runner）
     idle_read_count INTEGER NOT NULL DEFAULT 0,
+    -- P7 评审补充（加性）：最近一次实际监控读取时刻（仅真实读取写入，新建/核定不写）
+    last_checked_at TIMESTAMPTZ,
     status TEXT NOT NULL DEFAULT 'active',
     halted_reason TEXT,
     halted_at TIMESTAMPTZ,
@@ -248,6 +250,7 @@ _ALTER_STATEMENTS = (
     "ALTER TABLE bs_wecom_proxy_batches ADD COLUMN IF NOT EXISTS submit_text TEXT",
     # P7 评审补充（加性）：空闲读取轮次计数与批次回答积分累计
     "ALTER TABLE bs_wecom_proxy_task_sessions ADD COLUMN IF NOT EXISTS idle_read_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE bs_wecom_proxy_task_sessions ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ",
     "ALTER TABLE bs_wecom_proxy_batches ADD COLUMN IF NOT EXISTS credit_cost DOUBLE PRECISION NOT NULL DEFAULT 0",
 )
 

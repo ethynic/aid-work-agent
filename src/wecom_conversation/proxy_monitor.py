@@ -442,7 +442,9 @@ def _persist_read_result(tenant_id, user_id, item, cursor, generation, max_seen,
                 agent_id=item['agent_id'],
                 instruction_snapshot=item['instruction'],
                 web_session_id=item['web_session_id'])
-        assignments = ['wb1_cursor=%s', 'updated_at=CURRENT_TIMESTAMP']
+        assignments = ['wb1_cursor=%s', 'updated_at=CURRENT_TIMESTAMP',
+                       # P7 评审补充：最近检查取实际监控读取时刻（新建/核定不写）
+                       'last_checked_at=CURRENT_TIMESTAMP']
         params = [cursor]
         if not candidates:
             # 空闲读取轮（P7 评审补充）：零回答 Runner 的监控读按轮累加计数

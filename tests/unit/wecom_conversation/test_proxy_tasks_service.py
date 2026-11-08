@@ -62,6 +62,8 @@ def test_create_task_persists_stopped_with_active_targets(tenant_id):
     assert all(item['status'] == 'active' and item['wb1_cursor'] is None
                and item['baseline_origin'] is None and item['web_session_id'] is None
                for item in loaded['targets'])
+    # P7 评审补充：新建未读取 → last_checked_at 为 NULL（列表最近检查显示"无"）
+    assert all(item['last_checked_at'] is None for item in loaded['targets'])
 
 
 def test_create_rejects_session_of_other_account_or_unregistered(tenant_id):
@@ -99,6 +101,8 @@ def test_complete_start_builds_initial_baseline_and_web_session(tenant_id):
     assert first['baseline_origin'] == 'initial' and first['wb1_cursor'] == 'wb1.abc'
     assert first['processed_position'] == 100 and first['latest_seen_msg_id'] == 100
     assert first['source_generation'] == 'gen-1'
+    # P7 评审补充：基线读取是真实读取 → last_checked_at 落值；未启动任务为 NULL
+    assert first['last_checked_at'] is not None
     # web_session_id 按任务＋目标固定，且复用 Web 会话存储（chat_sessions 落行）
     assert first['web_session_id'] and first['web_session_id'].startswith('wecom_proxy_')
     assert by_session[_locator(2)]['web_session_id'] != first['web_session_id']
@@ -477,10 +481,11 @@ def test_list_runtime_info_projection(tenant_id):
     task = _create(tenant_id, [_locator(1), _locator(2)])
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        # 目标 1：活跃，最近检查 10:00、最新消息 120、空闲 3 轮
+        # 目标 1：活跃，最近实际读取 10:00（last_checked_at）、最新消息 120、空闲 3 轮
         cursor.execute(
             '''UPDATE bs_wecom_proxy_task_sessions SET idle_read_count=3,
                    latest_seen_msg_id=120, wb1_cursor='wb1.x',
+                   last_checked_at='2026-11-08 10:00:00+08',
                    updated_at='2026-11-08 10:00:00+08'
                WHERE tenant_id=%s AND task_id=%s AND session=%s''',
             (tenant_id, task['id'], _locator(1)))
@@ -503,7 +508,7 @@ def test_list_runtime_info_projection(tenant_id):
     assert row['idle_read_count'] == 5  # 按任务全部目标 SUM（含 halted）
     assert row['latest_seen_msg_id'] == 120  # active 目标 MAX
     assert row['credit_cost'] == pytest.approx(0.5)
-    assert row['last_checked_at'].isoformat().startswith('2026-11-08T10:00:00')  # active 目标 MAX(updated_at)
+    assert row['last_checked_at'].isoformat().startswith('2026-11-08T10:00:00')  # active 目标 MAX(last_checked_at)
     assert row['last_error'] == 'PROXY_READ_FAILED'
     # 再插入晚于停住时间（11:00）的批次错误 → last_error 翻转为批次 cli_error
     _insert_batch(tenant_id, task['id'], _locator(1), status='failed',
@@ -518,8 +523,9 @@ def test_list_runtime_info_projection(tenant_id):
 def test_list_runtime_info_defaults_without_batches_or_errors(tenant_id):
     """无批次无错误的新任务：合计为 0、最近错误为 None。
 
-    last_checked_at 聚合 MAX(target.updated_at)：未运行任务为目标行创建时间兜底，
-    监控读（空闲或建批）会随读刷新该时间。
+    last_checked_at 聚合 MAX(target.last_checked_at)（2026-11-08 评审补充）：
+    仅实际监控读取写入——新建未读取任务为 NULL（页面显示"无"），
+    监控读（空闲或建批）与启动基线读取会落值。
     """
     _register(tenant_id, _locator(3))
     task = _create(tenant_id, [_locator(3)])
@@ -528,5 +534,5 @@ def test_list_runtime_info_defaults_without_batches_or_errors(tenant_id):
     assert row['idle_read_count'] == 0
     assert row['credit_cost'] == 0
     assert row['last_error'] is None
-    assert row['last_checked_at'] is not None  # 目标行创建时间兜底（未运行）
+    assert row['last_checked_at'] is None  # 从未读取：不显示兜底时间
     assert row['latest_seen_msg_id'] is None

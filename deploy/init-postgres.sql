@@ -5904,6 +5904,8 @@ CREATE TABLE IF NOT EXISTS bs_wecom_proxy_task_sessions (
     latest_seen_msg_id BIGINT,
     -- P7 评审补充（加性）：无候选仅推游标的监控轮次数（空闲读取，零回答 Runner）
     idle_read_count INTEGER NOT NULL DEFAULT 0,
+    -- P7 评审补充（加性）：最近一次实际监控读取时刻（仅真实读取写入，新建/核定不写）
+    last_checked_at TIMESTAMPTZ,
     status TEXT NOT NULL DEFAULT 'active',
     halted_reason TEXT,
     halted_at TIMESTAMPTZ,

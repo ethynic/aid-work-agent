@@ -329,7 +329,8 @@ def list_tasks(tenant_id, user_id, *, include_deleted=False, limit=50, offset=0)
                     WHERE s.tenant_id=t.tenant_id AND s.task_id=t.id AND s.status='active'
                 ) AS active_target_count,
                 (
-                    SELECT MAX(s.updated_at) FROM bs_wecom_proxy_task_sessions s
+                    -- P7 评审补充：最近检查取实际监控读取时刻（新建/核定不写，NULL=从未检查）
+                    SELECT MAX(s.last_checked_at) FROM bs_wecom_proxy_task_sessions s
                     WHERE s.tenant_id=t.tenant_id AND s.task_id=t.id AND s.status='active'
                 ) AS last_checked_at,
                 (
@@ -459,7 +460,8 @@ def complete_start(tenant_id, user_id, task_id, *, device_id, self_user_id, base
                 cursor.execute(
                     '''UPDATE bs_wecom_proxy_task_sessions SET
                            wb1_cursor=%s, source_generation=%s, latest_seen_msg_id=%s,
-                           processed_position=%s, baseline_origin='initial', updated_at=CURRENT_TIMESTAMP
+                           processed_position=%s, baseline_origin='initial', updated_at=CURRENT_TIMESTAMP,
+                           last_checked_at=CURRENT_TIMESTAMP
                        WHERE id=%s''',
                     (baseline.get('cursor'), baseline.get('generation'),
                      baseline.get('watermark'), baseline.get('watermark'), target['id']))
@@ -591,15 +593,17 @@ def edit_stopped_task(tenant_id, user_id, task_id, *, title=None, instruction=No
             cursor.execute(
                 '''INSERT INTO bs_wecom_proxy_task_sessions
                        (tenant_id, user_id, task_id, session, source_generation, wb1_cursor,
-                        baseline_origin, processed_position, latest_seen_msg_id, status)
-                   VALUES (%s,%s,%s,%s,%s,%s,'edit_join_read',%s,%s,'active')
+                        baseline_origin, processed_position, latest_seen_msg_id, status,
+                        last_checked_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,'edit_join_read',%s,%s,'active',CURRENT_TIMESTAMP)
                    ON CONFLICT (tenant_id, task_id, session) DO UPDATE SET
                        status='active', source_generation=EXCLUDED.source_generation,
                        wb1_cursor=EXCLUDED.wb1_cursor,
                        baseline_origin='edit_join_read',
                        processed_position=EXCLUDED.processed_position,
                        latest_seen_msg_id=EXCLUDED.latest_seen_msg_id,
-                       halted_reason=NULL, halted_at=NULL, updated_at=CURRENT_TIMESTAMP''',
+                       halted_reason=NULL, halted_at=NULL, updated_at=CURRENT_TIMESTAMP,
+                       last_checked_at=CURRENT_TIMESTAMP''',
                 (tenant_id, user_id, task_id, locator, baseline.get('generation'),
                  baseline.get('cursor'), baseline.get('watermark'), baseline.get('watermark')))
         if remove_locators:
