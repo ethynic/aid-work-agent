@@ -15,6 +15,9 @@
  * M11b 撤销 M3 决策：wecom_read_session 进 MCP toolDefs——runtime 模式调用方是
  * agent（低频理性调用，非 Host 高频轮询），且 M10b 模型通道已把长滚动抓取变快；
  * 高频轮询仍走 CLI watch 动词（wecom_watch_poll 不进 runtime 受信清单）。
+ * 代理任务 P2 增加 wecom_config_doctor / wecom_config_calibrate（受信配置流程专用，
+ * 沿 wecom_session_directory 页面专用先例：在 listTools 中暴露，不加入 Agent 模型
+ * 工具集，是否受信/上报由 host core 决定；逻辑与 CLI doctor --localdb / calibrate 同源）。
  * 未真机验证的能力不得在此占位。
  */
 import { z } from 'zod'
@@ -304,6 +307,30 @@ export const TOOL_DEFS: WecomToolDef[] = [
     zodShape: { target_name: z.string().trim().min(1).max(100).describe('完整群名，非关键词'),
       cursor: z.string().min(1).max(2048).optional().describe('该群上次轮询返回的原cursor，首次不传') },
     annotations: { title: '企业微信群增量轮询', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'wecom_config_doctor', title: '企业微信配置检查',
+    description:
+      '受信配置流程专用本机诊断（不属模型业务工具）：执行基础环境门禁（Windows 平台/交互桌面会话/PowerShell/artifact 目录）' +
+      '与本地库深检（安装/登录态/数据目录/版本矩阵/指纹/密钥/快照解密/查询冒烟八步），' +
+      '返回 checks、runtime_readiness、localdb（steps/mode_decision/ui_ready/state_saved/guidance）结构化报告；' +
+      'self_user_id 为探测可确认的当前登录账号（不可确认时缺省，工具不因此失败）；' +
+      '深检结论 ui（退出语义上成功但本地库未就绪）与引导阶段失败（success=false）同样返回结构化报告。' +
+      '只读诊断：不激活窗口、不发送输入、不改剪贴板；深检 keyscan 为只读内存观察。',
+    zodShape: {},
+    annotations: { title: '企业微信配置检查', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'wecom_config_calibrate', title: '企业微信坐标标定',
+    description:
+      '受信配置流程专用本机坐标标定（写动作）：先经本地库身份预核（当前账号与本人显示名确认，失败返回 IDENTITY_UNCONFIRMED），' +
+      '再进入本人会话执行企微标题点与输入区双点标定（PowerShell 驱动，独占运行），' +
+      '返回 title_point/input_point 坐标、width/height/dpi 屏幕上下文与 self_user_id；' +
+      '驱动原始结果中的本机 cache_path 等仅存本机诊断，不进入返回。' +
+      '副作用：进入本人会话会切换当前会话视图并清除其未读角标（企微客户端固有行为），' +
+      '写入本机标定缓存与标定产物目录；复制标题核验经剪贴板通道（原剪贴板按序号 CAS 恢复）。',
+    zodShape: {},
+    annotations: { title: '企业微信坐标标定', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
 ]
 

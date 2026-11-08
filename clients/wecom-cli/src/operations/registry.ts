@@ -10,9 +10,12 @@
  * M9 将 wecom_history_read 改名为 wecom_read_session（CLI 动词 read → read-session，
  * 旧名直接废弃无别名）；M11b 起进 MCP toolDefs（撤销 M3「不进 MCP」决策：runtime
  * 模式调用方是 agent，低频理性，且模型通道已把长滚动抓取变快）。
+ * 代理任务 P2 增加 wecom_config_doctor / wecom_config_calibrate（受信配置流程专用，
+ * 无 CLI 动词，沿 wecom_session_directory 的 registry-only 接线先例）。
  */
 import { createWecomChatSearchOperation } from './chatSearch.js'
 import { createWecomChatSelectOperation } from './chatSelect.js'
+import { createWecomConfigDoctorOperation, createWecomConfigCalibrateOperation } from './configCheck.js'
 import { createWecomMessageSendOperation } from './messageSend.js'
 import { createWecomSendStatusOperation } from './sendStatus.js'
 import { createWecomProbeOperation } from './probe.js'
@@ -52,6 +55,8 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   wecom_group_list: { operation: createWecomGroupListOperation(), cli: { write: false } },
   wecom_group_read: { operation: createWecomGroupReadOperation(), cli: { write: false } },
   wecom_group_poll: { operation: createWecomGroupPollOperation(), cli: { write: false } },
+  wecom_config_doctor: { operation: createWecomConfigDoctorOperation(), cli: { write: false } },
+  wecom_config_calibrate: { operation: createWecomConfigCalibrateOperation(), cli: { write: true } },
 }
 
 export const OPERATION_NAMES = Object.keys(OPERATIONS)
