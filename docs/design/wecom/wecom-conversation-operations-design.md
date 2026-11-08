@@ -262,7 +262,7 @@ CLI 返回的群聊内容必须让每条消息都带 `sender_platform`：可靠�
 
 ## 9. 企业微信代理任务：新消息触发回答（2026-11-08，设计待开发）
 
-本节是独立于上述日报交付范围的新功能；开发状态见[代理任务计划](../../plans/plan-wecom-proxy-event-driven.md)。它取代把页面代理任务直接做成每 10 秒由模型 `agent_sleep` 唤醒的建议，不改变已有通用 continuous Runner 的语义。
+本节是独立于上述日报交付范围的新功能；开发状态见[代理任务计划](../../plans/plan-wecom-proxy-event-driven.md)，跨模块 schema 与能力契约见[代理任务契约](wecom-proxy-task-contract.md)。它取代把页面代理任务直接做成每 10 秒由模型 `agent_sleep` 唤醒的建议，不改变已有通用 continuous Runner 的语义。
 
 ### 9.1 现场依据与目标
 
