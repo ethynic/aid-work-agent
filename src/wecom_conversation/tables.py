@@ -202,6 +202,7 @@ CREATE TABLE IF NOT EXISTS bs_wecom_proxy_batches (
     web_session_id TEXT,
     runner_id TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
+    submit_text TEXT,
     end_json JSONB,
     cli_error TEXT,
     retry_count INTEGER NOT NULL DEFAULT 0,
@@ -238,6 +239,8 @@ _ALTER_STATEMENTS = (
     "ALTER TABLE bs_wecom_daily_summaries ADD COLUMN IF NOT EXISTS snapshot_at TIMESTAMPTZ",
     "ALTER TABLE bs_wecom_daily_summaries ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ",
     "ALTER TABLE bs_wecom_daily_summaries ADD COLUMN IF NOT EXISTS source_runner_id TEXT",
+    # P6 评审补充：持久化提交意图（submit_text），服务端重启后孤儿重提原样使用
+    "ALTER TABLE bs_wecom_proxy_batches ADD COLUMN IF NOT EXISTS submit_text TEXT",
 )
 
 _DDL_ITEMS = (

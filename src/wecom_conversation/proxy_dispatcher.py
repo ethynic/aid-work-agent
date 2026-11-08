@@ -296,11 +296,11 @@ async def _dispatch_batch(batch, runner_states):
             await _post_resume(batch, batch['runner_id'],
                                int(state.get('attempt') or 0), key_prefix='wecom-proxy-wake')
             return True
-        # 近期往来在占用后、提交前经受信读取（组级锁＋批次 running 双重串行，
-        # CLI 互斥兜底）；备忘使同键重试重建逐字节相同的意图
-        recent = await _recent_context_for(batch, device)
+        # 提交意图：首次构建（含近期往来，best-effort）并先持久化再 HTTP 提交；
+        # 已持久化则原样使用（评审：重启后孤儿重提不重读不重渲染）
+        submit_text = await _resolve_submit_text(batch, device)
         try:
-            runner = await _submit_runner(batch, recent)
+            runner = await _submit_runner(batch, submit_text)
         except Exception as error:  # noqa: BLE001
             await _handle_submit_error(batch, error)
             return False
@@ -317,21 +317,11 @@ async def _dispatch_batch(batch, runner_states):
 async def _submit_running_batch(batch):
     """孤儿批（占用已置、Runner 行缺失/提交结果未知）同键重试提交。
 
-    近期往来按备忘复用（进程重启后重读，漂移导致的幂等失配沿确定性拒绝
-    分支停住待人工，不重复建执行）。"""
-    proxy_api = _proxy_api()
-    device, error = await proxy_api._task_device(batch['tenant_id'], batch['user_id'],
-                                                 str(batch['device_id']),
-                                                 DISPATCH_REQUIRED_TOOLS)
-    if error:
-        # 设备不可用：占用保持，下轮同键重试
-        code, message = proxy_monitor_error_parts(error)
-        logger.warning(f'后端日志：企微代理孤儿批重提设备不可用本轮跳过 '
-                       f'batch={batch["id"]} code={code} message={message}')
-        return
-    recent = await _recent_context_for(batch, device)
+    提交意图以持久化 submit_text 原样重建（首次提交前已落库）——服务端重启、
+    群内新增消息均不改变重提内容，幂等命中原 Runner（契约 §4 submit_text）。"""
+    submit_text = await _resolve_submit_text(batch, device=None)
     try:
-        runner = await _submit_runner(batch, recent)
+        runner = await _submit_runner(batch, submit_text)
     except Exception as error:  # noqa: BLE001
         await _handle_submit_error(batch, error)
         return
@@ -442,11 +432,21 @@ async def _handle_submit_error(batch, error):
     """提交层错误分流：瞬时保留占用同键重试；确定性拒绝按语义停住/回退。"""
     if _is_transient(error):
         # 网络未知/5xx：批次保持 running（占用保持），下轮同幂等键重试——
-        # 若服务端已受理则幂等命中原 Runner，不重复建执行
+        # 提交意图已持久化（submit_text），重提逐字节一致，若服务端已受理则
+        # 幂等命中原 Runner，不重复建执行
         logger.warning(f'后端日志：企微代理提交暂时失败保留占用 batch={batch["id"]} '
                        f'code={_error_code(error) or type(error).__name__}')
         return
     code = _error_code(error) or 'SUBMIT_REJECTED'
+    if code == 'IDEMPOTENCY_INPUT_MISMATCH' or code == 'IDEMPOTENCY_CONFLICT':
+        # 幂等失配：提交意图已持久化、重提原样使用，正常流程不可能触发——
+        # 现在仅可能由真实缺陷（如 submit_text 与已受理意图不一致）导致；
+        # 服务端已存在内容不同的 Runner 且无法定位其 id：批次 failed＋会话
+        # 停住待人工（可见、不循环、不重复建执行）
+        logger.opt(exception=error).error(
+            f'后端日志：企微代理提交幂等失配（缺陷信号）batch={batch["id"]} code={code}')
+        await _fail_deterministic(batch, code, stop_task=False)
+        return
     if code in _REQUEUE_REJECT_CODES:
         # 任务已停止/删除竞态：批次回 pending 留待下次启动排队（不循环重试）
         from src.db.database import get_db_connection
@@ -579,15 +579,19 @@ def reply_discipline_augmentation(batch):
     )
 
 
-def build_submit_body(batch, recent_messages=None):
-    """RunnerSubmit 字典（契约 §6）：固定 web_session_id＋冻结指令快照＋本批原文。"""
+def build_submit_body(batch, submit_text=None):
+    """RunnerSubmit 字典（契约 §6）：固定 web_session_id＋冻结指令快照＋提交意图文本。
+
+    submit_text 为持久化提交意图（契约 §4，2026-11-08 评审补充）；缺省时按
+    冻结字段现场渲染（不带近期往来——近期往来随首次派发持久化，不在幂等键
+    生命周期内重读）。"""
     return {
         'source': PROXY_SERVICE_ID,
         'session': {'kind': 'web', 'session_id': batch['web_session_id']},
         # 幂等键：同批同 retry_count 重试返回原 Runner；零发送重试 retry_count+1
         # 换新键 → 新 Runner（契约 §5 规则 3）
         'client_request_id': f'{batch["id"]}:{int(batch.get("retry_count") or 0)}',
-        'text': render_batch_text(batch, recent_messages),
+        'text': submit_text if submit_text is not None else render_batch_text(batch),
         'attachments': [],
         'profile_id': batch['agent_id'],
         'instance_id': None,
@@ -611,20 +615,12 @@ def build_submit_body(batch, recent_messages=None):
     }
 
 
-async def _submit_runner(batch, recent_messages=None):
+async def _submit_runner(batch, submit_text):
     return await _proxy_client().request('POST', '/v1/runners', authorization=None,
-                                         body=build_submit_body(batch, recent_messages))
+                                         body=build_submit_body(batch, submit_text))
 
 
-# ==================== 本批之前的近期往来（设计 §9.4） ====================
-
-# 同 (tenant, batch, retry_count) 的近期往来备忘：提交层瞬时失败后同键重试必须
-# 重建逐字节相同的意图（幂等 digest 覆盖 text），重读最新页会随新消息漂移——
-# 同进程内复用首次读取结果；进程重启后的孤儿重提读不到备忘时按 best-effort
-# 重读，若幂等命中失配（IDEMPOTENCY_INPUT_MISMATCH）按确定性拒绝停住待人工。
-_recent_context_memo: dict = {}
-_RECENT_MEMO_MAX = 512
-
+# ==================== 本批之前的近期往来与提交意图持久化（设计 §9.4） ====================
 
 def _batch_min_msg_id(batch):
     snapshot = batch.get('input_snapshot') or {}
@@ -640,7 +636,8 @@ async def _fetch_recent_context(tenant_id, user_id, device, locator, before_msg_
     复用 P4 受信读 _read_sessions_call（沿既有受信派发路径，CLI 互斥已兜底
     串行）；仅保留 msg_id 低于本批最小值的消息——排除本批消息与批后新消息
     （如 100 批执行期间到达的 101-109）。best-effort：失败记日志返回空列表，
-    不因此失败批次（远期事实智能体仍可按需经读取工具核对）。
+    不因此失败批次（远期事实智能体仍可按需经读取工具核对）。读取结果随
+    submit_text 持久化（见 _resolve_submit_text），不依赖重读可复现。
     """
     proxy_api = _proxy_api()
     data, error = await proxy_api._read_sessions_call(
@@ -660,18 +657,44 @@ async def _fetch_recent_context(tenant_id, user_id, device, locator, before_msg_
     return messages
 
 
-async def _recent_context_for(batch, device):
-    """按（租户/批次/retry_count）取近期往来，命中备忘不重读（见备忘注释）。"""
-    memo_key = (batch['tenant_id'], batch['id'], int(batch.get('retry_count') or 0))
-    cached = _recent_context_memo.get(memo_key)
-    if cached is not None:
-        return cached
-    before_msg_id = _batch_min_msg_id(batch)
-    if before_msg_id is None:
-        return []
-    recent = await _fetch_recent_context(batch['tenant_id'], batch['user_id'], device,
-                                         batch['session'], before_msg_id)
-    if len(_recent_context_memo) >= _RECENT_MEMO_MAX:
-        _recent_context_memo.clear()
-    _recent_context_memo[memo_key] = recent
-    return recent
+def _persist_submit_text(tenant_id, batch_id, submit_text):
+    """提交意图持久化（独立短事务，先于 HTTP 提交；2026-11-08 评审补充）。
+
+    Runner 提交受理后回写 runner_id 前服务端重启 → 孤儿批重提原样使用持久化
+    文本，不重读最新页、不重渲染——群内新增消息不改变重提内容，同幂等键重试
+    意图逐字节一致（幂等 digest 覆盖 text），幂等命中原 Runner。
+    """
+    from src.db.database import get_db_connection
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''UPDATE bs_wecom_proxy_batches SET submit_text=%s,
+                   updated_at=CURRENT_TIMESTAMP WHERE id=%s AND tenant_id=%s''',
+            (submit_text, batch_id, tenant_id))
+        conn.commit()
+
+
+async def _resolve_submit_text(batch, device=None):
+    """提交意图解析：已持久化原样使用；为空则构建并先持久化再提交。
+
+    - submit_text 非空（孤儿重提/同键重试）：直接原样使用，不重读近期往来、
+      不重渲染——"服务端重启从持久事实继续"（设计 §9.3）；
+    - 为空（首次派发，device 可用）：取近期往来（best-effort）渲染并先持久化
+      （独立事务，在 HTTP 提交之前）；
+    - 为空且无 device（首次提交前崩溃的缺陷窗口重建）：现场渲染不带前文并
+      持久化，使后续重提收敛稳定。
+    """
+    submit_text = batch.get('submit_text')
+    if submit_text:
+        return submit_text
+    recent = []
+    if device is not None:
+        before_msg_id = _batch_min_msg_id(batch)
+        if before_msg_id is not None:
+            recent = await _fetch_recent_context(batch['tenant_id'], batch['user_id'],
+                                                 device, batch['session'], before_msg_id)
+    submit_text = render_batch_text(batch, recent)
+    await asyncio.to_thread(_persist_submit_text, batch['tenant_id'], batch['id'],
+                            submit_text)
+    return submit_text

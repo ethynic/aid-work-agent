@@ -202,11 +202,8 @@ def _patches(client, *, device_ok=True, agent_ok=True, recent_page=None, recent_
             patch.object(proxy_dispatcher, '_proxy_client', lambda: client))
 
 
-async def _tick(client, *, device_ok=True, agent_ok=True, recent_page=None, recent_error=None,
-                clear_memo=True):
-    """跑一轮派发；clear_memo 清近期往来备忘（用例间隔离）。"""
-    if clear_memo:
-        proxy_dispatcher._recent_context_memo.clear()
+async def _tick(client, *, device_ok=True, agent_ok=True, recent_page=None, recent_error=None):
+    """跑一轮派发（近期往来读取沿 mock 缝）。"""
     device_patch, recent_patch, agent_patch, client_patch = _patches(
         client, device_ok=device_ok, agent_ok=agent_ok,
         recent_page=recent_page, recent_error=recent_error)
@@ -714,9 +711,11 @@ async def test_dispatch_recent_read_failure_continues_without_section(tenant_id)
 
 
 @pytest.mark.asyncio
-async def test_dispatch_reuses_recent_context_for_same_key_retry(tenant_id):
-    """①备忘：提交瞬时失败后的同键重试复用首次近期往来（幂等意图逐字节一致），
-    不重读最新页。"""
+async def test_orphan_resubmit_uses_persisted_text_across_restart(tenant_id):
+    """①孤儿重提：首次提交受理未知（瞬时失败）→ 持久化 submit_text 已落库；
+    模拟重启（全新模块态、无内存态）且期间群内新增消息（最新页漂移）→ 重提
+    使用持久化文本逐字节不变、不重读近期往来，幂等键命中去重成功（返回同一
+    Runner），不触发 MISMATCH、不 halt。"""
     locator = _locator(4)
     _register(tenant_id, locator)
     task = _create_started(tenant_id, [locator])
@@ -724,37 +723,150 @@ async def test_dispatch_reuses_recent_context_for_same_key_retry(tenant_id):
     recent_page = _page(locator, [_peer(95, text='本批前消息')])
     client = _ClientStub(responses=[RunnerError('RUNNER_SERVICE_UNAVAILABLE', 503)])
     await _tick(client, recent_page=recent_page)
-    assert _batch_row(tenant_id, batch['id'])['status'] == 'running'
-    # 第二轮孤儿重提：备忘命中，不再发起受信读（读 mock 计数不变）
+    row = _batch_row(tenant_id, batch['id'])
+    assert row['status'] == 'running' and row['runner_id'] is None
+    first_text = client.requests[0][2]['text']
+    assert row['submit_text'] == first_text   # 首次提交前已持久化
+    # 模拟重启（无内存态）＋期间群内新增消息（最新页漂移：批后 120 挤入窗口）
+    drifted_page = _page(locator, [_peer(95, text='本批前消息'),
+                                   _peer(120, text='批后新消息')], cursor='wb1.drifted')
+    runner_id = 'runner_dedupe_1'
+    seen = {}
+
+    def idempotent_submit(body):
+        # 模拟服务端幂等：同 client_request_id 命中去重返回原 Runner
+        key = body['client_request_id']
+        return _submit_response(seen.setdefault(key, runner_id))
+
+    replay = _ClientStub(responses=[idempotent_submit])
     with patch.object(proxy_api, '_read_sessions_call') as read_mock:
-        read_mock.side_effect = AssertionError('重试不应重读近期往来')
+        read_mock.side_effect = AssertionError('重提不得重读近期往来')
+        await _tick(replay, recent_page=drifted_page)
+    assert len(replay.requests) == 1
+    assert replay.requests[0][2]['client_request_id'] == client.requests[0][2][
+        'client_request_id']
+    assert replay.requests[0][2]['text'] == first_text   # 逐字节一致
+    row = _batch_row(tenant_id, batch['id'])
+    assert row['status'] == 'running' and row['runner_id'] == runner_id  # 幂等命中
+    assert row['submit_text'] == first_text              # 未触发 MISMATCH/halt
+
+
+@pytest.mark.asyncio
+async def test_submit_text_persisted_before_http_submit(tenant_id):
+    """②崩溃窗口序：持久化 submit_text 先于 HTTP 提交（顺序断言）；
+    HTTP 后崩溃（瞬时失败→running 无 runner_id）→ 重提同文本。"""
+    locator = _locator(9)
+    _register(tenant_id, locator)
+    task = _create_started(tenant_id, [locator])
+    batch = _make_batch(tenant_id, task['id'], locator)
+    order = []
+    real_persist = proxy_dispatcher._persist_submit_text
+
+    def traced_persist(tenant, batch_id, submit_text):
+        order.append('persist')
+        return real_persist(tenant, batch_id, submit_text)
+
+    class OrderedClient(_ClientStub):
+        async def request(self, method, path, *, authorization, body=None, params=None):
+            order.append('submit')
+            return await super().request(method, path, authorization=authorization,
+                                         body=body, params=params)
+
+    client = OrderedClient()
+    device_patch, recent_patch, agent_patch, client_patch = _patches(
+        client, recent_page=_page(locator, [_peer(95, text='本批前消息')]))
+    with device_patch, recent_patch, agent_patch, client_patch, \
+            patch.object(proxy_dispatcher, '_persist_submit_text', traced_persist):
+        await run_tick()
+    assert order == ['persist', 'submit']   # 持久化先于 HTTP 提交
+    assert _batch_row(tenant_id, batch['id'])['submit_text'] is not None
+    # HTTP 后崩溃（瞬时失败→running 无 runner_id）→ 孤儿重提同文本
+    client2 = _ClientStub()
+    await _tick(client2)
+    assert client2.requests[0][2]['text'] == client.requests[0][2]['text']
+    assert _batch_row(tenant_id, batch['id'])['runner_id'] is not None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_recent_read_when_submit_text_persisted(tenant_id):
+    """③submit_text 非空：派发不发起近期往来受信读，提交文本原样使用
+    （即使最新页含可读前文也不重读）。"""
+    locator = _locator(10)
+    _register(tenant_id, locator)
+    task = _create_started(tenant_id, [locator])
+    batch = _make_batch(tenant_id, task['id'], locator)
+    persisted = '持久化的提交意图文本（与最新页无关）'
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''UPDATE bs_wecom_proxy_batches SET submit_text=%s
+                          WHERE id=%s AND tenant_id=%s''',
+                       (persisted, batch['id'], tenant_id))
+        conn.commit()
+    client = _ClientStub()
+    with patch.object(proxy_api, '_read_sessions_call') as read_mock:
+        read_mock.side_effect = AssertionError('submit_text 非空不得重读近期往来')
         device = {'id': DEVICE, 'capabilities_json': {'capabilities': list(proxy_tasks.RUNTIME_TOOL_NAMES)}}
         with patch.object(proxy_api, '_task_device', AsyncMock(return_value=(device, None))), \
              patch.object(proxy_dispatcher, '_agent_allowed', AsyncMock(return_value=True)), \
              patch.object(proxy_dispatcher, '_proxy_client', lambda: client):
             await run_tick()
-    assert len(client.requests) == 2
-    assert client.requests[1][2]['client_request_id'] == client.requests[0][2][
-        'client_request_id']
-    assert client.requests[1][2]['text'] == client.requests[0][2]['text']
+    read_mock.assert_not_awaited()
+    assert client.requests[0][2]['text'] == persisted
+
+
+@pytest.mark.asyncio
+async def test_orphan_resubmit_empty_submit_text_renders_and_persists(tenant_id):
+    """⑤occupy 与 persist 间崩溃的孤儿批（running、无 runner_id、submit_text 空）：
+    现场渲染不带前文，不取设备、不读近期往来，渲染结果持久化后提交——该窗口
+    幂等键尚未受理过任何提交，无失配冲突面；落库后重提即收敛稳定。"""
+    locator = _locator(12)
+    _register(tenant_id, locator)
+    task = _create_started(tenant_id, [locator])
+    batch = _make_batch(tenant_id, task['id'], locator)
+    # 模拟 occupy 提交后、persist 前崩溃：占用已置、无 runner_id、submit_text 空
+    assert await asyncio.to_thread(proxy_dispatcher._occupy_batch,
+                                   _batch_row(tenant_id, batch['id'])) is True
+    row = _batch_row(tenant_id, batch['id'])
+    assert row['status'] == 'running' and row['runner_id'] is None
+    assert row['submit_text'] is None
+    client = _ClientStub()
+    with patch.object(proxy_api, '_task_device', AsyncMock(
+            side_effect=AssertionError('空 submit_text 孤儿重提不取设备'))), \
+         patch.object(proxy_api, '_read_sessions_call', AsyncMock(
+            side_effect=AssertionError('空 submit_text 孤儿重提不读近期往来'))), \
+         patch.object(proxy_dispatcher, '_agent_allowed', AsyncMock(return_value=True)), \
+         patch.object(proxy_dispatcher, '_proxy_client', lambda: client):
+        await run_tick()
+    assert len(client.requests) == 1
+    text = client.requests[0][2]['text']
+    assert '本批之前的近期往来' not in text   # 无前文段（缺省渲染）
+    assert 'msg_id=99' in text               # 本批原文仍在
+    row = _batch_row(tenant_id, batch['id'])
+    assert row['submit_text'] == text        # 现场渲染已持久化，后续重提收敛
+    assert row['status'] == 'running' and row['runner_id'] == client.created[0]
 
 
 @pytest.mark.asyncio
 async def test_orphan_resubmit_digest_mismatch_fails_deterministically(tenant_id):
-    """①幂等失配（进程重启备忘不可得、重读漂移）：同键重提交遇
-    IDEMPOTENCY_INPUT_MISMATCH 走确定性拒绝——批次 failed＋目标 halted，
-    不再重试、不产生第二次 Runner 执行。"""
-    locator = _locator(9)
+    """幂等失配（现仅可能由真实缺陷触发——如 submit_text 在受理后被篡改）：
+    同键重提遇 IDEMPOTENCY_INPUT_MISMATCH 走确定性拒绝——批次 failed＋目标
+    halted，不再重试、不产生第二次 Runner 执行。"""
+    locator = _locator(11)
     _register(tenant_id, locator)
     task = _create_started(tenant_id, [locator])
     batch = _make_batch(tenant_id, task['id'], locator)
     client = _ClientStub(responses=[RunnerError('RUNNER_SERVICE_UNAVAILABLE', 503)])
     await _tick(client, recent_page=_page(locator, [_peer(95, text='旧前文')]))
     assert _batch_row(tenant_id, batch['id'])['status'] == 'running'
-    # 模拟进程重启：备忘清空后重读最新页（新消息使前文漂移→text 与首次不同）
+    # 模拟缺陷：受理后 submit_text 被篡改（重提文本与已受理意图不一致）
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''UPDATE bs_wecom_proxy_batches
+                          SET submit_text=%s WHERE id=%s AND tenant_id=%s''',
+                       ('被篡改的文本', batch['id'], tenant_id))
+        conn.commit()
     client2 = _ClientStub(responses=[RunnerError('IDEMPOTENCY_INPUT_MISMATCH', 409)])
-    await _tick(client2, recent_page=_page(locator, [_peer(95, text='旧前文'),
-                                                     _peer(96, text='期间新到')]))
+    await _tick(client2)
     assert len(client2.requests) == 1          # 失配即确定性拒绝，不二刷同键
     assert _batch_row(tenant_id, batch['id'])['status'] == 'failed'
     assert _target_row(tenant_id, task['id'], locator)['status'] == 'halted'

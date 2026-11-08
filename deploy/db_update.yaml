@@ -4638,3 +4638,8 @@
     CREATE UNIQUE INDEX IF NOT EXISTS uq_bs_wecom_proxy_batches_session_undecided
         ON bs_wecom_proxy_batches (tenant_id, session)
         WHERE status IN ('pending', 'running', 'waiting', 'reconcile_hold');
+- datetime: "2026-11-08 16:00:00"
+  remark: "企微代理批次表补持久化提交意图列 submit_text（P6 评审：Runner 提交受理后回写 runner_id 前重启，孤儿重提原样使用持久化文本，不重读不重渲染；2026-11-08 评审补充，加性；与 src/wecom_conversation/tables.py 同源）"
+  statements: |
+    ALTER TABLE bs_wecom_proxy_batches ADD COLUMN IF NOT EXISTS submit_text TEXT;
+

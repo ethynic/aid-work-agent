@@ -5929,6 +5929,7 @@ CREATE TABLE IF NOT EXISTS bs_wecom_proxy_batches (
     web_session_id TEXT,
     runner_id TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
+    submit_text TEXT,
     end_json JSONB,
     cli_error TEXT,
     retry_count INTEGER NOT NULL DEFAULT 0,
