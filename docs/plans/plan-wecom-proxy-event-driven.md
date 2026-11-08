@@ -7,7 +7,7 @@
 | P0 | 逐项确认设计并完成独立评审 | ✅ 完成（2026-11-08） | 核对旧任务用量；修正游标 scope、停止语义、会话历史与模块边界 |
 | P1 | 跨模块契约和 schema 冻结（文档） | ✅ 完成（2026-11-08） | 经三轮评审冻结为编码基线：首轮五项冲突与 Q1–Q6 裁决落地；二轮修订 needs_reply 分流、停止标志检查点、批次输入快照；终轮删除 `send_effect`，规则 3/4 以"发送调用事实＋原回执"分流（无调用或全部证明未发送→重试一次；有调用且任一次无法证明→只读对账），设计者确认后无需再复审。契约见 [wecom-proxy-task-contract.md](../design/wecom/wecom-proxy-task-contract.md)，共同契约 2.17 修订段同步。文档未提交 |
 | P2 | WeCom CLI 配置检查入口 | ✅ 完成（2026-11-08） | `wecom_config_doctor`/`wecom_config_calibrate` 受信 MCP 工具落地（契约 §2，registry-only 沿目录先例，cache_path 结构性排除）；新增 19 用例全过，模块回归与基线逐行一致（127 例存量环境失败：venv 缺失 126+存量断言 1），typecheck/build/MCP server/CLI 入口通过；CR 通过无 P0/P1，commit e0820517。真机 doctor/标定验收按 P8 执行 |
-| P3 | Runtime 受信调用与能力上报 | ✅ 完成（2026-11-08） | 两配置工具进 host core 受信名单（calibrate 归写集合），真实 listTools schema 检查后才上报能力串，旧插件 digest 锚点逐字节不变；wecomConfigTools 6 用例 + host-core 112 用例通过，A/B 基线对照零回归；CR 无 P0/P1，commit 6c3efabc。遗留记录：①recoveryStop.test.js 第 7 用例与现版 shutdown"等待在途启动"语义确定性死锁（2026-10-20 dd634717 引入测试时通过，其后 host core shutdown 语义变化致失效；master 基线同样复现，与 P3 无关，另立修复）；②calibrate 能力上报为存在性检查（P4 创建检查会真实执行工具，安全兜底） |
+| P3 | Runtime 受信调用与能力上报 | ✅ 完成（2026-11-08） | 两配置工具进 host core 受信名单（calibrate 归写集合），真实 listTools schema 检查后才上报能力串，旧插件 digest 锚点逐字节不变；wecomConfigTools 6 用例 + host-core 112 用例通过，A/B 基线对照零回归；CR 无 P0/P1，commit 6c3efabc。遗留记录：①recoveryStop.test.js 第 7 用例与 shutdown"等待在途启动"语义的确定性死锁已修复（测试改为先发起 shutdown 再放 prepareLaunch 闸门，三个断言语义全保留，12/12 过、全量套件完整跑通，commit 见 git log）；②calibrate 能力上报为存在性检查（P4 创建检查会真实执行工具，安全兜底） |
 | P4 | 后台配置、数据结构与 API | 📋 待开发 | — |
 | P5 | 后台监控循环与持久队列 | 📋 待开发 | — |
 | P6 | 后台回答 Runner 与结束记录 | 📋 待开发 | — |
