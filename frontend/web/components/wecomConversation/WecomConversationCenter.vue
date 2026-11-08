@@ -11,6 +11,9 @@
         <button class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover" @click="goDaily(); closeMenu()">
           日报工作台
         </button>
+        <button class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover" @click="goProxy(); closeMenu()">
+          代理任务
+        </button>
         <button class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover" @click="refreshAll(); closeMenu()">
           刷新
         </button>
@@ -194,6 +197,9 @@ function handleLogout() {
 }
 function goDaily() {
   router.push({ name: 'tenant-wecom-daily' })
+}
+function goProxy() {
+  router.push({ name: 'tenant-wecom-proxy' })
 }
 
 const conversations = ref<WecomConversation[]>([])

@@ -27,6 +27,7 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'daily-report', name: 'tenant-daily-report', component: () => import('@/components/reports/PersonalDailyReport.vue') },
       { path: 'wecom-conversations', name: 'tenant-wecom-conversations', component: () => import('@/components/wecomConversation/WecomConversationCenter.vue') },
       { path: 'wecom-conversations/daily', name: 'tenant-wecom-daily', component: () => import('@/components/wecomConversation/WecomConversationDaily.vue') },
+      { path: 'wecom-conversations/proxy', name: 'tenant-wecom-proxy', component: () => import('@/components/wecomConversation/WecomProxyTasks.vue') },
       { path: 'work-outcomes', name: 'tenant-work-outcomes', component: () => import('@/components/reports/WorkOutcomes.vue') },
       { path: 'my-agents', name: 'tenant-my-agents', component: () => import('@/components/MyDigitalEmployees.vue') },
       { path: 'agent/:subagent_name/prompt', name: 'tenant-agent-prompt', redirect: to => ({ name: 'tenant-my-agents', params: { tenant_id: (to.params as any).tenant_id } }) },
