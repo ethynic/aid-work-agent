@@ -4,10 +4,11 @@ description: >
   AI 获客技能：B2B 目标客户开发与冷邮件外联全流程。从需求澄清（brief）开始，
   检索目标客户名单（公司+联系人+邮箱），入库筛选后逐一撰写针对性邮件，
   邮箱就绪后自动批量发送或经定时任务发送（SMTP），发送结果回写数据库，
+  邮件正文内置打开追踪像素（收件方打开即产生打开记录，可回拉统计打开率），
   客户回复自动接收并判定意向、有意向时通知用户。
   适用于外贸开发、客户线索挖掘、cold outreach、lead generation、
   邮件营销获客等场景。
-version: 1.1.0
+version: 1.2.0
 init_script: lead_db.py
 requires_tools: [web_search, web_fetch]
 metadata:
@@ -33,8 +34,8 @@ metadata:
 
 1. **身份与数据库**：脚本由 `skill_execute` 在执行上下文中运行，
    `AID_TENANT_ID` / `AID_USER_ID` 环境变量由系统注入（不可伪造、不进提示词）。
-   所有名单/联系人/邮件/回复数据存 PostgreSQL `bs_ai_lead_gen_*` 五表
-   （campaigns / leads / contacts / emails / replies，启动时自动建表），
+   所有名单/联系人/邮件/回复数据存 PostgreSQL `bs_ai_lead_gen_*` 六表
+   （campaigns / leads / contacts / emails / replies / opens，启动时自动建表），
    **不要**使用原包的 workspace CSV 落盘存业务数据。
 2. **发件邮箱三层解析**（`mailbox_resolver.py`，发送脚本自动调用）：
    用户个人邮箱（邮箱设置）-> 租户邮箱兜底 -> 两者皆无时脚本退出并提示用户去配置。
@@ -112,6 +113,8 @@ metadata:
 | `email_verify.py` | 邮箱格式/MX 校验 |
 | `email_rules.py` | 职能相关性判定（三道闸门共用口径） |
 | `reply_monitor.py` | 回复监控：IMAP 轮询 -> 归属 -> 去重 -> LLM 意图判定 -> 意向通知/退订 |
+| `tracking_key.py` | 打开追踪 key 生成（按发件邮箱自动生成 track_tenant.secret，持久化到租户目录 lead-gen/tracking_keys.json，发送/回拉共用；一般不单独调用） |
+| `fetch_opens.py` | 打开记录回拉：从追踪端点按游标分页拉取 -> 按 message_id 匹配回写 emails 表 opens_at/open_count（幂等可重复跑） |
 
 `lead_db.py` 子命令：
 
@@ -329,6 +332,10 @@ python scripts/facts_builder.py --probe <campaign>/probe \
    （可配 `--max-minutes` 分段）。对话内编排（review）与定时编排（auto）
    都直接推进，不逐批确认。发送结果自动回写 emails 表
    （sent 含 message_id / failed / bounced），硬退信自动进退订名单。
+   发送默认开启打开追踪：正文尾部内嵌 1x1 像素（收件方客户端加载图片即记录
+   一次打开；纯文本客户端不触发，属已知损耗）。发送完成或次日运行
+   `fetch_opens.py --campaign-id ID` 回拉打开记录（自动回写 opens_at/open_count，
+   幂等可重复跑），结合回复数据向用户汇报打开率。
    发送完成后按「用户沟通口径」大白话汇报。
 10. **回复跟进**：回信按 Reply-To 锚点归因到 campaign，LLM 判定意向
     （interested/info_request/refused/irrelevant/unclear），有意向通知用户；
@@ -349,7 +356,8 @@ python scripts/facts_builder.py --probe <campaign>/probe \
 3. 为尚无草稿的联系人撰写针对性邮件草稿（subject_a/subject_b 两版）
 4. auto 模式自动推进：export-send-queue -> send_emails.py
    （先 --dry-run 无 BLOCK，再 --limit 3 试发，最后全量，限额系统强制）
-5. 收尾执行 daily-summary --campaign-id {ID} --notify 发送当日汇总通知
+5. 运行 fetch_opens.py --campaign-id {ID} 回拉打开记录（opens_at/open_count 自动回写）
+6. 收尾执行 daily-summary --campaign-id {ID} --notify 发送当日汇总通知
 ```
 
 执行成功后用 `bind-scheduler --campaign-id ID --task-id <定时任务ID>` 绑定并切 auto；

@@ -1,8 +1,46 @@
 # ai-lead-gen 邮件打开追踪接入方案（D 项，备后实施）
 
-> 状态：方案定稿，未实施（2026-11-08）。来源：上游 b2b-lead-gen v3.3.0-3.3.11 的
-> 云端打开追踪链路（`tracking_key.py` / `fetch_opens.py` / 像素端点）。
+> 状态：已实施（开发+单测完成，2026-11-08），待提交部署与真机冒烟。
+> 来源：上游 b2b-lead-gen v3.3.0-3.3.11 的云端打开追踪链路
+> （`tracking_key.py` / `fetch_opens.py` / 像素端点）。
 > 本轮技能包合并（A+B+C+E）已完成，D 项依赖服务端新端点，独立立项。
+
+## 实施记录（2026-11-08）
+
+- **服务端**（`src/api/track.py`，main.py 已注册）：
+  - `GET /api/track/p.gif`：匿名写入 bs_ai_lead_gen_opens（单行 INSERT 经
+    `asyncio.to_thread`，写库失败不阻断图片响应）；k 严格校验 hex8.hex32；
+    缺 message_id / key 非法时静默丢弃仍返回图片；按 IP 滑窗限速
+    （`rate_limit:track_pixel`，300 次/分钟）；
+  - `GET /api/track/opens`：k 与 secret 一致才返回（不一致 403）；游标按 id
+    单调递增，limit 默认 2000、硬上限 5000；
+  - `TenantContextMiddleware`：`/api/track/` 前缀匿名放行（等价 public_share 模式）；
+  - `SlidingWindowRateLimiter` 增加 `key_prefix` 参数（原硬编码 login 前缀）。
+- **表**：`bs_ai_lead_gen_opens`（id / tenant_id 平台归属尽力而为 / track_tenant
+  匿名租户 / campaign / message_id / recipient / opened_at / user_agent / ip）+
+  emails 表新增 `opens_at` / `open_count` 两列（lead_db.py init_tables +
+  db_update.yaml 2026-11-08 12:00:00 双登记）。
+- **技能侧**（`src/skills/ai-lead-gen-1.0.0/`，SKILL.md v1.2.0）：
+  - `tracking_key.py`：key store 改租户级
+    `storage/tenants/{tid}/lead-gen/tracking_keys.json`（AID_TENANT_ID fail-fast）；
+    手动覆盖 key 同样受 hex 格式校验（与服务端一致）；
+  - `fetch_opens.py`：默认端点 `https://agent.aidingyi.cn/api/track/opens`；
+    每次运行从游标 0 全量聚合（打开事件量级小，幂等可重复跑），按归一化
+    message_id（btrim '<>'）匹配回写 emails.opens_at / open_count；
+  - `send_emails.py`：track_opens 默认开启，正文转 HTML alternative 注入像素
+    `?k&m&c&r&t`（m=去尖括号 Message-ID，c=campaign_name，r=收件人，t=平台租户）；
+    纯文本客户端不触发像素为已知损耗。
+- **测试**：`tests/unit/test_lead_gen_open_tracking.py` 16 用例（key 生成/覆盖校验/
+  游标护栏/聚合/端点鉴权与分页）；`test_ai_lead_gen_skill.py` 回归全绿
+  （init_tables 六表断言更新）。
+- **与方案的偏差**：①像素 URL 增 `t` 参数注入平台租户归属（匿名端点无法强校验，
+  伪造只影响该字段本身；业务视图以 emails 表真实 tenant_id 为准），故 opens 表
+  在方案 tenant_id 列之外增加 track_tenant 列承载匿名租户；②像素写入为直接单行
+  INSERT 而非 Redis 队列缓冲（方案为「建议」项；冷邮件打开量级远低于连接池上限，
+  直接写入持久性更好，打开风暴下最坏是写入排队不阻塞响应）。
+- **验证缺口**：真机冒烟（发一封带像素测试邮件 → 收件端打开 → fetch_opens
+  回拉命中）需部署后执行；nginx 未对 /api/track/p.gif 配专门 location
+  （走主路由，Uvicorn 侧限速已覆盖；图片响应极小不占下载带宽，无需纳入下载限速）。
 
 ## 1. 背景与目标
 

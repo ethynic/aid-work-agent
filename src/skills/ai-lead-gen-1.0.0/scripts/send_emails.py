@@ -48,6 +48,7 @@ import smtplib
 import ssl
 import sys
 import time
+import urllib.parse
 from email.message import EmailMessage
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -92,11 +93,17 @@ try:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from email_rules import assess_email, load_target_config
     from mailbox_resolver import resolve_mailbox_or_die
+    from tracking_key import get_or_create_key
     from lead_db import (campaign_dir, get_conn, get_identity, get_campaign,
                          NamedTupleCursor)
 except ImportError as e:  # pragma: no cover
     raise SystemExit(f"[错误] 无法导入同目录脚本：{e}\n"
-                     f"请确认 scripts/ 下同时存在 email_rules.py / mailbox_resolver.py / lead_db.py 与 send_emails.py")
+                     f"请确认 scripts/ 下同时存在 email_rules.py / mailbox_resolver.py / "
+                     f"tracking_key.py / lead_db.py 与 send_emails.py")
+
+# 打开追踪像素端点（我方域名，24/7 在线）。收件人可能深夜打开邮件，
+# 端点必须一直可达，不能跑在执行机本地。
+DEFAULT_TRACK_PIXEL_BASE = "https://agent.aidingyi.cn/api/track/p.gif"
 
 # Wording that commonly trips spam filters. Checked in subject + body.
 SPAM_TRIGGER_WORDS = [
@@ -290,7 +297,7 @@ def is_session_error(text):
     return any(k in low for k in SESSION_ERRORS)
 
 
-def build_message(item, cfg):
+def build_message(item, cfg, campaign="", tenant_id=""):
     msg = EmailMessage()
     from_addr = cfg["from_email"]
     msg["From"] = f"{cfg.get('from_name', '')} <{from_addr}>".strip()
@@ -302,6 +309,22 @@ def build_message(item, cfg):
     msg["Date"] = email.utils.formatdate(localtime=True)
 
     body = item["body"].replace("\r\n", "\n")
+
+    # --- Open tracking ---
+    # 打开率是判断「钩子是否有效」的唯一硬指标：有效回复率只区分回/不回，
+    # 打开率才能区分「没打开」和「打开但不想回」。因此默认开启。
+    tracking = bool(cfg.get("track_opens", True))
+    if tracking:
+        pixel_base = (cfg.get("track_pixel_base") or DEFAULT_TRACK_PIXEL_BASE).strip()
+        if not pixel_base:
+            raise SystemExit(
+                "ERROR: track_opens 开启但 track_pixel_base 为空。\n"
+                "       固定端点已默认指向 https://agent.aidingyi.cn/api/track/p.gif，\n"
+                "       请勿显式设为空字符串。")
+        # tracking_key 零配置：自动按发件邮箱生成并持久化到租户目录
+        # （tracking_key.py，与 fetch_opens.py 回拉共用同一把 key）
+        _from = (cfg.get("from_email") or "").strip()
+        _tenant, _secret, tracking_key = get_or_create_key(_from, cfg.get("tracking_key"))
 
     # Compliance footer: required in most jurisdictions.
     footer_parts = []
@@ -316,6 +339,27 @@ def build_message(item, cfg):
         body = body.rstrip() + "\n\n---\n" + "\n".join(footer_parts)
 
     msg.set_content(body)
+
+    if tracking:
+        to_addr = (item.get("to") or "").strip()
+        # 每封邮件一个稳定唯一 ID：直接复用 RFC822 Message-ID（去尖括号，
+        # 与 reply_monitor / fetch_opens 的 norm_message_id 同口径）。
+        message_id = str(msg["Message-ID"] or "").strip().strip("<>").strip()
+        quote = urllib.parse.quote
+        pixel = (
+            f"{pixel_base}?k={quote(tracking_key)}"
+            f"&m={quote(message_id)}"
+            f"&c={quote(campaign)}"
+            f"&r={quote(to_addr)}"
+            f"&t={quote(tenant_id or '')}"
+        )
+        # 纯文本客户端不会触发像素，这是已知损耗。HTML 备选里带像素。
+        safe = (body.replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;").replace("\n", "<br>\n"))
+        html = (f"<div>{safe}</div>"
+                f'<img src="{pixel}" width="1" height="1" alt="" />')
+        msg.add_alternative(html, subtype="html")
+
     return msg
 
 
@@ -368,6 +412,11 @@ def build_cfg(campaign, mailbox, cdir):
         "reply_to": campaign.get("reply_mailbox") or mailbox["email_address"],
         "unsubscribe_url": sender.get("unsubscribe_url", ""),
         "postal_address": sender.get("postal_address", ""),
+        # 打开追踪默认开启（像素端点我方域名 24/7 在线）；tracking_key 留空
+        # 表示按发件邮箱自动生成（tracking_key.py，与 fetch_opens.py 回拉共用）
+        "track_opens": True,
+        "track_pixel_base": DEFAULT_TRACK_PIXEL_BASE,
+        "tracking_key": None,
         # 不填 / 0 / 负数 = 不限量（daily_limit_of 解析），发送量由用户决定
         "daily_limit": campaign.get("daily_limit"),
         "per_domain_daily_limit": 3,
@@ -617,6 +666,14 @@ def main():
     with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         campaign = get_campaign(cur, tenant_id, campaign_id)
     cfg = build_cfg(campaign, mailbox, cdir)
+    if cfg.get("track_opens"):
+        # 预解析 tracking_key（写回 cfg 供 build_message 复用，避免每封读盘）：
+        # 与 fetch_opens.py 回拉共用同一把 key
+        _t, _s, cfg["tracking_key"] = get_or_create_key(mailbox["email_address"], None)
+        print(f"open tracking: on  endpoint {cfg['track_pixel_base']} "
+              f"(track_tenant={_t})")
+    else:
+        print("open tracking: off")
 
     unsubscribed = load_unsubscribed(tenant_leadgen_dir)
     log_path, log_rows = load_log(cdir)
@@ -757,7 +814,9 @@ def main():
                 print(f"[{i}] reconnect failed: {exc}; stopping batch (resumable)")
                 break
 
-            msg = build_message(item, cfg)
+            msg = build_message(item, cfg,
+                                campaign=campaign.get("campaign_name") or "",
+                                tenant_id=tenant_id)
             attempt = 0
             success = False
             while attempt <= MAX_RETRY and not success:

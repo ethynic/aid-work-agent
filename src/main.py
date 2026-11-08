@@ -1804,7 +1804,9 @@ app.include_router(scheduled_task_router)
 app.include_router(channels_api.router)
 app.include_router(customer_followup.router)
 from src.api.ai_lead_gen import router as ai_lead_gen_router
+from src.api.track import router as track_router
 app.include_router(ai_lead_gen_router)
+app.include_router(track_router)
 app.include_router(complaint_handling.router)
 app.include_router(after_sales.router)
 app.include_router(email_settings.router)

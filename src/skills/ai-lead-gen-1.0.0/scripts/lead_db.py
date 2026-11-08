@@ -187,6 +187,8 @@ def init_tables():
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bs_ailg_emails_campaign "
                     "ON bs_ai_lead_gen_emails(campaign_id)")
+        cur.execute("ALTER TABLE bs_ai_lead_gen_emails ADD COLUMN IF NOT EXISTS opens_at TIMESTAMP")
+        cur.execute("ALTER TABLE bs_ai_lead_gen_emails ADD COLUMN IF NOT EXISTS open_count INT DEFAULT 0")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_replies (
                 id SERIAL PRIMARY KEY,
@@ -212,6 +214,29 @@ def init_tables():
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_bs_ailg_replies_tenant_message "
                     "ON bs_ai_lead_gen_replies(tenant_id, message_id) "
                     "WHERE message_id IS NOT NULL")
+        # 邮件打开追踪事件表（D 项）：像素端点 /api/track/p.gif 匿名写入，
+        # 每次打开一行；track_tenant 是 tracking_key 的 md5(from_email)[:8]
+        # 匿名租户（非平台 tenant_id），读取经 /api/track/opens 的 secret 鉴权。
+        # 平台归属 tenant_id 由发送侧像素参数注入（尽力而为），业务视图
+        # 以 emails 表（真实 tenant_id）为准，本表只作原始事件存储。
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_opens (
+                id SERIAL PRIMARY KEY,
+                tenant_id TEXT,
+                track_tenant TEXT NOT NULL,
+                campaign TEXT,
+                message_id TEXT,
+                recipient TEXT,
+                opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                user_agent TEXT,
+                ip TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_bs_ailg_opens_track "
+                    "ON bs_ai_lead_gen_opens(track_tenant, id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_bs_ailg_opens_tenant "
+                    "ON bs_ai_lead_gen_opens(tenant_id)")
         # get_db_connection 退出时无条件 rollback，DDL 必须显式提交
         conn.commit()
 

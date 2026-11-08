@@ -112,7 +112,7 @@ def test_norm_company_dedup_key():
     assert lead_db.norm_company("Acme, Inc.") == lead_db.norm_company("ACME")
 
 
-def test_init_tables_creates_five_tables(monkeypatch):
+def test_init_tables_creates_six_tables(monkeypatch):
     conn = FakeConn()
     monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
     lead_db.init_tables()
@@ -122,7 +122,7 @@ def test_init_tables_creates_five_tables(monkeypatch):
     assert tables == {
         "bs_ai_lead_gen_campaigns", "bs_ai_lead_gen_leads",
         "bs_ai_lead_gen_contacts", "bs_ai_lead_gen_emails",
-        "bs_ai_lead_gen_replies",
+        "bs_ai_lead_gen_replies", "bs_ai_lead_gen_opens",
     }
     # DDL 必须显式提交（get_db_connection 退出时无条件 rollback）
     assert conn.commits == 1
