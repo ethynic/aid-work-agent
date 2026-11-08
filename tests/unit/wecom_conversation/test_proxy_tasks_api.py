@@ -254,6 +254,47 @@ async def test_start_failed_baseline_read_writes_nothing():
     complete.assert_not_called()  # 受信读取失败：不翻转状态、不写基线
 
 
+def _read_page(**overrides):
+    """单目标读取成功页（总体 success；CLI 批量读结果形状）。"""
+    data = {'self_user_id': 'account-a', 'source_generation': 'gen-1',
+            'cursor': 'wb1.next', 'has_more': False, 'sessions': [], 'failed': []}
+    data.update(overrides)
+    return data, None
+
+
+@pytest.mark.asyncio
+async def test_baseline_read_rejects_per_target_failed_entry():
+    """CLI 批量读对单目标失败仍返回总体成功＋failed 数组＋游标：基线读取必须拒绝。"""
+    with patch.object(proxy_api, '_read_sessions_call', AsyncMock(
+            return_value=_read_page(failed=[{'code': 'TARGET_NOT_FOUND', 'stage': 'resolve'}]))), \
+         patch.object(proxy_api, '_err', _err_stub):
+        result, error = await proxy_api._baseline_read('tenant-1', 'user-1', {'id': 'device-a'}, 'ws1.a')
+    assert result is None
+    assert error['code'] == 'TARGET_NOT_FOUND'  # 透传 CLI 实际失败码
+
+
+@pytest.mark.asyncio
+async def test_start_per_target_failed_read_does_not_start():
+    """启动读取遇到单目标 failed：不启动、不写基线游标（回归 2026-11-08 评审）。"""
+    with patch.object(proxy_api, '_current_user_context', AsyncMock(
+            return_value=('tenant-1', 'user-1', USER))), \
+         patch.object(proxy_api, '_agent_allowed', AsyncMock(return_value=True)), \
+         patch.object(proxy_tasks, 'get_task', return_value={
+             'id': 1, 'status': 'stopped', 'agent_id': 'agent-a'}), \
+         patch.object(proxy_tasks, 'start_prep', return_value=(
+             {'id': 1, 'device_id': 'device-a'},
+             [{'id': 11, 'session': 'ws1.a', 'wb1_cursor': None}], [])), \
+         patch.object(proxy_api, '_task_device', AsyncMock(
+             return_value=({'id': 'device-a'}, None))), \
+         patch.object(proxy_api, '_read_sessions_call', AsyncMock(
+             return_value=_read_page(failed=[{'code': 'LOCALDB_UNAVAILABLE'}]))), \
+         patch.object(proxy_tasks, 'complete_start') as complete, \
+         patch.object(proxy_api, '_err', _err_stub):
+        result = await proxy_api.start_proxy_task(1, Request())
+    assert result['code'] == 'LOCALDB_UNAVAILABLE'
+    complete.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_start_probes_identity_when_all_baselines_exist():
     with patch.object(proxy_api, '_current_user_context', AsyncMock(

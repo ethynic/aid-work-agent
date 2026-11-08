@@ -160,6 +160,14 @@ async def _baseline_read(tenant_id, user_id, device, locator):
         data, error = await _read_sessions_call(tenant_id, user_id, device, arguments)
         if error:
             return None, error
+        # CLI 批量读对单目标失败仍返回总体成功＋failed 数组，且游标照常返回
+        # （sessions.ts 结果组装路径）：建基线必须确认本目标真实读到，失败即拒绝，
+        # 不保存游标/水位、不把该会话当已建基线启动
+        failed = data.get('failed')
+        if isinstance(failed, list) and failed:
+            first = failed[0] if isinstance(failed[0], dict) else {}
+            code = first.get('code') or 'PROXY_READ_FAILED'
+            return None, _err(409, '目标会话本地读取未完成，未建立基线；请核对会话状态后重试', code)
         self_user_id = data.get('self_user_id')
         generation = data.get('source_generation')
         cursor = data.get('cursor')
