@@ -2823,6 +2823,54 @@ class WecomSessionDirectoryTool(WecomLocalToolProxyTool):
         return None
 
 
+class WecomConfigProbeInput(BaseModel):
+    """配置检查工具无参输入（契约 §2.1/§2.2：固定执行，不接受任何参数）。"""
+    model_config = {'extra': 'forbid'}
+
+
+class WecomConfigDoctorTool(WecomLocalToolProxyTool):
+    """企微配置检查（代理任务契约 §2.1；仅受信配置流程可发起，不进模型工具集）。
+
+    与 `aid-wecom doctor --localdb` 同逻辑的结构化本地入口；就绪判定由服务端
+    按契约规则消费（success/localdb_ready/mode=db/runtime_readiness/self_user_id），
+    CLI 退出码不进入 invocation 通路。可见性同 wecom_session_directory 页面专用先例。
+    """
+
+    name = 'wecom_config_doctor'
+    display_name = '企业微信配置检查'
+    description = ('本地只读配置深检（仅供后台代理任务创建检查受信调用，模型不可见）。')
+    InputModel = WecomConfigProbeInput
+    timeout_seconds = 300
+
+    def _validate_args(self, args):
+        try:
+            self.InputModel.model_validate(args)
+        except ValueError:
+            return '配置检查不接受任何参数'
+        return None
+
+
+class WecomConfigCalibrateTool(WecomLocalToolProxyTool):
+    """企微双点坐标标定（代理任务契约 §2.2；仅受信配置流程可发起，不进模型工具集）。
+
+    与 `aid-wecom calibrate` 同逻辑（身份预核＋PowerShell 双点标定，独占运行走
+    CLI 既有互斥）；驱动原始结果中的本机 cache_path 等不进契约字段，云端不读。
+    """
+
+    name = 'wecom_config_calibrate'
+    display_name = '企业微信双点标定'
+    description = ('本机标题与输入区双点坐标标定（仅供后台代理任务创建检查受信调用，模型不可见）。')
+    InputModel = WecomConfigProbeInput
+    timeout_seconds = 300
+
+    def _validate_args(self, args):
+        try:
+            self.InputModel.model_validate(args)
+        except ValueError:
+            return '双点标定不接受任何参数'
+        return None
+
+
 class WecomUnreadListInput(BaseModel):
     name: Optional[str] = Field(None, max_length=100,
                                 description="可选：按会话名称、别名或备注子串过滤；命名来源不可用时明确报错")
@@ -2982,6 +3030,8 @@ LOCAL_PROXY_TOOL_CLASSES = (
     WecomReadSessionTool,
     WecomReadSessionsTool,
     WecomSessionDirectoryTool,
+    WecomConfigDoctorTool,
+    WecomConfigCalibrateTool,
     WecomUnreadListTool,
     WecomSendStatusTool,
     WecomGroupPollTool,

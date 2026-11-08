@@ -23,6 +23,8 @@ from src.local_tools.manifest import LOCAL_PROXY_TOOL_NAMES
 from src.local_tools.proxy_tool import (
     LOCAL_PROXY_TOOL_CLASSES,
     BossGotoTool,
+    WecomConfigCalibrateTool,
+    WecomConfigDoctorTool,
     WecomMessageSendTool,
     WecomProbeTool,
     WecomReadSessionTool,
@@ -41,7 +43,9 @@ TENANT = "tenant_t1"
 USER = "user_t1"
 REPO = "src.local_tools.proxy_tool.repository"
 
-# 与 runtime wecom manifest / catalog 条目逐字一致（顺序也一致）
+# 与 runtime wecom manifest / catalog 条目逐字一致（顺序也一致）；
+# 代理任务 P3/P4：runtime manifest（providers.ts WECOM_TOOLS）已含两个配置工具，
+# 服务端 catalog 镜像同步（契约 §3；仅受信配置流程可发起，不进模型工具集）
 WECOM_MANIFEST_TOOLS = [
     "wecom_probe",
     "wecom_message_send",
@@ -53,6 +57,8 @@ WECOM_MANIFEST_TOOLS = [
     "wecom_group_poll",
     "wecom_read_sessions",
     "wecom_session_directory",
+    "wecom_config_doctor",
+    "wecom_config_calibrate",
 ]
 
 WECOM_PROXY_CLASSES = [
@@ -66,6 +72,8 @@ WECOM_PROXY_CLASSES = [
     WecomGroupPollTool,
     WecomReadSessionsTool,
     WecomSessionDirectoryTool,
+    WecomConfigDoctorTool,
+    WecomConfigCalibrateTool,
 ]
 
 

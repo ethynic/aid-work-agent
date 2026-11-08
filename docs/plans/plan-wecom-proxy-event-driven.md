@@ -8,7 +8,7 @@
 | P1 | 跨模块契约和 schema 冻结（文档） | ✅ 完成（2026-11-08） | 经三轮评审冻结为编码基线：首轮五项冲突与 Q1–Q6 裁决落地；二轮修订 needs_reply 分流、停止标志检查点、批次输入快照；终轮删除 `send_effect`，规则 3/4 以"发送调用事实＋原回执"分流（无调用或全部证明未发送→重试一次；有调用且任一次无法证明→只读对账），设计者确认后无需再复审。契约见 [wecom-proxy-task-contract.md](../design/wecom/wecom-proxy-task-contract.md)，共同契约 2.17 修订段同步。文档未提交 |
 | P2 | WeCom CLI 配置检查入口 | ✅ 完成（2026-11-08） | `wecom_config_doctor`/`wecom_config_calibrate` 受信 MCP 工具落地（契约 §2，registry-only 沿目录先例，cache_path 结构性排除）；新增 19 用例全过，模块回归与基线逐行一致（127 例存量环境失败：venv 缺失 126+存量断言 1），typecheck/build/MCP server/CLI 入口通过；CR 通过无 P0/P1，commit e0820517。真机 doctor/标定验收按 P8 执行 |
 | P3 | Runtime 受信调用与能力上报 | ✅ 完成（2026-11-08） | 两配置工具进 host core 受信名单（calibrate 归写集合），真实 listTools schema 检查后才上报能力串，旧插件 digest 锚点逐字节不变；wecomConfigTools 6 用例 + host-core 112 用例通过，A/B 基线对照零回归；CR 无 P0/P1，commit 6c3efabc。遗留记录：①recoveryStop.test.js 第 7 用例与 shutdown"等待在途启动"语义的确定性死锁已修复（测试改为先发起 shutdown 再放 prepareLaunch 闸门，三个断言语义全保留，12/12 过、全量套件完整跑通，commit 见 git log）；②calibrate 能力上报为存在性检查（P4 创建检查会真实执行工具，安全兜底） |
-| P4 | 后台配置、数据结构与 API | 📋 待开发 | — |
+| P4 | 后台配置、数据结构与 API | 🔧 进行中（开发完成，待独立测试与 CR） | 三表 DDL（契约 §4 冻结字段）＋迁移/init-postgres.sql/db_update 变更记录；受信配置接点（wecom_config_doctor/calibrate 服务端代理类＋catalog/manifest 名单，不进模型工具集）；`/api/wecom-proxy-tasks` 创建（真实 doctor＋标定就绪判定，缺能力仅禁创建并提示升级）/启动（运行条件不要求配置工具、同账号同会话唯一归属、initial 基线＋web_session_id 复用 Web 会话存储）/停止（stop_requested＋无 running 批落 stopped）/已停止编辑（edit_join_read 水位，启动不覆盖）/软删除（未决批次转 ended_by_*）/列表/详情；批次建行与状态迁移函数供 P5/P6 复用。44 新用例＋模块回归全绿（容器隔离库 176 过）；存量 test_agent_local_tool_registration 4 断言失败与本阶段无关（stash 验证未改动即失败）。文档未提交 |
 | P5 | 后台监控循环与持久队列 | 📋 待开发 | — |
 | P6 | 后台回答 Runner 与结束记录 | 📋 待开发 | — |
 | P7 | 前端代理任务页面 | 📋 待开发 | — |

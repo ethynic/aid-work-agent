@@ -4559,3 +4559,75 @@
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (task_id, runner_id)
     );
+- datetime: "2026-11-08 12:00:00"
+  remark: "企微代理任务三表（bs_wecom_proxy_tasks/task_sessions/batches）：任务配置与会话目标位置、批次持久队列；状态机由服务端维护；与 src/wecom_conversation/tables.py 同源（代理任务契约 §4）"
+  statements: |
+    CREATE TABLE IF NOT EXISTS bs_wecom_proxy_tasks (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL DEFAULT 'main',
+        instance_id TEXT,
+        device_id UUID NOT NULL,
+        wecom_account_id TEXT NOT NULL,
+        self_user_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        instruction TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'stopped',
+        stop_requested BOOLEAN NOT NULL DEFAULT FALSE,
+        revision BIGINT NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        deleted_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_tasks_owner
+        ON bs_wecom_proxy_tasks (tenant_id, user_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_tasks_account
+        ON bs_wecom_proxy_tasks (tenant_id, wecom_account_id, status);
+    CREATE TABLE IF NOT EXISTS bs_wecom_proxy_task_sessions (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        task_id BIGINT NOT NULL,
+        session TEXT NOT NULL,
+        web_session_id TEXT,
+        source_generation TEXT,
+        wb1_cursor TEXT,
+        baseline_origin TEXT,
+        processed_position BIGINT,
+        latest_seen_msg_id BIGINT,
+        status TEXT NOT NULL DEFAULT 'active',
+        halted_reason TEXT,
+        halted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        UNIQUE (tenant_id, task_id, session)
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_task_sessions_task
+        ON bs_wecom_proxy_task_sessions (tenant_id, task_id, status);
+    CREATE TABLE IF NOT EXISTS bs_wecom_proxy_batches (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        task_id BIGINT NOT NULL,
+        session TEXT NOT NULL,
+        batch_end_msg_id BIGINT,
+        input_snapshot JSONB,
+        agent_id TEXT,
+        instruction_snapshot TEXT,
+        web_session_id TEXT,
+        runner_id TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        end_json JSONB,
+        cli_error TEXT,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        started_at TIMESTAMPTZ,
+        finished_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_batches_queue
+        ON bs_wecom_proxy_batches (tenant_id, task_id, session, status);
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_batches_task
+        ON bs_wecom_proxy_batches (tenant_id, task_id, status);
