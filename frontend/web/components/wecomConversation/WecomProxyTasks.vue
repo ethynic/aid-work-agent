@@ -202,11 +202,12 @@
                         <p v-else class="text-sm text-muted m-0">未记录对应原消息。</p>
                       </div>
                       <div class="px-3 py-2">
-                        <p class="text-xs text-muted m-0 mb-1">回复文本</p>
-                        <p class="text-sm text-default m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ reply.text || '—' }}</p>
-                        <p v-if="reply.verification === 'local-record' || reply.verification_detail?.method === 'local-record'" class="text-xs text-muted m-0 mt-1">
-                          结束记录标记：本机客户端已记录发送
-                        </p>
+                        <div class="flex items-center justify-between gap-2 mb-1">
+                          <p class="text-xs text-muted m-0">回复文本</p>
+                          <BaseButton v-if="typeof reply.text === 'string' && reply.text" size="sm" intent="ghost"
+                            @click="copyBatchValue(reply.text, '完整文本')">复制完整文本</BaseButton>
+                        </div>
+                        <p class="text-sm text-default m-0 line-clamp-6 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ reply.text || '—' }}</p>
                       </div>
                     </div>
                     <div v-if="batchUnanswered(batch.end_json).length" class="rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-sm text-warning-700">

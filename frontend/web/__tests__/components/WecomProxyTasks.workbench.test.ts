@@ -240,8 +240,10 @@ describe('企微代理任务页', () => {
 
   it('详情按各条回复配对原文，诊断信息可复制且保留失败原因', async () => {
     routeState.route!.query = { task: '7' }
+    const longReply = ['您好，两款都有货。', '', '颜色：蓝色、黑色', '尺码：39 至 44', '预计明天发货。',
+      '支持七天无理由退货。', '有问题欢迎继续留言。'].join('\n')
     const endJson = { schema_version: 1, needs_reply: true, replies: [
-      { inbound_msg_ids: [97, 99, '100', 100.5], text: '您好，两款都有货。', receipt_id: 'rcpt-1',
+      { inbound_msg_ids: [97, 99, '100', 100.5], text: longReply, receipt_id: 'rcpt-1',
         verification: 'local-record', verification_detail: { method: 'local-record', message_id: 110, source_generation: 'gen-a' } },
       null,
       { inbound_msg_ids: [100], text: '明天发货。' },
@@ -287,7 +289,6 @@ describe('企微代理任务页', () => {
     expect(wrapper!.text()).toContain('零发送重试再失败')
     expect(wrapper!.text()).toContain('空闲检查次数')
 
-    // 批次 31：将发送标记归因于结束记录
     const okBatch = wrapper!.find('[data-testid="batch-31"]')
     const replies = okBatch.findAll('[data-testid="batch-reply"]')
     expect(replies).toHaveLength(3)
@@ -297,22 +298,22 @@ describe('企微代理任务页', () => {
     expect(first!.text()).toContain('消息 #99')
     expect(first!.text()).toContain('原消息内容未保存')
     expect(first!.text()).toContain('您好，两款都有货。')
-    expect(first!.text()).toContain('结束记录标记：本机客户端已记录发送')
+    expect(okBatch.text()).not.toContain('本机客户端已记录发送')
     expect(first!.text()).not.toContain('消息 #100')
     expect(first!.text()).not.toContain('什么时候发货？')
     expect(second!.text()).toContain('访客乙')
     expect(second!.text()).toContain('什么时候发货？')
     expect(second!.text()).toContain('明天发货。')
-    expect(second!.text()).not.toContain('本机客户端已记录发送')
     expect(third!.text()).toContain('未记录对应原消息。')
     expect(third!.text()).toContain('请稍等。')
     expect(okBatch.text()).not.toContain('rcpt-1')
     expect(okBatch.text()).not.toContain('runner-one')
     expect(okBatch.text()).not.toContain('冻结上界消息')
     expect(okBatch.find('details').exists()).toBe(false)
+    await first!.findAll('button').find(button => button.text() === '复制完整文本')!.trigger('click')
     await okBatch.findAll('button').find(button => button.text() === '复制 Runner ID')!.trigger('click')
     await okBatch.findAll('button').find(button => button.text() === '复制完整结束 JSON')!.trigger('click')
-    expect(writeText.mock.calls).toEqual([['runner-one'], [JSON.stringify(endJson, null, 2)]])
+    expect(writeText.mock.calls).toEqual([[longReply], ['runner-one'], [JSON.stringify(endJson, null, 2)]])
     expect(okBatch.text()).toContain('回答积分 0.42')
     expect(okBatch.text()).toContain('未回复消息（1）')
     expect(okBatch.text()).toContain('消息 #98：发送失败')

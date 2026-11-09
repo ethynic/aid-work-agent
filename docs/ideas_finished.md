@@ -277,6 +277,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261109-1607 | 企业微信代理批次长回复预览 | ✅ 已完成开发。精简发送提示，长回复支持预览与全文复制。 | [设计](design/wecom/wecom-conversation-operations-design.md#92-页面与任务配置) | [计划](plans/plan-wecom-proxy-event-driven.md#p14-批次长回复预览与全文复制) |
 | 20261109-1555 | 企业微信代理任务详情精简 | ✅ 已完成开发。精简详情操作和批次展示，按原消息配对回复。 | [设计](design/wecom/wecom-conversation-operations-design.md#92-页面与任务配置) | [计划](plans/plan-wecom-proxy-event-driven.md#p13-代理任务详情与原消息配对展示) |
 | 20261109-1545 | 企业微信代理任务列表精简 | ✅ 已完成开发。移除五列并显示执行智能体的名称。 | [设计](design/wecom/wecom-conversation-operations-design.md#92-页面与任务配置) | [计划](plans/plan-wecom-proxy-event-driven.md#p12-精简代理任务列表) |
 | 20261109-1503 | 侧栏最近会话与定时任务标签 | ✅ 已完成开发。两个标签可直接切换，选中项显示主题色下划线。 | [设计](system/scheduled-task-runner-refactor-design.md) | [计划](plans/plan-sidebar-recent-scheduled-tabs.md) |
