@@ -93,9 +93,12 @@ def _proxy_api():
 
 # ==================== 单轮编排 ====================
 
-async def run_tick():
-    """派发单轮：核定 → 释放 → 恢复驱动 → 派发（单步异常不中断整轮）。"""
-    batches = await asyncio.to_thread(_load_active_batches)
+async def run_tick(group_key=None):
+    """单设备派发轮：核定 → 释放 → 恢复驱动 → 派发。"""
+    if group_key is None:
+        batches = await asyncio.to_thread(_load_active_batches)
+    else:
+        batches = await asyncio.to_thread(_load_active_batches, group_key)
     if not batches:
         return
     runner_states = await asyncio.to_thread(
@@ -138,7 +141,7 @@ async def run_tick():
                 f'后端日志：企微代理派发异常 batch={batch["id"]} {e}')
 
 
-def _load_active_batches():
+def _load_active_batches(group_key=None):
     """running＋可派发 pending 批次（含任务/目标派发核对字段快照）。
 
     pending 仅取任务 running、未 stop_requested、目标 active 的批次（派发前
@@ -149,18 +152,20 @@ def _load_active_batches():
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            '''SELECT b.*, t.device_id, t.wecom_account_id, t.status AS task_status,
+        query = '''SELECT b.*, t.device_id, t.wecom_account_id, t.status AS task_status,
                       t.stop_requested, t.self_user_id, s.status AS target_status
                FROM bs_wecom_proxy_batches b
                JOIN bs_wecom_proxy_tasks t ON t.id=b.task_id AND t.tenant_id=b.tenant_id
                LEFT JOIN bs_wecom_proxy_task_sessions s ON s.tenant_id=b.tenant_id
                       AND s.task_id=b.task_id AND s.session=b.session
-               WHERE b.status=%s OR (b.status=%s AND t.status=%s AND t.stop_requested=FALSE
-                     AND s.status=%s)
-               ORDER BY b.updated_at, b.id''',
-            (proxy_tasks.BATCH_RUNNING, proxy_tasks.BATCH_PENDING, proxy_tasks.TASK_RUNNING,
-             proxy_tasks.TARGET_ACTIVE))
+               WHERE (b.status=%s OR (b.status=%s AND t.status=%s AND t.stop_requested=FALSE
+                     AND s.status=%s))'''
+        params = [proxy_tasks.BATCH_RUNNING, proxy_tasks.BATCH_PENDING,
+                  proxy_tasks.TASK_RUNNING, proxy_tasks.TARGET_ACTIVE]
+        if group_key is not None:
+            query += ' AND b.tenant_id=%s AND t.device_id=%s AND t.wecom_account_id=%s'
+            params.extend(group_key)
+        cursor.execute(query + ' ORDER BY b.updated_at, b.id', params)
         return [dict(row) for row in cursor.fetchall()]
 
 

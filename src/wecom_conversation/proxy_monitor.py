@@ -107,13 +107,17 @@ def _error_parts(error):
 
 # ==================== tick：加载 → 停止收敛 → 等待批重排 → 分组读 ====================
 
-async def run_tick():
-    """监控单轮：停止收敛 → waiting 重排 → 按设备/账号分组串行监控读。
+async def run_tick(group_key=None):
+    """单设备监控轮：停止收敛 → waiting 重排 → 组内串行监控读。
 
     单组/单步异常只记日志不中断整轮（下 tick 从持久事实继续）；无任务时空转。
     """
-    tasks = await asyncio.to_thread(_load_running_tasks)
-    items = await asyncio.to_thread(_load_work_items)
+    if group_key is None:
+        tasks = await asyncio.to_thread(_load_running_tasks)
+        items = await asyncio.to_thread(_load_work_items)
+    else:
+        tasks = await asyncio.to_thread(_load_running_tasks, group_key)
+        items = await asyncio.to_thread(_load_work_items, group_key)
     if not tasks and not items:
         return
     logger.debug(f'后端日志：企微代理监控 tick tasks={len(tasks)} targets={len(items)}')
@@ -132,34 +136,39 @@ async def run_tick():
             logger.opt(exception=True).error(f'后端日志：企微代理监控组处理异常: {e}')
 
 
-def _load_running_tasks():
+def _load_running_tasks(group_key=None):
     from src.db.database import get_db_connection
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            '''SELECT * FROM bs_wecom_proxy_tasks WHERE status=%s ORDER BY id''',
-            (proxy_tasks.TASK_RUNNING,))
+        query = 'SELECT * FROM bs_wecom_proxy_tasks WHERE status=%s'
+        params = [proxy_tasks.TASK_RUNNING]
+        if group_key is not None:
+            query += ' AND tenant_id=%s AND device_id=%s AND wecom_account_id=%s'
+            params.extend(group_key)
+        cursor.execute(query + ' ORDER BY id', params)
         return [dict(row) for row in cursor.fetchall()]
 
 
-def _load_work_items():
+def _load_work_items(group_key=None):
     """running 任务＋active 目标（含任务停止标志与位置三事实快照）。"""
     from src.db.database import get_db_connection
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            '''SELECT t.id AS task_id, t.tenant_id, t.user_id, t.device_id,
+        query = '''SELECT t.id AS task_id, t.tenant_id, t.user_id, t.device_id,
                       t.wecom_account_id, t.agent_id, t.instruction, t.stop_requested,
                       s.id AS target_id, s.session, s.web_session_id, s.source_generation,
                       s.wb1_cursor, s.processed_position
                FROM bs_wecom_proxy_tasks t
                JOIN bs_wecom_proxy_task_sessions s
                  ON s.tenant_id=t.tenant_id AND s.task_id=t.id
-               WHERE t.status=%s AND s.status=%s
-               ORDER BY t.id, s.id''',
-            (proxy_tasks.TASK_RUNNING, proxy_tasks.TARGET_ACTIVE))
+               WHERE t.status=%s AND s.status=%s'''
+        params = [proxy_tasks.TASK_RUNNING, proxy_tasks.TARGET_ACTIVE]
+        if group_key is not None:
+            query += ' AND t.tenant_id=%s AND t.device_id=%s AND t.wecom_account_id=%s'
+            params.extend(group_key)
+        cursor.execute(query + ' ORDER BY t.id, s.id', params)
         return [dict(row) for row in cursor.fetchall()]
 
 
