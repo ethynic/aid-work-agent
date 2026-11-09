@@ -29,7 +29,7 @@ from zoneinfo import ZoneInfo
 from loguru import logger
 
 from . import proxy_settlement, proxy_tasks
-from .proxy_monitor import group_lock
+from .proxy_monitor import clear_dispatch_turn, group_lock, request_dispatch_turn
 
 # 服务身份（configs/config.yaml agent_runner.peers.wecom_proxy）；
 # token 复用同一 .env 的 AGENT_RUNNER_WEB_SERVICE_TOKEN，无新增 env
@@ -262,10 +262,12 @@ async def _dispatch_batch(batch, runner_states):
     """
     tenant_id = batch['tenant_id']
     device_id = str(batch['device_id'])
+    key = (tenant_id, device_id, batch['wecom_account_id'])
     proxy_api = _proxy_api()
     device, error = await proxy_api._task_device(tenant_id, batch['user_id'], device_id,
                                                  DISPATCH_REQUIRED_TOOLS)
     if error:
+        clear_dispatch_turn(key)
         # 设备/账号运行条件不满足：批次留在 pending，下轮重试（沿 P5 瞬态语义，
         # 设备生命周期问题不转嫁为会话 halted）
         code, message = proxy_monitor_error_parts(error)
@@ -273,16 +275,18 @@ async def _dispatch_batch(batch, runner_states):
                        f'device={device_id} code={code} message={message}')
         return False
     if not await _agent_allowed(batch):
+        clear_dispatch_turn(key)
         # 失权走占用→终态路径（状态白名单 running→failed；同时停任务）
         await asyncio.to_thread(_occupy_batch, batch)
         await _fail_deterministic(batch, 'AGENT_NOT_ALLOWED', stop_task=True)
         return False
-    key = (tenant_id, device_id, batch['wecom_account_id'])
     lock = group_lock(key)
     if not lock.acquire(blocking=False):
-        # 监控组读进行中：本轮不派发，下轮再取（占用取得在锁内，双向互斥）
+        # 监控组读进行中：标记下轮让位，避免两个同周期 job 每轮都撞锁。
+        request_dispatch_turn(key)
         logger.info(f'后端日志：企微代理监控占用组级锁，派发本轮跳过 batch={batch["id"]}')
         return False
+    clear_dispatch_turn(key)
     try:
         # 占用＋提交在同一临界区：监控组读（同锁）不会与 Runner 启动交错
         if await asyncio.to_thread(_group_has_running, tenant_id, device_id,

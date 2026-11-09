@@ -63,6 +63,7 @@ def _proxy_api():
 # 单持有者由调度器 manager 级 Redis 锁保证（Q1）。
 _group_locks_guard = threading.Lock()
 _group_locks: dict = {}
+_dispatch_turns: set = set()
 
 
 def group_lock(key):
@@ -72,6 +73,22 @@ def group_lock(key):
         if lock is None:
             lock = _group_locks[key] = threading.Lock()
         return lock
+
+
+def request_dispatch_turn(key):
+    """派发抢锁失败后，请监控下一轮给本设备一次派发机会。"""
+    with _group_locks_guard:
+        _dispatch_turns.add(key)
+
+
+def clear_dispatch_turn(key):
+    with _group_locks_guard:
+        _dispatch_turns.discard(key)
+
+
+def dispatch_turn_requested(key):
+    with _group_locks_guard:
+        return key in _dispatch_turns
 
 
 def _error_parts(error):
@@ -228,6 +245,11 @@ async def _run_group(items):
     """
     first = items[0]
     key = (first['tenant_id'], str(first['device_id']), first['wecom_account_id'])
+    # 派发器确实抢锁失败过才让位；平时等待中的其他会话仍可继续读。
+    if dispatch_turn_requested(key):
+        if await asyncio.to_thread(_group_has_pending, *key):
+            return
+        clear_dispatch_turn(key)  # 批次已停止/移除，旧让位请求失效
     lock = group_lock(key)
     if not lock.acquire(blocking=False):
         # P6 派发器正占用/提交该组批次：本轮跳过，下轮再读
@@ -238,6 +260,25 @@ async def _run_group(items):
         await _run_group_locked(items)
     finally:
         lock.release()
+
+
+def _group_has_pending(tenant_id, device_id, account):
+    """确认先前抢锁失败的批次仍可派发，避免旧请求一直阻断读取。"""
+    from src.db.database import get_db_connection
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''SELECT 1 FROM bs_wecom_proxy_batches b
+               JOIN bs_wecom_proxy_tasks t ON t.id=b.task_id AND t.tenant_id=b.tenant_id
+               JOIN bs_wecom_proxy_task_sessions s ON s.tenant_id=b.tenant_id
+                    AND s.task_id=b.task_id AND s.session=b.session
+               WHERE b.tenant_id=%s AND t.device_id=%s AND t.wecom_account_id=%s
+                 AND b.status=%s AND t.status=%s AND t.stop_requested=FALSE
+                 AND s.status=%s LIMIT 1''',
+            (tenant_id, device_id, account, proxy_tasks.BATCH_PENDING,
+             proxy_tasks.TASK_RUNNING, proxy_tasks.TARGET_ACTIVE))
+        return cursor.fetchone() is not None
 
 
 async def _run_group_locked(items):
