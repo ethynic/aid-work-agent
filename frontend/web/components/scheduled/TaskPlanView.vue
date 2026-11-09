@@ -163,7 +163,7 @@
                   含 {{ executionImages(row).length }} 张图片、{{ executionDownloadableFiles(row).length }} 个文件，点击「查看详情」查看。
                 </p>
               </div>
-              <!-- 展开详情：完整文本 + 图片 + 下载文件 + 执行过程 + 会话消息（评审 P2-4） -->
+              <!-- 展开详情：完整文本 + 图片 + 下载文件 + 执行过程 -->
               <div v-if="expanded[row.runner_id]" class="mt-2 space-y-2">
                 <div v-if="executionBodyText(row)" class="text-gray-700 leading-relaxed markdown-content prose-sm prose-slate max-w-none" v-html="renderedOutput(row)"></div>
                 <ImageGallery v-if="executionImages(row).length" :images="executionImages(row)" />
@@ -179,15 +179,6 @@
                     <li v-for="(item, index) in executionProgress(row)" :key="index" class="text-xs text-gray-500 whitespace-pre-wrap">{{ item.content }}</li>
                   </ul>
                 </details>
-                <div v-if="runnerDetail(row).state === 'loaded' && runnerSessionMessages(row).length" class="border-t border-gray-100 pt-2">
-                  <p class="text-xs text-gray-400 mb-1">会话消息（该次执行的完整记录）</p>
-                  <div v-for="(message, index) in runnerSessionMessages(row)" :key="index"
-                    class="text-sm whitespace-pre-wrap break-words"
-                    :class="message.role === 'user' ? 'text-gray-500' : 'text-gray-700'">
-                    <span class="text-xs text-gray-400 mr-1">{{ message.role === 'user' ? '任务输入' : '执行结果' }}</span>{{ message.content }}
-                  </div>
-                </div>
-                <p v-else-if="runnerDetail(row).state === 'error'" class="text-xs text-gray-400">会话消息详情暂不可用，以上方执行结果为准。</p>
               </div>
               <p v-else-if="!executionBodyText(row) && row.status === 'completed' && !executionImages(row).length" class="mt-1.5 text-sm text-gray-400">（本次执行无文本与图片输出）</p>
             </div>
@@ -462,7 +453,6 @@ import {
 import { notificationsAPI, type TaskDeliveryEvent, type TaskNotifyRule } from '@/api/notifications'
 import { notificationRequest } from '@/notifications/api'
 import { uploadFile } from '@/api/agent'
-import { getSessionMessages, type ChatMessageRecord } from '@/api/session'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useSubagentList } from '@/composables/useSubagentList'
 import { renderMarkdown } from '@/utils/markdown'
@@ -672,57 +662,8 @@ function renderedOutput(row: RunnerView): string {
   return renderMarkdown(executionBodyText(row))
 }
 
-// ---- 会话消息详情（评审 P2-4 完整结果兜底；二轮修正：按 runner 粒度缓存） ----
-// GET /api/sessions/{session_id}/messages 的公开投影带 metadata.runner_id
-// （src/api/message_projection.py），按 runner_id 过滤出该次执行的 user/assistant 消息。
-// 缓存键 = runner_id：终态 runner 的消息不再变（缓存一次即定）；非终态 runner
-// 每次展开刷新（执行完成后内容会变，终态落定时清掉旧缓存）。
-interface RunnerSessionDetail { state: 'loading' | 'loaded' | 'error'; messages: ChatMessageRecord[] }
-const sessionDetails = shallowReactive(new Map<string, RunnerSessionDetail>())
-
-function runnerDetail(row: RunnerView): RunnerSessionDetail {
-  return sessionDetails.get(row.runner_id) || { state: 'loading', messages: [] }
-}
-
-async function ensureSessionMessages(c: PageContext, row: RunnerView) {
-  const session = task.value?.session_id
-  if (!session || !isLive(c)) return
-  const cached = sessionDetails.get(row.runner_id)
-  if (cached?.state === 'loading') return
-  // 终态缓存一次即定（终态后消息不再变）；非终态每次展开重新拉取。
-  // runner_id 过滤在后端先于 limit 执行（Phase 5 三轮评审第 3 项）——
-  // 更早执行的消息不受最近 100 条窗口限制，也无需缓存整份会话消息。
-  if (cached?.state === 'loaded' && runnerTerminal(row.status)) return
-  // 在途请求身份标记（评审第 2 项）：响应返回时只有当缓存条目仍是本次
-  // 请求写入的 loading 对象（引用相等）才落库——终态落定清缓存（delete）
-  // 或下次展开重建 loading 后，旧请求一律丢弃，不得写入过期内容。
-  const loadingEntry: RunnerSessionDetail = { state: 'loading', messages: [] }
-  sessionDetails.set(row.runner_id, loadingEntry)
-  try {
-    const result = await getSessionMessages(session, 100, row.runner_id)
-    if (!isLive(c) || sessionDetails.get(row.runner_id) !== loadingEntry) return
-    sessionDetails.set(row.runner_id, { state: 'loaded', messages: result.messages || [] })
-  } catch {
-    if (!isLive(c) || sessionDetails.get(row.runner_id) !== loadingEntry) return
-    sessionDetails.set(row.runner_id, { state: 'error', messages: [] })
-  }
-}
-
-function runnerSessionMessages(row: RunnerView): { role: string; content: string }[] {
-  const detail = sessionDetails.get(row.runner_id)
-  if (!detail || detail.state !== 'loaded') return []
-  // 后端按 runner_id 先过滤再 limit（评审第 3 项）；role 校验保留作防御
-  return detail.messages
-    .filter(message => ['user', 'assistant'].includes(message.role))
-    .map(message => ({ role: message.role, content: message.content }))
-}
-
 function toggleExpand(runnerId: string) {
   expanded[runnerId] = !expanded[runnerId]
-  if (expanded[runnerId]) {
-    const row = runners.get(runnerId)
-    if (row) void ensureSessionMessages(ctx, row)
-  }
 }
 /** 等待中执行的等待说明（快照 waiting） */
 const waitingText = computed(() => {
@@ -778,8 +719,6 @@ function maybeObserve(c: PageContext, row: RunnerView) {
     const previous = runners.get(view.runner_id)
     applyRunnerView(view)
     if (previous && !runnerTerminal(previous.status) && runnerTerminal(view.status)) {
-      // 终态落定：非终态时展开过的会话消息缓存已过期，删除待下次展开重拉
-      sessionDetails.delete(view.runner_id)
       // 统计与通知投递随后更新
       scheduleTerminalRefresh(c)
     }
@@ -1019,7 +958,6 @@ function resetPage() {
   loadingRunners.value = false
   loadingOlderRunners.value = false
   for (const key of Object.keys(expanded)) delete expanded[key]
-  sessionDetails.clear()
   deliveries.value = []
   deliveriesState.value = 'loading'
   editModal.show = false
@@ -1106,8 +1044,6 @@ async function focusRunnerFromQuery(c: PageContext, runnerId: string): Promise<v
   }
   if (!isLive(c)) return
   expanded[runnerId] = true
-  const row = runners.get(runnerId)
-  if (row) void ensureSessionMessages(c, row)
   await nextTick()
   document.getElementById(`runner-${runnerId}`)?.scrollIntoView({ block: 'center' })
 }

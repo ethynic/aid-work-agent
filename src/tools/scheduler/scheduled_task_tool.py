@@ -50,7 +50,8 @@ _INTERNAL_FIELDS = ("pending_snapshot",)
 
 def _public_task(task):
     """任务行对外投影：剥离调度侧内部交接字段（chat 记录不落库内部快照）"""
-    return {key: value for key, value in task.items() if key not in _INTERNAL_FIELDS}
+    return {key: value.isoformat() if isinstance(value, datetime) else value
+            for key, value in task.items() if key not in _INTERNAL_FIELDS}
 
 
 # ==================== R56 路由约束：微信营销定时任务引导专用工具 ====================
