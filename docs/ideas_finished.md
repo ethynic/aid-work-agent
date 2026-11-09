@@ -8,6 +8,7 @@
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
 | 20261109-1230 | 企业微信代理不同 Runtime 独立调度 | ✅ 已完成开发；独立测试通过，待部署真机验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#9-企业微信代理任务新消息触发回答2026-11-08设计待开发) | [计划](plans/plan-wecom-proxy-event-driven.md#p10-不同-runtime-的代理调度独立2026-11-09) |
+| 20261109-1200 | 企业微信代理停住目标手动恢复 | ✅ 已完成开发；独测与 CR 通过，待部署验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#95-接口兼容与验收边界) | [计划](plans/plan-wecom-proxy-event-driven.md#p9-停住目标手动恢复2026-11-09) |
 | 20261109-1130 | 企微标定复用 Runtime 配对身份 | ✅ 已完成开发；独测和 CR 通过，待部署真机验收。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w32-标定复用-runtime-配对身份2026-11-09) |
 | 20261109-1041 | 企微标题复制解除旧剪贴板纯文本门禁 | ✅ 已完成开发；0.2.13 本机 Runtime 验收通过。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w31-发送标题复制解除原剪贴板纯文本门禁2026-11-09) |
 | 20261107-0103 | 企微删除添加客户与 OCR 发行依赖 | ✅ 已完成开发；独测、隔离签包及 CR 通过，未正式发行或部署。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w27-企微删除添加客户与-ocr-发行依赖2026-11-07) |
