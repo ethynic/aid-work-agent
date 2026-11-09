@@ -237,7 +237,13 @@ class TraceCollector:
 
         if record_service:
             self.trace.total_tokens = record_service.total_token_count
-            self.trace.model = record_service.model
+            # 模型展示口径并入图片生成模型（runner 投影的 model 已含，legacy 从 usage_breakdown 取）
+            image_model = None
+            breakdown = getattr(record_service, "usage_breakdown", None)
+            if isinstance(breakdown, dict):
+                image_model = (breakdown.get("image") or {}).get("model")
+            display_models = sorted({m for m in (record_service.model, image_model) if m})
+            self.trace.model = ",".join(display_models) if display_models else None
             self.trace.provider = record_service.provider
             self.trace.agent_iterations = record_service.agent_iterations
 

@@ -478,6 +478,9 @@ class SessionRecordService:
             if self.merge_semantics:
                 usage_breakdown["merge"] = self.merge_semantics
 
+            # 展示口径：模型列表并入图片生成模型（add_image_usage 记录在 usage_breakdown.image.model）
+            image_model = (self.usage_breakdown.get("image") or {}).get("model")
+            display_models = sorted({m for m in (self.model, image_model) if m})
             record = ChatRecordDB.create(
                 session_id=self.session_id,
                 tenant_id=self.tenant_id,
@@ -488,7 +491,7 @@ class SessionRecordService:
                 prompt_tokens=self.prompt_tokens,
                 completion_tokens=self.completion_tokens,
                 cached_input_tokens=self.cached_input_tokens,
-                model=self.model,
+                model=",".join(display_models) if display_models else None,
                 provider=self.provider,
                 execution_details=self.execution_details.to_dict(),
                 agent_iterations=self.agent_iterations,
