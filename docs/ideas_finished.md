@@ -7,6 +7,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261109-1041 | 企微标题复制解除旧剪贴板纯文本门禁 | ✅ 已完成开发；0.2.13 本机 Runtime 验收通过。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w31-发送标题复制解除原剪贴板纯文本门禁2026-11-09) |
 | 20261107-0103 | 企微删除添加客户与 OCR 发行依赖 | ✅ 已完成开发；独测、隔离签包及 CR 通过，未正式发行或部署。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w27-企微删除添加客户与-ocr-发行依赖2026-11-07) |
 | 20261107-1045 | 企微无 OCR Agent→Runtime 真机验收 | ✅ 已完成开发；四工具真机读发、错名及歧义场景通过。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w30-无-ocr-agentruntime-真机验收2026-11-07) |
 | 20261103-1306 | 任务计划时间窗、最短间隔与用户任务数约束 | ✅ 已完成开发；独立测试与 CR 通过（1 P0+2 P1 修复关闭），发布验收与部署待授权。 | [设计 §15](system/scheduled-task-runner-refactor-design.md#15-时间窗最短间隔与用户任务数2026-11-03-待开发扩展) | [计划](plans/plan-scheduled-task-schedule-constraints.md) |
