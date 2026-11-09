@@ -277,6 +277,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261109-1442 | 企业微信会话记录布局调整 | ✅ 已完成开发。参考客服对话页调整会话列表和消息气泡。 | [设计](design/wecom/wecom-conversation-operations-design.md#61-会话记录页面) | [计划](plans/plan-wecom-conversation-record-layout.md) |
 | 20261021-1126 | Web Agent 单条回复分享 | ✅ 已完成开发：所选回复独立分享，图标与时间同行，弹框支持可选密码及图片附件。 | [设计](system/web-agent-reply-sharing-design.md) | [计划](plans/plan-web-agent-reply-sharing.md) |
 | 20260602-0956 | 前端 Office 预览 | ✅ 已完成开发：Word/Excel/PPT 三格式预览（整页/整表缩放、10MB/20MB/1000 行硬门槛、FileTypeIcon 类型徽标、懒加载分包），511 项单测与手动验收全过。 | [设计](research/frontend-office-preview-design.md) | — |
 | 20260922-1931 | 租户前台知识库「访问授权」矩阵 | ✅ 已完成开发：知识库页面「访问授权」矩阵弹框（行=一级栏目、列=数字员工）三态复选框自助配置栏目授权——半选=未配置默认全允许、首勾 confirm 收窄、取消全部勾选恢复默认、保存原样保留跨租户共享项（复用现有接口后端零改动）；三态语义同步管理后台 TenantMgmt「知识库关联」弹框（本租户栏目三态、共享栏目二态）。2026-10-10 agent2 全链路验证：矩阵渲染/首勾确认文案/半选→勾选流转/保存落库（own 项 owner_tenant_id=null）/共享项原样保留/取消勾选恢复未配置/后台三态一致；验证后租户配置已还原。 | — | — |
