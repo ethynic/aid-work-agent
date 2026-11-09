@@ -393,6 +393,11 @@ class DingTalkAdapter(ChannelAdapter):
         # 通过 build_public_url 把 ImageRef.download_url 转成公网 URL，
         # 公网不可达时 send_image 内部会失败 → 该图跳过 warning 不阻断。
         for ref in images:
+            # 速率限制（与 send_long_message / 文件分支一致）
+            if not self._check_rate_limit(reply_to):
+                logger.warning(f"[DingTalk] send_message 图片分支被速率限制拦截: target={reply_to}")
+                all_success = False
+                break
             try:
                 file_id = ref.get("file_id") if isinstance(ref, dict) else None
                 if not file_id:

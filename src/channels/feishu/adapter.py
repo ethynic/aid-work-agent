@@ -24,6 +24,10 @@ from typing import Any, Dict, Optional
 import httpx
 from loguru import logger
 
+from src.channels._image_reply import (
+    resolve_downloadable_file_local_path,
+    resolve_image_ref_local_path,
+)
 from src.channels._image_text_renderer import render_text_with_image_placeholders
 from src.channels.base import (
     ChannelAdapter,
@@ -578,7 +582,7 @@ class FeishuAdapter(ChannelAdapter):
         # 2. 发送图片（Phase 2 P2.9.1 新增）
         for ref in images:
             try:
-                local_path = await self._resolve_image_local_path(ref)
+                local_path = await resolve_image_ref_local_path(ref)
                 if not local_path:
                     all_success = False
                     continue
@@ -595,10 +599,16 @@ class FeishuAdapter(ChannelAdapter):
 
         # 3. 发送可下载文件
         for file_info in message.downloadable_files:
+            # DownloadableFileInfo 只带 file_id（无本地路径），经 Redis 元数据
+            # 解析本地路径并做租户归属校验（与 _image_reply 同口径）
+            file_path = resolve_downloadable_file_local_path(file_info, self._tenant_id)
             # 上传图片或文件到飞书
             if file_info.file_name.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
                 # 图片：上传后发送图片消息
-                image_key = await self.media.upload_image(file_info.local_path)
+                if not file_path:
+                    all_success = False
+                    continue
+                image_key = await self.media.upload_image(file_path)
                 if image_key:
                     success = await self.send_image(image_key, message.reply_to)
                     if not success:
@@ -607,7 +617,10 @@ class FeishuAdapter(ChannelAdapter):
                     all_success = False
             else:
                 # 文件：上传后发送文件消息
-                file_key = await self.media.upload_file(file_info.local_path)
+                if not file_path:
+                    all_success = False
+                    continue
+                file_key = await self.media.upload_file(file_path)
                 if file_key:
                     success = await self.send_file(file_key, file_info.file_name, message.reply_to)
                     if not success:
@@ -616,37 +629,6 @@ class FeishuAdapter(ChannelAdapter):
                     all_success = False
 
         return all_success
-
-    async def _resolve_image_local_path(self, ref: Dict[str, Any]) -> Optional[Any]:
-        """从 ImageRef dict（含 file_id）解析出本地路径。
-
-        通过 ImageRegistry 从 Redis 查 file_id 拿本地绝对路径。
-        ref 只要有 file_id 字段即可（不需要 ImageRef 全部字段）。
-
-        Args:
-            ref: ImageRef 的 dict 形式（来自 UnifiedResponse.get_images()）
-
-        Returns:
-            本地路径 Path 对象，失败返回 None
-        """
-        from pathlib import Path
-
-        from src.core.image_asset import get_image_registry
-
-        file_id = ref.get("file_id") if isinstance(ref, dict) else None
-        if not file_id:
-            logger.warning(f"[feishu] resolve image path failed: ref 缺少 file_id, ref={ref}")
-            return None
-        try:
-            registry = get_image_registry()
-            ref_obj = await registry.get_ref_by_file_id(file_id)
-            if ref_obj is None:
-                logger.warning(f"[feishu] image not found in registry: file_id={file_id}")
-                return None
-            return await registry.resolve_local_path(ref_obj)
-        except Exception as e:
-            logger.warning(f"[feishu] resolve image path failed file_id={file_id}: {e}")
-            return None
 
     async def send_long_message(self, text: str, user_id: str) -> bool:
         """
