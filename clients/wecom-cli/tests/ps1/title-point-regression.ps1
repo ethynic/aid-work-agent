@@ -15,7 +15,8 @@ function Write-DriverLog { param($Message) }
 function Open-WeComNamedChat { param($Hwnd,$Name) $script:searched=$Name }
 function Resolve-WeComMainWindow { return 101 }
 function Get-WeComWindowSnapshot { param($Hwnd,$Path) Copy-Item -LiteralPath $script:shot -Destination $Path;return @(0,0,1000,800) }
-function Get-WeComCopiedTitle { param($Hwnd,$Section,$Point) return $script:copied }
+function Get-WeComCopiedTitle { param($Hwnd,$Section,$Point)
+    return $script:copied }
 $oldLocal=$env:LOCALAPPDATA;$oldUrl=$env:AID_WECOM_SERVER_URL;$oldToken=$env:AID_WECOM_SERVER_TOKEN
 $dir=Join-Path $env:TEMP ('wecom-send-points-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $dir | Out-Null

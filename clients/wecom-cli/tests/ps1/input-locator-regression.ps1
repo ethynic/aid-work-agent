@@ -18,7 +18,8 @@ function Invoke-WeComCalibration { param($SelfName,$ArtifactDir)
     return @{x=440;y=38;input_x=550;input_y=710;cache_path=$script:cachePath;source='glm'}
 }
 function Open-WeComNamedChat { param($Hwnd,$Name) [void]$script:actions.Add('search:'+$Name) }
-function Get-WeComCopiedTitle { param($Hwnd,$Section,$Point) [void]$script:actions.Add('copy-title');return $script:title }
+function Get-WeComCopiedTitle { param($Hwnd,$Section,$Point)
+    [void]$script:actions.Add('copy-title');return $script:title }
 function Test-WeComSendTitleMatch { param($Title,$Expected,[switch]$RequireWechat,[switch]$Group)
     return $Title -eq $Expected
 }
