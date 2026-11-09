@@ -284,7 +284,7 @@ async def submit_manual_report(authorization, tenant_id, user_id, *, conversatio
     _ensure_session_committed(session_id, tenant_id, user_id, '企微会话日报生成')
     body = {'source': 'chat', 'session': {'kind': 'web', 'session_id': session_id},
             'client_request_id': request_id, 'text': '更新今日企业微信会话总结',
-            'profile_id': 'main', 'routing_policy': 'default_single',
+            'profile_id': 'main', 'routing_policy': 'explicit',
             'request_data': {DESCRIPTOR_KEY: config, 'wecom_task_device': str(device_id)}}
     client = _runner_client()
     value = await client.request('POST', '/v1/runners', authorization=authorization,
