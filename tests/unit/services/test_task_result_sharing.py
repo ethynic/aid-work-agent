@@ -109,6 +109,29 @@ def test_view_uses_final_message_and_never_exposes_internal_references(monkeypat
     assert 'tool_calls' in message_sql and 'tool_call_id' in message_sql and 'wait_id' in message_sql
 
 
+def test_view_ends_pool_probe_transaction_before_snapshot_isolation(monkeypatch):
+    # 连接池检出时健康探针 SELECT 1 已隐式开启事务；SET TRANSACTION 必须是事务
+    # 首条语句，否则线上报 ActiveSqlTransaction（2026-11-09 agent2 500 事故）。
+    message = {'content': 'done', 'metadata': {'runner_id': 'runner_1'}, 'created_at': datetime(2026, 11, 6, 12)}
+    cursor = MagicMock()
+    cursor.fetchone.side_effect = [share(), task(), runner(), message]
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+
+    @contextmanager
+    def connect():
+        yield connection
+
+    monkeypatch.setattr(service, 'get_db_connection', connect)
+    service.view_task_result('opaque_key')
+    calls = [(name.rsplit('.', 1)[-1], args[0] if args else '')
+             for name, args, kwargs in connection.mock_calls
+             if name.rsplit('.', 1)[-1] in ('rollback', 'execute')]
+    first_set_tx = next(i for i, (name, sql) in enumerate(calls)
+                        if name == 'execute' and 'SET TRANSACTION' in sql)
+    assert any(name == 'rollback' for name, _ in calls[:first_set_tx])
+
+
 def test_file_only_result_uses_live_runner_result_when_no_history_reply(monkeypatch):
     live = {**runner(), 'result': {'output': '', 'images': [],
         'assistant_metadata': {'downloadableFiles': [{'file_id': 'secret_report', 'file_name': 'report.pdf'}]}}}

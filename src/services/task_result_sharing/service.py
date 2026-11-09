@@ -69,6 +69,9 @@ def _row(cursor, sql, values):
 
 def _live_snapshot(share_key):
     with get_db_connection() as connection:
+        # 池检出时健康探针已开启事务（SELECT 1），SET TRANSACTION 必须是事务首条语句，
+        # 先结束探针事务再建立权威快照（同 event_read.py 先例）。
+        connection.rollback()
         cursor = connection.cursor()
         cursor.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
         record = _row(cursor, 'SELECT * FROM task_result_shares WHERE share_key=%s', (share_key,))
