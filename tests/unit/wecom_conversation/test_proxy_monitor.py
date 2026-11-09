@@ -333,6 +333,34 @@ async def test_old_task_failed_batch_does_not_block_new_running_task(tenant_id, 
 
 
 @pytest.mark.asyncio
+async def test_halted_old_target_failed_batch_does_not_block_new_task(tenant_id):
+    """旧任务仍运行但目标已停住时，新任务获准接管该会话后必须能读新消息。"""
+    locator = _locator(1)
+    _register(tenant_id, locator)
+    old_task = _create_started(tenant_id, [locator])
+    old_batch = _make_batch(tenant_id, old_task['id'], locator,
+                            web_session_id='wecom_proxy_old')
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, old_batch['id'], 'running')
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, old_batch['id'], 'failed',
+                                           cli_error='zero_send_retry_exhausted')
+        assert proxy_tasks.mark_target_halted_in_tx(
+            cursor, tenant_id, old_task['id'], locator, 'zero_send_retry_exhausted')
+        conn.commit()
+    new_task = _create_started(tenant_id, [locator])
+    assert _task_row(tenant_id, old_task['id'])['status'] == 'running'
+
+    read = await _tick([(_page(locator, [_peer(101)], cursor='wb1.takeover'), None)])
+
+    read.assert_awaited_once()
+    assert _batch_rows(tenant_id, old_task['id'])[0]['status'] == 'failed'
+    new_batches = _batch_rows(tenant_id, new_task['id'])
+    assert len(new_batches) == 1
+    assert new_batches[0]['batch_end_msg_id'] == 101
+
+
+@pytest.mark.asyncio
 async def test_multi_task_multi_target_single_loop_serial(tenant_id):
     """同设备多任务多目标：单循环串行处理，各目标独立游标各自建批。"""
     _register(tenant_id, _locator(1))

@@ -89,7 +89,7 @@
 
 **位置三事实**（不可混用）：① `wb1_cursor`＋`source_generation`＝下次监控读起点与源库代际（编辑加入水位读取同样保存二者）；② `processed_position`＝已确认处理到的消息位置（推进语义见 §5）；③ `latest_seen_msg_id`＝最近一次实际读取观测的库内最新位置。派发批次时冻结 `batch_end_msg_id`。
 
-**状态机要点**：创建后 `stopped`，首次启动为 `initial` 目标建基线（当前水位，历史不算新事件）；`running` 期间拒绝一切编辑；停止＝置 `stop_requested`，等当前 Runner 结束或进入 `waiting` 后任务落 `stopped`；停止期间可改标题/会话/指令，新增目标在编辑加入时由编辑 API 经同一受信读取能力一次性读取记水位（`baseline_origin='edit_join_read'`，保存 `wb1_cursor`＋`source_generation`＋当时水位，后续启动不得覆盖；该读取与监控循环共用同设备/账号串行占用）；软删除或移除目标使对应未决批次（含 `waiting`、`reconcile_hold` 中的未发送批次）转 `ended_by_*`，不得再恢复发送。并发启动仅允许同账号同稳定会话一个 `running` 归属，冲突在启动时明确报错。
+**状态机要点**：创建后 `stopped`，首次启动为 `initial` 目标建基线（当前水位，历史不算新事件）；`running` 期间拒绝一切编辑；停止＝置 `stop_requested`，等当前 Runner 结束或进入 `waiting` 后任务落 `stopped`；停止期间可改标题/会话/指令，新增目标在编辑加入时由编辑 API 经同一受信读取能力一次性读取记水位（`baseline_origin='edit_join_read'`，保存 `wb1_cursor`＋`source_generation`＋当时水位，后续启动不得覆盖；该读取与监控循环共用同设备/账号串行占用）；软删除或移除目标使对应未决批次（含 `waiting`、`reconcile_hold` 中的未发送批次）转 `ended_by_*`，不得再恢复发送。并发启动仅允许同账号同稳定会话一个 `running` 且目标为 `active` 的归属，冲突在启动时明确报错。
 
 2026-11-09 加性恢复入口：仅 `stopped` 任务中 `halted_reason='zero_send_retry_exhausted'` 的目标可由当前用户明确请求恢复。恢复请求只将目标置 `active`，保留 `halted_reason` 作为待重试标记，不建批；设备离线等启动失败时不会留下停止任务的 `pending` 批占用其他任务。随后原启动 API 核对设备/账号/权限和会话归属成功，在启动事务内新建 `pending/retry_count=0` 批，复制原失败批的冻结 `input_snapshot`、`batch_end_msg_id`、固定 `web_session_id`，使用当前任务的智能体/指令快照，并清除标记；原失败批及回执留作历史。`wb1_cursor`、`source_generation`、`processed_position`、`latest_seen_msg_id` 不变。失败批次无快照或已处理位置已达到批次上界时拒绝恢复；初始空会话的已处理位置可以是 `NULL`，其首条失败消息仍可恢复。同会话已有未决批拒绝启动建批。普通启动不解除 `halted`，其他 `halted` 原因、`reconcile_hold` 不得借此自动重发。仅增加后台与页面 API，不改 Device/Runtime/CLI wire 或既有批次 JSON schema。
 
