@@ -91,6 +91,7 @@ afterEach(() => {
   wrapper = null
   document.body.innerHTML = ''
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 it('零发送停住目标显式确认后先恢复再启动；离线失败保留可再次启动的说明', async () => {
@@ -138,13 +139,13 @@ it('其他停住原因不提供恢复操作', async () => {
 })
 
 describe('企微代理任务页', () => {
-  it('列表显示状态、标题、监控会话数、智能体；运行中禁编辑并说明原因', async () => {
+  it('列表显示任务标识；运行中禁编辑并说明原因', async () => {
     await mountPage()
     const rows = wrapper!.findAll('tbody tr')
     expect(rows).toHaveLength(2)
     expect(rows[0]!.text()).toContain('已停止')
     expect(rows[0]!.text()).toContain('售前群代理')
-    expect(rows[0]!.text()).toContain('2')
+    expect(rows[0]!.text()).toContain('售前智能体')
     expect(rows[1]!.text()).toContain('运行中')
     const runningEdit = rows[1]!.findAll('button').find(button => button.text() === '编辑')!
     expect(runningEdit.attributes('disabled')).toBeDefined()
@@ -237,10 +238,23 @@ describe('企微代理任务页', () => {
     expect(proxyApi.deleteProxyTask).toHaveBeenCalledWith(7)
   })
 
-  it('详情展示目标游标位置与批次 end_json：回复文本、本机客户端已记录发送、未回复原因', async () => {
+  it('详情按各条回复配对原文，诊断信息可复制且保留失败原因', async () => {
     routeState.route!.query = { task: '7' }
-    proxyApi.getProxyTask.mockResolvedValue({ task: { ...stoppedTask, targets: [
+    const longReply = ['您好，两款都有货。', '', '颜色：蓝色、黑色', '尺码：39 至 44', '预计明天发货。',
+      '支持七天无理由退货。', '有问题欢迎继续留言。'].join('\n')
+    const endJson = { schema_version: 1, needs_reply: true, replies: [
+      { inbound_msg_ids: [97, 99, '100', 100.5], text: longReply, receipt_id: 'rcpt-1',
+        verification: 'local-record', verification_detail: { method: 'local-record', message_id: 110, source_generation: 'gen-a' } },
+      null,
+      { inbound_msg_ids: [100], text: '明天发货。' },
+      { inbound_msg_ids: { length: 1 }, text: '请稍等。' },
+    ], unanswered: [null, { msg_id: 98, reason: 'send_failed', cli_error: { code: 'SEND_TIMEOUT', invocation_id: 'inv-1' } }] }
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    proxyApi.getProxyTask.mockResolvedValue({ task: { ...stoppedTask,
+      device_name: '办公室 Runtime', wecom_account_name: '工作企微', targets: [
       { id: 1, tenant_id: 't1', user_id: 'u1', task_id: 7, session: 'ws1.acc.R%3Aone', web_session_id: 'wecom_proxy_x',
+        conversation_name: '售前群',
         source_generation: 'gen-a', wb1_cursor: 'wb1.cursor-value', baseline_origin: 'initial',
         processed_position: 100, latest_seen_msg_id: 110, idle_read_count: 3, status: 'active', halted_reason: null,
         halted_at: null, created_at: '', updated_at: '' },
@@ -251,11 +265,11 @@ describe('企微代理任务页', () => {
     ], batches: [
       { id: 31, task_id: 7, session: 'ws1.acc.R%3Aone', batch_end_msg_id: 100, agent_id: 'agent-a',
         web_session_id: 'wecom_proxy_x', runner_id: 'runner-one', status: 'succeeded', retry_count: 0,
-        credit_cost: 0.42,
-        end_json: { schema_version: 1, needs_reply: true, replies: [
-          { inbound_msg_ids: [97, 99], text: '您好，两款都有货。', receipt_id: 'rcpt-1',
-            verification: 'local-record', verification_detail: { method: 'local-record', message_id: 110, source_generation: 'gen-a' } },
-        ], unanswered: [{ msg_id: 98, reason: 'send_failed', cli_error: { code: 'SEND_TIMEOUT', invocation_id: 'inv-1' } }] },
+        conversation_name: '售前群', credit_cost: 0.42, end_json: endJson,
+        inbound_messages: [
+          { msg_id: 97, sender_name: '访客甲', text: '请问还有货吗？' },
+          { msg_id: 100, sender_name: '访客乙', text: '什么时候发货？' },
+        ],
         cli_error: null, created_at: '2026-11-08T09:00:00Z', updated_at: '', started_at: null, finished_at: '2026-11-08T09:05:00Z' },
       { id: 30, task_id: 7, session: 'ws1.acc.R%3Ahalt', batch_end_msg_id: 6, agent_id: 'agent-a',
         web_session_id: null, runner_id: 'runner-two', status: 'failed', retry_count: 1, end_json: null,
@@ -265,22 +279,43 @@ describe('企微代理任务页', () => {
     await mountPage()
     expect(proxyApi.getProxyTask).toHaveBeenCalledWith(7, { batchLimit: 50 })
     expect(wrapper!.find('[data-testid="detail-title"]').text()).toBe('售前群代理')
-
-    // 目标列表：游标、位置、基线来源、停住原因、空闲读取列
-    expect(wrapper!.text()).toContain('wb1.cursor-value'.slice(0, 8))
-    expect(wrapper!.text()).toContain('100')
-    expect(wrapper!.text()).toContain('创建初选')
-    expect(wrapper!.text()).toContain('编辑加入')
+    expect(wrapper!.text()).toContain('办公室 Runtime')
+    expect(wrapper!.text()).toContain('工作企微')
+    expect(wrapper!.text()).not.toContain('工作台 / 代理任务')
+    expect(wrapper!.text()).not.toContain('修订号')
+    expect(wrapper!.text()).not.toContain('ws1.')
+    expect(wrapper!.text()).not.toContain('wb1.')
+    expect(wrapper!.text()).toContain('未命名会话')
     expect(wrapper!.text()).toContain('零发送重试再失败')
-    expect(wrapper!.text()).toContain('空闲读取')
+    expect(wrapper!.text()).toContain('空闲检查次数')
 
-    // 批次 31：回复文本与 CLI 证据仅称“本机客户端已记录发送”
     const okBatch = wrapper!.find('[data-testid="batch-31"]')
-    expect(okBatch.text()).toContain('您好，两款都有货。')
-    expect(okBatch.text()).toContain('本机客户端已记录发送')
-    expect(okBatch.text()).toContain('回执 rcpt-1')
-    expect(okBatch.text()).toContain('本地库消息 #110')
+    const replies = okBatch.findAll('[data-testid="batch-reply"]')
+    expect(replies).toHaveLength(3)
+    const [first, second, third] = replies
+    expect(first!.text()).toContain('访客甲')
+    expect(first!.text()).toContain('请问还有货吗？')
+    expect(first!.text()).toContain('消息 #99')
+    expect(first!.text()).toContain('原消息内容未保存')
+    expect(first!.text()).toContain('您好，两款都有货。')
+    expect(okBatch.text()).not.toContain('本机客户端已记录发送')
+    expect(first!.text()).not.toContain('消息 #100')
+    expect(first!.text()).not.toContain('什么时候发货？')
+    expect(second!.text()).toContain('访客乙')
+    expect(second!.text()).toContain('什么时候发货？')
+    expect(second!.text()).toContain('明天发货。')
+    expect(third!.text()).toContain('未记录对应原消息。')
+    expect(third!.text()).toContain('请稍等。')
+    expect(okBatch.text()).not.toContain('rcpt-1')
+    expect(okBatch.text()).not.toContain('runner-one')
+    expect(okBatch.text()).not.toContain('冻结上界消息')
+    expect(okBatch.find('details').exists()).toBe(false)
+    await first!.findAll('button').find(button => button.text() === '复制完整文本')!.trigger('click')
+    await okBatch.findAll('button').find(button => button.text() === '复制 Runner ID')!.trigger('click')
+    await okBatch.findAll('button').find(button => button.text() === '复制完整结束 JSON')!.trigger('click')
+    expect(writeText.mock.calls).toEqual([[longReply], ['runner-one'], [JSON.stringify(endJson, null, 2)]])
     expect(okBatch.text()).toContain('回答积分 0.42')
+    expect(okBatch.text()).toContain('未回复消息（1）')
     expect(okBatch.text()).toContain('消息 #98：发送失败')
     expect(okBatch.text()).toContain('SEND_TIMEOUT')
     expect(okBatch.text()).not.toContain('对方已收到')
@@ -303,9 +338,12 @@ describe('企微代理任务页', () => {
     ] } })
     await mountPage()
     expect(wrapper!.text()).toContain('本批判定无需回复')
-    const editButton = wrapper!.findAll('button').find(button => button.text() === '编辑')!
+    expect(wrapper!.text()).toContain('未取得名称')
+    const editButton = wrapper!.get('button[aria-label="编辑"]')
+    expect(editButton.find('svg').exists()).toBe(true)
+    expect(wrapper!.get('button[aria-label="停止"]').find('svg').exists()).toBe(true)
     expect(editButton.attributes('disabled')).toBeDefined()
-    expect(editButton.attributes('title')).toBe('运行中不可编辑，请先停止')
+    expect(editButton.element.parentElement?.title).toBe('运行中不可编辑，请先停止')
   })
 
   it('停止后编辑预填配置，保存只携带变更差异', async () => {
@@ -334,23 +372,27 @@ describe('企微代理任务页', () => {
     expect((dialog.querySelector('select[aria-label="选择智能体"]') as HTMLSelectElement).disabled).toBe(true)
   })
 
-  it('列表运行信息列：最近检查、最新消息、空闲读取、回答积分与最近错误截断悬停', async () => {
-    proxyApi.listProxyTasks.mockResolvedValue({ tasks: [{ ...stoppedTask,
-      last_checked_at: '2026-11-08T10:00:00+08:00', latest_seen_msg_id: 120,
-      idle_read_count: 5, credit_cost: 0.6, last_error: 'PROXY_READ_FAILED' }] })
+  it('列表保留最近检查和回答积分，智能体只显示所选实例的名称', async () => {
+    const checkedAt = '2026-11-08T10:00:00+08:00'
+    proxyApi.listProxyTasks.mockResolvedValue({ tasks: [
+      { ...stoppedTask, last_checked_at: checkedAt, latest_seen_msg_id: 120,
+        idle_read_count: 5, credit_cost: 0.6, last_error: 'PROXY_READ_FAILED' },
+      { ...deletedTask, agent_id: 'archived-agent' },
+    ] })
+    subagentApi.listSubagents.mockResolvedValue({ success: true, data: [
+      { agent_id: 'agent-a', name: '售前智能体', display_name: '在线电商客服', type: 'tenant_instance' },
+    ] })
     await mountPage()
-    const header = wrapper!.find('thead')
-    expect(header.text()).toContain('最近检查')
-    expect(header.text()).toContain('最新消息')
-    expect(header.text()).toContain('空闲读取')
-    expect(header.text()).toContain('回答积分')
-    expect(header.text()).toContain('最近错误')
-    const row = wrapper!.findAll('tbody tr')[0]!
-    expect(row.text()).toContain('5')
-    expect(row.text()).toContain('0.60')
-    expect(row.text()).toContain('120')
-    const errorCell = row.find('.truncate')
-    expect(errorCell.attributes('title')).toBe('PROXY_READ_FAILED')
+    expect(wrapper!.findAll('thead th').map(cell => cell.text())).toEqual([
+      '状态', '标题', '智能体', '最近检查', '回答积分', '操作',
+    ])
+    const [active, archived] = wrapper!.findAll('tbody tr')
+    const cells = active!.findAll('td')
+    expect(cells[2]!.text()).toBe('在线电商客服')
+    expect(cells[2]!.attributes('title')).toBe('在线电商客服')
+    expect(cells[3]!.text()).toBe(new Date(checkedAt).toLocaleString('zh-CN'))
+    expect(cells[4]!.text()).toBe('0.60')
+    expect(archived!.findAll('td')[2]!.text()).toBe('—')
   })
 
   it('任务列表加载更多：按返回条数判 has_more，追加渲染且不再显示按钮', async () => {

@@ -2,6 +2,7 @@
 
 import base64
 import json
+from uuid import uuid4
 
 import pytest
 
@@ -83,6 +84,71 @@ def test_create_rejects_account_self_mismatch(tenant_id):
             tenant_id, USER, device_id=DEVICE, account=ACCOUNT, self_user_id='acc-x',
             title='T', agent_id='agent-a', instruction='I', sessions=[_locator(1)])
     assert _code(exc.value) == 'PROXY_ACCOUNT_MISMATCH'
+
+
+def test_task_detail_resolves_owned_names_and_only_projects_replied_originals(tenant_id):
+    device = str(uuid4())
+    session = _locator(1)
+    conversation = _register(tenant_id, session, name='售前群', device=device)
+    other = _register(tenant_id, _locator(2, account='other-account'), device=device)
+    task = _create(tenant_id, [session], device=device)
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                '''INSERT INTO local_tool_devices (id, tenant_id, user_id, name, token_hash)
+                   VALUES (%s,%s,%s,%s,%s)''',
+                (device, tenant_id, USER, '办公室 Runtime', device))
+            cursor.executemany(
+                '''INSERT INTO bs_wecom_messages
+                   (tenant_id,user_id,conversation_id,source_generation,source_message_id,
+                    sender_id,sender_name,name_source,sender_side,sent_at)
+                   VALUES (%s,%s,%s,'g1',%s,%s,%s,%s,%s,%s)''',
+                [
+                    (tenant_id, USER, conversation['id'], 1, ACCOUNT, '工作账号', 'user_table', 'self', '2026-11-07'),
+                    (tenant_id, USER, conversation['id'], 2, ACCOUNT, '未确认别名', 'unknown', 'self', '2026-11-08'),
+                    (tenant_id, USER, conversation['id'], 3, ACCOUNT, '对方伪名', 'user_table', 'peer', '2026-11-09'),
+                    (tenant_id, 'other-user', conversation['id'], 4, ACCOUNT, '别人的消息', 'user_table', 'self', '2026-11-10'),
+                    (tenant_id, USER, other['id'], 5, ACCOUNT, '其他账号', 'user_table', 'self', '2026-11-11'),
+                ])
+            batch = proxy_tasks.create_batch_in_tx(
+                cursor, tenant_id, USER, task_id=task['id'], session=session,
+                batch_end_msg_id=103, input_snapshot={'messages': [
+                    {'msg_id': 101, 'sender_name': '访客甲', 'text': '请问有货吗？', 'sender_id': 'private-id'},
+                    {'msg_id': 102, 'sender_name': '访客乙', 'text': '什么时候发货？'},
+                    {'msg_id': 103, 'sender_name': '访客丙', 'text': '未被回复的内容'},
+                ]},
+                agent_id='agent-a', instruction_snapshot='I', web_session_id='wecom_proxy_1')
+            proxy_tasks.transition_batch_in_tx(cursor, tenant_id, batch['id'], 'running')
+            proxy_tasks.transition_batch_in_tx(cursor, tenant_id, batch['id'], 'succeeded', end_json={
+                'replies': [{'inbound_msg_ids': [101]}, {'inbound_msg_ids': [102, 404]}],
+            })
+            conn.commit()
+
+        detail = proxy_tasks.get_task_detail(tenant_id, USER, task['id'])
+        assert detail['device_name'] == '办公室 Runtime'
+        assert detail['wecom_account_name'] == '工作账号'
+        assert detail['targets'][0]['conversation_name'] == '售前群'
+        projected = detail['batches'][0]
+        assert projected['conversation_name'] == '售前群'
+        assert projected['inbound_messages'] == [
+            {'msg_id': 101, 'sender_name': '访客甲', 'text': '请问有货吗？'},
+            {'msg_id': 102, 'sender_name': '访客乙', 'text': '什么时候发货？'},
+        ]
+        assert 'input_snapshot' not in projected
+        assert proxy_tasks.get_task_detail(tenant_id, 'other-user', task['id']) is None
+        assert proxy_tasks.get_task_detail('other-tenant', USER, task['id']) is None
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE local_tool_devices SET user_id=%s WHERE id=%s', ('other-user', device))
+            conn.commit()
+        assert proxy_tasks.get_task_detail(tenant_id, USER, task['id'])['device_name'] is None
+    finally:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM local_tool_devices WHERE id=%s', (device,))
+            conn.commit()
 
 
 # ==================== 启动基线与 web_session 登记 ====================

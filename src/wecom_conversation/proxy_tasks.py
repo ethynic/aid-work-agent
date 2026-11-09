@@ -367,6 +367,29 @@ def list_tasks(tenant_id, user_id, *, include_deleted=False, limit=50, offset=0)
         return [_row(item) for item in cursor.fetchall()]
 
 
+def _reply_inbound_messages(end_json, snapshot):
+    """只投影本批回复明确引用的原文，不返回完整运行快照。"""
+    if not isinstance(end_json, dict) or not isinstance(snapshot, dict):
+        return []
+    replies = end_json.get('replies')
+    messages = snapshot.get('messages')
+    if not isinstance(replies, list) or not isinstance(messages, list):
+        return []
+    covered_ids = set()
+    for reply in replies:
+        ids = reply.get('inbound_msg_ids') if isinstance(reply, dict) else None
+        if isinstance(ids, list):
+            covered_ids.update(msg_id for msg_id in ids if type(msg_id) is int)
+    return [
+        {'msg_id': message['msg_id'],
+         'sender_name': message['sender_name'] if isinstance(message.get('sender_name'), str) else None,
+         'text': message['text'] if isinstance(message.get('text'), str) else None}
+        for message in messages
+        if isinstance(message, dict) and type(message.get('msg_id')) is int
+        and message['msg_id'] in covered_ids
+    ]
+
+
 def get_task_detail(tenant_id, user_id, task_id, *, batch_limit=50, batch_offset=0):
     """任务详情：配置＋每目标位置只读投影＋最近批次（历史只读可查）。
 
@@ -376,7 +399,21 @@ def get_task_detail(tenant_id, user_id, task_id, *, batch_limit=50, batch_offset
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            '''SELECT * FROM bs_wecom_proxy_tasks WHERE id=%s AND tenant_id=%s AND user_id=%s''',
+            '''SELECT t.*, d.name AS device_name,
+                      (SELECT m.sender_name
+                       FROM bs_wecom_conversations c
+                       JOIN bs_wecom_messages m ON m.conversation_id=c.id
+                         AND m.tenant_id=c.tenant_id AND m.user_id=c.user_id
+                       WHERE c.tenant_id=t.tenant_id AND c.user_id=t.user_id
+                         AND c.source_account_id=t.wecom_account_id
+                         AND m.sender_side='self' AND m.sender_id=t.self_user_id
+                         AND m.name_source='user_table' AND BTRIM(m.sender_name) <> ''
+                       ORDER BY m.sent_at DESC NULLS LAST, m.id DESC LIMIT 1
+                      ) AS wecom_account_name
+               FROM bs_wecom_proxy_tasks t
+               LEFT JOIN local_tool_devices d ON d.id=t.device_id
+                 AND d.tenant_id=t.tenant_id AND d.user_id=t.user_id
+               WHERE t.id=%s AND t.tenant_id=%s AND t.user_id=%s''',
             (task_id, tenant_id, user_id))
         task = _row(cursor.fetchone())
         if task is None:
@@ -384,12 +421,25 @@ def get_task_detail(tenant_id, user_id, task_id, *, batch_limit=50, batch_offset
         targets = _task_targets(cursor, tenant_id, task_id)
         cursor.execute(
             '''SELECT id, task_id, session, batch_end_msg_id, agent_id, web_session_id,
-                      runner_id, status, end_json, cli_error, retry_count, credit_cost,
+                      runner_id, status, end_json, input_snapshot, cli_error, retry_count, credit_cost,
                       created_at, updated_at, started_at, finished_at
-               FROM bs_wecom_proxy_batches WHERE tenant_id=%s AND task_id=%s
+               FROM bs_wecom_proxy_batches WHERE tenant_id=%s AND user_id=%s AND task_id=%s
                ORDER BY id DESC LIMIT %s OFFSET %s''',
-            (tenant_id, task_id, min(int(batch_limit), 200), max(int(batch_offset), 0)))
+            (tenant_id, user_id, task_id, min(int(batch_limit), 200), max(int(batch_offset), 0)))
         batches = [_row(item) for item in cursor.fetchall()]
+        sessions = {item['session'] for item in targets + batches}
+        names = {}
+        if sessions:
+            cursor.execute(
+                '''SELECT session_locator, name FROM bs_wecom_conversations
+                   WHERE tenant_id=%s AND user_id=%s AND source_account_id=%s
+                     AND session_locator=ANY(%s)''',
+                (tenant_id, user_id, task['wecom_account_id'], list(sessions)))
+            names = {row['session_locator']: row['name'] for row in cursor.fetchall()}
+    for item in targets + batches:
+        item['conversation_name'] = names.get(item['session'])
+    for batch in batches:
+        batch['inbound_messages'] = _reply_inbound_messages(batch['end_json'], batch.pop('input_snapshot'))
     task['targets'] = targets
     task['batches'] = batches
     task['batches_has_more'] = len(batches) == min(int(batch_limit), 200)

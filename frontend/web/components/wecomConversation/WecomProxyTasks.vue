@@ -1,6 +1,6 @@
 <template>
   <div :class="embedded ? 'h-full' : 'h-screen'" class="flex flex-col bg-canvas">
-    <AppHeader title="企业微信代理任务" :is-logged-in="effectiveIsLoggedIn" :user="effectiveUser"
+    <AppHeader :title="detailId ? '' : '企业微信代理任务'" :is-logged-in="effectiveIsLoggedIn" :user="effectiveUser"
       @toggle-sidebar="handleToggleSidebar" @logout="tenantLogout">
       <template #menu-items="{ closeMenu }">
         <button class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover" @click="goCenter(); closeMenu()">会话记录</button>
@@ -10,7 +10,7 @@
 
     <main class="flex-1 overflow-y-auto p-4 md:p-6">
       <div class="max-w-6xl mx-auto space-y-4">
-        <div>
+        <div v-if="!detailId">
           <p class="text-xs text-muted mb-1">工作台 / 代理任务 / 企业微信</p>
           <h1 class="text-xl font-semibold text-default m-0">企业微信代理任务</h1>
         </div>
@@ -30,30 +30,22 @@
           <p v-if="actionError" role="alert" class="mx-4 mt-3 text-sm text-danger-700">{{ actionError }}</p>
 
           <div class="table-scroll-wrapper">
-            <BaseTable :columns="taskColumns" :data="tasks" row-key="id">
+            <BaseTable :columns="taskColumns" :data="tasks" row-key="id" table-fixed>
               <template #status="{ row }">
                 <BaseBadge :intent="statusBadge(row as WecomProxyTask).intent">{{ statusBadge(row as WecomProxyTask).label }}</BaseBadge>
               </template>
               <template #title="{ row }">
-                <span class="text-sm font-medium text-default">{{ row.title }}</span>
-                <span v-if="row.stop_requested && row.status === 'running'" class="text-xs text-warning-700 ml-2">停止中：等待当前批次结束</span>
+                <span class="block truncate text-sm font-medium text-default">{{ row.title }}</span>
+                <span v-if="row.stop_requested && row.status === 'running'" class="block text-xs text-warning-700">停止中：等待当前批次结束</span>
               </template>
-              <template #active_target_count="{ row }">{{ row.active_target_count ?? 0 }}</template>
-              <template #agent_id="{ row }">
-                <span class="text-xs text-muted break-all">{{ agentName(row.agent_id) }}</span>
+              <template #agent_name="{ row }">
+                <span class="block truncate">{{ agentName(row.agent_id) }}</span>
               </template>
               <template #last_checked_at="{ row }">
-                <span v-if="row.last_checked_at">{{ formatTime(row.last_checked_at) }}</span>
+                <span v-if="row.last_checked_at" class="whitespace-nowrap">{{ formatTime(row.last_checked_at) }}</span>
                 <span v-else class="text-xs text-muted">—</span>
               </template>
-              <template #latest_seen_msg_id="{ row }">{{ row.latest_seen_msg_id ?? '—' }}</template>
-              <template #idle_read_count="{ row }">{{ row.idle_read_count ?? 0 }}</template>
               <template #credit_cost="{ row }">{{ formatCredit(row.credit_cost) }}</template>
-              <template #last_error="{ row }">
-                <span v-if="row.last_error" class="block max-w-36 truncate text-xs text-warning-700" :title="row.last_error">{{ row.last_error }}</span>
-                <span v-else class="text-xs text-muted">—</span>
-              </template>
-              <template #updated_at="{ row }">{{ formatTime(row.updated_at) }}</template>
               <template #actions="{ row }">
                 <div class="flex items-center justify-center gap-1 whitespace-nowrap">
                   <BaseButton size="sm" intent="ghost" :data-testid="`detail-${row.id}`" @click="openDetail(row.id)">详情</BaseButton>
@@ -84,10 +76,45 @@
 
         <!-- ==================== 详情视图 ==================== -->
         <div v-else class="bg-surface border border-default rounded-xl overflow-hidden">
-          <div class="px-4 py-3 border-b border-default flex items-center gap-3 flex-wrap">
-            <BaseButton intent="secondary" data-testid="back-list" @click="closeDetail">返回列表</BaseButton>
-            <div class="flex-1" />
-            <BaseButton intent="ghost" :disabled="detailLoading" @click="loadDetail">刷新</BaseButton>
+          <div class="px-4 py-3 border-b border-default flex items-center gap-2 [&_button]:px-2 sm:[&_button]:px-3">
+            <BaseButton class="shrink-0" intent="ghost" aria-label="返回列表" title="返回列表" data-testid="back-list" @click="closeDetail">
+              <svg class="h-4 w-4" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7M5 12h14" /></svg>
+            </BaseButton>
+            <div v-if="detailTask" class="flex-1 min-w-0">
+              <div class="flex items-center gap-2">
+                <h1 class="text-base font-semibold text-default m-0 truncate" :title="detailTask.title" data-testid="detail-title">{{ detailTask.title }}</h1>
+                <BaseBadge class="shrink-0 whitespace-nowrap" :intent="statusBadge(detailTask).intent">{{ statusBadge(detailTask).label }}</BaseBadge>
+              </div>
+              <p v-if="detailTask.stop_requested && detailTask.status === 'running'" class="text-xs text-warning-700 m-0">停止中：等待当前批次结束</p>
+            </div>
+            <div v-else class="flex-1" />
+            <div class="flex shrink-0 items-center gap-1 ml-auto">
+              <BaseButton intent="ghost" aria-label="刷新" title="刷新" :disabled="detailLoading" @click="loadDetail">
+                <svg class="h-4 w-4" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7v5h-5M4 17v-5h5m-4.2-3a8 8 0 0 1 13.1-3L20 8M4 16l2.1 2A8 8 0 0 0 19.2 15" /></svg>
+              </BaseButton>
+              <template v-if="detailTask">
+                <span v-if="detailTask.status === 'stopped'" class="inline-flex"
+                  :title="!activeTargets.length ? '没有可启动的会话，请先恢复停住的目标或编辑添加' : '启动'">
+                  <BaseButton intent="ghost" aria-label="启动" :disabled="actionPending(detailTask.id) || !activeTargets.length" @click="startTask(detailTask)">
+                    <svg class="h-4 w-4" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m8 5 12 7-12 7Z" /></svg>
+                  </BaseButton>
+                </span>
+                <BaseButton v-if="detailTask.status === 'running'" intent="ghost" aria-label="停止" title="停止"
+                  :disabled="actionPending(detailTask.id)" @click="askStop(detailTask)">
+                  <svg class="h-4 w-4" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+                </BaseButton>
+                <span v-if="detailTask.status !== 'deleted'" class="inline-flex"
+                  :title="detailTask.status === 'running' ? '运行中不可编辑，请先停止' : '编辑'">
+                  <BaseButton intent="ghost" aria-label="编辑" :disabled="detailTask.status === 'running' || actionPending(detailTask.id)" @click="openEdit(detailTask)">
+                    <svg class="h-4 w-4" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 4 4 4M4 20l4.5-1 12-12a2.8 2.8 0 0 0-4-4l-12 12L4 20Z" /></svg>
+                  </BaseButton>
+                </span>
+                <BaseButton v-if="detailTask.status === 'stopped'" intent="danger-ghost" aria-label="删除" title="删除"
+                  :disabled="actionPending(detailTask.id)" @click="askDelete(detailTask)">
+                  <svg class="h-4 w-4" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M6 7l1 13h10l1-13M9 7V4h6v3m-5 4v5m4-5v5" /></svg>
+                </BaseButton>
+              </template>
+            </div>
           </div>
 
           <p v-if="detailError" role="alert" class="mx-4 mt-3 text-sm text-danger-700">{{ detailError }}</p>
@@ -95,38 +122,15 @@
           <p v-if="actionError" role="alert" class="mx-4 mt-3 text-sm text-danger-700">{{ actionError }}</p>
 
           <template v-if="detailTask">
-            <div class="px-4 py-4 border-b border-default flex items-start gap-3 flex-wrap">
-              <div class="flex-1 min-w-48">
-                <div class="flex items-center gap-2 flex-wrap">
-                  <h2 class="text-base font-semibold text-default m-0 break-words" data-testid="detail-title">{{ detailTask.title }}</h2>
-                  <BaseBadge :intent="statusBadge(detailTask).intent">{{ statusBadge(detailTask).label }}</BaseBadge>
-                  <span v-if="detailTask.stop_requested && detailTask.status === 'running'" class="text-xs text-warning-700">停止中：等待当前批次结束</span>
-                </div>
-                <div class="flex items-center gap-1 mt-2 flex-wrap">
-                  <BaseButton v-if="detailTask.status === 'stopped'" size="sm" intent="secondary"
-                    :disabled="actionPending(detailTask.id) || !activeTargets.length"
-                    :title="!activeTargets.length ? '没有可启动的会话，请先恢复停住的目标或编辑添加' : ''"
-                    @click="startTask(detailTask)">启动</BaseButton>
-                  <BaseButton v-if="detailTask.status === 'running'" size="sm" intent="secondary" :disabled="actionPending(detailTask.id)" @click="askStop(detailTask)">停止</BaseButton>
-                  <BaseButton v-if="detailTask.status !== 'deleted'" size="sm" intent="secondary" :disabled="detailTask.status === 'running' || actionPending(detailTask.id)"
-                    :title="detailTask.status === 'running' ? '运行中不可编辑，请先停止' : ''"
-                    @click="openEdit(detailTask)">编辑</BaseButton>
-                  <BaseButton v-if="detailTask.status === 'stopped'" size="sm" intent="danger-ghost"
-                    :disabled="actionPending(detailTask.id)" @click="askDelete(detailTask)">删除</BaseButton>
-                </div>
-              </div>
-            </div>
-
             <section class="px-4 py-4 border-b border-default" aria-label="任务信息">
               <h3 class="text-sm font-semibold text-default m-0 mb-3">任务信息</h3>
               <dl class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm m-0">
                 <div class="flex gap-2"><dt class="text-muted shrink-0 w-24 m-0">任务编号</dt><dd class="m-0 text-default break-all">#{{ detailTask.id }}</dd></div>
-                <div class="flex gap-2"><dt class="text-muted shrink-0 w-24 m-0">智能体</dt><dd class="m-0 text-default break-all">{{ agentName(detailTask.agent_id) }}</dd></div>
-                <div class="flex gap-2"><dt class="text-muted shrink-0 w-24 m-0">设备</dt><dd class="m-0 text-default break-all">{{ shortSession(detailTask.device_id) }}</dd></div>
-                <div class="flex gap-2"><dt class="text-muted shrink-0 w-24 m-0">企微账号</dt><dd class="m-0 text-default break-all">{{ detailTask.wecom_account_id }}</dd></div>
+                <div class="flex gap-2"><dt class="text-muted shrink-0 w-24 m-0">智能体</dt><dd class="m-0 text-default [overflow-wrap:anywhere]">{{ agentName(detailTask.agent_id) }}</dd></div>
+                <div class="flex gap-2"><dt class="text-muted shrink-0 w-24 m-0">设备</dt><dd class="m-0 text-default [overflow-wrap:anywhere]">{{ detailTask.device_name || '未取得名称' }}</dd></div>
+                <div class="flex gap-2"><dt class="text-muted shrink-0 w-24 m-0">企微账号</dt><dd class="m-0 text-default [overflow-wrap:anywhere]">{{ detailTask.wecom_account_name || '未取得名称' }}</dd></div>
                 <div class="flex gap-2"><dt class="text-muted shrink-0 w-24 m-0">创建时间</dt><dd class="m-0 text-default">{{ formatTime(detailTask.created_at) }}</dd></div>
                 <div class="flex gap-2"><dt class="text-muted shrink-0 w-24 m-0">更新时间</dt><dd class="m-0 text-default">{{ formatTime(detailTask.updated_at) }}</dd></div>
-                <div class="flex gap-2"><dt class="text-muted shrink-0 w-24 m-0">修订号</dt><dd class="m-0 text-default">{{ detailTask.revision }}</dd></div>
                 <div v-if="detailTask.deleted_at" class="flex gap-2"><dt class="text-muted shrink-0 w-24 m-0">删除时间</dt><dd class="m-0 text-default">{{ formatTime(detailTask.deleted_at) }}</dd></div>
               </dl>
               <div class="mt-3">
@@ -139,26 +143,19 @@
             <section class="px-4 py-4 border-b border-default" aria-label="会话目标">
               <h3 class="text-sm font-semibold text-default m-0 mb-3">会话目标（{{ activeTargets.length }} 个监控中）</h3>
               <div class="table-scroll-wrapper">
-                <BaseTable :columns="targetColumns" :data="detailTask.targets || []" row-key="id">
-                  <template #session="{ row }">
-                    <span class="text-sm text-default">{{ targetName(row.session) }}</span>
-                    <span class="block text-xs text-muted">{{ shortSession(row.session) }}</span>
+                <BaseTable :columns="targetColumns" :data="detailTask.targets || []" row-key="id" table-fixed
+                  class="[&_th]:px-2 [&_td]:px-2">
+                  <template #conversation_name="{ row }">
+                    <span class="text-sm text-default [overflow-wrap:anywhere]">{{ targetName(row as WecomProxyTarget) }}</span>
                   </template>
                   <template #status="{ row }">
                     <BaseBadge :intent="targetBadge(row.status).intent">{{ targetBadge(row.status).label }}</BaseBadge>
-                    <span v-if="row.halted_reason" class="block text-xs text-warning-700 mt-1 whitespace-pre-wrap">{{ row.status === 'active' ? '待启动重试：' : '' }}{{ row.halted_reason }}</span>
+                    <span v-if="row.halted_reason" class="block text-xs text-warning-700 mt-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ row.status === 'active' ? '待启动重试：' : '' }}{{ row.halted_reason }}</span>
                     <BaseButton v-if="detailTask.status === 'stopped' && row.status === 'halted' && row.halted_reason === 'zero_send_retry_exhausted'"
-                      size="sm" intent="secondary" class="mt-2" :disabled="actionPending(detailTask.id)"
+                      size="sm" intent="secondary" class="mt-2 !px-2" :disabled="actionPending(detailTask.id)"
                       :data-testid="`recover-target-${row.id}`" @click="askRecover(detailTask, row as WecomProxyTarget)">恢复并重试</BaseButton>
                   </template>
-                  <template #baseline_origin="{ row }">{{ baselineLabel(row.baseline_origin) }}</template>
-                  <template #processed_position="{ row }">{{ row.processed_position ?? '—' }}</template>
-                  <template #latest_seen_msg_id="{ row }">{{ row.latest_seen_msg_id ?? '—' }}</template>
                   <template #idle_read_count="{ row }">{{ row.idle_read_count ?? 0 }}</template>
-                  <template #wb1_cursor="{ row }">
-                    <span v-if="row.wb1_cursor" class="break-all">{{ shortSession(row.wb1_cursor) }}</span>
-                    <span v-else class="text-xs text-muted">未建基线（首次启动时建立）</span>
-                  </template>
                   <template #empty>暂无会话目标。停止后可编辑添加。</template>
                 </BaseTable>
               </div>
@@ -170,12 +167,16 @@
                 暂无批次。启动后监控发现新消息才创建回答批次；空闲读取不创建批次。
               </p>
               <article v-for="batch in detailTask.batches" :key="batch.id" class="rounded-xl border border-default mb-3 overflow-hidden" :data-testid="`batch-${batch.id}`">
-                <header class="px-4 py-3 bg-gray-50 border-b border-default flex items-start justify-between gap-3 flex-wrap">
-                  <div class="min-w-0 text-xs text-muted">
-                    <p class="m-0"><span class="text-sm text-default font-medium">{{ targetName(batch.session) }}</span> · 批次 #{{ batch.id }} · 冻结上界消息 {{ batch.batch_end_msg_id ?? '—' }}</p>
-                    <p class="m-0 mt-1 break-all">Runner {{ batch.runner_id || '—' }} · 回答积分 {{ formatCredit(batch.credit_cost) }} · 创建 {{ formatTime(batch.created_at) }}<template v-if="batch.finished_at"> · 结束 {{ formatTime(batch.finished_at) }}</template></p>
+                <header class="px-4 py-3 bg-gray-50 border-b border-default flex items-start justify-between gap-x-3 gap-y-2 flex-wrap">
+                  <div class="min-w-0">
+                    <h4 class="text-sm text-default font-medium m-0 [overflow-wrap:anywhere]">{{ targetName(batch) }} <span class="text-xs text-muted font-normal">· 批次 #{{ batch.id }}</span></h4>
+                    <p class="text-xs text-muted m-0 mt-1">
+                      <template v-if="batch.finished_at">完成于 {{ formatTime(batch.finished_at) }}</template>
+                      <template v-else>创建于 {{ formatTime(batch.created_at) }}</template>
+                      · 回答积分 {{ formatCredit(batch.credit_cost) }}
+                    </p>
                   </div>
-                  <div class="shrink-0 flex items-center gap-2">
+                  <div class="flex items-center gap-2 flex-wrap">
                     <BaseBadge v-if="batch.retry_count > 0" intent="warning">已重试 {{ batch.retry_count }} 次</BaseBadge>
                     <BaseBadge :intent="batchBadge(batch.status).intent">{{ batchBadge(batch.status).label }}</BaseBadge>
                   </div>
@@ -188,25 +189,39 @@
                     <p v-if="batchNeedsReply(batch.end_json) === false && !batch.end_json.replies?.length" class="text-sm text-default m-0">
                       本批判定无需回复。
                     </p>
-                    <div v-for="(reply, index) in batch.end_json.replies || []" :key="index" class="mb-3 last:mb-0">
-                      <p class="text-xs text-muted m-0 mb-1">回复文本<template v-if="reply.inbound_msg_ids?.length">（覆盖消息 {{ reply.inbound_msg_ids.join('、') }}）</template></p>
-                      <p class="text-sm text-default m-0 whitespace-pre-wrap break-words rounded-lg border border-default px-3 py-2">{{ reply.text || '—' }}</p>
-                      <p class="text-xs text-muted m-0 mt-1 break-all">
-                        本机客户端已记录发送<template v-if="reply.receipt_id"> · 回执 {{ reply.receipt_id }}</template><template v-if="reply.verification_detail?.message_id"> · 本地库消息 #{{ reply.verification_detail.message_id }}</template>
-                      </p>
+                    <div v-for="(reply, index) in batchReplies(batch.end_json)" :key="index"
+                      class="mb-3 rounded-lg border border-default overflow-hidden" data-testid="batch-reply">
+                      <div class="bg-gray-50 px-3 py-2 border-b border-default">
+                        <p class="text-xs text-muted m-0 mb-1">原消息</p>
+                        <ul v-if="reply.inbound_msg_ids?.length" class="space-y-2 m-0 p-0 list-none">
+                          <li v-for="source in replySources(batch, reply)" :key="source.msg_id" class="text-sm text-default">
+                            <p class="text-xs text-muted m-0 [overflow-wrap:anywhere]">{{ source.sender_name || '发言人未知' }} · 消息 #{{ source.msg_id }}</p>
+                            <p class="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ source.text || '原消息内容未保存' }}</p>
+                          </li>
+                        </ul>
+                        <p v-else class="text-sm text-muted m-0">未记录对应原消息。</p>
+                      </div>
+                      <div class="px-3 py-2">
+                        <div class="flex items-center justify-between gap-2 mb-1">
+                          <p class="text-xs text-muted m-0">回复文本</p>
+                          <BaseButton v-if="typeof reply.text === 'string' && reply.text" size="sm" intent="ghost"
+                            @click="copyBatchValue(reply.text, '完整文本')">复制完整文本</BaseButton>
+                        </div>
+                        <p class="text-sm text-default m-0 line-clamp-6 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ reply.text || '—' }}</p>
+                      </div>
                     </div>
-                    <div v-if="batch.end_json.unanswered?.length" class="rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-sm text-warning-700">
-                      <p class="m-0 mb-1 font-medium">未回复消息（{{ batch.end_json.unanswered.length }}）</p>
-                      <p v-for="(item, index) in batch.end_json.unanswered" :key="index" class="m-0 break-all">
+                    <div v-if="batchUnanswered(batch.end_json).length" class="rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-sm text-warning-700">
+                      <p class="m-0 mb-1 font-medium">未回复消息（{{ batchUnanswered(batch.end_json).length }}）</p>
+                      <p v-for="(item, index) in batchUnanswered(batch.end_json)" :key="index" class="m-0 break-all">
                         消息 #{{ item.msg_id ?? '—' }}：{{ unansweredReason(item) }}<template v-if="item.cli_error?.code"> · 错误码 {{ item.cli_error.code }}</template><template v-if="item.cli_error?.invocation_id"> · 调用 {{ item.cli_error.invocation_id }}</template>
                       </p>
                     </div>
-                    <details class="mt-3 text-xs text-muted">
-                      <summary class="cursor-pointer">完整结束 JSON</summary>
-                      <pre class="m-0 mt-1 p-2 rounded-lg bg-gray-50 border border-default overflow-x-auto break-all whitespace-pre-wrap">{{ JSON.stringify(batch.end_json, null, 2) }}</pre>
-                    </details>
                   </template>
                   <p v-else-if="!batch.cli_error" class="text-xs text-muted m-0">批次尚未产生结束记录。</p>
+                  <div v-if="batch.runner_id || batch.end_json" class="flex gap-1 flex-wrap mt-2">
+                    <BaseButton v-if="batch.runner_id" intent="ghost" @click="copyBatchValue(batch.runner_id, 'Runner ID')">复制 Runner ID</BaseButton>
+                    <BaseButton v-if="batch.end_json" intent="ghost" @click="copyBatchValue(JSON.stringify(batch.end_json, null, 2), '结束 JSON')">复制完整结束 JSON</BaseButton>
+                  </div>
                 </div>
               </article>
               <div v-if="batchesHasMore" class="text-center pt-1">
@@ -318,24 +333,27 @@ defineProps<{ embedded?: boolean }>()
 
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useToast } from 'vue-toastification'
 import AppHeader from '@/components/AppHeader.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
-import BaseTable from '@/components/ui/BaseTable.vue'
+import BaseTable, { type TableColumn } from '@/components/ui/BaseTable.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import {
   createProxyTask, deleteProxyTask, editProxyTask, getProxyTask, listProxyTasks,
   proxyErrorText, recoverProxyTarget, startProxyTask, stopProxyTask,
-  type ProxyBatchEndJson, type ProxyBatchUnanswered, type WecomProxyTask, type WecomProxyTarget,
+  type ProxyBatchEndJson, type ProxyBatchReply, type ProxyBatchUnanswered,
+  type WecomProxyBatch, type WecomProxyTask, type WecomProxyTarget,
 } from '@/api/wecomProxy'
 import { listDirectory, type DirectoryConversation } from '@/api/wecomConversation'
 import { listSubagents, type SubagentListItem } from '@/api/subagent'
 
 const route = useRoute()
 const router = useRouter()
+const toast = useToast()
 const { admin, isLoggedIn, logout: tenantLogout } = useTenantAuth()
 const toggleSidebarFn = inject<() => void>('toggleSidebar')
 const effectiveIsLoggedIn = computed(() => isLoggedIn.value)
@@ -359,7 +377,8 @@ function agentLabel(item: SubagentListItem): string {
 }
 function agentName(agentId: string): string {
   const item = agents.value.find(candidate => candidate.agent_id === agentId)
-  return item ? `${agentLabel(item)}（${agentId}）` : agentId
+  const name = item && agentLabel(item)
+  return name && name !== agentId ? name : '—'
 }
 
 // ==================== 任务列表 ====================
@@ -382,18 +401,13 @@ function markAction(id: number, on: boolean) {
   actionIds.value = next
 }
 
-const taskColumns = [
+const taskColumns: TableColumn[] = [
   { key: 'status', label: '状态', width: '92px' },
   { key: 'title', label: '标题' },
-  { key: 'active_target_count', label: '监控会话数', width: '96px', tdAlign: 'center' as const },
-  { key: 'agent_id', label: '智能体', width: '150px' },
-  { key: 'last_checked_at', label: '最近检查', width: '150px' },
-  { key: 'latest_seen_msg_id', label: '最新消息', width: '88px', tdAlign: 'center' as const },
-  { key: 'idle_read_count', label: '空闲读取', width: '84px', tdAlign: 'center' as const },
-  { key: 'credit_cost', label: '回答积分', width: '88px', tdAlign: 'center' as const },
-  { key: 'last_error', label: '最近错误', width: '150px' },
-  { key: 'updated_at', label: '最近更新', width: '150px' },
-  { key: 'actions', label: '操作', width: '220px', tdAlign: 'center' as const },
+  { key: 'agent_name', label: '智能体', width: '172px', tooltip: row => agentName(row.agent_id) },
+  { key: 'last_checked_at', label: '最近检查', width: '176px' },
+  { key: 'credit_cost', label: '回答积分', width: '88px', tdAlign: 'center' },
+  { key: 'actions', label: '操作', width: '220px', tdAlign: 'center' },
 ]
 
 async function loadList() {
@@ -488,7 +502,7 @@ function askRecover(task: WecomProxyTask, target: WecomProxyTarget) {
   const end = failed?.batch_end_msg_id ?? target.latest_seen_msg_id
   confirmState.value = {
     title: '确认恢复并重试',
-    message: `将重试「${targetName(target.session)}」未回复的消息${end == null ? '' : `（截至消息 ${end}）`}。若你已经人工回复，继续可能造成重复回答。`,
+    message: `将重试「${targetName(target)}」未回复的消息${end == null ? '' : `（截至消息 ${end}）`}。若你已经人工回复，继续可能造成重复回答。`,
     intent: 'primary',
     taskId: task.id,
     action: async () => {
@@ -603,24 +617,15 @@ watch(detailId, id => {
 const activeTargets = computed(() => (detailTask.value?.targets || []).filter(item => item.status === 'active'))
 
 const targetColumns = [
-  { key: 'session', label: '会话' },
-  { key: 'status', label: '状态', width: '150px' },
-  { key: 'baseline_origin', label: '基线来源', width: '100px' },
-  { key: 'processed_position', label: '已处理位置', width: '100px', tdAlign: 'center' as const },
-  { key: 'latest_seen_msg_id', label: '最新消息', width: '96px', tdAlign: 'center' as const },
-  { key: 'idle_read_count', label: '空闲读取', width: '84px', tdAlign: 'center' as const },
-  { key: 'wb1_cursor', label: 'wb1 游标', width: '160px' },
+  { key: 'conversation_name', label: '会话' },
+  { key: 'status', label: '状态', width: '106px' },
+  { key: 'idle_read_count', label: '空闲检查次数', width: '100px', tdAlign: 'center' as const },
 ]
 
 function targetBadge(status: string): { label: string; intent: 'success' | 'warning' | 'neutral' } {
   if (status === 'active') return { label: '监控中', intent: 'success' }
   if (status === 'halted') return { label: '已停住', intent: 'warning' }
   return { label: '已移除', intent: 'neutral' }
-}
-function baselineLabel(origin: string | null): string {
-  if (origin === 'initial') return '创建初选'
-  if (origin === 'edit_join_read') return '编辑加入'
-  return '未建基线'
 }
 function batchBadge(status: string): { label: string; intent: 'success' | 'warning' | 'primary' | 'neutral' } {
   const labels: Record<string, { label: string; intent: 'success' | 'warning' | 'primary' | 'neutral' }> = {
@@ -637,6 +642,33 @@ function batchBadge(status: string): { label: string; intent: 'success' | 'warni
 }
 function batchNeedsReply(endJson: ProxyBatchEndJson): boolean | undefined {
   return typeof endJson.needs_reply === 'boolean' ? endJson.needs_reply : undefined
+}
+function batchReplies(endJson: ProxyBatchEndJson): ProxyBatchReply[] {
+  return (endJson.replies || [])
+    .filter(reply => reply && typeof reply === 'object' && !Array.isArray(reply))
+    .map(reply => ({
+      ...reply,
+      inbound_msg_ids: Array.isArray(reply.inbound_msg_ids)
+        ? reply.inbound_msg_ids.filter(Number.isInteger)
+        : [],
+    }))
+}
+function batchUnanswered(endJson: ProxyBatchEndJson): ProxyBatchUnanswered[] {
+  return (endJson.unanswered || [])
+    .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+}
+function replySources(batch: WecomProxyBatch, reply: ProxyBatchReply) {
+  return [...new Set(reply.inbound_msg_ids || [])].map(msgId =>
+    batch.inbound_messages?.find(source => source.msg_id === msgId)
+    || { msg_id: msgId, sender_name: null, text: null })
+}
+async function copyBatchValue(value: string, label: string) {
+  try {
+    await navigator.clipboard.writeText(value)
+    toast.success(`已复制 ${label}`)
+  } catch {
+    toast.error(`复制 ${label} 失败`)
+  }
 }
 const UNANSWERED_REASON_LABELS: Record<string, string> = {
   send_failed: '发送失败',
@@ -760,8 +792,8 @@ let directorySeq = 0
 function directoryName(session: string): string {
   return directoryNames.value[session] || ''
 }
-function targetName(session: string): string {
-  return directoryName(session) || shortSession(session)
+function targetName(item: Pick<WecomProxyTarget, 'session' | 'conversation_name'>): string {
+  return item.conversation_name || directoryName(item.session) || '未命名会话'
 }
 function openPicker() {
   pickerOpen.value = true
