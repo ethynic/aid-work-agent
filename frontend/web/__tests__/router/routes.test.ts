@@ -73,6 +73,7 @@ describe('entry route responsibilities', () => {
         "notification-rules",
         "local-tools",
         "daily-report",
+        "wecom-agent/:tab(conversations|daily|proxy)?",
         "wecom-conversations",
         "wecom-conversations/daily",
         "wecom-conversations/proxy",

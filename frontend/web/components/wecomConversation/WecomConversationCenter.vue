@@ -1,5 +1,5 @@
 <template>
-  <div class="h-screen flex flex-col bg-gray-50">
+  <div :class="embedded ? 'h-full' : 'h-screen'" class="flex flex-col bg-gray-50">
     <AppHeader
       title="企微会话"
       :is-logged-in="effectiveIsLoggedIn"
@@ -8,10 +8,10 @@
       @logout="handleLogout"
     >
       <template #menu-items="{ closeMenu }">
-        <button class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover" @click="goDaily(); closeMenu()">
+        <button v-if="!embedded" class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover" @click="goDaily(); closeMenu()">
           日报工作台
         </button>
-        <button class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover" @click="goProxy(); closeMenu()">
+        <button v-if="!embedded" class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover" @click="goProxy(); closeMenu()">
           代理任务
         </button>
         <button class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover" @click="refreshAll(); closeMenu()">
@@ -160,6 +160,9 @@
 </template>
 
 <script setup lang="ts">
+// 企业微信Agent 工作区内嵌模式（WecomAgentHub Tab）：根容器 h-full，页内跳转入口由统一 Tab 取代
+defineProps<{ embedded?: boolean }>()
+
 import { computed, inject, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
