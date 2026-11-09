@@ -7,6 +7,7 @@ import { WecomProxyApiError } from '@/api/wecomProxy'
 const proxyApi = vi.hoisted(() => ({
   listProxyTasks: vi.fn(), getProxyTask: vi.fn(), createProxyTask: vi.fn(),
   editProxyTask: vi.fn(), deleteProxyTask: vi.fn(), startProxyTask: vi.fn(), stopProxyTask: vi.fn(),
+  recoverProxyTarget: vi.fn(),
 }))
 const conversationApi = vi.hoisted(() => ({ listDirectory: vi.fn() }))
 const subagentApi = vi.hoisted(() => ({ listSubagents: vi.fn() }))
@@ -70,6 +71,7 @@ beforeEach(() => {
   proxyApi.createProxyTask.mockResolvedValue({ task: stoppedTask })
   proxyApi.editProxyTask.mockResolvedValue({ task: stoppedTask })
   proxyApi.startProxyTask.mockResolvedValue({ task: runningTask })
+  proxyApi.recoverProxyTarget.mockResolvedValue({ target: {} })
   proxyApi.stopProxyTask.mockResolvedValue({ task: stoppedTask })
   proxyApi.deleteProxyTask.mockResolvedValue({ task: deletedTask })
   conversationApi.listDirectory.mockResolvedValue({
@@ -89,6 +91,50 @@ afterEach(() => {
   wrapper = null
   document.body.innerHTML = ''
   vi.restoreAllMocks()
+})
+
+it('零发送停住目标显式确认后先恢复再启动；离线失败保留可再次启动的说明', async () => {
+  routeState.route!.query = { task: '7' }
+  const halted = { id: 13, tenant_id: 't1', user_id: 'u1', task_id: 7,
+    session: 'ws1.acc.R%3Aone', web_session_id: 'wecom_proxy_x',
+    source_generation: 'g1', wb1_cursor: 'wb1.x', baseline_origin: 'initial',
+    processed_position: 266, latest_seen_msg_id: 269, idle_read_count: 0,
+    status: 'halted', halted_reason: 'zero_send_retry_exhausted', halted_at: '',
+    created_at: '', updated_at: '' }
+  const failed = { id: 15, task_id: 7, session: halted.session, batch_end_msg_id: 269,
+    agent_id: 'agent-a', web_session_id: 'wecom_proxy_x', runner_id: 'runner-x',
+    status: 'failed', end_json: null, cli_error: 'zero_send_retry_exhausted',
+    retry_count: 1, credit_cost: 0, created_at: '', updated_at: '', started_at: null, finished_at: null }
+  proxyApi.getProxyTask.mockResolvedValueOnce({ task: { ...stoppedTask, targets: [halted], batches: [failed] } })
+    .mockResolvedValue({ task: { ...stoppedTask, targets: [{ ...halted, status: 'active' }], batches: [failed] } })
+  proxyApi.startProxyTask.mockRejectedValueOnce(new WecomProxyApiError('设备离线', 'DEVICE_OFFLINE', 409))
+  await mountPage()
+  expect(wrapper!.find('[data-testid="recover-target-13"]').exists()).toBe(true)
+  await wrapper!.find('[data-testid="recover-target-13"]').trigger('click')
+  await flushPromises()
+  expect(document.body.querySelector('[data-testid="confirm-message"]')!.textContent).toContain('消息 269')
+  expect(document.body.querySelector('[data-testid="confirm-message"]')!.textContent).toContain('人工回复')
+  ;[...document.body.querySelectorAll('button')].find(button => button.textContent === '确认')!.click()
+  await flushPromises()
+  expect(proxyApi.recoverProxyTarget).toHaveBeenCalledWith(7, 13)
+  expect(proxyApi.startProxyTask).toHaveBeenCalledWith(7)
+  expect(proxyApi.recoverProxyTarget.mock.invocationCallOrder[0]).toBeLessThan(
+    proxyApi.startProxyTask.mock.invocationCallOrder[0]!)
+  expect(wrapper!.text()).toContain('已标记恢复，任务仍停止')
+  expect(wrapper!.text()).toContain('解决错误后点击“启动”')
+})
+
+it('其他停住原因不提供恢复操作', async () => {
+  routeState.route!.query = { task: '7' }
+  proxyApi.getProxyTask.mockResolvedValue({ task: { ...stoppedTask, targets: [{
+    id: 13, tenant_id: 't1', user_id: 'u1', task_id: 7, session: 'ws1.acc.R%3Aone',
+    status: 'halted', halted_reason: 'UI_CHANGED', processed_position: 266,
+    latest_seen_msg_id: 269, wb1_cursor: 'wb1.x', web_session_id: 'wecom_proxy_x',
+    source_generation: 'g1', baseline_origin: 'initial', idle_read_count: 0,
+    halted_at: '', created_at: '', updated_at: '',
+  }], batches: [] } })
+  await mountPage()
+  expect(wrapper!.find('[data-testid="recover-target-13"]').exists()).toBe(false)
 })
 
 describe('企微代理任务页', () => {

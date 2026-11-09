@@ -205,6 +205,7 @@ export const PROXY_ERROR_LABELS: Record<string, string> = {
   PROXY_NO_TARGETS: '任务没有启用的会话目标，请先编辑添加',
   PROXY_BASELINE_MISSING: '会话基线读取结果缺失，未启动',
   PROXY_BATCH_OCCUPIED: '该会话已有未决批次，不重复建批',
+  PROXY_RECOVERY_UNAVAILABLE: '该会话当前无法恢复重试，请查看批次记录',
   PROXY_BATCH_STATE_INVALID: '批次状态不允许该迁移',
   PROXY_BACKLOG_TOO_LARGE: '会话积压超过单次读取上限（20 页×50 条），请先消化积压后重试',
   PROXY_CURSOR_MISSING: '本地读取结果缺少游标，无法记录基线',
@@ -277,6 +278,10 @@ export function deleteProxyTask(taskId: number): Promise<{ task: WecomProxyTask 
 
 export function startProxyTask(taskId: number): Promise<{ task: WecomProxyTask }> {
   return request('POST', `/${taskId}/start`)
+}
+
+export function recoverProxyTarget(taskId: number, targetId: number): Promise<{ target: WecomProxyTarget }> {
+  return request('POST', `/${taskId}/targets/${targetId}/recover`)
 }
 
 export function stopProxyTask(taskId: number): Promise<{ task: WecomProxyTask }> {

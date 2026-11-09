@@ -419,6 +419,56 @@ def start_prep(tenant_id, user_id, task_id):
     return task, targets, conflicts
 
 
+def _recovery_batch(cursor, tenant_id, task_id, target):
+    """只接受零发送耗尽的最后失败批及其冻结输入。"""
+    cursor.execute(
+        '''SELECT * FROM bs_wecom_proxy_batches
+           WHERE tenant_id=%s AND task_id=%s AND session=%s
+           ORDER BY id DESC LIMIT 1''',
+        (tenant_id, task_id, target['session']))
+    batch = _row(cursor.fetchone())
+    if not batch or batch['status'] != BATCH_FAILED \
+            or batch['cli_error'] != 'zero_send_retry_exhausted' \
+            or not isinstance(batch['input_snapshot'], dict) \
+            or not isinstance(batch['batch_end_msg_id'], int) \
+            or (target['processed_position'] is not None
+                and batch['batch_end_msg_id'] <= target['processed_position']):
+        raise _err('PROXY_RECOVERY_UNAVAILABLE',
+                   '原失败批次已不符合安全重试条件，请查看批次记录')
+    return batch
+
+
+def request_target_recovery(tenant_id, user_id, task_id, target_id):
+    """显式恢复请求：只标记为可启动；待原启动核对成功时才建批。"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        task = _task_for_update(cursor, tenant_id, user_id, task_id)
+        if task['status'] != TASK_STOPPED:
+            raise _err('PROXY_STATE_CONFLICT', '请等待任务完全停止后再恢复')
+        cursor.execute(
+            '''SELECT * FROM bs_wecom_proxy_task_sessions
+               WHERE tenant_id=%s AND user_id=%s AND task_id=%s AND id=%s FOR UPDATE''',
+            (tenant_id, user_id, task_id, target_id))
+        target = _row(cursor.fetchone())
+        if not target or target['status'] != TARGET_HALTED \
+                or target['halted_reason'] != 'zero_send_retry_exhausted':
+            raise _err('PROXY_RECOVERY_UNAVAILABLE', '这个会话当前不能恢复重试')
+        _recovery_batch(cursor, tenant_id, task_id, target)
+        _lock_start(cursor, tenant_id, task['wecom_account_id'])
+        conflicts = _running_session_owners(cursor, tenant_id, task['wecom_account_id'],
+                                            task_id, [target['session']])
+        if conflicts:
+            raise _err('PROXY_SESSION_OWNED',
+                       f'同一企微账号的会话已由运行中的任务 #{conflicts[0]["task_id"]} 监控')
+        cursor.execute(
+            '''UPDATE bs_wecom_proxy_task_sessions SET status=%s,
+                   updated_at=CURRENT_TIMESTAMP WHERE id=%s RETURNING *''',
+            (TARGET_ACTIVE, target_id))
+        target = _row(cursor.fetchone())
+        conn.commit()
+    return target
+
+
 def complete_start(tenant_id, user_id, task_id, *, device_id, self_user_id, baselines):
     """启动落位：核对账号一致与归属唯一，建缺失基线并登记 web_session_id。
 
@@ -452,6 +502,18 @@ def complete_start(tenant_id, user_id, task_id, *, device_id, self_user_id, base
         baselines = baselines or {}
         for target in targets:
             locator = target['session']
+            if target['halted_reason'] == 'zero_send_retry_exhausted':
+                batch = _recovery_batch(cursor, tenant_id, task_id, target)
+                create_batch_in_tx(
+                    cursor, tenant_id, user_id, task_id=task_id, session=locator,
+                    batch_end_msg_id=batch['batch_end_msg_id'],
+                    input_snapshot=batch['input_snapshot'], agent_id=task['agent_id'],
+                    instruction_snapshot=task['instruction'],
+                    web_session_id=target['web_session_id'])
+                cursor.execute(
+                    '''UPDATE bs_wecom_proxy_task_sessions SET halted_reason=NULL,
+                           halted_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=%s''',
+                    (target['id'],))
             if target['wb1_cursor'] is None:
                 baseline = baselines.get(locator)
                 if baseline is None:

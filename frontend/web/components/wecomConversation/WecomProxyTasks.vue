@@ -104,7 +104,9 @@
                 </div>
                 <div class="flex items-center gap-1 mt-2 flex-wrap">
                   <BaseButton v-if="detailTask.status === 'stopped'" size="sm" intent="secondary"
-                    :disabled="actionPending(detailTask.id)" @click="startTask(detailTask)">启动</BaseButton>
+                    :disabled="actionPending(detailTask.id) || !activeTargets.length"
+                    :title="!activeTargets.length ? '没有可启动的会话，请先恢复停住的目标或编辑添加' : ''"
+                    @click="startTask(detailTask)">启动</BaseButton>
                   <BaseButton v-if="detailTask.status === 'running'" size="sm" intent="secondary" :disabled="actionPending(detailTask.id)" @click="askStop(detailTask)">停止</BaseButton>
                   <BaseButton v-if="detailTask.status !== 'deleted'" size="sm" intent="secondary" :disabled="detailTask.status === 'running' || actionPending(detailTask.id)"
                     :title="detailTask.status === 'running' ? '运行中不可编辑，请先停止' : ''"
@@ -144,7 +146,10 @@
                   </template>
                   <template #status="{ row }">
                     <BaseBadge :intent="targetBadge(row.status).intent">{{ targetBadge(row.status).label }}</BaseBadge>
-                    <span v-if="row.status === 'halted' && row.halted_reason" class="block text-xs text-warning-700 mt-1 whitespace-pre-wrap">{{ row.halted_reason }}</span>
+                    <span v-if="row.halted_reason" class="block text-xs text-warning-700 mt-1 whitespace-pre-wrap">{{ row.status === 'active' ? '待启动重试：' : '' }}{{ row.halted_reason }}</span>
+                    <BaseButton v-if="detailTask.status === 'stopped' && row.status === 'halted' && row.halted_reason === 'zero_send_retry_exhausted'"
+                      size="sm" intent="secondary" class="mt-2" :disabled="actionPending(detailTask.id)"
+                      :data-testid="`recover-target-${row.id}`" @click="askRecover(detailTask, row as WecomProxyTarget)">恢复并重试</BaseButton>
                   </template>
                   <template #baseline_origin="{ row }">{{ baselineLabel(row.baseline_origin) }}</template>
                   <template #processed_position="{ row }">{{ row.processed_position ?? '—' }}</template>
@@ -323,8 +328,8 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import {
   createProxyTask, deleteProxyTask, editProxyTask, getProxyTask, listProxyTasks,
-  proxyErrorText, startProxyTask, stopProxyTask,
-  type ProxyBatchEndJson, type ProxyBatchUnanswered, type WecomProxyTask,
+  proxyErrorText, recoverProxyTarget, startProxyTask, stopProxyTask,
+  type ProxyBatchEndJson, type ProxyBatchUnanswered, type WecomProxyTask, type WecomProxyTarget,
 } from '@/api/wecomProxy'
 import { listDirectory, type DirectoryConversation } from '@/api/wecomConversation'
 import { listSubagents, type SubagentListItem } from '@/api/subagent'
@@ -472,6 +477,28 @@ function askStop(task: WecomProxyTask) {
     taskId: task.id,
     action: async () => {
       await stopProxyTask(task.id)
+      await reloadAfterAction(task.id)
+    },
+  }
+}
+
+function askRecover(task: WecomProxyTask, target: WecomProxyTarget) {
+  const failed = (task.batches || []).find(batch => batch.session === target.session
+    && batch.status === 'failed' && batch.cli_error === 'zero_send_retry_exhausted')
+  const end = failed?.batch_end_msg_id ?? target.latest_seen_msg_id
+  confirmState.value = {
+    title: '确认恢复并重试',
+    message: `将重试「${targetName(target.session)}」未回复的消息${end == null ? '' : `（截至消息 ${end}）`}。若你已经人工回复，继续可能造成重复回答。`,
+    intent: 'primary',
+    taskId: task.id,
+    action: async () => {
+      await recoverProxyTarget(task.id, target.id)
+      try {
+        await startProxyTask(task.id)
+      } catch (error) {
+        await reloadAfterAction(task.id)
+        throw new Error(`已标记恢复，任务仍停止；解决错误后点击“启动”。启动失败：${proxyErrorText(error)}`)
+      }
       await reloadAfterAction(task.id)
     },
   }

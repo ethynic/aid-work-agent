@@ -344,6 +344,129 @@ def test_start_without_active_targets_rejected(tenant_id):
     assert _code(exc.value) == 'PROXY_NO_TARGETS'
 
 
+def _zero_send_halted_task(tenant_id, *, initial_position=266, end_position=269):
+    locator = _locator(77)
+    _register(tenant_id, locator)
+    task = _create(tenant_id, [locator])
+    proxy_tasks.complete_start(tenant_id, USER, task['id'], device_id=DEVICE,
+                               self_user_id=ACCOUNT,
+                               baselines={locator: _baseline(initial_position)})
+    target = proxy_tasks.get_task(tenant_id, USER, task['id'])['targets'][0]
+    snapshot = {'schema_version': 1, 'session': locator,
+                'messages': [{'msg_id': end_position, 'side': 'peer', 'text': '待回复'}]}
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        old = proxy_tasks.create_batch_in_tx(
+            cursor, tenant_id, USER, task_id=task['id'], session=locator,
+            batch_end_msg_id=end_position, input_snapshot=snapshot, agent_id='agent-a',
+            instruction_snapshot='旧指令', web_session_id=target['web_session_id'])
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, old['id'], 'running')
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, old['id'], 'failed',
+                                           cli_error='zero_send_retry_exhausted')
+        cursor.execute(
+            '''UPDATE bs_wecom_proxy_task_sessions SET status='halted',
+                   halted_reason='zero_send_retry_exhausted', latest_seen_msg_id=%s,
+                   wb1_cursor='wb1.after-message' WHERE id=%s''',
+            (end_position, target['id']))
+        cursor.execute("UPDATE bs_wecom_proxy_tasks SET status='stopped', stop_requested=TRUE WHERE id=%s",
+                       (task['id'],))
+        conn.commit()
+    return task, target, old, snapshot
+
+
+def test_manual_recovery_accepts_first_message_after_empty_baseline(tenant_id):
+    task, target, _, snapshot = _zero_send_halted_task(
+        tenant_id, initial_position=None, end_position=1)
+    proxy_tasks.request_target_recovery(tenant_id, USER, task['id'], target['id'])
+    proxy_tasks.complete_start(tenant_id, USER, task['id'], device_id=DEVICE,
+                               self_user_id=ACCOUNT, baselines={})
+    loaded = proxy_tasks.get_task_detail(tenant_id, USER, task['id'])
+    assert loaded['targets'][0]['processed_position'] is None
+    assert loaded['batches'][0]['status'] == 'pending'
+    assert loaded['batches'][0]['batch_end_msg_id'] == 1
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT input_snapshot FROM bs_wecom_proxy_batches WHERE id=%s',
+                       (loaded['batches'][0]['id'],))
+        assert cursor.fetchone()['input_snapshot'] == snapshot
+
+
+def test_manual_recovery_reuses_frozen_input_only_after_successful_start(tenant_id):
+    task, target, old, snapshot = _zero_send_halted_task(tenant_id)
+    before = proxy_tasks.get_task(tenant_id, USER, task['id'])['targets'][0]
+    with pytest.raises(ConversationServiceError) as exc:
+        proxy_tasks.start_prep(tenant_id, USER, task['id'])
+    assert exc.value.code == 'PROXY_NO_TARGETS'  # 普通启动不偷偷解除停住
+
+    proxy_tasks.request_target_recovery(tenant_id, USER, task['id'], target['id'])
+    marked = proxy_tasks.get_task(tenant_id, USER, task['id'])['targets'][0]
+    assert marked['status'] == 'active' and marked['halted_reason'] == 'zero_send_retry_exhausted'
+    assert proxy_tasks.get_task_detail(tenant_id, USER, task['id'])['batches'][0]['id'] == old['id']
+    with pytest.raises(ConversationServiceError) as exc:
+        proxy_tasks.request_target_recovery(tenant_id, USER, task['id'], target['id'])
+    assert exc.value.code == 'PROXY_RECOVERY_UNAVAILABLE'  # 重复点击不建批
+    with pytest.raises(ConversationServiceError) as exc:
+        proxy_tasks.complete_start(tenant_id, USER, task['id'], device_id=DEVICE,
+                                   self_user_id='wrong-account', baselines={})
+    assert exc.value.code == 'PROXY_ACCOUNT_MISMATCH'
+    assert len(proxy_tasks.get_task_detail(tenant_id, USER, task['id'])['batches']) == 1  # 失败无占位
+
+    proxy_tasks.complete_start(tenant_id, USER, task['id'], device_id=DEVICE,
+                               self_user_id=ACCOUNT, baselines={})
+    loaded = proxy_tasks.get_task_detail(tenant_id, USER, task['id'])
+    batches = loaded['batches']
+    assert loaded['status'] == 'running' and len(batches) == 2
+    assert batches[1]['id'] == old['id'] and batches[1]['status'] == 'failed'
+    assert batches[0]['status'] == 'pending' and batches[0]['retry_count'] == 0
+    assert batches[0]['batch_end_msg_id'] == 269
+    assert batches[0]['web_session_id'] == before['web_session_id']
+    assert batches[0]['agent_id'] == task['agent_id']
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT input_snapshot, instruction_snapshot, runner_id, submit_text '
+                       'FROM bs_wecom_proxy_batches WHERE id=%s', (batches[0]['id'],))
+        fresh = cursor.fetchone()
+    assert fresh['input_snapshot'] == snapshot
+    assert fresh['instruction_snapshot'] == task['instruction']
+    assert fresh['runner_id'] is None and fresh['submit_text'] is None
+    after = loaded['targets'][0]
+    for key in ('wb1_cursor', 'source_generation', 'processed_position',
+                'latest_seen_msg_id', 'web_session_id'):
+        assert after[key] == before[key]
+    assert after['status'] == 'active' and after['halted_reason'] is None
+
+
+def test_manual_recovery_rejects_other_reason_and_advanced_position(tenant_id):
+    task, target, old, _ = _zero_send_halted_task(tenant_id)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE bs_wecom_proxy_task_sessions SET halted_reason='UI_CHANGED' WHERE id=%s",
+                       (target['id'],))
+        conn.commit()
+    with pytest.raises(ConversationServiceError) as exc:
+        proxy_tasks.request_target_recovery(tenant_id, USER, task['id'], target['id'])
+    assert exc.value.code == 'PROXY_RECOVERY_UNAVAILABLE'
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''UPDATE bs_wecom_proxy_task_sessions SET processed_position=266
+                       WHERE id=%s''', (target['id'],))
+        cursor.execute("UPDATE bs_wecom_proxy_batches SET cli_error='unknown' WHERE id=%s",
+                       (old['id'],))
+        conn.commit()
+    with pytest.raises(ConversationServiceError) as exc:
+        proxy_tasks.request_target_recovery(tenant_id, USER, task['id'], target['id'])
+    assert exc.value.code == 'PROXY_RECOVERY_UNAVAILABLE'  # 发送结果不明不可重试
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''UPDATE bs_wecom_proxy_task_sessions SET
+                       halted_reason='zero_send_retry_exhausted', processed_position=269
+                       WHERE id=%s''', (target['id'],))
+        conn.commit()
+    with pytest.raises(ConversationServiceError) as exc:
+        proxy_tasks.request_target_recovery(tenant_id, USER, task['id'], target['id'])
+    assert exc.value.code == 'PROXY_RECOVERY_UNAVAILABLE'
+
+
 # ==================== 批次状态迁移（P5/P6 复用） ====================
 
 def test_batch_transition_state_machine(tenant_id):
