@@ -28,9 +28,9 @@ function Get-WeComTitlePoint([int64]$Hwnd, [string]$ImagePath) {
     $main = Get-WeComWindowInfo ([IntPtr]$Hwnd)
     $dpi = [int][WeComWin32]::GetDpiForWindow([IntPtr]$Hwnd)
     if ($dpi -le 0) { Throw-DriverError 'UI_CHANGED' '无法取得企业微信窗口 DPI，未发送消息' }
-    $url = ([string]$env:AID_WECOM_SERVER_URL).TrimEnd('/')
-    $token = [string]$env:AID_WECOM_SERVER_TOKEN
-    if (-not $url -or -not $token) { Throw-DriverError 'CONFIG_MISSING' '缺少 GLM 标定服务配置，未发送消息' }
+    $url = ([string]$env:AIDWORK_RUNTIME_SERVER).TrimEnd('/')
+    $token = [string]$env:AIDWORK_RUNTIME_DEVICE_TOKEN
+    if (-not $url -or -not $token) { Throw-DriverError 'CONFIG_MISSING' '缺少 Runtime 配对信息，无法标定坐标，未发送消息' }
     Add-Type -AssemblyName System.Drawing
     $source = [Drawing.Image]::FromFile($ImagePath)
     try {
@@ -44,24 +44,14 @@ function Get-WeComTitlePoint([int64]$Hwnd, [string]$ImagePath) {
         } finally { $memory.Dispose() }
     } finally { $source.Dispose() }
     $image = 'data:image/png;base64,' + [Convert]::ToBase64String($bytes)
-    $system = '只定位企业微信右侧聊天区顶部标题第一个字中心，以及底部大块文本输入框中心。返回单个 JSON 对象，字段 divider_x、title_x、title_y、input_x、input_y 均为相对完整截图左上角的整数像素坐标。divider_x 是左侧列表与右侧聊天区分界线。看不清时返回 {"error":"point_not_found"}。不要返回文字内容。'
-    $request = @{
-        model = 'GLM-5.3-Flash'; purpose = 'wecom-title-coordinate'; temperature = 0
-        messages = @(
-            @{ role = 'system'; content = $system },
-            @{ role = 'user'; content = @(
-                @{ type = 'text'; text = '按截图原像素给出两个中心坐标；不要缩放。' },
-                @{ type = 'image_url'; image_url = @{ url = $image } }
-            ) }
-        )
-    }
+    $request = @{ image = $image }
     try {
         $body = [Text.Encoding]::UTF8.GetBytes(($request | ConvertTo-Json -Depth 8 -Compress))
-        $response = Invoke-RestMethod -Uri ($url + '/api/client/v1/llm/chat') -Method Post -Headers @{ Authorization = ('Bearer ' + $token) } -ContentType 'application/json' -Body $body -TimeoutSec 60
+        $response = Invoke-RestMethod -Uri ($url + '/api/local-tools/runtime/wecom/calibrate') -Method Post -Headers @{ Authorization = ('Bearer ' + $token) } -ContentType 'application/json' -Body $body -TimeoutSec 60
     } catch {
         $status = 0
         if ($null -ne $_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
-        if ($status -eq 401) { Throw-DriverError 'CONFIG_MISSING' 'GLM 标定鉴权失败，未发送消息' }
+        if ($status -eq 401) { Throw-DriverError 'CONFIG_MISSING' 'Runtime 配对身份无效，无法标定坐标，未发送消息' }
         Throw-DriverError 'CONTENT_UNAVAILABLE' ('GLM 双点标定失败（HTTP ' + $status + '），未发送消息')
     }
     $raw = ([string]$response.content).Trim()
@@ -169,45 +159,17 @@ function Write-WeComTitleCopyTrace($Clock, [string]$Phase, [int]$MainPid) {
 }
 
 function Get-WeComCopiedTitle([int64]$Hwnd, [string]$Section, $Point) {
-    # 保存纯文本剪贴板 → 写唯一 nonce → 选中标题复制 → 按序号 CAS 恢复。
-    # 原剪贴板是图片/富格式时不触碰；若外部进程同时改剪贴板，不覆盖其新内容。
+    # 只接受本次企微复制的新序号、企微所有者及非空标题；旧剪贴板内容不参与核对。
+    Add-Type -AssemblyName System.Windows.Forms
     $main = Get-WeComWindowInfo ([IntPtr]$Hwnd)
     $screenX = [int]($main.X + $Point.x)
     $screenY = [int]($main.Y + $Point.y)
-    $nonce = 'AidWecomTitle:' + [guid]::NewGuid().ToString('N')
-    $window = $null; $original = $null; $touched = $false
-    $copied = ''; $copySeq = $null; $nonceSeq = $null; $failure = ''
-    $restored = $false
+    $copied = ''; $copySeq = $null; $failure = ''
     $clock = [Diagnostics.Stopwatch]::StartNew()
-    $phase = 'original_read'
+    $phase = 'title_ui'
     try {
-        $originalSeq = [WeComWin32]::GetClipboardSequenceNumber()
-        Write-WeComTitleCopyTrace $clock 'original_read_begin' $main.Pid
-        $original = Get-WeComPlainClipboard
-        Write-WeComTitleCopyTrace $clock 'original_read_end' $main.Pid
-        if ($originalSeq -ne [WeComWin32]::GetClipboardSequenceNumber()) { throw 'clipboard_changed' }
-        $window = New-WeComClipboardOwner
-        $written = [uint32]0
-        $touched = $true
-        $phase = 'nonce_exchange'
-        Write-WeComTitleCopyTrace $clock 'nonce_exchange_begin' $main.Pid
-        if (-not [WeComWin32]::ExchangeClipboardText($window.Handle, $originalSeq, $original.text,
-                $original.empty, $nonce, $false, [ref]$written)) {
-            # A false CAS return is before EmptyClipboard; no restore is needed.
-            $touched = $false
-            throw 'clipboard_changed'
-        }
-        Write-WeComTitleCopyTrace $clock 'nonce_exchange_end' $main.Pid
-        $nonceSeq = [WeComWin32]::GetClipboardSequenceNumber()
-        $phase = 'nonce_read'
-        Write-WeComTitleCopyTrace $clock 'nonce_read_begin' $main.Pid
-        $check = Get-WeComPlainClipboard
-        Write-WeComTitleCopyTrace $clock 'nonce_read_end' $main.Pid
-        if ($check.empty -or $check.text -cne $nonce -or
-                [WeComWin32]::GetClipboardOwner() -ne $window.Handle -or
-                $nonceSeq -ne [WeComWin32]::GetClipboardSequenceNumber()) { throw 'clipboard_nonce_unconfirmed' }
+        $copyStartSeq = [WeComWin32]::GetClipboardSequenceNumber()
         if (-not [WeComWin32]::IsWindow([IntPtr]$Hwnd)) { throw 'window_changed' }
-        $phase = 'title_ui'
         Write-WeComTitleCopyTrace $clock 'title_ui_begin' $main.Pid
         if ($Section -eq 'group') {
             $copyHwnd = Get-WeComGroupTitleEditWindow -Hwnd $Hwnd -ScreenX $screenX -ScreenY $screenY
@@ -230,21 +192,19 @@ function Get-WeComCopiedTitle([int64]$Hwnd, [string]$Section, $Point) {
         $deadline = [DateTime]::UtcNow.AddMilliseconds(1500)
         while ([DateTime]::UtcNow -lt $deadline) {
             $seq = [WeComWin32]::GetClipboardSequenceNumber()
-            if ($seq -ne $nonceSeq) {
+            if ($seq -ne $copyStartSeq) {
                 # 企微复制标题会同时发布 WeWork/HTML 富格式；只读取其 UnicodeText。
                 $phase = 'copy_read'
                 Write-WeComTitleCopyTrace $clock 'copy_read_begin' $main.Pid
                 $owner = [WeComWin32]::GetClipboardOwner()
                 $ownerPid = 0
                 [void][WeComWin32]::GetWindowThreadProcessId($owner, [ref]$ownerPid)
-                if ($owner -ne $window.Handle -and $ownerPid -ne $main.Pid) {
-                    throw 'clipboard_changed'
-                }
+                if ($ownerPid -ne $main.Pid) { throw 'clipboard_changed' }
                 $read = @{ empty = -not [Windows.Forms.Clipboard]::ContainsText(); text = [Windows.Forms.Clipboard]::GetText() }
                 Write-WeComTitleCopyTrace $clock 'copy_read_end' $main.Pid
                 if ($seq -eq [WeComWin32]::GetClipboardSequenceNumber() -and
                         $ownerPid -eq $main.Pid -and -not $read.empty -and
-                        $read.text -cne $nonce -and $read.text.Length -gt 0) {
+                        $read.text.Length -gt 0) {
                     $copied = $read.text; $copySeq = $seq
                     break
                 }
@@ -256,53 +216,11 @@ function Get-WeComCopiedTitle([int64]$Hwnd, [string]$Section, $Point) {
         $failure = $_.Exception.Message
         Write-WeComTitleCopyTrace $clock ($phase + '_failed') $main.Pid
     }
-    finally {
-        if ($touched -and $null -ne $original) {
-            $restoreReason = 'not_attempted'
-            try {
-                $phase = 'restore_read'
-                Write-WeComTitleCopyTrace $clock 'restore_read_begin' $main.Pid
-                $owner = [WeComWin32]::GetClipboardOwner()
-                $ownerPid = 0
-                [void][WeComWin32]::GetWindowThreadProcessId($owner, [ref]$ownerPid)
-                if ($owner -ne $window.Handle -and $ownerPid -ne $main.Pid) {
-                    $restoreReason = 'external_owner'
-                } else {
-                    $seq = [WeComWin32]::GetClipboardSequenceNumber()
-                    $now = @{ empty = -not [Windows.Forms.Clipboard]::ContainsText(); text = [Windows.Forms.Clipboard]::GetText() }
-                    Write-WeComTitleCopyTrace $clock 'restore_read_end' $main.Pid
-                    $stable = $seq -eq [WeComWin32]::GetClipboardSequenceNumber()
-                    $nonceOwned = $null -ne $window -and -not $now.empty -and
-                        [WeComWin32]::GetClipboardOwner() -eq $window.Handle -and $now.text -ceq $nonce
-                    $copyOwned = $null -ne $copySeq -and $seq -eq $copySeq -and $now.text -ceq $copied
-                    if ($stable -and ($nonceOwned -or $copyOwned)) {
-                        $written = [uint32]0
-                        $restoreReason = 'cas_rejected'
-                        $phase = 'restore_exchange'
-                        Write-WeComTitleCopyTrace $clock 'restore_exchange_begin' $main.Pid
-                        $restored = [WeComWin32]::ExchangeClipboardText($window.Handle, $seq, $now.text,
-                            $now.empty, $original.text, $original.empty, [ref]$written)
-                        Write-WeComTitleCopyTrace $clock 'restore_exchange_end' $main.Pid
-                    } elseif (-not $stable) {
-                        $restoreReason = 'sequence_changed'
-                    } else {
-                        $restoreReason = 'ownership_unconfirmed'
-                    }
-                }
-            } catch { $restoreReason = $phase + '_exception' }
-            if (-not $restored) {
-                Write-WeComTitleCopyTrace $clock ('restore_' + $restoreReason) $main.Pid
-                if ($failure) { $failure += ';restore=' + $restoreReason }
-                else { $failure = 'clipboard_restore_failed:' + $restoreReason }
-            }
-        }
-        if ($null -ne $window) { $window.Dispose() }
-    }
     if ($failure) {
         try { Clear-WeComCachedTitlePointOnCopyFailure -Point $Point -Failure $failure }
         catch { $failure += ';title_cache_invalidate_failed' }
     }
-    if ($failure) { Throw-DriverError 'UI_CHANGED' ('标题复制或剪贴板恢复失败（' + $failure + '），未触碰输入区或发送消息') }
+    if ($failure) { Throw-DriverError 'UI_CHANGED' ('标题复制失败（' + $failure + '），未触碰输入区或发送消息') }
     return $copied
 }
 

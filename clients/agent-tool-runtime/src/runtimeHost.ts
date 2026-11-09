@@ -229,16 +229,15 @@ export class LegacyExecution implements HostAdapter {
     const entries = Object.fromEntries(Object.entries(this.resolveEntries(config)).filter(([, entry]) => existsSync(entry)))
     const api = new ApiClient(server, token)
     const bridgeKey = randomBytes(32).toString('hex')
-    const wecomEnv: Record<string, string> = {}
+    const wecomLegacyEnv: Record<string, string> = {}
     for (const key of ['AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN']) {
-      if (process.env[key] !== undefined) wecomEnv[key] = process.env[key]!
+      if (process.env[key] !== undefined) wecomLegacyEnv[key] = process.env[key]!
     }
-    // The trusted BOSS process uses this pairing, never independently configured credentials.
-    const bossEnv = { AIDWORK_RUNTIME_SERVER: server, AIDWORK_RUNTIME_DEVICE_TOKEN: token }
-    // Only BOSS receives the paired API context; other Providers never inherit it.
+    // Keep legacy WeCom credentials for already delivered plugins; new plugins use pairing.
+    const pairedEnv = { AIDWORK_RUNTIME_SERVER: server, AIDWORK_RUNTIME_DEVICE_TOKEN: token }
     const providers = new ProviderSet(entries, { nodeExecutable: this.nodeExecutable, baseEnv: providerEnvironment(),
       ...(this.supervision.enabled ? { prepareLaunch: (entry: string) => this.supervision.prepareLaunch(entry) } : {}),
-      providerEnv: { weixin: { AIDWORK_WEIXIN_BRIDGE_KEY: bridgeKey }, wecom: wecomEnv, 'boss-recruiting': bossEnv } })
+      providerEnv: { weixin: { AIDWORK_WEIXIN_BRIDGE_KEY: bridgeKey }, wecom: { ...wecomLegacyEnv, ...pairedEnv }, 'boss-recruiting': pairedEnv } })
     this.providers = providers
     this.runFailure = null
     this.stopping = false

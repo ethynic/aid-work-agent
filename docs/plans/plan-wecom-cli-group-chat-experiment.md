@@ -37,6 +37,25 @@
 | W28 搜索门禁真机回炉 | 唯一本地目录后直接输入搜索并 Enter，标题复制做最终核对 | ✅ 完成（2026-11-07） | 真机唯一选择、标题“孙晨”核对、文本发送及本地库 1991 对账通过 |
 | W29 标题复制剪贴板诊断 | 分辨 OLE 读取阻塞、远控接管与 CAS 恢复结果 | ✅ 完成（2026-11-07） | 日志定位 AweSun 阻塞；剪贴板恢复可用后 select/send 真机通过 |
 | W30 无 OCR Agent→Runtime 真机验收 | 使用新版签名插件验收读发；补齐第四项只读目录工具 | ✅ 完成（2026-11-07） | A2/A3/A4 唯一出站回读通过；目录错名/多名/同名/唯一联系人真机通过；Skill 独测 27 项通过 |
+| W31 非文本剪贴板标题复制修复 | 五条标题复制路径只凭本次企微复制核对标题，均覆盖剪贴板 | ✅ 完成（2026-11-09） | 独测 PS 六组、Win32 fresh init、Node 66/66、typecheck/build 通过；真机标定、选择及文本发送本地库核验通过；CR 无阻断；0.2.13 验签并导入本机 Runtime，插件已启用且检查就绪，安装后标定成功。原代理批次 #15 未补发 |
+| W32 标定复用 Runtime 配对身份 | 后台设备鉴权专用接口、Runtime 注入、WeCom CLI 标定依次独立实施 | ✅ 完成（2026-11-09） | 独测后端 53/53＋相邻 API 29/29、Host 3/3、Desktop 17/17、CLI PS 回归、三模块类型检查与构建通过；CR 无阻断；Runtime 0.0.40＋WeCom 0.2.14 验收包验签通过。未部署或真机联调；旧插件＋新 Runtime 二进制组合未实测 |
+
+## W32 标定复用 Runtime 配对身份（2026-11-09）
+
+问题：新用户安装并配对 Runtime 后无需另填服务器地址或签发静态 ClientBinding。当前本机标定却依赖父进程环境变量，普通安装未提供，导致代理任务保存前失败。成功标准：同一已配对设备仅凭配对信息完成标定，服务端按设备租户计费；旧客户端 `/api/client/v1/llm/chat` 不变；错误时不写坐标缓存、不发送消息。
+
+1. 后台模块 `src/local_tools/`：新增仅企微双点定位的设备 Bearer API，固定模型和提示词，身份/租户取配对设备，复用原价目和 ×10 计费；保持旧 ClientBinding 路由。独立验证设备鉴权、租户计费、模型调用与旧接口兼容。
+2. Runtime 模块 `clients/agent-tool-runtime/`、`clients/agent-desktop/`：从已保存配对配置与 DPAPI 凭据向 WeCom Provider 注入服务端地址和设备 token；保留旧企微凭据仅供已交付旧插件，新 CLI 不读取；独立验证 WeCom 收到正确身份且其他 Provider 不收到。
+3. WeCom CLI 模块 `clients/wecom-cli/`：截图经专用设备 API 标定，继续检查返回的整数坐标与本人标题；未由 Runtime 提供配对上下文时明确失败，不读取设备凭据文件；验证不依赖旧企微环境变量和请求目标正确。
+4. 组合验收：先完成后台、Runtime、CLI 独立测试和 CodeReview，再签包；部署、安装与真机代理任务保存另按项目授权规则执行。旧客户端仅升级服务端的组合须保持原路径。
+
+发行记录：从提交 `75a40690` 隔离构建 Runtime 0.0.40 与 WeCom 0.2.14 验收包；插件验签、本地库 Python/AES/SQLite 离线检查、Runtime 安装包静态校验、目标 Runtime 与插件兼容核验及打包定向测试全部通过。交付包及两个安装文件已复制到本机 Downloads；复制后的 SHA-256 与交付清单一致：Runtime `c6ccdd0c4e7634aff7a725afaf5a9100910f1908edfb39d8a29a8382a136e905`，WeCom `d460b6de3fdacf9647e0a3ed45f88597ea4bf5f1dcd6fce2a7b741f83af3b3b7`。未安装本机或其他设备，未部署 agent2；服务端新设备 API 仍需发布后才能真机标定。
+
+## W31 发送标题复制解除原剪贴板纯文本门禁（2026-11-09）
+
+agent2 代理任务 #3 的消息 #269 读取成功；本机 0.2.12 连续三次 `wecom_message_send` 均返回 `UI_CHANGED/effect=none`，driver-log 只有 `original_read_begin/failed`，无标题双击、无输入或 Enter。相同剪贴板序号 3498 的只读检查显示格式为 Bitmap/DeviceIndependentBitmap/Format17，所有者为飞书进程；独立 `calibrate` 复现 `CLIPBOARD_NOT_PLAIN_TEXT`。所以问题是标题复制前要求旧剪贴板必须是纯文本，不是 agent2 页面发版改动或双点缓存丢失。
+
+发送文本、图片和文件本来会覆盖剪贴板；标定只需把本次复制的标题与本人名字全等比较，选择只需把本次复制的标题与目标会话名全等比较。五条路径现共用单一标题复制实现，均不读取、保存或恢复旧内容，会覆盖当前剪贴板；标定和选择后本次复制的标题留在剪贴板。只以本次企微 Ctrl+C 的新序号、所有者进程和非空标题作为复制证据；发送、选择按原规则全等核对目标，标定全等核对本人名字。原 `_common.ps1` 中只服务旧内容保存与恢复的纯文本读取、EDP 判断及 CAS 原语已无生产调用，同其专属旧行为测试一起删除，保留本次复制需要的 Win32 序号和所有者接口。旧阶段独立测试的 PowerShell 五组回归、Node 66/66 及 CLI typecheck/build 通过；本轮收敛后的开发自测 PowerShell 五组、Node 21/21、typecheck/build 通过，最终版独测 PowerShell 六组、Win32 fresh init、Node 66/66、typecheck/build 通过；CR 无阻断。改动版工作区 CLI 在原剪贴板为 WeWork 富格式时真机 `calibrate` 成功：本次复制序号 3518→3530、owner 为企微，标题与本人名字全等，标题点 (434,38)、输入点 (762,1230)；这次标定早于本轮代码收敛。最终版真机 `select` 唯一匹配陆伟，复制标题“陆伟”全等，序号 3541→3553、owner 为企微；随后 `send --target-name 陆伟` 发送明确标记测试消息成功，标题同样全等，复制序号 3553→3565、owner 为企微，`verification=local-record`、`message_id=271`、receipt 为 `send-2026-11-09T03-09-26-462Z`。`select` 缺缓存时先标定，再以本次复制核对目标；合成回归覆盖直接选择、连续标定后选择、错标题拒绝。0.2.13 已验签导入本机验收 Runtime，界面显示已启用、已就绪，安装后 `calibrate --json` 再次成功；未部署 agent2；P8 原批次 #15 未补发，消息 #269 也未自动重发，恢复需独立处理位置和未回复消息。
 
 ## W30 无 OCR Agent→Runtime 真机验收（2026-11-07）
 

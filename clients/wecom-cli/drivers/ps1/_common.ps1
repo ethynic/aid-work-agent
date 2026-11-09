@@ -46,93 +46,6 @@ public class WeComWin32 {
     [DllImport("user32.dll")] public static extern uint GetClipboardSequenceNumber();
     [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern IntPtr GetClipboardOwner();
-    [DllImport("user32.dll")] static extern bool OpenClipboard(IntPtr owner);
-    [DllImport("user32.dll")] static extern bool CloseClipboard();
-    [DllImport("user32.dll")] static extern uint EnumClipboardFormats(uint format);
-    [DllImport("user32.dll")] static extern IntPtr GetClipboardData(uint format);
-    [DllImport("user32.dll")] static extern bool EmptyClipboard();
-    [DllImport("user32.dll")] static extern IntPtr SetClipboardData(uint format, IntPtr data);
-    [DllImport("kernel32.dll")] static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
-    [DllImport("kernel32.dll")] static extern IntPtr GlobalLock(IntPtr memory);
-    [DllImport("kernel32.dll")] static extern bool GlobalUnlock(IntPtr memory);
-    [DllImport("kernel32.dll")] static extern UIntPtr GlobalSize(IntPtr memory);
-    [DllImport("kernel32.dll")] static extern IntPtr GlobalFree(IntPtr memory);
-    [DllImport("edputil.dll")] static extern int EdpGetEnterpriseIdForClipboard(out IntPtr enterpriseId);
-    [DllImport("kernel32.dll")] static extern IntPtr GetProcessHeap();
-    [DllImport("kernel32.dll")] static extern bool HeapFree(IntPtr heap, uint flags, IntPtr memory);
-    public static bool IsPersonalClipboard() {
-        IntPtr enterpriseId = IntPtr.Zero;
-        try {
-            return EdpGetEnterpriseIdForClipboard(out enterpriseId) == 0 && enterpriseId == IntPtr.Zero;
-        } catch (DllNotFoundException) { return false; }
-        catch (EntryPointNotFoundException) { return false; }
-        finally {
-            if (enterpriseId != IntPtr.Zero && !HeapFree(GetProcessHeap(), 0, enterpriseId))
-                throw new InvalidOperationException("CLIPBOARD_PROTECTION_CHECK_FAILED");
-        }
-    }
-    static IntPtr AllocateClipboardText(string text) {
-        byte[] bytes = Encoding.Unicode.GetBytes(text + "\0");
-        IntPtr memory = GlobalAlloc(2, (UIntPtr)bytes.Length);
-        if (memory == IntPtr.Zero) throw new InvalidOperationException("CLIPBOARD_ALLOC_FAILED");
-        try {
-            IntPtr address = GlobalLock(memory);
-            if (address == IntPtr.Zero) throw new InvalidOperationException("CLIPBOARD_LOCK_FAILED");
-            try { Marshal.Copy(bytes, 0, address, bytes.Length); }
-            finally { GlobalUnlock(memory); }
-            return memory;
-        } catch { GlobalFree(memory); throw; }
-    }
-    public static bool ExchangeClipboardText(IntPtr owner, uint expectedSequence, string expectedText,
-            bool expectedEmpty, string nextText, bool nextEmpty, out uint writtenSequence) {
-        writtenSequence = expectedSequence;
-        IntPtr memory = IntPtr.Zero;
-        IntPtr rollback = IntPtr.Zero;
-        bool opened = false;
-        try {
-            // Allocate before taking the short clipboard lock. No delayed rendering or OLE call under it.
-            if (!nextEmpty) {
-                memory = AllocateClipboardText(nextText);
-                if (!expectedEmpty) rollback = AllocateClipboardText(expectedText);
-            }
-            if (!OpenClipboard(owner)) return false;
-            opened = true;
-            if (GetClipboardSequenceNumber() != expectedSequence) return false;
-            if (expectedEmpty) {
-                if (EnumClipboardFormats(0) != 0) return false;
-            } else {
-                IntPtr previous = GetClipboardData(13); // CF_UNICODETEXT
-                if (previous == IntPtr.Zero || GlobalSize(previous).ToUInt64() < (ulong)expectedText.Length * 2 + 2)
-                    return false;
-                IntPtr address = GlobalLock(previous);
-                if (address == IntPtr.Zero) return false;
-                try {
-                    if (!String.Equals(Marshal.PtrToStringUni(address, expectedText.Length), expectedText,
-                            StringComparison.Ordinal) || Marshal.ReadInt16(address, checked(expectedText.Length * 2)) != 0)
-                        return false;
-                } finally { GlobalUnlock(previous); }
-            }
-            // Compare and replace share one OpenClipboard lifetime: external writes cannot be overwritten.
-            if (!EmptyClipboard()) throw new InvalidOperationException("CLIPBOARD_WRITE_FAILED");
-            if (!nextEmpty) {
-                if (SetClipboardData(13, memory) == IntPtr.Zero) {
-                    // One bounded recovery under the same lock; no external write can be overwritten.
-                    // Failure still escapes: even this recovery may fail during an OS clipboard fault.
-                    if (rollback != IntPtr.Zero && SetClipboardData(13, rollback) != IntPtr.Zero)
-                        rollback = IntPtr.Zero;
-                    throw new InvalidOperationException("CLIPBOARD_WRITE_FAILED");
-                }
-                memory = IntPtr.Zero; // OS now owns this HGLOBAL.
-            }
-            writtenSequence = GetClipboardSequenceNumber();
-            return true;
-        } finally {
-            bool closed = !opened || CloseClipboard();
-            if (memory != IntPtr.Zero) GlobalFree(memory);
-            if (rollback != IntPtr.Zero) GlobalFree(rollback);
-            if (!closed) throw new InvalidOperationException("CLIPBOARD_CLOSE_FAILED");
-        }
-    }
     public struct RECT { public int Left, Top, Right, Bottom; }
     public struct POINT { public int X, Y; }
 }
@@ -491,38 +404,6 @@ function Test-WeComSearchWindowUnchanged($Before, $After) {
     return ($Before.Pid -gt 0 -and $Before.Pid -eq $After.Pid -and $Before.Hwnd -eq $After.Hwnd -and
         $After.Class -eq 'WeWorkWindow' -and $After.Visible -and
         $Before.X -eq $After.X -and $Before.Y -eq $After.Y -and $Before.W -eq $After.W -and $Before.H -eq $After.H)
-}
-
-function Get-WeComPlainClipboard {
-    Add-Type -AssemblyName System.Windows.Forms
-    $data = [Windows.Forms.Clipboard]::GetDataObject()
-    if ($null -eq $data -or @($data.GetFormats($false)).Count -eq 0) {
-        # OLE can briefly report no data just after a native write, even at the same
-        # clipboard sequence. Refresh once; callers still require stable provenance.
-        Start-Sleep -Milliseconds 25
-        $data = [Windows.Forms.Clipboard]::GetDataObject()
-    }
-    if ($null -eq $data) { return @{empty=$true;text=''} }
-    $formats=@($data.GetFormats($false))
-    if ($formats.Count -eq 0) { return @{empty=$true;text=''} }
-    $extra=@($formats | Where-Object {
-        $_ -notin @('UnicodeText','Text','OEMText','System.String','Locale')
-    })
-    if (-not [Windows.Forms.Clipboard]::ContainsText()) { throw 'CLIPBOARD_NOT_PLAIN_TEXT' }
-    if ($extra.Count -gt 0) {
-        # A system EDP marker alone does not prove enterprise ownership. Ask Windows;
-        # never discard a real identity, unknown policy or other non-text formats.
-        if ($extra.Count -ne 1 -or $extra[0] -ne 'EnterpriseDataProtectionId') { throw 'CLIPBOARD_NOT_PLAIN_TEXT' }
-        Initialize-WeComWin32
-        if (-not [WeComWin32]::IsPersonalClipboard()) { throw 'CLIPBOARD_NOT_PLAIN_TEXT' }
-    }
-    return @{empty=$false;text=[Windows.Forms.Clipboard]::GetText()}
-}
-
-function New-WeComClipboardOwner {
-    Add-Type -AssemblyName System.Windows.Forms
-    # An undisplayed owner HWND is required by EmptyClipboard/SetClipboardData; never Show/Focus it.
-    return New-Object Windows.Forms.Control
 }
 
 function Focus-WeComSearchBox {

@@ -328,7 +328,7 @@ export const TOOL_DEFS: WecomToolDef[] = [
       '返回 title_point/input_point 坐标、width/height/dpi 屏幕上下文与 self_user_id；' +
       '驱动原始结果中的本机 cache_path 等仅存本机诊断，不进入返回。' +
       '副作用：进入本人会话会切换当前会话视图并清除其未读角标（企微客户端固有行为），' +
-      '写入本机标定缓存与标定产物目录；复制标题核验经剪贴板通道（原剪贴板按序号 CAS 恢复）。',
+      '写入本机标定缓存与标定产物目录；复制标题核验会覆盖当前剪贴板且不恢复。',
     zodShape: {},
     annotations: { title: '企业微信坐标标定', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
