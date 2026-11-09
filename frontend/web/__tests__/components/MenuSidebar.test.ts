@@ -79,7 +79,7 @@ vi.mock('@/composables/useDesktopUpdater', () => ({
 
 // mock vue-router（reactive 让 route.path 变化能触发 watch）
 const routerPush = vi.fn()
-const routeState = reactive({ path: '/', params: {} as Record<string, any>, query: {} as Record<string, any> })
+const routeState = reactive({ path: '/', name: undefined as string | undefined, params: {} as Record<string, any>, query: {} as Record<string, any> })
 vi.mock('vue-router', () => ({
   useRouter: () => ({ push: routerPush }),
   useRoute: () => routeState,
@@ -151,7 +151,7 @@ function findFlyout(): HTMLElement | null {
 }
 
 
-describe('MenuSidebar - 任务计划分组（Runner 化 Phase 5，设计 §6）', () => {
+describe('MenuSidebar - 最近与定时任务标签', () => {
   let wrapper: ReturnType<typeof mount> | null = null
 
   beforeEach(() => {
@@ -163,6 +163,7 @@ describe('MenuSidebar - 任务计划分组（Runner 化 Phase 5，设计 §6）'
     tenantAdmin.value = null
     tenant.value = null
     routeState.path = '/'
+    routeState.name = undefined
     routeState.params = {}
     routeState.query = {}
     routerPush.mockClear()
@@ -178,7 +179,7 @@ describe('MenuSidebar - 任务计划分组（Runner 化 Phase 5，设计 §6）'
     localStorage.clear()
   })
 
-  it('渲染任务计划分组并从普通会话列表排除任务专属会话', async () => {
+  it('默认展示最近会话，键盘切换定时任务后可打开任务详情', async () => {
     sessionsRef.value = [
       { session_id: 'n1', title: '普通会话', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
       { session_id: 's_sched_1', title: '任务会话标题', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', metadata: { scheduled_task: 'sched_mock1' } },
@@ -190,12 +191,22 @@ describe('MenuSidebar - 任务计划分组（Runner 化 Phase 5，设计 §6）'
     wrapper = mountSidebar()
     await flushPromises()
 
-    // 任务计划分组来自 /api/scheduled-tasks（MSW handler 返回 Mock 定时任务）
-    expect(wrapper.text()).toContain('任务计划')
-    expect(wrapper.text()).toContain('Mock 定时任务')
-    // 普通会话保留；任务专属会话（metadata.scheduled_task）从历史会话列表排除
-    expect(wrapper.text()).toContain('普通会话')
-    expect(wrapper.text()).not.toContain('任务会话标题')
+    const [recentTab, scheduledTab] = wrapper.findAll('[role="tab"]')
+    const [recentPanel, scheduledPanel] = wrapper.findAll('[role="tabpanel"]')
+    expect(recentTab.text()).toBe('最近')
+    expect(scheduledTab.text()).toBe('定时任务')
+    expect(recentTab.attributes('aria-selected')).toBe('true')
+    expect(recentPanel.isVisible()).toBe(true)
+    expect(scheduledPanel.isVisible()).toBe(false)
+    expect(recentPanel.text()).toContain('普通会话')
+    expect(recentPanel.text()).not.toContain('任务会话标题')
+
+    await recentTab.trigger('keydown', { key: 'ArrowRight' })
+    expect(scheduledTab.attributes('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(scheduledTab.element)
+    expect(recentPanel.isVisible()).toBe(false)
+    expect(scheduledPanel.isVisible()).toBe(true)
+    expect(routerPush).not.toHaveBeenCalled()
 
     // 点击任务计划项 → 打开任务视图（非聊天页；按钮化后 Tab/Enter 键盘可达，评审 P2-10）
     const planRow = wrapper.findAll('button').find((b: any) => b.text().includes('Mock 定时任务'))
@@ -216,7 +227,28 @@ describe('MenuSidebar - 任务计划分组（Runner 化 Phase 5，设计 §6）'
     wrapper = mountSidebar()
     await flushPromises()
     expect(wrapper.text()).toContain('普通会话')
-    expect(wrapper.text()).not.toContain('任务计划')
+    expect(wrapper.findAll('[role="tabpanel"]')[1].isVisible()).toBe(false)
+    await wrapper.findAll('[role="tab"]')[1].trigger('click')
+    const scheduledPanel = wrapper.findAll('[role="tabpanel"]')[1]
+    expect(scheduledPanel.isVisible()).toBe(true)
+    expect(scheduledPanel.text()).toContain('定时任务加载失败')
+    server.use(http.get('/api/scheduled-tasks', () => HttpResponse.json({ success: true, data: { tasks: [], total: 0 } })))
+    await scheduledPanel.get('button').trigger('click')
+    await flushPromises()
+    expect(scheduledPanel.text()).toContain('暂无定时任务')
+  })
+
+  it('任务详情深链接自动显示定时任务，返回聊天时显示最近', async () => {
+    routeState.path = '/t/test-tenant/TASKS/sched_mock1'
+    routeState.name = 'tenant-scheduled-task-view'
+    wrapper = mountSidebar({ isMobile: true })
+    const [recentTab, scheduledTab] = wrapper.findAll('[role="tab"]')
+    expect(scheduledTab.attributes('aria-selected')).toBe('true')
+
+    routeState.path = '/t/test-tenant/chat'
+    routeState.name = undefined
+    await nextTick()
+    expect(recentTab.attributes('aria-selected')).toBe('true')
   })
 
   it('租户切换：立即清空任务分组并丢弃旧租户的慢响应（二轮评审第 2 项）', async () => {
@@ -244,7 +276,7 @@ describe('MenuSidebar - 任务计划分组（Runner 化 Phase 5，设计 §6）'
     wrapper = mountSidebar()
     await flushPromises()
     // A 未返回：分组为空（无残留）
-    expect(wrapper.text()).not.toContain('任务计划')
+    expect(wrapper.text()).not.toContain('租户A任务ZZZ')
 
     // 切换租户（登录态保持 true，仅 tenantId 变化）：立即重载
     currentTenant = 'b'
@@ -539,9 +571,9 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(texts.some(t => t.includes('管理菜单'))).toBe(false)
     expect(texts.some(t => t.includes('AI获客'))).toBe(false) // 业务数据 trigger
 
-    // 新会话按钮和历史会话仍在
+    // 新会话按钮与侧栏双标签在移动端仍可用
     expect(texts.some(t => t.includes('新会话'))).toBe(true)
-    expect(wrapper.text()).toContain('历史会话')
+    expect(wrapper.findAll('[role="tab"]').map(tab => tab.text())).toEqual(['最近', '定时任务'])
 
     // 打开用户菜单
     const userMenuBtn = allButtons.find((b: any) => b.text().includes('admin'))

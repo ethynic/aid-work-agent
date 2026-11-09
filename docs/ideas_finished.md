@@ -277,6 +277,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261109-1503 | 侧栏最近会话与定时任务标签 | ✅ 已完成开发。两个标签可直接切换，选中项显示主题色下划线。 | [设计](system/scheduled-task-runner-refactor-design.md) | [计划](plans/plan-sidebar-recent-scheduled-tabs.md) |
 | 20261109-1442 | 企业微信会话记录布局调整 | ✅ 已完成开发。参考客服对话页调整会话列表和消息气泡。 | [设计](design/wecom/wecom-conversation-operations-design.md#61-会话记录页面) | [计划](plans/plan-wecom-conversation-record-layout.md) |
 | 20261021-1126 | Web Agent 单条回复分享 | ✅ 已完成开发：所选回复独立分享，图标与时间同行，弹框支持可选密码及图片附件。 | [设计](system/web-agent-reply-sharing-design.md) | [计划](plans/plan-web-agent-reply-sharing.md) |
 | 20260602-0956 | 前端 Office 预览 | ✅ 已完成开发：Word/Excel/PPT 三格式预览（整页/整表缩放、10MB/20MB/1000 行硬门槛、FileTypeIcon 类型徽标、懒加载分包），511 项单测与手动验收全过。 | [设计](research/frontend-office-preview-design.md) | — |
