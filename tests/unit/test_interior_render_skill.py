@@ -32,7 +32,10 @@ class TestSkillLoading:
         reg.load_from_directory(SKILL_DIR.parent)
         skill = reg.get("interior-render")
         assert skill is not None
-        assert skill.version == "1.0.0"
+        # 期望版本从 SKILL.md frontmatter 读取（合并上游会递增，不硬编码）
+        fm_version = re.search(r"^version:\s*(\S+)", SKILL_MD.read_text(encoding="utf-8"), re.M)
+        assert fm_version, "SKILL.md 缺少 version 字段"
+        assert skill.version == fm_version.group(1).strip("'\"")
         assert skill.requires_tools == ["image_render", "image_read"]
 
     def test_registry_content_nonempty(self):
