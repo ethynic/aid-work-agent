@@ -8,6 +8,8 @@
 """
 
 import asyncio
+import base64
+import binascii
 import json
 import uuid as _uuid
 from datetime import datetime
@@ -15,6 +17,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from loguru import logger
+from pydantic import BaseModel, ConfigDict
 
 from src.api.auth import get_current_user
 from src.db.client_binding_db import ClientUsageLogDB
@@ -48,6 +51,18 @@ CLAIM_POLL_INTERVAL = 0.5   # 长轮询间隔（秒）
 CLAIM_MAX_WAIT = 30         # 长轮询最长等待（秒）
 ONLINE_THRESHOLD_SECONDS = 30  # last_seen_at 距今 ≤30s 视为在线
 PROGRESS_MESSAGE_MAX_LEN = 500
+
+
+class WecomCalibrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    image: str
+
+
+_WECOM_CALIBRATION_PROMPT = (
+    '只定位企业微信右侧聊天区顶部标题第一个字中心，以及底部大块文本输入框中心。'
+    '返回单个 JSON 对象，字段 divider_x、title_x、title_y、input_x、input_y 均为相对完整截图左上角的整数像素坐标。'
+    'divider_x 是左侧列表与右侧聊天区分界线。看不清时返回 {"error":"point_not_found"}。不要返回文字内容。'
+)
 
 
 def _http_error(status_code: int, error: str, exc: Optional[Exception] = None) -> HTTPException:
@@ -527,6 +542,79 @@ async def runtime_boss_visual_diagnose(
     if result["state"] in {"reserved", "dispatched"}:
         return JSONResponse(result, status_code=202, headers={"Retry-After": "2"})
     return result
+
+
+@router.post("/runtime/wecom/calibrate")
+async def runtime_wecom_calibrate(
+    body: WecomCalibrationRequest, device: Dict = Depends(_require_device)
+):
+    """用已配对设备身份为企微双点标定定位；不接收任意模型或对话。"""
+    prefix = "data:image/png;base64,"
+    if not body.image.startswith(prefix):
+        raise _http_error(400, "标定截图必须是本地 PNG 数据")
+    encoded = body.image[len(prefix):]
+    if len(encoded) > 14_000_000:
+        raise _http_error(413, "标定截图过大")
+    try:
+        screenshot = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        raise _http_error(400, "标定截图不是有效 PNG 数据") from None
+    if not screenshot.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise _http_error(400, "标定截图不是有效 PNG 数据")
+    if len(screenshot) > 10 * 1024 * 1024:
+        raise _http_error(413, "标定截图过大")
+
+    tenant_id, user_id = device["tenant_id"], device["user_id"]
+    tenant, user = await asyncio.gather(
+        asyncio.to_thread(TenantDB.get_by_id, tenant_id),
+        asyncio.to_thread(UserDB.get_by_id, user_id),
+    )
+    if not tenant or tenant.get("status") != "active":
+        raise _http_error(403, "设备租户不存在或已停用")
+    if (not user or user.get("status") != "active"
+            or user.get("role") != "platform_admin" and user.get("tenant_id") != tenant_id):
+        raise _http_error(403, "设备用户不存在、已停用或不属于当前租户")
+    if float(tenant.get("credit_balance") or 0) <= 0:
+        raise _http_error(402, "积分余额不足")
+
+    from src.api.client_routes import _get_model_gateway
+
+    gateway = await asyncio.to_thread(_get_model_gateway, "GLM-5.3-Flash")
+    try:
+        response = await gateway.chat(
+            messages=[
+                {"role": "system", "content": _WECOM_CALIBRATION_PROMPT},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "按截图原像素给出两个中心坐标；不要缩放。"},
+                    {"type": "image_url", "image_url": {"url": body.image}},
+                ]},
+            ],
+            temperature=0,
+            max_tokens=4000,
+            response_format=None,
+            reasoning_effort="max",
+        )
+    except Exception as error:
+        logger.opt(exception=True).error(
+            f"后端日志：企微双点标定模型调用失败 device={device['id']} error={type(error).__name__}"
+        )
+        raise _http_error(502, "企微双点标定模型调用失败") from None
+
+    usage = response.get("usage") or {}
+    model = response.get("model") or gateway.get_model_name()
+    provider = response.get("provider") or gateway.get_provider_name()
+    billing = await asyncio.to_thread(
+        ClientUsageLogDB.record_llm_usage,
+        tenant_id=tenant_id,
+        binding_id="wecom-local-runtime",
+        model=model,
+        provider=provider,
+        usage=usage,
+        stage="wecom-title-coordinate",
+        detail={"device_id": str(device["id"])},
+    )
+    return {"content": response.get("content", ""), "model": model,
+            "provider": provider, "usage": usage, "billing": billing}
 
 
 @router.post("/runtime/resume/evaluate")

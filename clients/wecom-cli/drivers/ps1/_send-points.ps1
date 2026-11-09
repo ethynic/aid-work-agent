@@ -28,9 +28,9 @@ function Get-WeComTitlePoint([int64]$Hwnd, [string]$ImagePath) {
     $main = Get-WeComWindowInfo ([IntPtr]$Hwnd)
     $dpi = [int][WeComWin32]::GetDpiForWindow([IntPtr]$Hwnd)
     if ($dpi -le 0) { Throw-DriverError 'UI_CHANGED' '无法取得企业微信窗口 DPI，未发送消息' }
-    $url = ([string]$env:AID_WECOM_SERVER_URL).TrimEnd('/')
-    $token = [string]$env:AID_WECOM_SERVER_TOKEN
-    if (-not $url -or -not $token) { Throw-DriverError 'CONFIG_MISSING' '缺少 GLM 标定服务配置，未发送消息' }
+    $url = ([string]$env:AIDWORK_RUNTIME_SERVER).TrimEnd('/')
+    $token = [string]$env:AIDWORK_RUNTIME_DEVICE_TOKEN
+    if (-not $url -or -not $token) { Throw-DriverError 'CONFIG_MISSING' '缺少 Runtime 配对信息，无法标定坐标，未发送消息' }
     Add-Type -AssemblyName System.Drawing
     $source = [Drawing.Image]::FromFile($ImagePath)
     try {
@@ -44,24 +44,14 @@ function Get-WeComTitlePoint([int64]$Hwnd, [string]$ImagePath) {
         } finally { $memory.Dispose() }
     } finally { $source.Dispose() }
     $image = 'data:image/png;base64,' + [Convert]::ToBase64String($bytes)
-    $system = '只定位企业微信右侧聊天区顶部标题第一个字中心，以及底部大块文本输入框中心。返回单个 JSON 对象，字段 divider_x、title_x、title_y、input_x、input_y 均为相对完整截图左上角的整数像素坐标。divider_x 是左侧列表与右侧聊天区分界线。看不清时返回 {"error":"point_not_found"}。不要返回文字内容。'
-    $request = @{
-        model = 'GLM-5.3-Flash'; purpose = 'wecom-title-coordinate'; temperature = 0
-        messages = @(
-            @{ role = 'system'; content = $system },
-            @{ role = 'user'; content = @(
-                @{ type = 'text'; text = '按截图原像素给出两个中心坐标；不要缩放。' },
-                @{ type = 'image_url'; image_url = @{ url = $image } }
-            ) }
-        )
-    }
+    $request = @{ image = $image }
     try {
         $body = [Text.Encoding]::UTF8.GetBytes(($request | ConvertTo-Json -Depth 8 -Compress))
-        $response = Invoke-RestMethod -Uri ($url + '/api/client/v1/llm/chat') -Method Post -Headers @{ Authorization = ('Bearer ' + $token) } -ContentType 'application/json' -Body $body -TimeoutSec 60
+        $response = Invoke-RestMethod -Uri ($url + '/api/local-tools/runtime/wecom/calibrate') -Method Post -Headers @{ Authorization = ('Bearer ' + $token) } -ContentType 'application/json' -Body $body -TimeoutSec 60
     } catch {
         $status = 0
         if ($null -ne $_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
-        if ($status -eq 401) { Throw-DriverError 'CONFIG_MISSING' 'GLM 标定鉴权失败，未发送消息' }
+        if ($status -eq 401) { Throw-DriverError 'CONFIG_MISSING' 'Runtime 配对身份无效，无法标定坐标，未发送消息' }
         Throw-DriverError 'CONTENT_UNAVAILABLE' ('GLM 双点标定失败（HTTP ' + $status + '），未发送消息')
     }
     $raw = ([string]$response.content).Trim()

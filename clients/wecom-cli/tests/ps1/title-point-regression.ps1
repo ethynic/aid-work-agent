@@ -8,6 +8,8 @@ function Get-WeComWindowInfo { param($Hwnd) return @{W=$script:width;H=$script:h
 function Throw-DriverError { param($Code,$Message) throw ('WECOMDRIVE|'+$Code+'|'+$Message) }
 function Invoke-RestMethod { param($Uri,$Method,$Headers,$ContentType,$Body,$TimeoutSec)
     $script:modelCalls++
+    $script:lastUri=$Uri
+    $script:lastAuth=$Headers.Authorization
     $script:lastRequest=[Text.Encoding]::UTF8.GetString($Body) | ConvertFrom-Json
     return @{content=$script:modelContent}
 }
@@ -18,9 +20,11 @@ function Get-WeComWindowSnapshot { param($Hwnd,$Path) Copy-Item -LiteralPath $sc
 function Get-WeComCopiedTitle { param($Hwnd,$Section,$Point)
     return $script:copied }
 $oldLocal=$env:LOCALAPPDATA;$oldUrl=$env:AID_WECOM_SERVER_URL;$oldToken=$env:AID_WECOM_SERVER_TOKEN
+$oldRuntimeUrl=$env:AIDWORK_RUNTIME_SERVER;$oldRuntimeToken=$env:AIDWORK_RUNTIME_DEVICE_TOKEN
 $dir=Join-Path $env:TEMP ('wecom-send-points-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $dir | Out-Null
-$env:LOCALAPPDATA=$dir;$env:AID_WECOM_SERVER_URL='https://example.invalid';$env:AID_WECOM_SERVER_TOKEN='synthetic'
+$env:LOCALAPPDATA=$dir;$env:AID_WECOM_SERVER_URL='https://legacy.invalid';$env:AID_WECOM_SERVER_TOKEN='legacy-token'
+$env:AIDWORK_RUNTIME_SERVER='https://paired.example.invalid';$env:AIDWORK_RUNTIME_DEVICE_TOKEN='synthetic-device'
 $script:width=1000;$script:height=800;$script:shot=Join-Path $dir 'shot.png'
 $bmp=[Drawing.Bitmap]::new(1000,800)
 try { $bmp.Save($script:shot,[Drawing.Imaging.ImageFormat]::Png) } finally { $bmp.Dispose() }
@@ -39,8 +43,11 @@ try {
     $point=Get-WeComTitlePoint -Hwnd 101 -ImagePath $script:shot
     Assert-True ($point.x -eq 440 -and $point.input_x -eq 620 -and $point.input_y -eq 710) 'one model response must provide both points'
     Assert-True ($script:modelCalls -eq 1) 'one calibration invokes model exactly once'
+    Assert-True ($script:lastUri -eq 'https://paired.example.invalid/api/local-tools/runtime/wecom/calibrate') 'calibration must use the paired server device API'
+    Assert-True ($script:lastAuth -eq 'Bearer synthetic-device') 'calibration must use the paired device identity, not a client binding'
+    Assert-True (@($script:lastRequest.PSObject.Properties.Name).Count -eq 1) 'calibration request must contain only screenshot, never arbitrary model or tenant'
     Assert-True (-not (Test-Path -LiteralPath $point.cache_path)) 'unverified model points must not enter cache'
-    $url=$lastRequest.messages[1].content[1].image_url.url
+    $url=$lastRequest.image
     $bytes=[Convert]::FromBase64String($url.Substring('data:image/png;base64,'.Length))
     $memory=[IO.MemoryStream]::new($bytes)
     try { $img=[Drawing.Image]::FromStream($memory); try {
@@ -68,6 +75,10 @@ try {
     $failure='';try{Get-WeComTitlePoint -Hwnd 101 -ImagePath $script:shot | Out-Null}catch{$failure=$_.Exception.Message}
     Assert-True ($failure -like 'WECOMDRIVE|CONTENT_UNAVAILABLE|*') 'input point outside chat area must fail without caching'
     Assert-True (-not (Test-Path -LiteralPath $point.cache_path)) 'bad point must not poison cache'
+    $env:AIDWORK_RUNTIME_DEVICE_TOKEN=''
+    $failure='';try{Get-WeComTitlePoint -Hwnd 101 -ImagePath $script:shot | Out-Null}catch{$failure=$_.Exception.Message}
+    Assert-True ($failure -like 'WECOMDRIVE|CONFIG_MISSING|*') 'legacy client binding alone cannot impersonate a paired device'
+    $env:AIDWORK_RUNTIME_DEVICE_TOKEN='synthetic-device'
     # 自会话标题全等是模型坐标写入缓存的最后条件。
     function Get-WeComTitlePoint { param($Hwnd,$ImagePath)
         return @{x=440;y=38;input_x=620;input_y=710;w=1000;h=800;dpi=96;cache_path=(Get-WeComPointCachePath);source='glm'}
@@ -82,6 +93,7 @@ try {
     Assert-True (Test-Path -LiteralPath $point.cache_path) 'verified self title caches both points'
 } finally {
     $env:LOCALAPPDATA=$oldLocal;$env:AID_WECOM_SERVER_URL=$oldUrl;$env:AID_WECOM_SERVER_TOKEN=$oldToken
+    $env:AIDWORK_RUNTIME_SERVER=$oldRuntimeUrl;$env:AIDWORK_RUNTIME_DEVICE_TOKEN=$oldRuntimeToken
     Remove-Item -LiteralPath $dir -Recurse -Force
 }
 Write-Output 'PS_TITLE_POINT_AND_CLICK_OK'

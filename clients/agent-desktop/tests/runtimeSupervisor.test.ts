@@ -247,7 +247,7 @@ test('disconnect finishes pending queries immediately rather than keeping the fu
 
 for (const product of ['desktop', 'runtime_app'] as const) {
   for (const configured of [true, false]) {
-    test(`${product} Host forwards only WeCom calibration settings and keeps other ambient credentials isolated when configured=${configured}`, async () => {
+    test(`${product} Host keeps legacy WeCom settings for installed old plugins and isolates other credentials when configured=${configured}`, async () => {
       const root = await mkdtemp(path.join(os.tmpdir(), 'h3-boss-env-'))
       const entry = path.join(root, 'host.cjs')
       const excluded = ['OPENAI_API_KEY', 'ZHIPUAI_API_KEY', 'DEVICE_TOKEN', 'AIDWORK_DEVICE_TOKEN',
