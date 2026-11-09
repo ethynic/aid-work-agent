@@ -118,6 +118,8 @@ async def test_manual_submission_keeps_sixty_ids_in_one_main_runner():
     body = client.request.call_args.kwargs['body']
     assert (method, path) == ('POST', '/v1/runners')
     assert body['profile_id'] == 'main'
+    # A sole permitted chat profile must not replace the daily report profile.
+    assert body['routing_policy'] == 'explicit'
     assert body['request_data']['wecom_task_device'] == 'device-a'
     assert body['request_data'][plans.DESCRIPTOR_KEY] == {
         'schema_version': 2, 'kind': 'daily', 'trigger': 'manual',
