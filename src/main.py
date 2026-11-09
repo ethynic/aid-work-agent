@@ -568,7 +568,6 @@ async def lifespan(app: FastAPI):
 
 
 # ============== File Upload Configuration ==============
-import shutil
 from pathlib import Path
 
 # 上传文件存储目录（基于项目根目录，不受 cwd 影响）
@@ -943,9 +942,27 @@ async def list_tools():
 from fastapi import UploadFile, File
 from src.config.settings import settings
 
+# 上传分块写入的块大小（1MB）：按实际读取字节累计限流，不信任客户端声明的 size
+_UPLOAD_CHUNK_SIZE = 1024 * 1024
+
+
+def _require_upload_auth(http_request: Request) -> None:
+    """上传/文件元数据接口的认证与租户校验
+
+    与 src/api/knowledge_tdoc.py `_require_auth` 同模式：
+    - get_current_user 仅认 Authorization: Bearer，缺失/无效返回 401
+    - 无租户上下文（如 platform_admin 未指定 X-Tenant-Id）返回 403
+    """
+    current_user = auth.get_current_user(http_request)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="未登录")
+    from src.saas.context import get_current_tenant_id
+    if not get_current_tenant_id():
+        raise HTTPException(status_code=403, detail="缺少租户上下文")
+
 
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(http_request: Request, file: UploadFile = File(...)):
     """
     上传文件接口
 
@@ -960,6 +977,9 @@ async def upload_file(file: UploadFile = File(...)):
         "mime_type": "application/pdf"
     }
     """
+    # 认证与租户校验（置于 try 外：HTTPException 不被下方兜底 except 吞成 500）
+    _require_upload_auth(http_request)
+
     try:
         # 生成唯一文件ID
         file_id = f"file_{uuid.uuid4().hex[:12]}"
@@ -969,8 +989,8 @@ async def upload_file(file: UploadFile = File(...)):
 
         # 验证文件大小
         max_size = settings.storage.max_general_file_size
+        max_size_mb = max_size / 1024 / 1024
         if file.size and file.size > max_size:
-            max_size_mb = max_size / 1024 / 1024
             return JSONResponse(
                 status_code=200,
                 content={
@@ -979,14 +999,29 @@ async def upload_file(file: UploadFile = File(...)):
                 }
             )
 
-        # 保存文件（租户模式下按 tenant_id 隔离）
+        # 保存文件（租户模式下按 tenant_id 隔离）；分块写入并按实际读取字节限流
         upload_dir = _get_tenant_upload_dir()
         file_path = upload_dir / f"{file_id}{suffix}"
+        file_size = 0
         with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        # 获取文件信息
-        file_size = file_path.stat().st_size
+            while True:
+                chunk = file.file.read(_UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                file_size += len(chunk)
+                if file_size > max_size:
+                    # 删除半截文件，按既有约定返回 200 + success=false
+                    buffer.close()
+                    file.file.close()
+                    file_path.unlink(missing_ok=True)
+                    return JSONResponse(
+                        status_code=200,
+                        content={
+                            "success": False,
+                            "error": f"文件过大，最大支持 {max_size_mb:.0f}MB"
+                        }
+                    )
+                buffer.write(chunk)
 
         # 根据扩展名判断文件类型
         mime_type_map = {
@@ -1055,12 +1090,13 @@ async def upload_file(file: UploadFile = File(...)):
 
 
 @app.get("/api/upload/{file_id}")
-async def get_uploaded_file(file_id: str):
+async def get_uploaded_file(http_request: Request, file_id: str):
     """
     获取已上传文件的信息
 
     返回文件的元信息（不返回文件内容）
     """
+    _require_upload_auth(http_request)
     file_info = _get_file_info(file_id)
     if not file_info:
         raise HTTPException(status_code=404, detail="文件不存在")
@@ -1071,10 +1107,11 @@ async def get_uploaded_file(file_id: str):
 
 
 @app.delete("/api/upload/{file_id}")
-async def delete_uploaded_file(file_id: str):
+async def delete_uploaded_file(http_request: Request, file_id: str):
     """
     删除已上传的文件
     """
+    _require_upload_auth(http_request)
     file_info = _get_file_info(file_id)
     if not file_info:
         raise HTTPException(status_code=404, detail="文件不存在")
