@@ -9,6 +9,7 @@
   提示）/view/set_notify_rule 设置与清除（F4）/list_notify_rules/越权 fail-closed
 """
 
+import json
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -442,6 +443,9 @@ class TestManageScheduledTaskTool:
         assert "您共有 2 个定时任务" in result["message"]
         assert "任务A" in result["message"] and "下次执行" in result["message"]
         assert "credit_blocked" in result["message"]
+        # Runner 会把工具结果写入会话消息；数据库时间必须能被 JSON 序列化。
+        json.dumps(result)
+        assert result["tasks"][0]["next_due_at"] == "2026-10-29T09:00:00"
         assert mock_list.call_args.args[0] == "user_1"
         assert mock_list.call_args.kwargs["tenant_id"] == "tenant_1"
 
@@ -580,6 +584,9 @@ class TestManageScheduledTaskTool:
         assert "累计执行: 5" in result["message"]
         assert "credit_blocked" in result["message"]
         assert "任务视图" in result["message"]
+        # 查看详情同样必须可写入 Runner 会话，不能在回答用户前中断。
+        json.dumps(result)
+        assert result["task"]["last_run_at"] == "2026-10-28T09:00:00"
 
     async def test_set_notify_rule_sets(self):
         tool = ManageScheduledTaskTool()

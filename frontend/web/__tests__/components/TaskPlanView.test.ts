@@ -5,7 +5,7 @@
  * - P1-1 切换任务请求隔离（A→B 快速切换，A 慢响应不覆盖 B）
  * - P1-2 新执行发现（10s 轮询 mock 出新 runner → 并入并 observe）
  * - P2-3 双缓存收敛（list 返回更高 revision 的新终态值刷新后展示；旧投影被拒）
- * - P2-4 执行结果完整展示（图片渲染 + 会话消息详情）
+ * - 执行详情保留结果、图片与进度，隐藏计划提示词
  * - P2-6(§15) interval 整数小时预填与阈值即时校验
  * - P2-7 附件上传（复用 uploadFile，上传后组装 AttachmentRef）
  * - P2-9 通知规则未变更时不提交规则字段
@@ -45,6 +45,7 @@ vi.mock('vue-toastification', () => ({
 vi.mock('@/composables/useTenantAuth', () => ({
   useTenantAuth: () => ({
     admin: ref({ user_id: 'u1', username: 'tester', role: 'user' }),
+    tenant: ref(null),
     isLoggedIn: ref(true),
     getAuthHeader: () => ({ Authorization: 'Bearer test-token', 'X-Tenant-Id': 'tenant-1' }),
     logout: vi.fn(),
@@ -305,7 +306,7 @@ describe('TaskPlanView - 评审修复回归', () => {
     }
   })
 
-  it('P2-4 展开详情渲染输出图片与会话消息（按 metadata.runner_id 过滤）', async () => {
+  it('展开详情保留执行结果、图片与进度，不展示计划提示词', async () => {
     const image = {
       file_id: 'img-1', download_url: '/api/files/img-1', display_name: '图表.png',
       width: 100, height: 100, mime_type: 'image/png', size_bytes: 2048,
@@ -314,15 +315,10 @@ describe('TaskPlanView - 评审修复回归', () => {
     const r1 = makeRunner({
       runner_id: 'r1', status: 'completed',
       result: { status: 'completed', output: '文本结论如下', images: [image], credit_cost: 3 },
+      snapshot: { progressMessages: [{ type: 'progress', content: '已生成图表' }] },
     })
     runnerListMock.mockResolvedValue(pageOf([r1]))
-    getSessionMessagesMock.mockResolvedValue({
-      messages: [
-        { message_id: 'm1', session_id: 'sess-1', role: 'user', content: '任务输入内容Q', metadata: { runner_id: 'r1' }, created_at: '2026-01-01T09:00:00' },
-        { message_id: 'm2', session_id: 'sess-1', role: 'assistant', content: '完整会话结果W', metadata: { runner_id: 'r1' }, created_at: '2026-01-01T09:05:00' },
-        { message_id: 'm3', session_id: 'sess-1', role: 'assistant', content: '其他执行的内容E', metadata: { runner_id: 'r-other' }, created_at: '2026-01-01T08:00:00' },
-      ],
-    })
+    getSessionMessagesMock.mockResolvedValue({ messages: [{ role: 'user', content: '计划提示词正文' }] })
     wrapper = mount(TaskPlanView)
     await flushPromises()
     expect(wrapper.text()).toContain('含 1 张图片')
@@ -335,11 +331,11 @@ describe('TaskPlanView - 评审修复回归', () => {
     // 图片经 ImageGallery 渲染为 <img>
     const imgs = wrapper.findAll('img').filter(i => (i.attributes('src') || '').includes('img-1'))
     expect(imgs.length).toBeGreaterThanOrEqual(1)
-    // 会话消息按 runner_id 过滤展示
-    expect(wrapper.text()).toContain('任务输入内容Q')
-    expect(wrapper.text()).toContain('完整会话结果W')
-    // 后端已按 runner_id 先过滤（三轮-3）：mock 返回即展示内容；r1 消息必须在场
-    expect(wrapper.text()).toContain('完整会话结果W')
+    expect(wrapper.text()).toContain('文本结论如下')
+    expect(wrapper.get('details').text()).toContain('已生成图表')
+    expect(wrapper.text()).not.toContain('会话消息（该次执行的完整记录）')
+    expect(wrapper.text()).not.toContain('计划提示词正文')
+    expect(getSessionMessagesMock).not.toHaveBeenCalled()
   })
 
   it('P2-12 多个 active：行级取消绑定该行 runner_id，顶部不给单一取消入口', async () => {
@@ -620,60 +616,6 @@ describe('TaskPlanView - 评审修复回归', () => {
     expect(wrapper.text()).toContain('有投递进行中')
   })
 
-  it('二轮-6 会话详情按 runner 缓存：终态一次即定，非终态每次展开刷新，终态落定清缓存', async () => {
-    vi.useFakeTimers()
-    try {
-      const done = makeRunner({ runner_id: 'r-done', status: 'completed', accepted_at: '2026-01-01T10:00:00', result: { status: 'completed', output: '已完成输出DONE' } })
-      const live = makeRunner({ runner_id: 'r-live', status: 'running', accepted_at: '2026-01-01T11:00:00', revision: 1, view_revision: 1, result: null, snapshot: { output: '进行中输出LIVE' } })
-      runnerListMock.mockResolvedValue(pageOf([done, live]))
-      const observeCallbacks = new Map<string, (view: RunnerView) => void>()
-      runnerObserveMock.mockImplementation((id: string, _h: unknown, onView: (view: RunnerView) => void) => {
-        observeCallbacks.set(id, onView)
-      })
-      wrapper = mount(TaskPlanView)
-      await flushPromises()
-
-      const view = wrapper!
-      // 行级定位：按行容器分别取展开按钮
-      const rows = () => view.findAll('.divide-y > div')
-      const doneRow = () => rows().find(r => r.text().includes('已完成输出DONE'))!
-      const liveRow = () => rows().find(r => r.text().includes('进行中输出LIVE'))!
-
-      await doneRow().findAll('button').find(b => b.text() === '查看详情')!.trigger('click')
-      await flushPromises()
-      expect(getSessionMessagesMock).toHaveBeenCalledTimes(1)
-      await doneRow().findAll('button').find(b => b.text() === '收起')!.trigger('click')
-      await doneRow().findAll('button').find(b => b.text() === '查看详情')!.trigger('click')
-      await flushPromises()
-      expect(getSessionMessagesMock).toHaveBeenCalledTimes(1)
-
-      // 非终态行：每次展开刷新（执行完成后内容会变）
-      await liveRow().findAll('button').find(b => b.text() === '查看详情')!.trigger('click')
-      await flushPromises()
-      expect(getSessionMessagesMock).toHaveBeenCalledTimes(2)
-      await liveRow().findAll('button').find(b => b.text() === '收起')!.trigger('click')
-      await liveRow().findAll('button').find(b => b.text() === '查看详情')!.trigger('click')
-      await flushPromises()
-      expect(getSessionMessagesMock).toHaveBeenCalledTimes(3)
-
-      // 终态落定：observe 推送 terminal 投影 → 非终态期间拉取的缓存作废，再展开重新拉取
-      observeCallbacks.get('r-live')!(makeRunner({
-        runner_id: 'r-live', status: 'completed', accepted_at: '2026-01-01T11:00:00',
-        revision: 2, view_revision: 2, finished_at: '2026-01-01T11:05:00',
-        result: { status: 'completed', output: '进行中输出LIVE' },
-      }))
-      await flushPromises()
-      await vi.advanceTimersByTimeAsync(3_000) // 终态刷新调度（2s）
-      await flushPromises()
-      await liveRow().findAll('button').find(b => b.text() === '收起')!.trigger('click')
-      await liveRow().findAll('button').find(b => b.text() === '查看详情')!.trigger('click')
-      await flushPromises()
-      expect(getSessionMessagesMock).toHaveBeenCalledTimes(4)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
   // ==================== Phase 5 三轮评审回归 ====================
 
   it('三轮-1 旧上传完成不得解除新上传的保存限制（占位派生）', async () => {
@@ -714,25 +656,6 @@ describe('TaskPlanView - 评审修复回归', () => {
 
     resolveB({ file_id: 'fb', name: 'b', type: 'file', mime_type: '', size: 1 })
     await flushPromises()
-  })
-
-  it('三轮-3 消息拉取携带 runner_id（后端先过滤再 limit）', async () => {
-    const task = makeTask()
-    getScheduledTaskMock.mockResolvedValue(task)
-    const r1 = makeRunner({ runner_id: 'r1', status: 'completed',
-      result: { status: 'completed', output: '输出' } })
-    runnerListMock.mockResolvedValue(pageOf([r1]))
-    getSessionMessagesMock.mockResolvedValue({ messages: [] })
-    wrapper = mount(TaskPlanView)
-    await flushPromises()
-
-    const toggle = wrapper.findAll('button').find(b => b.text() === '查看详情')
-    expect(toggle).toBeTruthy()
-    await toggle!.trigger('click')
-    await flushPromises()
-    const calls = getSessionMessagesMock.mock.calls
-    const lastCall = calls[calls.length - 1]
-    expect(lastCall?.[2]).toBe('r1')
   })
 
   it('§15(CR P1-3) 存量非整小时间隔：预填为空并提示，不再静默改写为 1 小时', async () => {
@@ -862,7 +785,6 @@ describe('TaskPlanView - 评审修复回归', () => {
     getScheduledTaskMock.mockResolvedValue(makeTask())
     runnerListMock.mockResolvedValue(pageOf([]))  // 首页 20 条不含目标执行
     runnerGetMock.mockReset().mockResolvedValue(target)
-    getSessionMessagesMock.mockResolvedValue({ messages: [] })
     routeState.query = { runner_id: 'r-old' }
     wrapper = mount(TaskPlanView)
     await flushPromises()
