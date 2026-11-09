@@ -35,7 +35,7 @@ type AgentTab = 'conversations' | 'daily' | 'proxy'
 const tabs: { key: AgentTab; label: string }[] = [
   { key: 'conversations', label: '会话记录' },
   { key: 'daily', label: '每日总结' },
-  { key: 'proxy', label: '代理任务' },
+  { key: 'proxy', label: '聊天配置' },
 ]
 
 const components: Record<AgentTab, typeof WecomConversationCenter> = {

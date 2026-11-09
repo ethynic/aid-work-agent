@@ -41,11 +41,12 @@ describe('WecomAgentHub（企业微信Agent 三入口合并壳）', () => {
     expect(wrapper.text()).toContain('企业微信Agent')
   })
 
-  it('路由 tab=proxy 时高亮代理任务并内嵌代理页面', () => {
+  it('聊天配置标签在 tab=proxy 时高亮并显示代理页面', () => {
     routeState.route = { params: { tenant_id: 't1', tab: 'proxy' } }
     const wrapper = mountHub()
-    expect(wrapper.find('[data-testid="wecom-agent-tab-proxy"]').classes())
-      .toContain('bg-primary-50')
+    const tab = wrapper.find('[data-testid="wecom-agent-tab-proxy"]')
+    expect(tab.text()).toBe('聊天配置')
+    expect(tab.classes()).toContain('bg-primary-50')
     expect(wrapper.find('[data-testid="page-proxy"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="page-conversations"]').exists()).toBe(false)
   })
