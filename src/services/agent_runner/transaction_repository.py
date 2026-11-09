@@ -120,6 +120,14 @@ def settle_record(cursor, runner, result, cost, totals, breakdown):
     state = (runner.get('checkpoint') or {}).get('execution') or {}
     models = sorted({group['model'] for group in breakdown['groups'] if group.get('model')})
     providers = sorted({group['provider'] for group in breakdown['groups'] if group.get('provider')})
+    # 图像生成走独立落账（image_render 无网关用量回执，不进 groups），
+    # 展示口径上把本会话工具计费记录中的图片模型并入模型列表，与真实调用一致
+    cursor.execute("SELECT usage_breakdown FROM chat_records WHERE session_id=%s AND source_type='tool_billing'",
+        (runner['session_id'],))
+    for row in cursor.fetchall():
+        image_model = ((row.get('usage_breakdown') or {}).get('image') or {}).get('model')
+        if image_model:
+            models = sorted(set(models) | {image_model})
     details = execution_statistics(state, runner['runner_id'],runner.get('checkpoint') or {})
     if record is None:
         user_message=runner['input']['text']
