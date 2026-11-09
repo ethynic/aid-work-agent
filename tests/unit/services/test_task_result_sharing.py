@@ -1,5 +1,6 @@
 """A task result link shows one owned terminal run and only its visible products."""
 
+import json
 from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import MagicMock
@@ -130,6 +131,16 @@ def test_view_ends_pool_probe_transaction_before_snapshot_isolation(monkeypatch)
     first_set_tx = next(i for i, (name, sql) in enumerate(calls)
                         if name == 'execute' and 'SET TRANSACTION' in sql)
     assert any(name == 'rollback' for name, _ in calls[:first_set_tx])
+
+
+def test_view_payload_is_json_safe(monkeypatch):
+    # API 层用 JSONResponse 直接序列化返回值（2026-11-09 agent2 二次 500：
+    # datetime 未序列化），datetime 必须在服务层转为 isoformat 字符串。
+    message = {'content': 'done', 'metadata': {'runner_id': 'runner_1'}, 'created_at': datetime(2026, 11, 6, 12)}
+    database(monkeypatch, [share(), task(), runner(), message])
+    result = service.view_task_result('opaque_key')
+    assert result['finished_at'] == '2026-11-06T12:00:00'
+    assert json.loads(json.dumps(result))['finished_at'] == result['finished_at']
 
 
 def test_file_only_result_uses_live_runner_result_when_no_history_reply(monkeypatch):
