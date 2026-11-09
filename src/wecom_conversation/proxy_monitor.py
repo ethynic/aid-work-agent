@@ -63,6 +63,7 @@ def _proxy_api():
 # 单持有者由调度器 manager 级 Redis 锁保证（Q1）。
 _group_locks_guard = threading.Lock()
 _group_locks: dict = {}
+_dispatch_turns: set = set()
 
 
 def group_lock(key):
@@ -72,6 +73,22 @@ def group_lock(key):
         if lock is None:
             lock = _group_locks[key] = threading.Lock()
         return lock
+
+
+def request_dispatch_turn(key):
+    """派发抢锁失败后，请监控下一轮给本设备一次派发机会。"""
+    with _group_locks_guard:
+        _dispatch_turns.add(key)
+
+
+def clear_dispatch_turn(key):
+    with _group_locks_guard:
+        _dispatch_turns.discard(key)
+
+
+def dispatch_turn_requested(key):
+    with _group_locks_guard:
+        return key in _dispatch_turns
 
 
 def _error_parts(error):
@@ -90,13 +107,17 @@ def _error_parts(error):
 
 # ==================== tick：加载 → 停止收敛 → 等待批重排 → 分组读 ====================
 
-async def run_tick():
-    """监控单轮：停止收敛 → waiting 重排 → 按设备/账号分组串行监控读。
+async def run_tick(group_key=None):
+    """单设备监控轮：停止收敛 → waiting 重排 → 组内串行监控读。
 
     单组/单步异常只记日志不中断整轮（下 tick 从持久事实继续）；无任务时空转。
     """
-    tasks = await asyncio.to_thread(_load_running_tasks)
-    items = await asyncio.to_thread(_load_work_items)
+    if group_key is None:
+        tasks = await asyncio.to_thread(_load_running_tasks)
+        items = await asyncio.to_thread(_load_work_items)
+    else:
+        tasks = await asyncio.to_thread(_load_running_tasks, group_key)
+        items = await asyncio.to_thread(_load_work_items, group_key)
     if not tasks and not items:
         return
     logger.debug(f'后端日志：企微代理监控 tick tasks={len(tasks)} targets={len(items)}')
@@ -115,34 +136,39 @@ async def run_tick():
             logger.opt(exception=True).error(f'后端日志：企微代理监控组处理异常: {e}')
 
 
-def _load_running_tasks():
+def _load_running_tasks(group_key=None):
     from src.db.database import get_db_connection
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            '''SELECT * FROM bs_wecom_proxy_tasks WHERE status=%s ORDER BY id''',
-            (proxy_tasks.TASK_RUNNING,))
+        query = 'SELECT * FROM bs_wecom_proxy_tasks WHERE status=%s'
+        params = [proxy_tasks.TASK_RUNNING]
+        if group_key is not None:
+            query += ' AND tenant_id=%s AND device_id=%s AND wecom_account_id=%s'
+            params.extend(group_key)
+        cursor.execute(query + ' ORDER BY id', params)
         return [dict(row) for row in cursor.fetchall()]
 
 
-def _load_work_items():
+def _load_work_items(group_key=None):
     """running 任务＋active 目标（含任务停止标志与位置三事实快照）。"""
     from src.db.database import get_db_connection
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            '''SELECT t.id AS task_id, t.tenant_id, t.user_id, t.device_id,
+        query = '''SELECT t.id AS task_id, t.tenant_id, t.user_id, t.device_id,
                       t.wecom_account_id, t.agent_id, t.instruction, t.stop_requested,
                       s.id AS target_id, s.session, s.web_session_id, s.source_generation,
                       s.wb1_cursor, s.processed_position
                FROM bs_wecom_proxy_tasks t
                JOIN bs_wecom_proxy_task_sessions s
                  ON s.tenant_id=t.tenant_id AND s.task_id=t.id
-               WHERE t.status=%s AND s.status=%s
-               ORDER BY t.id, s.id''',
-            (proxy_tasks.TASK_RUNNING, proxy_tasks.TARGET_ACTIVE))
+               WHERE t.status=%s AND s.status=%s'''
+        params = [proxy_tasks.TASK_RUNNING, proxy_tasks.TARGET_ACTIVE]
+        if group_key is not None:
+            query += ' AND t.tenant_id=%s AND t.device_id=%s AND t.wecom_account_id=%s'
+            params.extend(group_key)
+        cursor.execute(query + ' ORDER BY t.id, s.id', params)
         return [dict(row) for row in cursor.fetchall()]
 
 
@@ -228,6 +254,11 @@ async def _run_group(items):
     """
     first = items[0]
     key = (first['tenant_id'], str(first['device_id']), first['wecom_account_id'])
+    # 派发器确实抢锁失败过才让位；平时等待中的其他会话仍可继续读。
+    if dispatch_turn_requested(key):
+        if await asyncio.to_thread(_group_has_pending, *key):
+            return
+        clear_dispatch_turn(key)  # 批次已停止/移除，旧让位请求失效
     lock = group_lock(key)
     if not lock.acquire(blocking=False):
         # P6 派发器正占用/提交该组批次：本轮跳过，下轮再读
@@ -238,6 +269,25 @@ async def _run_group(items):
         await _run_group_locked(items)
     finally:
         lock.release()
+
+
+def _group_has_pending(tenant_id, device_id, account):
+    """确认先前抢锁失败的批次仍可派发，避免旧请求一直阻断读取。"""
+    from src.db.database import get_db_connection
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''SELECT 1 FROM bs_wecom_proxy_batches b
+               JOIN bs_wecom_proxy_tasks t ON t.id=b.task_id AND t.tenant_id=b.tenant_id
+               JOIN bs_wecom_proxy_task_sessions s ON s.tenant_id=b.tenant_id
+                    AND s.task_id=b.task_id AND s.session=b.session
+               WHERE b.tenant_id=%s AND t.device_id=%s AND t.wecom_account_id=%s
+                 AND b.status=%s AND t.status=%s AND t.stop_requested=FALSE
+                 AND s.status=%s LIMIT 1''',
+            (tenant_id, device_id, account, proxy_tasks.BATCH_PENDING,
+             proxy_tasks.TASK_RUNNING, proxy_tasks.TARGET_ACTIVE))
+        return cursor.fetchone() is not None
 
 
 async def _run_group_locked(items):

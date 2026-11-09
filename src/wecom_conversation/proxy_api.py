@@ -274,6 +274,20 @@ async def get_proxy_task_detail(task_id: int, request: Request,
 
 # ==================== 启动 / 停止 / 编辑 / 软删除 ====================
 
+@router.post('/{task_id}/targets/{target_id}/recover')
+async def recover_proxy_target(task_id: int, target_id: int, request: Request):
+    """用户明确要求重试零发送失败批；实际建批由随后启动事务完成。"""
+    try:
+        tenant_id, user_id = await _current_user_and_tenant(request)
+        target = await asyncio.to_thread(proxy_tasks.request_target_recovery,
+                                         tenant_id, user_id, task_id, target_id)
+        return _ok({'target': target})
+    except service.ConversationServiceError as exc:
+        return _service_error(exc)
+    except SessionTaskError as exc:
+        return _from_service_error(exc)
+
+
 @router.post('/{task_id}/start')
 async def start_proxy_task(task_id: int, request: Request):
     """启动：核对运行条件（不要求配置工具能力）；首次启动为 initial 目标建基线。"""

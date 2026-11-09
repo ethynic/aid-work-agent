@@ -29,7 +29,7 @@ from zoneinfo import ZoneInfo
 from loguru import logger
 
 from . import proxy_settlement, proxy_tasks
-from .proxy_monitor import group_lock
+from .proxy_monitor import clear_dispatch_turn, group_lock, request_dispatch_turn
 
 # 服务身份（configs/config.yaml agent_runner.peers.wecom_proxy）；
 # token 复用同一 .env 的 AGENT_RUNNER_WEB_SERVICE_TOKEN，无新增 env
@@ -93,9 +93,12 @@ def _proxy_api():
 
 # ==================== 单轮编排 ====================
 
-async def run_tick():
-    """派发单轮：核定 → 释放 → 恢复驱动 → 派发（单步异常不中断整轮）。"""
-    batches = await asyncio.to_thread(_load_active_batches)
+async def run_tick(group_key=None):
+    """单设备派发轮：核定 → 释放 → 恢复驱动 → 派发。"""
+    if group_key is None:
+        batches = await asyncio.to_thread(_load_active_batches)
+    else:
+        batches = await asyncio.to_thread(_load_active_batches, group_key)
     if not batches:
         return
     runner_states = await asyncio.to_thread(
@@ -138,7 +141,7 @@ async def run_tick():
                 f'后端日志：企微代理派发异常 batch={batch["id"]} {e}')
 
 
-def _load_active_batches():
+def _load_active_batches(group_key=None):
     """running＋可派发 pending 批次（含任务/目标派发核对字段快照）。
 
     pending 仅取任务 running、未 stop_requested、目标 active 的批次（派发前
@@ -149,18 +152,20 @@ def _load_active_batches():
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            '''SELECT b.*, t.device_id, t.wecom_account_id, t.status AS task_status,
+        query = '''SELECT b.*, t.device_id, t.wecom_account_id, t.status AS task_status,
                       t.stop_requested, t.self_user_id, s.status AS target_status
                FROM bs_wecom_proxy_batches b
                JOIN bs_wecom_proxy_tasks t ON t.id=b.task_id AND t.tenant_id=b.tenant_id
                LEFT JOIN bs_wecom_proxy_task_sessions s ON s.tenant_id=b.tenant_id
                       AND s.task_id=b.task_id AND s.session=b.session
-               WHERE b.status=%s OR (b.status=%s AND t.status=%s AND t.stop_requested=FALSE
-                     AND s.status=%s)
-               ORDER BY b.updated_at, b.id''',
-            (proxy_tasks.BATCH_RUNNING, proxy_tasks.BATCH_PENDING, proxy_tasks.TASK_RUNNING,
-             proxy_tasks.TARGET_ACTIVE))
+               WHERE (b.status=%s OR (b.status=%s AND t.status=%s AND t.stop_requested=FALSE
+                     AND s.status=%s))'''
+        params = [proxy_tasks.BATCH_RUNNING, proxy_tasks.BATCH_PENDING,
+                  proxy_tasks.TASK_RUNNING, proxy_tasks.TARGET_ACTIVE]
+        if group_key is not None:
+            query += ' AND b.tenant_id=%s AND t.device_id=%s AND t.wecom_account_id=%s'
+            params.extend(group_key)
+        cursor.execute(query + ' ORDER BY b.updated_at, b.id', params)
         return [dict(row) for row in cursor.fetchall()]
 
 
@@ -262,10 +267,12 @@ async def _dispatch_batch(batch, runner_states):
     """
     tenant_id = batch['tenant_id']
     device_id = str(batch['device_id'])
+    key = (tenant_id, device_id, batch['wecom_account_id'])
     proxy_api = _proxy_api()
     device, error = await proxy_api._task_device(tenant_id, batch['user_id'], device_id,
                                                  DISPATCH_REQUIRED_TOOLS)
     if error:
+        clear_dispatch_turn(key)
         # 设备/账号运行条件不满足：批次留在 pending，下轮重试（沿 P5 瞬态语义，
         # 设备生命周期问题不转嫁为会话 halted）
         code, message = proxy_monitor_error_parts(error)
@@ -273,16 +280,18 @@ async def _dispatch_batch(batch, runner_states):
                        f'device={device_id} code={code} message={message}')
         return False
     if not await _agent_allowed(batch):
+        clear_dispatch_turn(key)
         # 失权走占用→终态路径（状态白名单 running→failed；同时停任务）
         await asyncio.to_thread(_occupy_batch, batch)
         await _fail_deterministic(batch, 'AGENT_NOT_ALLOWED', stop_task=True)
         return False
-    key = (tenant_id, device_id, batch['wecom_account_id'])
     lock = group_lock(key)
     if not lock.acquire(blocking=False):
-        # 监控组读进行中：本轮不派发，下轮再取（占用取得在锁内，双向互斥）
+        # 监控组读进行中：标记下轮让位，避免两个同周期 job 每轮都撞锁。
+        request_dispatch_turn(key)
         logger.info(f'后端日志：企微代理监控占用组级锁，派发本轮跳过 batch={batch["id"]}')
         return False
+    clear_dispatch_turn(key)
     try:
         # 占用＋提交在同一临界区：监控组读（同锁）不会与 Runner 启动交错
         if await asyncio.to_thread(_group_has_running, tenant_id, device_id,
