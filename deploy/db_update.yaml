@@ -4560,6 +4560,25 @@
         UNIQUE (task_id, runner_id)
     );
 - datetime: "2026-11-08 12:00:00"
+  remark: "ai-lead-gen 邮件打开追踪（D 项）：新增 bs_ai_lead_gen_opens 事件表（像素端点 /api/track/p.gif 匿名写入，track_tenant 为 md5 匿名租户）；bs_ai_lead_gen_emails 增 opens_at/open_count 两列承接回拉合并"
+  statements: |
+    CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_opens (
+        id SERIAL PRIMARY KEY,
+        tenant_id TEXT,
+        track_tenant TEXT NOT NULL,
+        campaign TEXT,
+        message_id TEXT,
+        recipient TEXT,
+        opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        user_agent TEXT,
+        ip TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_ailg_opens_track ON bs_ai_lead_gen_opens(track_tenant, id);
+    CREATE INDEX IF NOT EXISTS idx_bs_ailg_opens_tenant ON bs_ai_lead_gen_opens(tenant_id);
+    ALTER TABLE bs_ai_lead_gen_emails ADD COLUMN IF NOT EXISTS opens_at TIMESTAMP;
+    ALTER TABLE bs_ai_lead_gen_emails ADD COLUMN IF NOT EXISTS open_count INT DEFAULT 0;
+- datetime: "2026-11-08 12:01:00"
   remark: "企微代理任务三表（bs_wecom_proxy_tasks/task_sessions/batches）：任务配置与会话目标位置、批次持久队列；状态机由服务端维护；与 src/wecom_conversation/tables.py 同源（代理任务契约 §4）"
   statements: |
     CREATE TABLE IF NOT EXISTS bs_wecom_proxy_tasks (

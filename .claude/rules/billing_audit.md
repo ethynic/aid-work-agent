@@ -2,7 +2,7 @@
 
 > **适用范围**：所有涉及 LLM / Embedding / ASR / 视频生成 / 短信发送 调用的代码改动--新增调用点、重构调用方、修改计费逻辑、定期计费审计。
 >
-> **背景**：2026-08-14 计费缺失审计发现项目存在 18 处真实缺口（详见 [llm-billing-gap-audit.md](../../docs/plans/llm-billing-gap-audit.md)），2026-10-30 全量复检确认已全部修复关闭；同日复检把短信发送纳入审计范围并发现 1 处缺口（见 §5）。根因是审计方法论盲区 + 服务/工具/管理后台多入口边界盲区。本规范把审计 checklist 固化为开发流程的一部分，**每次计费相关改动必须执行**，避免下次审计再次遗漏。
+> **背景**：2026-08-14 计费缺失审计发现项目存在 18 处真实缺口（详见 [llm-billing-gap-audit.md](../../docs/audit/llm-billing-gap-audit.md)），2026-10-30 全量复检确认已全部修复关闭；同日复检把短信发送纳入审计范围并发现 1 处缺口（见 §5）。根因是审计方法论盲区 + 服务/工具/管理后台多入口边界盲区。本规范把审计 checklist 固化为开发流程的一部分，**每次计费相关改动必须执行**，避免下次审计再次遗漏。
 
 ---
 
@@ -42,7 +42,7 @@ grep -rn "gateway\.chat\b\|llm_gateway\.chat\b\|_gateway\.chat\b" src/ --include
   | grep -v "def chat\b\|async def chat\b\|# \|chat_with_tools"
 ```
 
-**对每个命中点**，逐点读函数上下文，确认调用方是否在 `async def` 中且 `await`（避免 [followup_manager P1 bug](../../docs/plans/llm-billing-gap-audit.md#518-srcskillsfollowup-tracking-100scriptsfollowup_managerpy364附带-p1-bug-修复) 同步调用 async 函数致 LLM 实际未执行）。
+**对每个命中点**，逐点读函数上下文，确认调用方是否在 `async def` 中且 `await`（避免 [followup_manager P1 bug](../../docs/audit/llm-billing-gap-audit.md#518-srcskillsfollowup-tracking-100scriptsfollowup_managerpy364附带-p1-bug-修复) 同步调用 async 函数致 LLM 实际未执行）。
 
 ### 3.2 全量 Embedding 调用扫描
 
@@ -268,7 +268,7 @@ if result and result.get("code") == 200:
 
 ### 5.1 2026-08-14 审计（18 处）——2026-10-30 复检已全部修复关闭
 
-详见 [llm-billing-gap-audit.md](../../docs/plans/llm-billing-gap-audit.md)：
+详见 [llm-billing-gap-audit.md](../../docs/audit/llm-billing-gap-audit.md)：
 
 | 类别 | 数量 | 状态 |
 |------|------|------|
@@ -331,7 +331,7 @@ if result and result.get("code") == 200:
 - [ ] 租户归属验证
 ```
 
-报告存放位置：`docs/plans/llm-billing-audit-YYYYMMDD.md`，并在 `docs/ideas.md` 「调研报告索引」或对应功能分区登记。
+报告存放位置：`docs/audit/llm-billing-audit-YYYYMMDD.md`，并在 `docs/ideas.md` 「调研报告索引」或对应功能分区登记。
 
 ---
 
@@ -345,6 +345,6 @@ if result and result.get("code") == 200:
 
 ## 关联文档
 
-- [LLM 调用计费缺失审计](../../docs/plans/llm-billing-gap-audit.md) - 2026-08-14 审计报告（18 处缺口 + 7 条遗漏根因分析）
+- [LLM 调用计费缺失审计](../../docs/audit/llm-billing-gap-audit.md) - 2026-08-14 审计报告（18 处缺口 + 7 条遗漏根因分析）
 - [LLM 计费接入改造设计](../../docs/system/saas/llm-billing-integration-design.md) - 上次改造设计文档
 - [租户信用计费设计](../../docs/system/saas/tenant-credit-billing-design.md) - 整体计费架构

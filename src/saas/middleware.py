@@ -124,10 +124,13 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
             # Public reply sharing carries its own narrow resource grant, not a
             # visitor's possibly unrelated logged-in tenant context.
             public_share = re.fullmatch(r'/api/public/reply-shares/[A-Za-z0-9_-]+/(?:view|files/[A-Za-z0-9_.-]+)', path)
+            # 邮件打开追踪（ai-lead-gen）：收件方邮箱客户端匿名发起，
+            # 归属由 tracking_key（k 参数）承载，读取端点再做 secret 鉴权
+            public_track = path.startswith("/api/track/")
 
             # 1. 租户级回调路由：/t/{tenant_id}/...
             tenant_match = _TENANT_CALLBACK_PATTERN.match(path)
-            if public_share:
+            if public_share or public_track:
                 pass
             elif tenant_match:
                 tenant_id = tenant_match.group(1)

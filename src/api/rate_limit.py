@@ -24,14 +24,17 @@ WINDOW_SECONDS = 60
 class SlidingWindowRateLimiter:
     """滑动窗口速率限制器（线程安全，支持 Redis 跨 worker 共享）"""
 
-    def __init__(self, max_requests: int = DEFAULT_LOGIN_LIMIT, window_seconds: int = WINDOW_SECONDS):
+    def __init__(self, max_requests: int = DEFAULT_LOGIN_LIMIT, window_seconds: int = WINDOW_SECONDS,
+                 key_prefix: str = "rate_limit:login"):
         self.max_requests = max_requests
         self.window_seconds = window_seconds
+        # 键前缀区分不同限速场景（登录 / 像素打点等），避免互相挤占计数
+        self.key_prefix = key_prefix
         self._local_requests: dict[str, list[float]] = defaultdict(list)
         self._local_lock = Lock()
 
     def _redis_key(self, key: str) -> str:
-        return redis_client.make_key("rate_limit:login", key)
+        return redis_client.make_key(self.key_prefix, key)
 
     def is_allowed(self, key: str) -> bool:
         """检查 key 是否在限制内允许请求"""

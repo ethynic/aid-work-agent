@@ -112,7 +112,7 @@ def test_norm_company_dedup_key():
     assert lead_db.norm_company("Acme, Inc.") == lead_db.norm_company("ACME")
 
 
-def test_init_tables_creates_five_tables(monkeypatch):
+def test_init_tables_creates_six_tables(monkeypatch):
     conn = FakeConn()
     monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
     lead_db.init_tables()
@@ -122,7 +122,7 @@ def test_init_tables_creates_five_tables(monkeypatch):
     assert tables == {
         "bs_ai_lead_gen_campaigns", "bs_ai_lead_gen_leads",
         "bs_ai_lead_gen_contacts", "bs_ai_lead_gen_emails",
-        "bs_ai_lead_gen_replies",
+        "bs_ai_lead_gen_replies", "bs_ai_lead_gen_opens",
     }
     # DDL 必须显式提交（get_db_connection 退出时无条件 rollback）
     assert conn.commits == 1
@@ -411,12 +411,43 @@ def test_pick_subject_explicit_group_and_hash_fallback():
     assert legacy == ("only", "none")
 
 
-def test_rampup_cap_table():
-    assert send_emails.rampup_cap(0) == 20
-    assert send_emails.rampup_cap(49) == 20
-    assert send_emails.rampup_cap(100) == 50
-    assert send_emails.rampup_cap(499) == 100
-    assert send_emails.rampup_cap(500) == 200
+def test_daily_limit_of_unlimited_semantics():
+    # v3.3.11 起去预热分档：不填/0/负 = 不限量；正数才生效
+    assert send_emails.daily_limit_of({}) is None
+    assert send_emails.daily_limit_of({"daily_limit": 0}) is None
+    assert send_emails.daily_limit_of({"daily_limit": -5}) is None
+    assert send_emails.daily_limit_of({"daily_limit": "30"}) == 30
+    assert send_emails.daily_limit_of({"daily_limit": 50}) == 50
+
+
+def test_is_throttle_and_session_error():
+    assert send_emails.is_throttle("554 5.7.1 mi:stc") is True
+    assert send_emails.is_throttle("450 4.7.1 too many connections, rate limit") is True
+    assert send_emails.is_throttle("550 user not found") is False
+    assert send_emails.is_session_error("Connection reset by peer") is True
+    assert send_emails.is_session_error("SMTP connection is not connected") is True
+    assert send_emails.is_session_error("550 5.1.1 user unknown") is False
+
+
+def test_clean_addr_variants():
+    assert send_emails.clean_addr("u003einfo@example.de") == "info@example.de"
+    assert send_emails.clean_addr("&gt;info@example.de") == "info@example.de"
+    assert send_emails.clean_addr("mailto:info@example.de") == "info@example.de"
+    assert send_emails.clean_addr("<info@example.de>") == "info@example.de"
+    assert send_emails.clean_addr("info@example.de") == "info@example.de"
+
+
+def test_plan_capacity_unlimited_when_no_daily_limit():
+    # 不同域 5 封、daily_limit=None（不限量）：全部可发
+    queue = [{"to": f"a{i}@d{i}.com"} for i in range(5)]
+    out = send_emails.plan_capacity(queue, [], None, 3)
+    assert out["room"] == 5 and out["shortfall"] == 0
+    # 用户 daily_limit=3 时收窄到 3
+    out2 = send_emails.plan_capacity(queue, [], 3, 3)
+    assert out2["room"] == 3 and out2["shortfall"] == 2
+    # 每域 24h<=3 封红线独立生效：同域 4 封即使不限量也只发 3
+    out3 = send_emails.plan_capacity([{"to": f"{c}@x.com"} for c in "abcd"], [], None, 3)
+    assert out3["room"] == 3 and out3["capped"] == {"x.com": 1}
 
 
 def test_build_cfg_from_mailbox_and_campaign(monkeypatch, tmp_path):
