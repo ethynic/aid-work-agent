@@ -527,7 +527,9 @@ CREATE TABLE IF NOT EXISTS documents (
     origin VARCHAR(32) NOT NULL DEFAULT 'manual_upload',
     external_id TEXT,
     status VARCHAR(16) NOT NULL DEFAULT 'active',
-    expires_at TIMESTAMP
+    expires_at TIMESTAMP,
+    -- 检索级临时下架（与软删 status='deleted' 正交；管理列表仍可见可重新启用）
+    disabled BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 -- 旧表迁移兜底（CREATE TABLE IF NOT EXISTS 不会更新已存在的表）
@@ -535,6 +537,7 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS origin VARCHAR(32) NOT NULL DEFAU
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS external_id TEXT;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'active';
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS disabled BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
 CREATE INDEX IF NOT EXISTS idx_documents_tenant ON documents(tenant_id);

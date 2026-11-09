@@ -224,14 +224,16 @@ def resolve_category_scope(
 
 def build_active_document_condition(alias: str = "d") -> str:
     """检索侧文档可见性条件（公众号内容入知识库 WP2，设计 §7.3）：
-    仅 active 且未过期的文档参与检索，排序/LIMIT 前过滤。
-    软删除（status='deleted'）与已过期（expires_at <= now()）文档对检索不可见；
-    expires_at 只限制检索，不限制管理端列表查看（列表侧仅用 status 过滤）。
+    仅 active、未过期且未禁用的文档参与检索，排序/LIMIT 前过滤。
+    软删除（status='deleted'）、已过期（expires_at <= now()）与禁用
+    （disabled=TRUE，知识库文档禁用/启用功能）文档对检索不可见；
+    expires_at/disabled 只限制检索，不限制管理端列表查看（列表侧仅用 status 过滤）。
     返回常量 SQL 片段（自带外层括号），无参数。
     """
     return (
         f"({alias}.status = 'active' "
-        f"AND ({alias}.expires_at IS NULL OR {alias}.expires_at > now()))"
+        f"AND ({alias}.expires_at IS NULL OR {alias}.expires_at > now()) "
+        f"AND {alias}.disabled IS NOT TRUE)"
     )
 
 

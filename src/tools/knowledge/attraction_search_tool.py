@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from src.tools.base import BaseTool
 from src.db.database import get_db_connection
 from src.core.image_asset import get_image_registry
-from src.knowledge.retriever.tenant_range import load_shared_ranges
+from src.knowledge.retriever.tenant_range import load_shared_ranges, build_active_document_condition
 
 
 class AttractionSearchInput(BaseModel):
@@ -118,6 +118,7 @@ class AttractionSearchTool(BaseTool):
                     JOIN documents d ON c.doc_id = d.id
                     WHERE d.source_type = 'attraction_resource'
                       AND {tenant_sql}
+                      AND {build_active_document_condition("d")}
                       AND c.chunk_index = 0
                     ORDER BY distance
                     LIMIT %s

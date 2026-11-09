@@ -64,6 +64,11 @@ class DocumentResponse(BaseModel):
     origin: Optional[str] = None
     status: Optional[str] = None
     expires_at: Optional[str] = None
+    disabled: bool = False
+
+
+class SetDocumentDisabledRequest(BaseModel):
+    disabled: bool
 
 
 class SearchRequest(BaseModel):
@@ -571,6 +576,33 @@ async def delete_document(doc_id: int, http_request: Request = None):
         )
 
     return JSONResponse(content={"success": True, "message": result.get("message", "已删除")})
+
+
+@router.post("/documents/{doc_id}/set_disabled")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.KNOWLEDGE_DOC, id_arg="doc_id")
+async def set_document_disabled(doc_id: int, request: SetDocumentDisabledRequest, http_request: Request = None):
+    """
+    设置知识库文档禁用/启用（检索级临时下架）
+
+    - 禁用后智能体检索（向量/FTS/标题检索/跨租户共享）立即不可见
+    - 管理列表仍可见，可重新启用；与删除（物理级联）正交
+    - 对象级租户校验：跨租户文档统一按「文档不存在」响应，不泄漏存在性
+    """
+    row = knowledge_service.set_document_disabled(
+        doc_id, request.disabled,
+        tenant_id=get_current_tenant_id(),
+        global_view=_is_global_admin_view(http_request),
+    )
+    if row is None:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "文档不存在", "debug": "文档不存在"}
+        )
+    return JSONResponse(content={
+        "success": True,
+        "message": "已禁用，智能体检索不再使用该文档" if request.disabled else "已启用，恢复正常检索",
+        "document": row,
+    })
 
 
 @router.get("/documents/{doc_id}/chunks")

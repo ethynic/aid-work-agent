@@ -4670,4 +4670,8 @@
   remark: "企微代理目标表补最近检查时刻 last_checked_at（P7 评审：列表最近检查改取实际监控读取时刻，新建/核定不写，未检查显示无；2026-11-08 评审补充，加性；与 src/wecom_conversation/tables.py 同源）"
   statements: |
     ALTER TABLE bs_wecom_proxy_task_sessions ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ;
+- datetime: "2026-11-09 14:28:15"
+  remark: "documents 表加检索级禁用列 disabled（知识库文档禁用/启用功能；与软删 status='deleted' 正交，禁用文档检索不可见但管理列表仍可见可重新启用；加性）"
+  statements: |
+    ALTER TABLE documents ADD COLUMN IF NOT EXISTS disabled BOOLEAN NOT NULL DEFAULT FALSE;
 
