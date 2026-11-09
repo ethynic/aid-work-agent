@@ -6,6 +6,7 @@
 
 1. **本人打开也可能 404**：同名多账号 + 换设备换登录路径时，登录进去的 user_id 与通知收件人不一致（2026-11-06 agent2 案例：平台管理员账号建任务、租户同名账号点链接，数据全在却 404）。
 2. **未登录无法直接看结果**：手机/新设备点推送必须先登录，体验断裂。
+3. **已知缺陷（2026-11-09 agent2）**：view 单事务在池化连接上直接执行 `SET TRANSACTION ISOLATION LEVEL`，连接池检出健康探针 `SELECT 1` 已隐式开启事务，触发 `ActiveSqlTransaction` 500，所有分享链接打不开。修复：`_live_snapshot` 先 `connection.rollback()` 结束探针事务再建快照隔离（commit 961395ce，同 `event_read.py` 先例）；单测 mock 连接不复现真实事务语义是该缺陷漏测原因。
 
 Web 会话已有**回复分享**功能（免登录只读渲染，src/services/message_sharing/），本设计把同等免登录能力用于定时任务终态通知。
 
