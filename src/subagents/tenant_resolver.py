@@ -63,7 +63,7 @@ def resolve_tenant_config(registry, tenant_id: Optional[str], agent_id: str) -> 
     display_name = None if archived else (row.get("display_name") or base.name)
     description = None if archived else (row.get("description") or base.description)
 
-    merged = base.model_copy(update={
+    update_fields = {
         "name": display_name or base.name,
         "description": description or base.description,
         # 直用实例行 agent_id == base_agent_id，dir_name 保持不变；副本实例行切换为实例 id，
@@ -73,5 +73,21 @@ def resolve_tenant_config(registry, tenant_id: Optional[str], agent_id: str) -> 
         "from_db": True,
         "tenant_instance": True,
         "base_agent_id": base_agent_id,
-    })
+    }
+
+    # LLM 覆盖：开关开且实例行有配置才生效；开关关/归档/未配置时保留父定义值（行数据不动，重开开关即恢复）。
+    # 任何异常按未配置处理（fail-closed，回退父定义），不影响实例解析主流程
+    llm_raw = row.get("llm_provider")
+    if llm_raw is not None and not archived:
+        try:
+            from src.saas.db.tenant_db import TenantDB
+            if TenantDB.is_llm_edit_allowed(tenant_id):
+                from src.models.subagent import extract_llm_config
+                _provider, _model_codes = extract_llm_config(llm_raw)
+                update_fields["llm_provider"] = _provider
+                update_fields["llm_model_codes"] = _model_codes
+        except Exception as e:
+            logger.opt(exception=True).error(f"解析租户 LLM 覆盖失败 agent={agent_id}: {e}")
+
+    merged = base.model_copy(update=update_fields)
     return merged

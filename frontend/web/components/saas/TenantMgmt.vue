@@ -310,6 +310,16 @@
           </div>
           <div v-else class="text-xs text-muted">尚未接入其他租户的知识库</div>
         </div>
+
+        <!-- LLM 提供者定制权限（仅编辑模式） -->
+        <div v-if="isEdit" class="col-span-2 pt-4 border-t border-default">
+          <label class="flex items-center gap-3 cursor-pointer">
+            <input v-model="allowLlmEdit" type="checkbox"
+              class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
+            <span class="text-sm font-medium text-default">允许修改LLM提供者</span>
+          </label>
+          <p class="text-xs text-muted mt-1">开启后，租户可在「我的数字员工 - 定制」中指定数字员工的 LLM 提供者与各 Provider 模型覆盖；关闭后立即失效并回退父定义/全局默认（已配置的数据保留，重新开启恢复生效）。</p>
+        </div>
       </div>
 
       <!-- 数字员工授权标签页 -->
@@ -620,7 +630,7 @@ import BaseTable, { type TableColumn } from '@/components/ui/BaseTable.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import LogoUpload from '@/components/ui/LogoUpload.vue'
-import { listTenants, createTenant, updateTenant, deleteTenant, type TenantFormData } from '@/api/saasTenant'
+import { listTenants, createTenant, updateTenant, deleteTenant, setTenantLlmProviderEdit, type TenantFormData } from '@/api/saasTenant'
 import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, getSubagentEnvVars, setSubagentEnvVars, getConfigFileStatus, uploadConfigFile, downloadConfigFile, deleteConfigFile, type AgentItem, type EnvVarItem, getSubagentKnowledgeSources, setSubagentKnowledgeSources, type KnowledgeSourceItem, listTenantKnowledgeCategories, getTenantKnowledgeShares, setTenantKnowledgeShares, type KnowledgeShareItem } from '@/api/saasPermissions'
 import TenantMigration from '@/components/saas/TenantMigration.vue'
 import TenantActivationCodes from '@/components/saas/TenantActivationCodes.vue'
@@ -658,6 +668,9 @@ const columns: TableColumn[] = [
 
 const showFormDialog = ref(false)
 const isEdit = ref(false)
+// 「允许修改LLM提供者」开关（仅编辑模式；独立端点保存，不并入 updateTenant 整体替换 settings）
+const allowLlmEdit = ref(false)
+let allowLlmEditInitial = false
 const submitting = ref(false)
 const formError = ref('')
 const tenantCodeError = ref('')
@@ -938,6 +951,8 @@ async function openEditDialog(tenant: any) {
     logo_file_id: tenant.logo_file_id || null,
   }
   originalFormData.value = { ...formData.value }
+  allowLlmEdit.value = tenant.settings?.allow_llm_provider_edit === true
+  allowLlmEditInitial = allowLlmEdit.value
   activeTab.value = 'basic'
   selectedAgentIds.value = []
   loadingAgents.value = true
@@ -1312,6 +1327,17 @@ async function handleSubmit() {
     const targetTenantId = isEdit.value ? currentTenant.value?.tenant_id : createdTenantId
     if (targetTenantId) {
       await setTenantAgentPermissions(targetTenantId, selectedAgentIds.value)
+    }
+    // LLM 提供者开关与主保存分离：仅在编辑且值变化时调用；失败不阻塞主保存结果
+    if (isEdit.value && currentTenant.value && allowLlmEdit.value !== allowLlmEditInitial) {
+      try {
+        await setTenantLlmProviderEdit(currentTenant.value.tenant_id, allowLlmEdit.value)
+        allowLlmEditInitial = allowLlmEdit.value
+      } catch (llmErr: any) {
+        formError.value = llmErr?.message || 'LLM 提供者开关保存失败'
+        submitting.value = false
+        return
+      }
     }
     if (result.message) {
       toast.success(result.message)

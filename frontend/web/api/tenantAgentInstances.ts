@@ -22,6 +22,8 @@ export interface TenantAgentInstance {
   extra_prompt: string | null
   greeting_summary: string | null
   greeting_prompts: GreetingPrompt[] | null
+  llm_provider: string | null
+  llm_model_codes: Record<string, string> | null
   is_copy: boolean
   status: string
   created_at?: string
@@ -34,6 +36,9 @@ export interface UpdateInstancePayload {
   extra_prompt?: string | null
   greeting_summary?: string | null
   greeting_prompts?: GreetingPrompt[] | null
+  // LLM 字段为「提交即整体更新」契约：携带即整体更新（null=清除恢复继承）；不携带=不改
+  llm_provider?: string | null
+  llm_model_codes?: Record<string, string> | null
 }
 
 async function request(path: string, init: RequestInit = {}): Promise<any> {

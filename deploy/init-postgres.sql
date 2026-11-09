@@ -5612,6 +5612,9 @@ CREATE TABLE IF NOT EXISTS tenant_agent_instances (
     extra_prompt TEXT,
     greeting_summary TEXT,
     greeting_prompts JSONB,
+    -- 租户 LLM 覆盖：与 subagent_definitions.llm_provider 同构（pack/extract_llm_config），
+    -- 是否生效由 tenants.settings.allow_llm_provider_edit 开关把关
+    llm_provider JSONB,
     status TEXT DEFAULT 'active',
     created_by TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

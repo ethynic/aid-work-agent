@@ -321,6 +321,49 @@ async def update_tenant_preferences(request: Request, body: TenantPreferencesReq
     return {"success": True, "data": {"show_ai_badge": bool(body.show_ai_badge)}}
 
 
+class TenantLlmProviderEditRequest(BaseModel):
+    """租户 LLM 提供者定制权限开关（仅平台管理员）"""
+    allow_llm_provider_edit: bool = Field(..., description="是否允许租户在定制弹框修改 LLM 提供者与模型（默认 False）")
+
+
+@router.patch("/{tenant_id}/llm-provider-edit")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT, id_arg="tenant_id")
+async def set_tenant_llm_provider_edit(request: Request, tenant_id: str, body: TenantLlmProviderEditRequest):
+    """设置租户「允许修改LLM提供者」开关（仅平台管理员）。
+
+    只写 tenants.settings.allow_llm_provider_edit（事务内 JSON 整体更新，保留其他键）。
+    默认关闭：关闭时租户定制弹框不显示 LLM 配置区块、实例更新接口拒绝 llm 字段，
+    且运行时立即失效租户已配置的 LLM 覆盖（回退父定义/全局默认，行数据保留）。"""
+    admin = require_admin(request)
+    if admin.get("role") != "platform_admin":
+        raise HTTPException(status_code=403, detail="仅平台管理员可设置")
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT settings FROM tenants WHERE tenant_id = %s FOR UPDATE",
+                           (tenant_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="企业不存在")
+            settings = row["settings"]
+            if isinstance(settings, str):
+                settings = json.loads(settings or "{}")
+            settings = settings if isinstance(settings, dict) else {}
+            settings["allow_llm_provider_edit"] = bool(body.allow_llm_provider_edit)
+            cursor.execute("UPDATE tenants SET settings = %s WHERE tenant_id = %s",
+                           (json.dumps(settings, ensure_ascii=False), tenant_id))
+            conn.commit()
+        # get_by_id 走 30 分钟 Redis 缓存，改完立即失效保证租户前台显隐即时生效
+        invalidate_tenant_cache(tenant_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.opt(exception=True).error(f"更新租户 LLM 提供者定制开关失败 tenant_id={tenant_id} {e}")
+        raise HTTPException(status_code=500, detail="保存失败，请稍后重试")
+    logger.info(f"Tenant LLM provider edit updated: tenant_id={tenant_id}, allow={body.allow_llm_provider_edit}")
+    return {"success": True, "data": {"allow_llm_provider_edit": bool(body.allow_llm_provider_edit)}}
+
+
 # ============== 平台管理员 - 租户 CRUD ==============
 
 @router.post("/")

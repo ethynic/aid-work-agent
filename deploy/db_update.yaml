@@ -4675,3 +4675,7 @@
   statements: |
     ALTER TABLE documents ADD COLUMN IF NOT EXISTS disabled BOOLEAN NOT NULL DEFAULT FALSE;
 
+- datetime: "2026-11-09 15:45:08"
+  remark: "租户数字员工实例表加 LLM 覆盖列 llm_provider（定制弹框 LLM 提供者/Model 覆盖；JSONB 与 subagent_definitions.llm_provider 同构，是否生效由 tenants.settings.allow_llm_provider_edit 把关；加性）"
+  statements: |
+    ALTER TABLE tenant_agent_instances ADD COLUMN IF NOT EXISTS llm_provider JSONB;

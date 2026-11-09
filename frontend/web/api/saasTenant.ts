@@ -181,6 +181,21 @@ export async function updateTenantPreferences(showAiBadge: boolean): Promise<{ s
   return data?.data || { show_ai_badge: showAiBadge }
 }
 
+/** 平台管理员设置租户「允许修改LLM提供者」开关（tenants.settings.allow_llm_provider_edit） */
+export async function setTenantLlmProviderEdit(tenantId: string, allowed: boolean): Promise<{ allow_llm_provider_edit: boolean }> {
+  const res = await fetch(`${API_BASE}/tenants/${encodeURIComponent(tenantId)}/llm-provider-edit`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getSaasAuthHeader() },
+    body: JSON.stringify({ allow_llm_provider_edit: allowed })
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    const detail = typeof data?.detail === 'string' ? data.detail : '保存失败'
+    throw new Error(detail)
+  }
+  return data?.data || { allow_llm_provider_edit: allowed }
+}
+
 export async function listTenants(params?: {
   page?: number
   page_size?: number
