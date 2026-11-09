@@ -81,8 +81,9 @@ class UploadDataFileTool(BaseTool):
             try:
                 # 推断 schema
                 table_name_hint = f"{file_basename}_{sheet_name}" if len(sheets) > 1 else file_basename
-                schema = await asyncio.to_thread(
-                    schema_extractor.extract_schema,
+                # extract_schema 是 async 函数，必须直接 await；
+                # 不能用 asyncio.to_thread（只会拿到 coroutine 对象，后续 .get 必抛 AttributeError）
+                schema = await schema_extractor.extract_schema(
                     sheet_info=sheet_info,
                     table_name_hint=table_name_hint,
                 )
