@@ -93,6 +93,12 @@
 
 2026-11-09 加性恢复入口：仅 `stopped` 任务中 `halted_reason='zero_send_retry_exhausted'` 的目标可由当前用户明确请求恢复。恢复请求只将目标置 `active`，保留 `halted_reason` 作为待重试标记，不建批；设备离线等启动失败时不会留下停止任务的 `pending` 批占用其他任务。随后原启动 API 核对设备/账号/权限和会话归属成功，在启动事务内新建 `pending/retry_count=0` 批，复制原失败批的冻结 `input_snapshot`、`batch_end_msg_id`、固定 `web_session_id`，使用当前任务的智能体/指令快照，并清除标记；原失败批及回执留作历史。`wb1_cursor`、`source_generation`、`processed_position`、`latest_seen_msg_id` 不变。失败批次无快照或已处理位置已达到批次上界时拒绝恢复；初始空会话的已处理位置可以是 `NULL`，其首条失败消息仍可恢复。同会话已有未决批拒绝启动建批。普通启动不解除 `halted`，其他 `halted` 原因、`reconcile_hold` 不得借此自动重发。仅增加后台与页面 API，不改 Device/Runtime/CLI wire 或既有批次 JSON schema。
 
+### 4.1 Web 任务详情只读投影
+
+既有 `GET /api/wecom-proxy-tasks/{task_id}` 由 Web 代理任务服务维护。详情增量返回可空的设备名称、企微账号名称、会话名称以及批次原消息摘要。设备名按任务的租户、用户及设备取配对记录。账号名取同租户、用户及企微账号已归档的本人可信显示名；会话名按同租户、用户、账号及会话标识取登记名称。
+
+每批只投影该批结束记录中回复引用的消息 ID、发言人显示名及原文，原文取同一批的冻结输入。完整输入快照、其他消息及原始发言人 ID 不进入投影。名称或原文缺失时页面明确标示。投影字段为加性，既有客户端可继续读取原字段，旧服务端缺少新增字段时页面显示缺失态。数据库结构、Device API、Runtime、CLI 和批次结束 JSON v1 契约沿用既有版本。
+
 ## 5. 批次结束 JSON v1 与核定规则（P6 落点）
 
 Runner 正常结束输出（服务端核定后存 `end_json`，页面据此展示）：

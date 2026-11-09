@@ -102,6 +102,10 @@ export interface WecomProxyTask {
   /** 仅列表投影返回：最近错误（目标 halted_reason 或最近批次 cli_error，取时间最新） */
   last_error?: string | null
   /** 仅详情投影返回 */
+  device_name?: string | null
+  /** 已归档的本账号本人显示名称，仅详情投影返回 */
+  wecom_account_name?: string | null
+  /** 仅详情投影返回 */
   targets?: WecomProxyTarget[]
   /** 仅详情投影返回（按 batch_offset/batch_limit 分页） */
   batches?: WecomProxyBatch[]
@@ -117,6 +121,7 @@ export interface WecomProxyTarget {
   user_id: string
   task_id: number
   session: string
+  conversation_name?: string | null
   web_session_id: string | null
   source_generation: string | null
   /** wb1 游标；null = 尚未建基线（首次启动时建立） */
@@ -138,12 +143,15 @@ export interface WecomProxyBatch {
   id: number
   task_id: number
   session: string
+  conversation_name?: string | null
   batch_end_msg_id: number | null
   agent_id: string | null
   web_session_id: string | null
   runner_id: string | null
   status: string
   end_json: ProxyBatchEndJson | null
+  /** 仅投影该批回复已引用的原消息，不包含其他运行快照内容 */
+  inbound_messages?: Array<{ msg_id: number; sender_name: string | null; text: string | null }>
   cli_error: string | null
   retry_count: number
   /** 本批回答积分累计（核定落库跨重试累加；P7 评审补充） */

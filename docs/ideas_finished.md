@@ -277,6 +277,8 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261109-1555 | 企业微信代理任务详情精简 | ✅ 已完成开发。精简详情操作和批次展示，按原消息配对回复。 | [设计](design/wecom/wecom-conversation-operations-design.md#92-页面与任务配置) | [计划](plans/plan-wecom-proxy-event-driven.md#p13-代理任务详情与原消息配对展示) |
+| 20261109-1545 | 企业微信代理任务列表精简 | ✅ 已完成开发。移除五列并显示执行智能体的名称。 | [设计](design/wecom/wecom-conversation-operations-design.md#92-页面与任务配置) | [计划](plans/plan-wecom-proxy-event-driven.md#p12-精简代理任务列表) |
 | 20261109-1503 | 侧栏最近会话与定时任务标签 | ✅ 已完成开发。两个标签可直接切换，选中项显示主题色下划线。 | [设计](system/scheduled-task-runner-refactor-design.md) | [计划](plans/plan-sidebar-recent-scheduled-tabs.md) |
 | 20261109-1442 | 企业微信会话记录布局调整 | ✅ 已完成开发。参考客服对话页调整会话列表和消息气泡。 | [设计](design/wecom/wecom-conversation-operations-design.md#61-会话记录页面) | [计划](plans/plan-wecom-conversation-record-layout.md) |
 | 20261021-1126 | Web Agent 单条回复分享 | ✅ 已完成开发：所选回复独立分享，图标与时间同行，弹框支持可选密码及图片附件。 | [设计](system/web-agent-reply-sharing-design.md) | [计划](plans/plan-web-agent-reply-sharing.md) |
