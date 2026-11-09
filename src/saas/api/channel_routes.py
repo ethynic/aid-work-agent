@@ -32,6 +32,7 @@ from src.channels.session import channel_session_manager
 from src.channels.verbose_dispatcher import resolve_verbose_feedback_config
 from src.channels.wecom_kf.budget import WeComKfReplyBudget
 from src.channels.idempotency import MessageDeduplicator
+from src.models.message import MessageType
 from src.services.session_record import SessionRecordManager
 from src.core.storage import ensure_tenant_storage_dir, get_tenant_storage_path
 from src.core.temp_logger import tlog as _tlog
@@ -535,6 +536,65 @@ def _build_attachments_for_agent(attachments: list) -> list:
     return result
 
 
+def _build_image_attachment_from_bytes(
+    tenant_id: str,
+    image_bytes: bytes,
+    media_token: str,
+    log_tag: str,
+    local_path: str = "",
+) -> Optional[dict]:
+    """
+    把已下载的图片字节按 wecom_kf 附件口径构建为渠道附件（落盘 + base64）。
+
+    供飞书 / 钉钉 / 企微应用后台处理补图片输入分支使用（媒体下载 API 各渠道
+    不同，字节到手后的处理统一收口到本函数）：
+    - 飞书/钉钉 media.download_image 已自行落盘（返回 local_path）→ 传 local_path
+      直接复用，避免重复写盘；
+    - 企微 download_media 只返回字节 → 未传 local_path 时按 wecom_kf 口径落盘
+      `storage/tenants/{tenant_id}/conversation/{timestamp}_{media_token}.jpg`。
+
+    Returns:
+        attachment dict（type/image、file_name、mime_type、file_size、content、
+        local_path、saved_at），下载字节为空或落盘失败时返回 None
+    """
+    from datetime import datetime
+
+    if not image_bytes:
+        return None
+    if not tenant_id:
+        raise RuntimeError(
+            f"[_build_image_attachment_from_bytes] tenant_id 缺失；"
+            f"租户渠道回调必须携带 tenant_id，请检查路由配置"
+        )
+
+    if local_path:
+        file_name = os.path.basename(local_path)
+    else:
+        safe_token = "".join(c for c in media_token if c.isalnum())[:16] or "img"
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        file_name = f"image_{safe_token}.jpg"
+        safe_filename = f"{timestamp}_{safe_token}.jpg"
+        tenant_dir = ensure_tenant_storage_dir(tenant_id, "conversation")
+        local_path = os.path.join(tenant_dir, safe_filename)
+        try:
+            with open(local_path, "wb") as f:
+                f.write(image_bytes)
+        except Exception as e:
+            logger.error(f"[{log_tag}] 保存图片附件失败: {local_path}, error={e}")
+            return None
+
+    return {
+        "type": "image",
+        "media_id": media_token,
+        "file_name": file_name,
+        "mime_type": "image/jpeg",
+        "file_size": len(image_bytes),
+        "content": base64.b64encode(image_bytes).decode("ascii"),
+        "local_path": local_path,
+        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
 async def _transcribe_voice_with_asr(
     audio_content: str,
     audio_format: str = "wav",
@@ -708,6 +768,29 @@ async def _process_tenant_wecom_background(
             message, tenant_id, _download_wecom_voice, "[Tenant WeCom]"
         )
 
+        # 图片消息：下载图片并按 wecom_kf 口径构建附件（用户发户型图 → 智能体判读出图）
+        user_attachments = []
+        if message.message_type == MessageType.IMAGE:
+            _media_id = message.content.get("media_id", "")
+            try:
+                _downloaded = await adapter.media.download_media(_media_id)
+            except Exception as e:
+                logger.warning(f"[Tenant WeCom] 图片下载异常: message_id={message.message_id}, error={e}")
+                _downloaded = None
+            if _downloaded:
+                att = _build_image_attachment_from_bytes(
+                    tenant_id, _downloaded[0], _media_id, "Tenant WeCom"
+                )
+                if att:
+                    user_attachments.append(att)
+            else:
+                logger.warning(f"[Tenant WeCom] 图片下载失败: message_id={message.message_id}")
+
+        # 图片消息落库与 Agent 输入用占位文本（对齐 wecom_kf 口径），附件另传
+        user_content = message.text
+        if message.message_type == MessageType.IMAGE and not user_content:
+            user_content = "[图片消息：用户发来的图片见附件，可判读其内容]"
+
         # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
         # 只替换对话执行，渠道业务和原会话队列保持原实现。
@@ -720,13 +803,13 @@ async def _process_tenant_wecom_background(
         record_service = SessionRecordManager.start_record(
             session_id=session_id,
             user_id=user_id,
-            user_message=message.text,
+            user_message=user_content,
             tenant_id=tenant_id,
             source_type="wecom",
         )
         # 入口仅使用平台语音识别文本，无独立用量；模型/工具费用由 Runner 结算。
-        # 语音消息 ASR 识别成功时需落库 ASR 用量（见下方 add_asr_usage），故不跳过
-        record_service.skip_save = not asr_success
+        # 语音消息 ASR 识别成功 / 图片消息附件构建成功时需落库，故不跳过
+        record_service.skip_save = not (asr_success or user_attachments)
 
         # ASR 计费（按次计费，识别成功才计费；必须在 start_record 之后）：
         # 渠道侧 ASR 在 start_record 之前调用，SpeechToTextTool 内部计费因无当前
@@ -768,7 +851,7 @@ async def _process_tenant_wecom_background(
         result = await channel_session_manager.process_and_persist(
             session_id=session_id,
             tenant_id=tenant_id,
-            user_content=message.text,
+            user_content=user_content,
             user_metadata=message.raw_message,
             message_type=message.message_type,
             agent=agent,
@@ -777,6 +860,11 @@ async def _process_tenant_wecom_background(
             send_response=send_response,
             send_verbose=_send_verbose,
             verbose_feedback_config=_verbose_cfg,
+            agent_attachments=_build_attachments_for_agent(user_attachments) if user_attachments else None,
+            user_attachments_meta=[
+                {k: att[k] for k in ("type", "media_id", "file_name", "mime_type", "file_size", "local_path", "saved_at")}
+                for att in user_attachments
+            ] or None,
         )
 
         SessionRecordManager.end_record()
@@ -1121,6 +1209,32 @@ async def _process_tenant_dingtalk_background(
             message, tenant_id, _download_dingtalk_voice, "[Tenant DingTalk]"
         )
 
+        # 图片消息：下载图片并按 wecom_kf 口径构建附件（用户发图 → 智能体判读出图）。
+        # 钉钉 media.download_image 已按租户规范落盘，传 local_path 复用不重复写盘。
+        user_attachments = []
+        if message.message_type == MessageType.IMAGE:
+            _download_code = message.content.get("download_code", "")
+            try:
+                _downloaded = await adapter.media.download_image(_download_code, adapter.robot_code)
+            except Exception as e:
+                logger.warning(f"[Tenant DingTalk] 图片下载异常: message_id={message.message_id}, error={e}")
+                _downloaded = None
+            if _downloaded:
+                _local_path, _image_bytes = _downloaded
+                att = _build_image_attachment_from_bytes(
+                    tenant_id, _image_bytes, _download_code, "Tenant DingTalk",
+                    local_path=_local_path,
+                )
+                if att:
+                    user_attachments.append(att)
+            else:
+                logger.warning(f"[Tenant DingTalk] 图片下载失败: message_id={message.message_id}")
+
+        # 图片消息落库与 Agent 输入用占位文本（对齐 wecom_kf 口径），附件另传
+        user_content = message.text
+        if message.message_type == MessageType.IMAGE and not user_content:
+            user_content = "[图片消息：用户发来的图片见附件，可判读其内容]"
+
         # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
         # 只替换对话执行，渠道业务和原会话队列保持原实现。
@@ -1133,14 +1247,14 @@ async def _process_tenant_dingtalk_background(
         record_service = SessionRecordManager.start_record(
             session_id=session_id,
             user_id=user_id or message.user_id,
-            user_message=message.text,
+            user_message=user_content,
             tenant_id=tenant_id,
             source_type="dingtalk",
         )
         # KF 同款归属：渠道侧无独立入口用量，模型/工具费用由 Runner 结算；
         # 跳过零用量 chat_record，避免对话数/耗时统计重复计算。
-        # 语音消息 ASR 识别成功时需落库 ASR 用量（见下方 add_asr_usage），故不跳过
-        record_service.skip_save = not asr_success
+        # 语音消息 ASR 识别成功 / 图片消息附件构建成功时需落库，故不跳过
+        record_service.skip_save = not (asr_success or user_attachments)
 
         # ASR 计费（按次计费，识别成功才计费；必须在 start_record 之后）：
         # 渠道侧 ASR 在 start_record 之前调用，SpeechToTextTool 内部计费因无当前
@@ -1186,7 +1300,7 @@ async def _process_tenant_dingtalk_background(
         result = await channel_session_manager.process_and_persist(
             session_id=session_id,
             tenant_id=tenant_id,
-            user_content=message.text,
+            user_content=user_content,
             user_metadata=message.raw_message,
             message_type=message.message_type,
             agent=agent,
@@ -1195,6 +1309,11 @@ async def _process_tenant_dingtalk_background(
             send_response=send_response,
             send_verbose=_send_verbose,
             verbose_feedback_config=_verbose_cfg,
+            agent_attachments=_build_attachments_for_agent(user_attachments) if user_attachments else None,
+            user_attachments_meta=[
+                {k: att[k] for k in ("type", "media_id", "file_name", "mime_type", "file_size", "local_path", "saved_at")}
+                for att in user_attachments
+            ] or None,
         )
 
         SessionRecordManager.end_record()
@@ -1321,6 +1440,32 @@ async def _process_tenant_feishu_background(
             message, tenant_id, _download_feishu_voice, "[Tenant Feishu]"
         )
 
+        # 图片消息：下载图片并按 wecom_kf 口径构建附件（用户发图 → 智能体判读出图）。
+        # 飞书 media.download_image 已按租户规范落盘，传 local_path 复用不重复写盘。
+        user_attachments = []
+        if message.message_type == MessageType.IMAGE:
+            _image_key = message.content.get("image_key", "")
+            try:
+                _downloaded = await adapter.media.download_image(_image_key)
+            except Exception as e:
+                logger.warning(f"[Tenant Feishu] 图片下载异常: message_id={message.message_id}, error={e}")
+                _downloaded = None
+            if _downloaded:
+                _local_path, _image_bytes = _downloaded
+                att = _build_image_attachment_from_bytes(
+                    tenant_id, _image_bytes, _image_key, "Tenant Feishu",
+                    local_path=_local_path,
+                )
+                if att:
+                    user_attachments.append(att)
+            else:
+                logger.warning(f"[Tenant Feishu] 图片下载失败: message_id={message.message_id}")
+
+        # 图片消息落库与 Agent 输入用占位文本（对齐 wecom_kf 口径），附件另传
+        user_content = message.text
+        if message.message_type == MessageType.IMAGE and not user_content:
+            user_content = "[图片消息：用户发来的图片见附件，可判读其内容]"
+
         # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
         # 只替换对话执行，渠道业务和原会话队列保持原实现。
@@ -1333,14 +1478,14 @@ async def _process_tenant_feishu_background(
         record_service = SessionRecordManager.start_record(
             session_id=session_id,
             user_id=user_id or message.user_id,
-            user_message=message.text,
+            user_message=user_content,
             tenant_id=tenant_id,
             source_type="feishu",
         )
         # KF 同款归属：渠道侧无独立入口用量，模型/工具费用由 Runner 结算；
         # 跳过零用量 chat_record，避免对话数/耗时统计重复计算。
-        # 语音消息 ASR 识别成功时需落库 ASR 用量（见下方 add_asr_usage），故不跳过
-        record_service.skip_save = not asr_success
+        # 语音消息 ASR 识别成功 / 图片消息附件构建成功时需落库，故不跳过
+        record_service.skip_save = not (asr_success or user_attachments)
 
         # ASR 计费（按次计费，识别成功才计费；必须在 start_record 之后）：
         # 渠道侧 ASR 在 start_record 之前调用，SpeechToTextTool 内部计费因无当前
@@ -1381,7 +1526,7 @@ async def _process_tenant_feishu_background(
         result = await channel_session_manager.process_and_persist(
             session_id=session_id,
             tenant_id=tenant_id,
-            user_content=message.text,
+            user_content=user_content,
             user_metadata=message.raw_message,
             message_type=message.message_type,
             agent=agent,
@@ -1390,6 +1535,11 @@ async def _process_tenant_feishu_background(
             send_response=send_response,
             send_verbose=_send_verbose,
             verbose_feedback_config=_verbose_cfg,
+            agent_attachments=_build_attachments_for_agent(user_attachments) if user_attachments else None,
+            user_attachments_meta=[
+                {k: att[k] for k in ("type", "media_id", "file_name", "mime_type", "file_size", "local_path", "saved_at")}
+                for att in user_attachments
+            ] or None,
         )
 
         SessionRecordManager.end_record()
