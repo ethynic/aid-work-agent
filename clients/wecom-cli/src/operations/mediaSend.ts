@@ -12,7 +12,7 @@ import { resolveTargetByName, sanitizeTiming, validateTargetSelector, type Resol
 import { withSendSnapshot, verifySendReceipt, type MediaSendReceipt, type SendBaseline } from '../platform/localdb/sendVerification.js'
 import { invalidateSendReceipt, saveSendReceipt, type ReceiptCrypto } from '../platform/sendReceipt.js'
 import { probeCurrentAccount, checkCancelled } from '../platform/localdb/identity.js'
-import { resolveFocusConversation } from '../platform/localdb/unread.js'
+import { assertSendDisplayNameUnique, resolveFocusConversation } from '../platform/localdb/unread.js'
 import { parseConversationRows } from '../platform/localdb/watch.js'
 import { hash } from '../platform/localdb/access.js'
 import type { LocaldbReadDeps } from '../platform/localdb/readSession.js'
@@ -102,10 +102,12 @@ export function createMediaSendOperation(kind: 'image' | 'file', deps: MediaDeps
               !Number.isSafeInteger(meta.schema_version)) throw new CodedOperationError('IDENTITY_UNCONFIRMED', '本人身份映射未确认')
           selfName = meta.self_name
           // Full-name global resolution prevents a contact/group same-name default-result mismatch.
-          const globalId = await resolveFocusConversation(query, target.name, current.account, undefined, target.subtitle)
+          const searchName = target.type === 'group' ? target.name : target.name.replace(/@微信$/, '').trim()
+          const globalId = await resolveFocusConversation(query, searchName, current.account, undefined, undefined, true)
           const typedId = await resolveFocusConversation(query, target.name, current.account,
             target.type === 'group' ? 'group' : target.type === 'contact' ? 'contact' : undefined, target.subtitle)
           if (globalId !== typedId) throw new CodedOperationError('TARGET_AMBIGUOUS', '本地库目标身份不唯一，未发送')
+          await assertSendDisplayNameUnique(query, target.name, target.type, target.subtitle, current.account)
           const row = parseConversationRows((await query(['--task', 'conversations'])).conversations)
             .find(c => c.conversation_id === globalId)
           const baseline = row?.last_message_id ?? 0
@@ -163,7 +165,7 @@ export function createMediaSendOperation(kind: 'image' | 'file', deps: MediaDeps
           } catch (err) { failure = mapExecutorError(err).code; break }
         }
         const baseData = {
-          receipt_id: receiptId, target: target.name, title: data.title, navigated: true,
+          receipt_id: receiptId, target: target.name, navigated: true,
           ...(resolved ? { resolved_target: { name: resolved.name, subtitle: resolved.subtitle, section: resolved.section } } : {}),
           [kind]: { name: basename(path), size_bytes: sizeBytes, sha256 },
           input_point: data.input_point, timing_ms: sanitizeTiming(data.timing_ms),

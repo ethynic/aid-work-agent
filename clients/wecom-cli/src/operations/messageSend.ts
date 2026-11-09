@@ -1,7 +1,7 @@
 /**
  * wecom_message_send：本地库准入/基线 → 企微双点坐标标定及无 OCR 导航/发送 → 本地库唯一出站记录核验。
  * 缺双点缓存时驱动从已验证的本人显示名搜索自会话，GLM 一次定位两个点，复制标题全等后缓存。
- * 目标由本地库唯一解析；驱动搜索并 Enter 打开默认结果，复制标题核对后才清理输入区并发送。
+ * 目标由本地库唯一解析；驱动搜索并 Enter 打开默认结果，随后清理输入区并发送。
  * Enter 后未知结果仅保留原凭据供 send-status 只读对账，不自动重发。
  */
 import { mkdirSync } from 'node:fs'
@@ -26,7 +26,7 @@ import { withSendSnapshot, verifySendReceipt, type SendBaseline, type SendReceip
 import { invalidateSendReceipt, saveSendReceipt, type ReceiptCrypto } from '../platform/sendReceipt.js'
 import { mapExecutorError } from './errorMapping.js'
 import { probeCurrentAccount, checkCancelled } from '../platform/localdb/identity.js'
-import { resolveFocusConversation } from '../platform/localdb/unread.js'
+import { assertSendDisplayNameUnique, resolveFocusConversation } from '../platform/localdb/unread.js'
 import { hasExternalWechatHint } from '../platform/localdb/contactScope.js'
 import { parseConversationRows } from '../platform/localdb/watch.js'
 import type { LocaldbReadDeps } from '../platform/localdb/readSession.js'
@@ -236,21 +236,30 @@ export function createWecomMessageSendOperation(
           let resolved: ResolvedByNameTarget | null = null
           if (args.target_name !== undefined) {
             // Explicit external targets can be resolved from trusted DB evidence without opening search.
-            // The driver must still confirm the exact WeChat title before typing and Enter.
             const current = await (local.probeAccountFn ?? probeCurrentAccount)(opCtx)
             let conversationId = ''
             await withSendSnapshot(current, opCtx, local, 'send-baseline', async query => {
               const meta = await query(['--task', 'context', '--account', current.account])
               if (meta.self_user_id !== current.account) throw new CodedOperationError('IDENTITY_UNCONFIRMED', '本人身份映射未确认')
-              conversationId = await resolveFocusConversation(query, args.target_name!, current.account,
+              if (!bound && !args.subtitle && args.target_name!.trim().endsWith('@微信')) {
+                try {
+                  const exactId = await resolveFocusConversation(query, args.target_name!, current.account, undefined, undefined, true)
+                  if (exactId.startsWith('R:')) conversationId = exactId
+                } catch (err) {
+                  if (!(err instanceof CodedOperationError && err.code === 'TARGET_NOT_FOUND')) throw err
+                }
+              }
+              if (!conversationId) conversationId = await resolveFocusConversation(query, args.target_name!, current.account,
                 bound ? 'group' : hasExternalWechatHint(args.target_name!, 'contact', args.subtitle) ? 'contact' : undefined,
                 hasExternalWechatHint(args.target_name!, 'contact', args.subtitle) ? '微信联系人' : args.subtitle)
             })
+            const resolvedSubtitle = conversationId.startsWith('R:') ? '' :
+              hasExternalWechatHint(args.target_name, 'contact', args.subtitle) ? '微信联系人' : ''
             resolved = {
-              name: args.target_name.trim(), subtitle: hasExternalWechatHint(args.target_name, 'contact', args.subtitle) ? '微信联系人' : '',
+              name: args.target_name.trim(), subtitle: resolvedSubtitle,
               section: conversationId.startsWith('R:') ? '群聊' : '联系人',
               target_ref: createRefFn(args.target_name.trim(), conversationId.startsWith('R:') ? 'group' : 'contact',
-                hasExternalWechatHint(args.target_name, 'contact', args.subtitle) ? '微信联系人' : '', undefined, current.account),
+                resolvedSubtitle, undefined, current.account),
             }
           }
           const target = verifyRefFn(resolved !== null ? resolved.target_ref : args.target_ref!)
@@ -286,8 +295,12 @@ export function createWecomMessageSendOperation(
                   throw new CodedOperationError('IDENTITY_UNCONFIRMED', '本人 sender_id 域身份未确认')
                 }
                 selfName = meta.self_name as string
+                const searchName = target.type === 'group' ? target.name : target.name.replace(/@微信$/, '').trim()
+                const globalId = await resolveFocusConversation(query, searchName, current.account, undefined, undefined, true)
                 conversationId = deps.resolvedSession?.conversationId ?? await resolveFocusConversation(query, target.name, meta.self_user_id as string,
-                  bound ? 'group' : target.type === 'contact' ? 'contact' : undefined, target.subtitle)
+                  target.type === 'group' ? 'group' : target.type === 'contact' ? 'contact' : undefined, target.subtitle)
+                if (conversationId !== globalId) throw new CodedOperationError('TARGET_AMBIGUOUS', '本地库目标身份不唯一，未发送')
+                await assertSendDisplayNameUnique(query, target.name, target.type, target.subtitle, current.account)
                 if (deps.resolvedSession && (current.account !== deps.resolvedSession.account || conversationId !== deps.resolvedSession.conversationId)) {
                   throw new CodedOperationError('IDENTITY_UNCONFIRMED', '当前会话定位与原读取目标不一致，未发送消息')
                 }
@@ -424,7 +437,6 @@ export function createWecomMessageSendOperation(
                 ...(resolved !== null
                   ? { resolved_target: { name: resolved.name, subtitle: resolved.subtitle, section: resolved.section } }
                   : {}),
-                title: typeof data.title === 'string' && data.title.length > 0 ? data.title : target.name,
                 navigated,
                 sent_verification: sentVerification,
                 input_point: inputPoint,

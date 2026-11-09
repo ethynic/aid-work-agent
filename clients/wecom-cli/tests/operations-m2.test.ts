@@ -3,7 +3,7 @@
  *
  * wecom_chat_search：成功签发 target_ref / 空 query INVALID_ARGUMENT / 驱动 UI_CHANGED 透传 /
  * 无结果 TARGET_NOT_FOUND / type 过滤。
- * wecom_message_send：成功 / 标题不一致 UI_CHANGED 透传 / 草稿残留 UI_CHANGED 透传 /
+ * wecom_message_send：成功 / 本地库目标歧义零 UI / 草稿残留 UI_CHANGED 透传 /
  * TARGET_AMBIGUOUS 透传 / target_ref 过期 TARGET_REF_STALE / 篡改 INVALID_ARGUMENT /
  * 超时→EXECUTION_UNKNOWN / 取消→CANCELLED(unknown) / 空 text 超长 text INVALID_ARGUMENT /
  * 换行放行（多行走驱动侧剪贴板粘贴通道，驱动收到原文）。

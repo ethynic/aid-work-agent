@@ -16,6 +16,8 @@ import type { CurrentAccount } from '../src/platform/localdb/identity.js'
 import { writeLocalState } from '../src/platform/localdb/matrix.js'
 import { runLocaldbPy } from '../src/platform/localdb/driver.js'
 import type { RunPowerShellDriverFn, PowerShellScriptOptions } from '../src/platform/powershell.js'
+import { readSessionDirectory } from '../src/operations/sessionDirectory.js'
+import { createTargetRef, verifyTargetRef, type CreateTargetRefFn } from '../src/platform/targetRef.js'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const python = join(root, '..', '..', 'venv', 'Scripts', 'python.exe')
@@ -26,9 +28,9 @@ const ctx = (): OpContext => ({ signal: new AbortController().signal, progress: 
 const crypto = { protect: async (s: string) => Buffer.from(s).toString('base64'),
   unprotect: async (s: string) => Buffer.from(s, 'base64').toString('utf8') }
 
-async function fixture() {
+async function fixture(setupMode = 'unread-setup') {
   const base = mkdtempSync(join(tmpdir(), 'wecom-media-send-'))
-  execFileSync(python, [helper, base, 'unread-setup'], { windowsHide: true })
+  execFileSync(python, [helper, base, setupMode], { windowsHide: true })
   const data = await locateDataDir({ cefLogDir: null, candidateRoots: [],
     activeAccount: { pid: 4242, message_db: join(base, SELF, 'Data', 'message.db') } })
   const current: CurrentAccount = { account: SELF, windowPid: 4242, dataDir: data }
@@ -85,7 +87,7 @@ async function execute(kind: 'image' | 'file', rows: Record<string, unknown>[] |
   const driver = (async (opts: PowerShellScriptOptions) => {
     calls.push(opts)
     if (driverError) throw driverError
-    return { sent: true, verified: false, title: 'Peer', input_point: { x: 760, y: 1245, source: 'cache' } }
+    return { sent: true, verified: false, input_point: { x: 760, y: 1245, source: 'cache' } }
   }) as RunPowerShellDriverFn
   const common = { localdb: local, runDriverFn: driver, artifactDirFn: () => f.artifacts,
     verifyRefFn: () => ({ name: 'Peer', type: 'contact' as const, subtitle: '', account: SELF }),
@@ -101,6 +103,7 @@ test('图片唯一 101 出站记录才确认客户端记录，不声称原图片
   try {
     assert.equal(x.result.success, true, JSON.stringify(x.result))
     assert.equal(x.result.data.verification, 'local-record')
+    assert.equal(Object.hasOwn(x.result.data, 'title'), false)
     assert.match(x.result.message, /不证明与原图片字节一致/)
     assert.equal(x.calls.length, 1)
     assert.match(x.calls[0]!.script, /send-image\.ps1$/)
@@ -124,6 +127,70 @@ test('文件名全等的唯一 102 出站记录确认；短文件名不再因 OC
   }
   finally { x.f.close() }
 })
+
+for (const kind of ['image', 'file'] as const) {
+  test(`${kind} 按完整 @微信 群名直达：真实本地目录与发送预检同名`, async () => {
+    const f = await fixture('suffix-group')
+    try {
+      const calls: PowerShellScriptOptions[] = []
+      const local = withRows(f.deps, [mediaRow(kind)])
+      const keyDir = join(f.base, 'refs')
+      const createRefFn: CreateTargetRefFn = (name, type, subtitle, coords, account) =>
+        createTargetRef(name, type, subtitle, { keyDir, coords, account })
+      const deps = { localdb: local, artifactDirFn: () => f.artifacts, receiptCrypto: crypto,
+        localdbVerifyPoll: { attempts: 1, delayMs: 0 },
+        readCatalogFn: (args: Parameters<typeof readSessionDirectory>[0], opCtx: OpContext) =>
+          readSessionDirectory(args, opCtx, local),
+        createRefFn,
+        verifyRefFn: (ref: string) => verifyTargetRef(ref, { keyDir }),
+        runDriverFn: (async (opts: PowerShellScriptOptions) => {
+          calls.push(opts)
+          return { sent: true, input_point: { x: 760, y: 1245, source: 'cache' } }
+        }) as RunPowerShellDriverFn }
+      const op = kind === 'image' ? createWecomSendImageOperation(deps) : createWecomSendFileOperation(deps)
+      const result = await op.execute({ target_name: '项目群@微信',
+        [kind === 'image' ? 'image_path' : 'file_path']: kind === 'image' ? f.image : f.file }, ctx())
+      assert.equal(result.success, true, JSON.stringify(result))
+      assert.equal(result.data.verification, 'local-record')
+      assert.equal(calls.length, 1)
+      const args = calls[0]!.args!
+      assert.equal(args[args.indexOf('-TargetName') + 1], '项目群@微信')
+      assert.equal(args[args.indexOf('-Section') + 1], 'group')
+    } finally { f.close() }
+  })
+
+  for (const [mode, groupName] of [
+    ['suffix-collision', 'Peer@微信'],
+    ['suffix-space-collision', 'Peer @微信'],
+    ['suffix-no-history-collision', 'Peer@微信'],
+  ] as const) test(`${kind} ${mode} 群与外部联系人显示同名：零 UI 拒发`, async () => {
+    const f = await fixture(mode)
+    try {
+      const calls: PowerShellScriptOptions[] = []
+      const keyDir = join(f.base, 'refs')
+      const createRefFn: CreateTargetRefFn = (name, type, subtitle, coords, account) =>
+        createTargetRef(name, type, subtitle, { keyDir, coords, account })
+      const deps = { localdb: f.deps, artifactDirFn: () => f.artifacts, receiptCrypto: crypto,
+        readCatalogFn: (args: Parameters<typeof readSessionDirectory>[0], opCtx: OpContext) =>
+          readSessionDirectory(args, opCtx, f.deps),
+        createRefFn, verifyRefFn: (ref: string) => verifyTargetRef(ref, { keyDir }),
+        runDriverFn: (async (opts: PowerShellScriptOptions) => {
+          calls.push(opts)
+          throw new Error('ambiguous target must not reach UI')
+        }) as RunPowerShellDriverFn }
+      const op = kind === 'image' ? createWecomSendImageOperation(deps) : createWecomSendFileOperation(deps)
+      const pathArg = { [kind === 'image' ? 'image_path' : 'file_path']: kind === 'image' ? f.image : f.file }
+      const refs = [createRefFn(groupName, 'group', '', undefined, SELF)]
+      if (mode !== 'suffix-no-history-collision') refs.push(createRefFn('Peer', 'contact', '微信联系人', undefined, SELF))
+      for (const selector of [{ target_name: groupName }, ...refs.map(target_ref => ({ target_ref }))]) {
+        const result = await op.execute({ ...selector, ...pathArg }, ctx())
+        assert.equal(result.code, 'TARGET_AMBIGUOUS', JSON.stringify(result))
+        assert.equal(result.effect, 'none')
+      }
+      assert.equal(calls.length, 0)
+    } finally { f.close() }
+  })
+}
 
 for (const [kind, rows] of [
   ['image', []], ['image', [mediaRow('image'), mediaRow('image', 'a', 14)]],

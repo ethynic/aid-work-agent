@@ -67,7 +67,7 @@
 | 20261104-2038 | 企微会话每日总结工作台与专属定时配置 | 🔧 部分完成 | 日报内部会话已从聊天列表排除，待 agent2 发布验收。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [计划](plans/plan-wecom-daily-summary-workbench.md) |
 | 20261108-1200 | 企业微信代理任务按新消息激活智能体 | 🔧 部分完成（P8 联测中） | 单设备统一监控会话，新消息才按会话启动智能体回答。 | [设计](design/wecom/wecom-conversation-operations-design.md#9-企业微信代理任务新消息触发回答2026-11-08设计待开发) | [计划](plans/plan-wecom-proxy-event-driven.md) |
 | 20261103-1508 | 企微附件原件与持续任务后续优化 | 📋 待开发（用户暂缓） | 附件原件、预览及Runner恢复交互另行实施，不阻塞日志日报。 | [设计边界](design/wecom/wecom-conversation-operations-design.md#8-后置范围与验收原则) | [后续计划](plans/plan-wecom-conversation-followups.md) |
-| 20261105-1100 | 企微群聊长文本粘贴与监控等待修复 | 🔧 部分完成 | agent2 的 GLM 标定与标题复制已真机验证，完整发送待验收。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w23-文本发送标题复制与-glm-标定2026-11-06) |
+| 20261105-1100 | 企微群聊长文本粘贴与监控等待修复 | 🔧 部分完成 | W33 发送跳过目标标题复制，保留自会话标定与本地库回执。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w33-发送跳过目标标题复制2026-11-09) |
 | 20261102-1430 | 企微旁路聊天日志、前端与按日日报 | 🔧 部分完成（工作台由新计划接续） | 旁路日志与日期读取已有初版实现；日报页面及计划按新方案重做。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [历史计划](plans/plan-wecom-conversation-operations.md) / [新计划](plans/plan-wecom-daily-summary-workbench.md) |
 | 20261018-1736 | wecom-cli 登录引导增强（自动拉起 + 二维码直返） | 💡 灵感 | 三态验收发现：need_login 态 probe 已返回登录二维码 base64，缺口是 WECOM_NOT_FOUND（进程未启动）时不自动拉起企微——增加自动启动后把二维码转交 agent 引导用户扫码。 | [验收记录](plans/wecom-cli-localdb-three-state-acceptance.md) | — |
 | 20261014-2043 | wecom-cli 本地库数据通道（local-db） | 🔧 部分完成 | 统一打包入口及Runtime＋WeCom配套验包完成，实际安装待验。 | [设计](design/wecom/wecom-cli-localdb-design.md) | [开发计划](plans/plan-wecom-cli-localdb.md) |

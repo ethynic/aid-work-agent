@@ -7,7 +7,7 @@
  * EXECUTION_UNKNOWN（effect=unknown，不调用 OCR 补验或重入发送）/ localdb 不可用时发送前拒绝 / 取消（发送后）→ CANCELLED partial。
  * 第八轮评审修复：跨账号 target_ref 发送前拒绝（TARGET_REF_STALE / 驱动零调用，校验在本地
  * 库兜底 try 之外；含真实签发+真实验签、仅 payload.account 为他账号的整链形态）/ 账号匹配
- * ref 正常发送 / probe 身份失败按自身错误码透传不静默 / 标题核对先于清草稿。
+ * ref 正常发送 / probe 身份失败按自身错误码透传不静默 / 唯一名称搜索后清草稿。
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -39,7 +39,6 @@ const windows = { skip: process.platform !== 'win32' }
 
 const SKIP_OK = {
   navigate_required: false,
-  title: 'Peer',
   sent_verification: { method: 'skipped', result: 'unverified' },
   input_point: { x: 640, y: 648, source: 'jev' },
   timing_ms: { total: 5000 },
@@ -57,9 +56,9 @@ interface Fixture {
   close(): void
 }
 
-async function fixture(): Promise<Fixture> {
+async function fixture(setupMode = 'unread-setup'): Promise<Fixture> {
   const base = mkdtempSync(join(tmpdir(), 'wecom-p2-sendverify-'))
-  execFileSync(python, [helper, base, 'unread-setup'], { windowsHide: true })
+  execFileSync(python, [helper, base, setupMode], { windowsHide: true })
   const data = await locateDataDir({ cefLogDir: null, candidateRoots: [],
     activeAccount: { pid: 4242, message_db: join(base, SELF, 'Data', 'message.db') } })
   const current: CurrentAccount = { account: SELF, windowPid: 4242, dataDir: data }
@@ -130,6 +129,7 @@ test('db 核验命中：发送 → 本地记录匹配 → applied + verification
     assert.equal(r.code, 'OK')
     assert.equal(r.effect, 'applied')
     assert.equal(r.data.verification, 'local-record')
+    assert.equal(Object.hasOwn(r.data, 'title'), false)
     const detail = r.data.verification_detail as {method: string;message_id: number;source_generation: string}
     assert.equal(detail.method, 'local-record')
     assert.equal(detail.message_id, 14)
@@ -166,6 +166,89 @@ test('按名称发送先由本地库唯一解析，驱动只调用一次且收�
     assert.ok(!args.includes('-SkipVerify'))
   } finally { f.close() }
 })
+
+test('联系人句柄遇到同名群，发送前拒绝默认搜索结果歧义', windows, async () => {
+  const f = await fixture('same-name-group')
+  try {
+    const mock: DriverMock = { calls: [], stages: [{ ...SKIP_OK }] }
+    const op = createWecomMessageSendOperation({ runDriverFn: makeRunDriver(mock),
+      verifyRefFn: () => ({ name: 'Peer', type: 'contact', subtitle: '', account: SELF }),
+      artifactDirFn: () => f.artifactRoot, localdb: f.deps })
+    const r = await op.execute({ target_ref: 'peer-ref', text: 'must not send' }, silentCtx())
+    assert.equal(r.code, 'TARGET_AMBIGUOUS')
+    assert.equal(r.effect, 'none')
+    assert.equal(mock.calls.length, 0)
+  } finally { f.close() }
+})
+
+test('群名以 @微信 结尾时，本地库与 UI 都使用完整群名', windows, async () => {
+  const f = await fixture('suffix-group')
+  try {
+    const mock: DriverMock = { calls: [], stages: [{ ...SKIP_OK }, { ...SKIP_OK }] }
+    const op = createWecomMessageSendOperation({ runDriverFn: makeRunDriver(mock),
+      verifyRefFn: () => ({ name: '项目群@微信', type: 'group', subtitle: '', account: SELF }),
+      artifactDirFn: () => f.artifactRoot, localdb: f.deps, localdbVerifyPoll: { attempts: 1, delayMs: 0 } })
+    const byRef = await op.execute({ target_ref: 'group-ref', text: 'synthetic group test' }, silentCtx())
+    const byName = await op.execute({ target_name: '项目群@微信', text: 'synthetic group test' }, silentCtx())
+    assert.equal(mock.calls.length, 2, JSON.stringify({ byRef, byName }))
+    for (const call of mock.calls) {
+      const args = driverArgs(call)
+      assert.equal(args[args.indexOf('-TargetName') + 1], '项目群@微信')
+      assert.equal(args[args.indexOf('-Section') + 1], 'group')
+      assert.equal(args[args.indexOf('-Subtitle') + 1], '')
+    }
+  } finally { f.close() }
+})
+
+test('群名与外部联系人显示名同为 Peer@微信：直达及两种句柄均零 UI 拒发', windows, async () => {
+  const f = await fixture('suffix-collision')
+  try {
+    const mock: DriverMock = { calls: [], stages: [] }
+    const op = createWecomMessageSendOperation({ runDriverFn: makeRunDriver(mock),
+      createRefFn: (_name, type) => `ref:${type}`,
+      verifyRefFn: ref => ref === 'ref:group'
+        ? { name: 'Peer@微信', type: 'group', subtitle: '', account: SELF }
+        : { name: 'Peer', type: 'contact', subtitle: '微信联系人', account: SELF },
+      artifactDirFn: () => f.artifactRoot, localdb: f.deps })
+    for (const args of [
+      { target_name: 'Peer@微信', text: 'must not send' },
+      { target_ref: 'ref:group', text: 'must not send' },
+      { target_ref: 'ref:contact', text: 'must not send' },
+    ]) {
+      const r = await op.execute(args, silentCtx())
+      assert.equal(r.code, 'TARGET_AMBIGUOUS', JSON.stringify(r))
+      assert.equal(r.effect, 'none')
+    }
+    assert.equal(mock.calls.length, 0)
+  } finally { f.close() }
+})
+
+for (const [mode, groupName] of [
+  ['suffix-space-collision', 'Peer @微信'],
+  ['suffix-no-history-collision', 'Peer@微信'],
+] as const) {
+  test(`${groupName} 与${mode === 'suffix-no-history-collision' ? '无历史' : '有历史'}外部联系人显示同名仍拒发`, windows, async () => {
+    const f = await fixture(mode)
+    try {
+      const mock: DriverMock = { calls: [], stages: [] }
+      const op = createWecomMessageSendOperation({ runDriverFn: makeRunDriver(mock),
+        createRefFn: (_name, type) => `ref:${type}`,
+        verifyRefFn: ref => ref === 'ref:contact'
+          ? { name: 'Peer', type: 'contact', subtitle: '微信联系人', account: SELF }
+          : { name: groupName, type: 'group', subtitle: '', account: SELF },
+        artifactDirFn: () => f.artifactRoot, localdb: f.deps })
+      const selectors = [{ target_name: groupName, text: 'must not send' },
+        { target_ref: 'ref:group', text: 'must not send' }]
+      if (mode === 'suffix-space-collision') selectors.push({ target_ref: 'ref:contact', text: 'must not send' })
+      for (const args of selectors) {
+        const r = await op.execute(args, silentCtx())
+        assert.equal(r.code, 'TARGET_AMBIGUOUS', JSON.stringify(r))
+        assert.equal(r.effect, 'none')
+      }
+      assert.equal(mock.calls.length, 0)
+    } finally { f.close() }
+  })
+}
 
 test('本地库正文不匹配：即使截图核验可能成功也保持 unknown', windows, async () => {
   const f = await fixture()
@@ -411,12 +494,14 @@ test('账号匹配 target_ref：核对通过正常发送（local-record 命中�
   } finally { f.close() }
 })
 
-test('文本发送先核对目标标题才清草稿，Enter 后不再走 OCR 终态', () => {
+test('本地库唯一目标后搜索 Enter 进入，发送不依赖标题复制，投递后仅由本地库核验', () => {
   const src = readFileSync(fileURLToPath(new URL('../../drivers/ps1/message-send.ps1', import.meta.url)), 'utf8')
-  const titleCheck = src.indexOf('Test-WeComSendTitleMatch -Title $title')
+  const search = src.indexOf('Open-WeComNamedChat -Hwnd $mainHwnd -Name $query')
   const clear = src.indexOf('Clear-WeComFocusedInput -Hwnd $mainHwnd')
   const enter = src.indexOf('Send-WeComEnter -Hwnd $mainHwnd', clear)
-  assert.ok(titleCheck > -1 && clear > titleCheck && enter > clear)
+  assert.ok(search > -1 && clear > search && enter > clear)
+  assert.equal(src.includes('Get-WeComCopiedTitle'), false)
+  assert.equal(src.includes('Test-WeComSendTitleMatch'), false)
   assert.equal(src.includes('Invoke-WeComChatOcr'), false)
   assert.equal(src.includes('Invoke-WeComJev'), false)
 })

@@ -1,29 +1,26 @@
 ﻿param([Parameter(Mandatory)][string]$DriverDir)
 $ErrorActionPreference = 'Stop'
-. (Join-Path $DriverDir '_send-points.ps1')
-
-$cases = @(
-    @{ title = '孙晨'; expected = '孙晨'; section = 'contact'; ok = $true },
-    @{ title = '孙晨@微信'; expected = '孙晨'; section = 'contact'; ok = $true },
-    @{ title = '孙晨 @微信'; expected = '孙晨'; section = 'contact'; ok = $true },
-    @{ title = '孙晨@企业微信'; expected = '孙晨'; section = 'contact'; ok = $false },
-    @{ title = '孙晨附加'; expected = '孙晨'; section = 'contact'; ok = $false },
-    @{ title = '孙晨@微信'; expected = '孙晨'; section = 'group'; ok = $false },
-    @{ title = '孙晨 @微信'; expected = '孙晨'; section = 'group'; ok = $false },
-    @{ title = '孙晨'; expected = '孙晨'; section = 'group'; ok = $true },
-    @{ title = '孙晨@微信'; expected = '孙晨@微信'; section = 'group'; ok = $true }
-)
-foreach ($case in $cases) {
-    $actual = Test-WeComSendTitleMatch -Title $case.title -Expected $case.expected -Section $case.section
-    if ($actual -ne $case.ok) {
-        throw ('标题匹配失败：' + ($case | ConvertTo-Json -Compress))
-    }
+$points = Get-Content -LiteralPath (Join-Path $DriverDir '_send-points.ps1') -Raw -Encoding UTF8
+if (-not $points.Contains('Get-WeComCopiedTitle -Hwnd $mainHwnd -Section ''contact'' -Point $point')) {
+    throw '自会话标定必须仍复制标题并核对本人显示名'
 }
-
+if (-not $points.Contains('[string]::Equals($title, $SelfName, [StringComparison]::Ordinal)')) {
+    throw '自会话标定缺少本人标题全等核对'
+}
 foreach ($name in @('message-send.ps1', 'send-image.ps1', 'send-file.ps1')) {
     $source = Get-Content -LiteralPath (Join-Path $DriverDir $name) -Raw -Encoding UTF8
-    if (-not $source.Contains('Test-WeComSendTitleMatch -Title $title -Expected $TargetName -Section $Section')) {
-        throw ($name + ' 未使用已验证的发送标题规则')
+    $search = $source.IndexOf('Open-WeComNamedChat -Hwnd $mainHwnd -Name $query')
+    $input = $source.IndexOf('Clear-WeComFocusedInput -Hwnd $mainHwnd')
+    $paste = $source.IndexOf('Send-WeComAttachChordKey -Hwnd $mainHwnd -Vk 0x56')
+    $enter = $source.IndexOf('Send-WeComEnter -Hwnd $mainHwnd')
+    if ($search -lt 0 -or $input -le $search -or $paste -le $input -or $enter -le $paste) {
+        throw ($name + ' 未保持唯一目标搜索后输入、粘贴、发送顺序')
+    }
+    if ($source.Contains('Get-WeComCopiedTitle') -or $source.Contains('Test-WeComSendTitleMatch') -or $source.Contains('title = $title')) {
+        throw ($name + ' 仍依赖发送前标题复制或伪报标题')
+    }
+    if (-not $source.Contains('if ($Section -ne ''group'') { $query = $TargetName -replace ''@微信$'', '''' }')) {
+        throw ($name + ' 群名必须保留完整搜索词')
     }
 }
-Write-Output ('send-title-wechat-regression passed: ' + $cases.Count + ' behavior cases, 3 send drivers')
+Write-Output 'send-without-title-regression passed: calibration keeps self-title verification, 3 send drivers skip target-title copy'

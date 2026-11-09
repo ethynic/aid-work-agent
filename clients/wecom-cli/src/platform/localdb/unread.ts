@@ -119,11 +119,12 @@ function parseLastPerConvRows(value: unknown): LastPerConvRow[] {
 }
 
 /**
- * focus 单名 → conversation_id（规则同 readSession 范本：strip @微信；命名候选仅 user_table
+ * focus 单名 → conversation_id（联系人显示后缀按 readSession 去掉 @微信；群名保持原文；命名候选仅 user_table
  * 精确匹配 + session 的 R 群名；user 命中须有实际 S 会话；多候选 → TARGET_AMBIGUOUS）。
  * focus 无目标类型信息，按 readSession 无名目标同款来源要求（user_table + conversation_table）。
  * targetType（第九轮评审 P1）：ref 输入携带的 identity.type 保留为类型约束——contact 只认
  * S:、group 只认 R:（类型不符/无命中 → 查无目标，不能把群引用绑到联系人）；缺省同无名目标。
+ * exactSearchName 仅供发送前按实际 UI 搜索词做跨类型唯一复核，不施加微信联系人来源过滤。
  * P2 任务 3.2/3.4 起 watch 执行器与 send 本地库核验复用同一段（导出而非复制）。
  */
 export async function resolveFocusConversation(
@@ -132,10 +133,11 @@ export async function resolveFocusConversation(
   selfUserId: string,
   targetType?: 'contact' | 'group',
   subtitle?: string,
+  exactSearchName = false,
 ): Promise<string> {
-  const name = focus.trim().replace(/@微信$/, '').trim()
-  if (!name) throw new CodedOperationError('TARGET_NOT_FOUND', '会话名去除 @微信 后缀后为空，无法定位')
-  const externalOnly = hasExternalWechatHint(focus, targetType, subtitle)
+  const name = (exactSearchName || targetType === 'group' ? focus : focus.replace(/@微信$/, '')).trim()
+  if (!name) throw new CodedOperationError('TARGET_NOT_FOUND', '会话名为空，无法定位')
+  const externalOnly = !exactSearchName && hasExternalWechatHint(focus, targetType, subtitle)
   const resolved = await query(['--task', 'resolve', '--name', name, '--account', selfUserId,
     ...(externalOnly ? ['--external-only'] : [])])
   const sources = resolved.sources as Record<string, unknown> | undefined
@@ -181,6 +183,46 @@ export async function resolveFocusConversation(
   const id = candidateIds[0]
   if (!id) throw new CodedOperationError('TARGET_NOT_FOUND', '完整检索后未找到已识别的目标会话')
   return id
+}
+
+/** 发送搜索词相同的群名与外部联系人显示名不能交给 UI 默认选中消歧。 */
+export async function assertSendDisplayNameUnique(
+  query: (params: string[]) => Promise<Record<string, unknown>>,
+  name: string, type: string, subtitle: string, selfUserId: string,
+): Promise<void> {
+  const base = name.trim().replace(/ ?@微信$/, '').trim()
+  const hasGroup = async (focus: string): Promise<boolean> => {
+    try {
+      await resolveFocusConversation(query, focus, selfUserId, 'group')
+      return true
+    } catch (err) {
+      if (err instanceof CodedOperationError && err.code === 'TARGET_NOT_FOUND') return false
+      if (err instanceof CodedOperationError && err.code === 'TARGET_AMBIGUOUS') return true
+      throw err
+    }
+  }
+  if (type === 'group' && name.trim().endsWith('@微信')) {
+    const regular = await query(['--task', 'resolve', '--name', base, '--account', selfUserId])
+    const source = (regular.sources as Record<string, unknown> | undefined)?.user_table
+    if (source === 'schema-unknown') throw new CodedOperationError('VERSION_UNSUPPORTED', '联系人名称来源不完整，无法确认显示名唯一')
+    if (source !== 'ok') throw unavailable('联系人名称来源不可用，无法确认显示名唯一')
+    const users = Array.isArray(regular.candidates) ? regular.candidates as Record<string, unknown>[] : []
+    if (users.some(row => row.source === 'user_table')) {
+      const external = await query(['--task', 'resolve', '--name', base, '--account', selfUserId, '--external-only'])
+      const externalSource = (external.sources as Record<string, unknown> | undefined)?.user_table
+      if (externalSource === 'schema-unknown') throw new CodedOperationError('VERSION_UNSUPPORTED', '外部联系人身份来源不完整，无法确认显示名唯一')
+      if (externalSource !== 'ok') throw unavailable('外部联系人身份来源不可用，无法确认显示名唯一')
+      const candidates = Array.isArray(external.candidates) ? external.candidates as Record<string, unknown>[] : []
+      if (candidates.some(row => row.source === 'user_table')) {
+        throw new CodedOperationError('TARGET_AMBIGUOUS', '群名与外部联系人显示名相同，未发送')
+      }
+    }
+  }
+  if (type === 'contact' && hasExternalWechatHint(name, type, subtitle)) {
+    if (await hasGroup(`${base}@微信`) || await hasGroup(`${base} @微信`)) {
+      throw new CodedOperationError('TARGET_AMBIGUOUS', '外部联系人显示名与群名相同，未发送')
+    }
+  }
 }
 
 export async function readLocaldbUnread(

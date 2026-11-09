@@ -18,11 +18,7 @@ function Invoke-WeComCalibration { param($SelfName,$ArtifactDir)
     return @{x=440;y=38;input_x=550;input_y=710;cache_path=$script:cachePath;source='glm'}
 }
 function Open-WeComNamedChat { param($Hwnd,$Name) [void]$script:actions.Add('search:'+$Name) }
-function Get-WeComCopiedTitle { param($Hwnd,$Section,$Point)
-    [void]$script:actions.Add('copy-title');return $script:title }
-function Test-WeComSendTitleMatch { param($Title,$Expected,[switch]$RequireWechat,[switch]$Group)
-    return $Title -eq $Expected
-}
+function Get-WeComCopiedTitle { throw 'send must not copy target title' }
 function Send-WeComClick { param($Hwnd,$ScreenX,$ScreenY) [void]$script:actions.Add('click-input');return 101 }
 function Clear-WeComFocusedInput { param($Hwnd) [void]$script:actions.Add('clear');return $true }
 function Set-Clipboard { param($Value) [void]$script:actions.Add('clipboard:'+$Value) }
@@ -31,10 +27,10 @@ function Send-WeComEnter { param($Hwnd) [void]$script:actions.Add('enter') }
 function Start-Sleep { param($Milliseconds) }
 function Throw-DriverError { param($Code,$Message) throw ('WECOMDRIVE|'+$Code+'|'+$Message) }
 function Write-DriverLog { param($Message) }
-function Run-Scenario([bool]$Cached,[string]$Title,[string]$Text='hello') {
+function Run-Scenario([bool]$Cached,[string]$Text='hello',[string]$Name='Peer',[string]$TargetSection='contact') {
     $script:actions=New-Object Collections.ArrayList
-    $script:cache=$Cached;$script:title=$Title
-    $TargetName='Peer';$Subtitle='';$Section='contact';$SelfName='Self';$ArtifactDir=$env:TEMP
+    $script:cache=$Cached
+    $TargetName=$Name;$Subtitle='';$Section=$TargetSection;$SelfName='Self';$ArtifactDir=$env:TEMP
     $SkipVerify=$true
     $result=$null;$failure=''
     try { $result=& $body } catch { $failure=$_.Exception.Message }
@@ -43,18 +39,18 @@ function Run-Scenario([bool]$Cached,[string]$Title,[string]$Text='hello') {
 $script:cachePath=Join-Path $env:TEMP ('wecom-send-test-'+[guid]::NewGuid().ToString('N')+'.json')
 try {
     Set-Content -LiteralPath $script:cachePath -Value '{}' -Encoding UTF8
-    $r=Run-Scenario $true 'Peer'
+    $r=Run-Scenario $true
     Assert-True ($r.failure -eq '') 'cached send should complete'
     Assert-True (@($r.actions | Where-Object {$_ -like 'calibrate:*'}).Count -eq 0) 'valid cache must skip model calibration'
-    Assert-True (($r.actions -join ',') -eq 'search:Peer,copy-title,click-input,clear,clipboard:hello,paste,enter') 'title must be confirmed before draft clear and paste/Enter'
-    $r=Run-Scenario $false 'Peer' ('line1'+[Environment]::NewLine+'line2')
+    Assert-True (($r.actions -join ',') -eq 'search:Peer,click-input,clear,clipboard:hello,paste,enter') 'unique target search must precede input, paste and Enter without title copy'
+    Assert-True (-not $r.result.ContainsKey('title')) 'unobserved target title must not be reported as verified'
+    $r=Run-Scenario $false ('line1'+[Environment]::NewLine+'line2')
     Assert-True ($r.failure -eq '') 'missing cache should calibrate and then send'
     Assert-True ($r.actions[0] -eq 'calibrate:Self') 'calibration must use verified self display name'
     Assert-True (@($r.actions | Where-Object {$_ -eq 'paste'}).Count -eq 1) 'multiline also pastes once'
-    $r=Run-Scenario $true 'Wrong'
-    Assert-True ($r.failure -like 'WECOMDRIVE|TARGET_NOT_FOUND|*') 'wrong title must reject before input'
-    Assert-True (@($r.actions | Where-Object {$_ -eq 'clear' -or $_ -eq 'enter'}).Count -eq 0) 'wrong title must not clear or send'
-    Assert-True (-not (Test-Path -LiteralPath $script:cachePath)) 'unmatched title invalidates cached coordinates for next calibration'
+    Assert-True (($r.actions -join ',') -like 'calibrate:Self,search:Peer,click-input,clear,clipboard:*,paste,enter') 'calibration must finish before unique target search and send'
+    $r=Run-Scenario $true 'hello' '项目群@微信' 'group'
+    Assert-True ($r.actions[0] -eq 'search:项目群@微信') 'group name ending in @微信 must be searched in full'
 } finally {
     if (Test-Path -LiteralPath $script:cachePath) { Remove-Item -LiteralPath $script:cachePath -Force }
 }

@@ -75,6 +75,7 @@ test('多个外部同名或外部关系未知时，不能借约束选出一个�
 test('外部目标按DB唯一定位直接发送，不搜索；真实新出站记录对账确认一次', windows, async () => {
   const f = await fixture()
   try {
+    f.command('external-unique')
     let sends = 0
     const keyDir = join(f.base, 'refs')
     const op = createWecomMessageSendOperation({
@@ -87,7 +88,7 @@ test('外部目标按DB唯一定位直接发送，不搜索；真实新出站记
         assert.ok(!opts.args?.includes('-VerifyOnly'), '发送后只用本地库核验')
         sends++
         f.command('append', 2)
-        return { navigate_required: false, title: 'Peer @微信', sent_verification: { method: 'skipped', result: 'unverified' } }
+        return { navigate_required: false, sent_verification: { method: 'skipped', result: 'unverified' } }
       },
     })
     const result = await op.execute({ target_name: 'Peer@微信', text: 'synthetic-14' }, ctx())
@@ -95,6 +96,19 @@ test('外部目标按DB唯一定位直接发送，不搜索；真实新出站记
     assert.equal(result.effect, 'applied')
     assert.equal(result.data.verification, 'local-record')
     assert.equal(sends, 1)
+  } finally { f.close() }
+})
+
+test('外部与内部同名时，发送前拒绝依赖默认搜索选中', windows, async () => {
+  const f = await fixture()
+  try {
+    let uiCalls = 0
+    const op = createWecomMessageSendOperation({ artifactDirFn: () => join(f.base, 'artifacts'), localdb: f.deps,
+      runDriverFn: async () => { uiCalls++; throw new Error('unexpected UI') } })
+    const result = await op.execute({ target_name: 'Peer@微信', text: 'must not send' }, ctx())
+    assert.equal(result.code, 'TARGET_AMBIGUOUS')
+    assert.equal(result.effect, 'none')
+    assert.equal(uiCalls, 0)
   } finally { f.close() }
 })
 

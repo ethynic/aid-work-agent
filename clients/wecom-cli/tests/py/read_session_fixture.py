@@ -124,8 +124,37 @@ def main():
             else:
                 conn.execute('DELETE FROM external_user_relation_v3 WHERE user_id=?', (PEER,))
         encrypted(base, 'user')
+    elif command == 'external-unique':
+        with sqlite3.connect(base / 'user.plain.db') as conn:
+            conn.execute("DELETE FROM user_table WHERE id='333'")
+        encrypted(base, 'user')
     elif command == 'unread-setup':
         unread_setup(base)
+    elif command in ('same-name-group', 'suffix-group'):
+        unread_setup(base)
+        with sqlite3.connect(base / 'session.plain.db') as conn:
+            conn.execute('UPDATE conversation_table SET name=? WHERE conversation_id=?',
+                         ('Peer' if command == 'same-name-group' else '项目群@微信', UNREAD_CONVS['project']))
+        encrypted(base, 'session')
+    elif command in ('suffix-collision', 'suffix-space-collision', 'suffix-no-history-collision'):
+        unread_setup(base)
+        with sqlite3.connect(base / 'user.plain.db') as conn:
+            conn.execute('ALTER TABLE user_table ADD COLUMN corp_id INTEGER')
+            conn.execute('UPDATE user_table SET corp_id=1 WHERE id=?', (SELF,))
+            conn.execute('UPDATE user_table SET corp_id=2 WHERE id=?', (PEER,))
+            conn.execute('CREATE TABLE external_user_relation_v3(user_id INTEGER)')
+            if command == 'suffix-no-history-collision':
+                conn.execute("UPDATE user_table SET name='Other' WHERE id=?", (PEER,))
+                conn.execute("INSERT INTO user_table(id,name,alias,remark,corp_id) VALUES('9007199254740995','Peer','','',2)")
+                conn.execute("INSERT INTO external_user_relation_v3 VALUES('9007199254740995')")
+            else:
+                conn.execute('INSERT INTO external_user_relation_v3 VALUES(?)', (PEER,))
+        encrypted(base, 'user')
+        with sqlite3.connect(base / 'session.plain.db') as conn:
+            conn.execute('UPDATE conversation_table SET name=? WHERE conversation_id=?',
+                         ('Peer @微信' if command == 'suffix-space-collision' else 'Peer@微信',
+                          UNREAD_CONVS['project']))
+        encrypted(base, 'session')
     elif command in ('append', 'append-empty', 'replace', 'ack', 'reuse'):
         with sqlite3.connect(base / 'message.plain.db') as conn:
             if command == 'ack':

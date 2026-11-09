@@ -1,4 +1,4 @@
-﻿# wecom_message_send：双点缓存、标题复制、本地库终态核验由 TS 承担。UTF-8 BOM。
+﻿# wecom_message_send：双点缓存、唯一名称搜索、本地库终态核验由 TS 承担。UTF-8 BOM。
 param(
     [Parameter(Mandatory)][string]$TargetName,
     [string]$Subtitle = '',
@@ -27,21 +27,14 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     }
     $mainHwnd = Resolve-WeComMainWindow
     # 搜索默认结果直接 Enter；本地库已在任何 UI 写入前唯一解析目标。
-    $query = $TargetName -replace '@微信$', ''
+    $query = $TargetName
+    if ($Section -ne 'group') { $query = $TargetName -replace '@微信$', '' }
     Open-WeComNamedChat -Hwnd $mainHwnd -Name $query
     $mainHwnd = Resolve-WeComMainWindow
     $main = Get-WeComWindowInfo ([IntPtr]$mainHwnd)
     $currentPoint = Get-WeComCachedPoints -Hwnd $mainHwnd
     if ($null -eq $currentPoint) {
         Throw-DriverError 'UI_CHANGED' '进入目标后窗口尺寸或 DPI 变化，未输入或发送消息'
-    }
-    $title = Get-WeComCopiedTitle -Hwnd $mainHwnd -Section $Section -Point $currentPoint
-    if (-not (Test-WeComSendTitleMatch -Title $title -Expected $TargetName -Section $Section)) {
-        # 无法区分默认搜索结果偏离与缓存标题点偏离；本次拒发，下次重新标定。
-        if ($currentPoint.source -eq 'cache' -and (Test-Path -LiteralPath $currentPoint.cache_path)) {
-            Remove-Item -LiteralPath $currentPoint.cache_path -Force
-        }
-        Throw-DriverError 'TARGET_NOT_FOUND' ('搜索默认会话标题「' + $title + '」与目标不一致，未输入或发送消息')
     }
     $screenX = [int]($main.X + $currentPoint.input_x)
     $screenY = [int]($main.Y + $currentPoint.input_y)
@@ -63,7 +56,6 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WecomCli.MessageSend' -Body {
     return @{
         navigate_required = $false
         navigated = $true
-        title = $title
         sent = $true
         verified = $false
         sent_verification = @{ method = 'skipped'; result = 'unverified' }

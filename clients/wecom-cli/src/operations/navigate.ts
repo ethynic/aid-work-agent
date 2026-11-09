@@ -102,13 +102,23 @@ export async function resolveTargetByName(
   subtitle: string,
   texts: ResolveByNameTexts,
 ): Promise<ResolvedByNameTarget> {
-  const query = targetName.replace(/@微信$/, '').trim()
   cfg.opCtx.progress({ stage: 'execute', message: `按名称「${targetName}」直达：内部搜索定位目标` })
   const searchOp = createWecomChatSearchOperation({
     createRefFn: cfg.createRefFn,
     readCatalogFn: cfg.readCatalogFn,
   })
-  const searchRes = await searchOp.execute({ query, type: 'any' }, cfg.opCtx)
+  const fullName = targetName.trim()
+  let query = fullName
+  let searchRes = await searchOp.execute({ query, type: 'any' }, cfg.opCtx)
+  if (fullName.endsWith('@微信')) {
+    const best = searchRes.data.best as { name?: string; section?: string } | undefined
+    const exactGroup = searchRes.success && best?.name === fullName && best.section === '群聊'
+    const exactAmbiguous = !searchRes.success && searchRes.code === 'TARGET_AMBIGUOUS' && searchRes.data.match_kind === 'exact'
+    if (!exactGroup && !exactAmbiguous) {
+      query = fullName.replace(/@微信$/, '').trim()
+      searchRes = await searchOp.execute({ query, type: 'any' }, cfg.opCtx)
+    }
+  }
   if (!searchRes.success) {
     // search 本身失败（面板未出现/驱动错等）：透传错误码，未发生任何写动作
     throw new CodedOperationError(
