@@ -7,6 +7,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261109-1314 | 企业微信代理旧失败批不再阻断监控 | ✅ 已完成开发；独立测试通过，待部署真机验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#95-接口兼容与验收边界) | [计划](plans/plan-wecom-proxy-event-driven.md#p11-旧失败批不再阻断合法后续监控2026-11-09) |
 | 20261109-1230 | 企业微信代理不同 Runtime 独立调度 | ✅ 已完成开发；独立测试通过，待部署真机验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#9-企业微信代理任务新消息触发回答2026-11-08设计待开发) | [计划](plans/plan-wecom-proxy-event-driven.md#p10-不同-runtime-的代理调度独立2026-11-09) |
 | 20261109-1200 | 企业微信代理停住目标手动恢复 | ✅ 已完成开发；独测与 CR 通过，待部署验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#95-接口兼容与验收边界) | [计划](plans/plan-wecom-proxy-event-driven.md#p9-停住目标手动恢复2026-11-09) |
 | 20261109-1130 | 企微标定复用 Runtime 配对身份 | ✅ 已完成开发；独测和 CR 通过，待部署真机验收。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w32-标定复用-runtime-配对身份2026-11-09) |
