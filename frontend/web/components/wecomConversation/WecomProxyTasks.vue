@@ -331,7 +331,7 @@
 // 企业微信Agent 工作区内嵌模式（WecomAgentHub Tab）：根容器 h-full
 defineProps<{ embedded?: boolean }>()
 
-import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, inject, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import AppHeader from '@/components/AppHeader.vue'
@@ -555,6 +555,8 @@ const detailId = computed(() => (typeof route.query.task === 'string' && /^\d+$/
 const detailTask = ref<WecomProxyTask | null>(null)
 const detailLoading = ref(false)
 const detailError = ref('')
+const detailPageActive = ref(true)
+const DETAIL_POLL_INTERVAL_MS = 10_000
 // 批次分页（新批次在前；"加载更多批次"按 offset 追加渲染）
 const BATCH_PAGE_SIZE = 50
 const batchesHasMore = ref(false)
@@ -573,14 +575,23 @@ async function loadDetail() {
   if (!id) return
   const seq = ++detailSeq
   detailLoading.value = true
-  detailError.value = ''
   try {
     const value = await getProxyTask(Number(id), { batchLimit: BATCH_PAGE_SIZE })
     if (seq !== detailSeq || detailId.value !== id) return
-    detailTask.value = value.task
-    batchesHasMore.value = value.task.batches_has_more === true
+    const task = value.task
+    const latest = task.batches || []
+    const previous = detailTask.value?.batches || []
+    const oldest = latest[latest.length - 1]
+    const hasMore = task.batches_has_more === true
+    // 只有两页相交才保留旧尾页，避免 offset 跳过尚未取得的中间批次。
+    const older = hasMore && oldest && previous.some(batch => batch.id === oldest.id)
+      ? previous.filter(batch => batch.id < oldest.id)
+      : []
+    detailTask.value = { ...task, batches: [...latest, ...older] }
+    if (!older.length) batchesHasMore.value = hasMore
+    detailError.value = ''
   } catch (error) {
-    if (seq === detailSeq) { detailTask.value = null; batchesHasMore.value = false; detailError.value = proxyErrorText(error) }
+    if (seq === detailSeq && detailId.value === id) detailError.value = proxyErrorText(error)
   } finally {
     if (seq === detailSeq) detailLoading.value = false
   }
@@ -599,7 +610,10 @@ async function loadMoreBatches() {
     if (seq !== detailSeq || detailId.value !== id) return
     const current = detailTask.value
     if (current) {
-      current.batches = [...(current.batches || []), ...(value.task.batches || [])]
+      const batches = current.batches || []
+      const oldest = batches[batches.length - 1]
+      const older = (value.task.batches || []).filter(batch => !oldest || batch.id < oldest.id)
+      current.batches = [...batches, ...older]
     }
     batchesHasMore.value = value.task.batches_has_more === true
   } catch (error) {
@@ -609,9 +623,22 @@ async function loadMoreBatches() {
   }
 }
 watch(detailId, id => {
+  detailSeq++
   detailTask.value = null
+  detailLoading.value = false
+  detailError.value = ''
   batchesHasMore.value = false
-  if (id) void loadDetail()
+  if (id && detailPageActive.value) void loadDetail()
+})
+
+const canPollDetail = computed(() => detailPageActive.value && !!detailId.value
+  && detailTask.value?.status === 'running' && !detailLoading.value && !actionPending(Number(detailId.value)))
+watch(canPollDetail, (enabled, _, onCleanup) => {
+  if (!enabled) return
+  const timer = setTimeout(() => {
+    if (canPollDetail.value) void loadDetail()
+  }, DETAIL_POLL_INTERVAL_MS)
+  onCleanup(() => clearTimeout(timer))
 })
 
 const activeTargets = computed(() => (detailTask.value?.targets || []).filter(item => item.status === 'active'))
@@ -859,6 +886,16 @@ onMounted(() => {
   void loadAgents()
   // 深链进入详情（?task=id）时首查详情
   if (detailId.value) void loadDetail()
+})
+onActivated(() => {
+  if (detailPageActive.value) return
+  detailPageActive.value = true
+  if (detailId.value) void loadDetail()
+})
+onDeactivated(() => {
+  detailPageActive.value = false
+  detailSeq++
+  detailLoading.value = false
 })
 onUnmounted(() => {
   listSeq++; detailSeq++; directorySeq++

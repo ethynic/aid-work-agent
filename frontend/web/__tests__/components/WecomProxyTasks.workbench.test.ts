@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { h, KeepAlive, nextTick, ref } from 'vue'
 import WecomProxyTasks from '@/components/wecomConversation/WecomProxyTasks.vue'
 import { WecomProxyApiError } from '@/api/wecomProxy'
 
@@ -92,6 +93,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 it('零发送停住目标显式确认后先恢复再启动；离线失败保留可再次启动的说明', async () => {
@@ -419,14 +421,89 @@ describe('企微代理任务页', () => {
     proxyApi.getProxyTask.mockResolvedValueOnce({ task: { ...stoppedTask, targets: [],
       batches: [batch(52), batch(51)], batches_has_more: true } })
       .mockResolvedValueOnce({ task: { ...stoppedTask, targets: [],
-        batches: [batch(50)], batches_has_more: false } })
+        batches: [batch(53), batch(52), batch(51), batch(50)], batches_has_more: false } })
     await mountPage()
     expect(wrapper!.find('[data-testid="load-more-batches"]').exists()).toBe(true)
     await wrapper!.find('[data-testid="load-more-batches"]').trigger('click')
     await flushPromises()
     expect(proxyApi.getProxyTask).toHaveBeenLastCalledWith(7, { batchLimit: 50, batchOffset: 2 })
-    expect(wrapper!.find('[data-testid="batch-50"]').exists()).toBe(true)
-    expect(wrapper!.find('[data-testid="batch-52"]').exists()).toBe(true)
+    expect(wrapper!.findAll('article').map(card => card.attributes('data-testid'))).toEqual(
+      ['batch-52', 'batch-51', 'batch-50'],
+    )
     expect(wrapper!.find('[data-testid="load-more-batches"]').exists()).toBe(false)
+  })
+
+  it('运行中刷新会话统计和最新批次，保留已加载历史，停止后结束轮询', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    routeState.route!.query = { task: '8' }
+    const response = (status: string, idle: number, ids: number[], more: boolean) => ({ task: {
+      ...runningTask, status, targets: [{ id: 1, conversation_name: '售前群', status: 'active', idle_read_count: idle }],
+      batches: ids.map(id => ({ id, conversation_name: '售前群', status: 'succeeded' })),
+      batches_has_more: more,
+    } })
+    proxyApi.getProxyTask
+      .mockResolvedValueOnce(response('running', 7, [52, 51], true))
+      .mockResolvedValueOnce(response('running', 7, [50], false))
+      .mockResolvedValueOnce(response('running', 8, [53, 52], true))
+      .mockResolvedValueOnce(response('stopped', 9, [53, 52], true))
+
+    const page = await mountPage()
+    await page.get('[data-testid="load-more-batches"]').trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(page.get('[aria-label="会话目标"] tbody td:last-child').text()).toBe('8')
+    expect(page.findAll('article').map(card => card.attributes('data-testid'))).toEqual(
+      ['batch-53', 'batch-52', 'batch-51', 'batch-50'],
+    )
+    expect(page.find('[data-testid="load-more-batches"]').exists()).toBe(false)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(page.text()).toContain('已停止')
+    expect(page.get('[aria-label="会话目标"] tbody td:last-child').text()).toBe('9')
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(proxyApi.getProxyTask).toHaveBeenCalledTimes(4)
+  })
+
+  it('慢请求不会重叠，自动刷新失败保留当前详情并重试', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    routeState.route!.query = { task: '8' }
+    const pending = deferred<{ task: typeof runningTask }>()
+    proxyApi.getProxyTask.mockResolvedValueOnce({ task: runningTask })
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce({ task: runningTask })
+
+    const page = await mountPage()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(proxyApi.getProxyTask).toHaveBeenCalledTimes(2)
+    pending.reject(new Error('网络暂时不可用'))
+    await flushPromises()
+    expect(page.get('[data-testid="detail-title"]').text()).toBe(runningTask.title)
+    expect(page.text()).toContain('网络暂时不可用')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(proxyApi.getProxyTask).toHaveBeenCalledTimes(3)
+    expect(page.text()).not.toContain('网络暂时不可用')
+  })
+
+  it('KeepAlive 切走时停轮询，返回后重新读取并忽略切走前的响应', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    routeState.route!.query = { task: '8' }
+    const active = ref(true)
+    const pending = deferred<{ task: typeof runningTask }>()
+    proxyApi.getProxyTask.mockResolvedValueOnce({ task: runningTask })
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce({ task: { ...runningTask, title: '返回后更新的任务' } })
+    wrapper = mount({ render: () => h(KeepAlive, null, () => active.value ? h(WecomProxyTasks) : h('div')) },
+      { global: { provide: { toggleSidebar: () => {} }, stubs: { AppHeader: true } } })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(10_000)
+    active.value = false
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(proxyApi.getProxyTask).toHaveBeenCalledTimes(2)
+    active.value = true
+    await flushPromises()
+    pending.resolve({ task: { ...runningTask, title: '切走前的任务' } })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="detail-title"]').text()).toBe('返回后更新的任务')
+    expect(proxyApi.getProxyTask).toHaveBeenCalledTimes(3)
   })
 })

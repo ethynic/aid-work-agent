@@ -277,6 +277,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261109-1628 | 企业微信代理任务详情自动刷新 | ✅ 已完成开发。运行中定时更新会话统计和批次记录。 | [设计](design/wecom/wecom-conversation-operations-design.md#92-页面与任务配置) | [计划](plans/plan-wecom-proxy-event-driven.md#p15-运行中代理任务详情自动刷新) |
 | 20261109-1607 | 企业微信代理批次长回复预览 | ✅ 已完成开发。精简发送提示，长回复支持预览与全文复制。 | [设计](design/wecom/wecom-conversation-operations-design.md#92-页面与任务配置) | [计划](plans/plan-wecom-proxy-event-driven.md#p14-批次长回复预览与全文复制) |
 | 20261109-1555 | 企业微信代理任务详情精简 | ✅ 已完成开发。精简详情操作和批次展示，按原消息配对回复。 | [设计](design/wecom/wecom-conversation-operations-design.md#92-页面与任务配置) | [计划](plans/plan-wecom-proxy-event-driven.md#p13-代理任务详情与原消息配对展示) |
 | 20261109-1545 | 企业微信代理任务列表精简 | ✅ 已完成开发。移除五列并显示执行智能体的名称。 | [设计](design/wecom/wecom-conversation-operations-design.md#92-页面与任务配置) | [计划](plans/plan-wecom-proxy-event-driven.md#p12-精简代理任务列表) |
