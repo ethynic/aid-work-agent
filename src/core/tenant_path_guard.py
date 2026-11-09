@@ -188,8 +188,11 @@ def is_source_storage_reference(text: str) -> bool:
 
 
 # 独立的 `src` 词（/app/src、src/tools、cd src 等形态）；
-# source/srcs 等含 src 前缀的单词不命中。
-_PLATFORM_SRC_RE = re.compile(r"(?<![A-Za-z0-9_])src(?![A-Za-z0-9_])")
+# source/srcs 等含 src 前缀的单词不命中；
+# 前置连字符的 CLI 参数名（--src、-src）不命中——技能脚本自有参数
+# （如 contract-generator fetch_file.py --src），真实误拦案例 2026-11-09。
+# 路径引用形态（空格/引号/= 后跟 src）仍全部命中。
+_PLATFORM_SRC_RE = re.compile(r"(?<![A-Za-z0-9_-])src(?![A-Za-z0-9_])")
 
 
 def check_text_for_platform_source_paths(text: str) -> Tuple[bool, Optional[str]]:

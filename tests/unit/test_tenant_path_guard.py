@@ -720,6 +720,27 @@ class TestCheckTextForPlatformSourcePaths:
         )
         assert blocked is False
 
+    def test_cli_flag_src_not_blocked(self):
+        """技能脚本自有的 --src 参数不命中（contract-generator fetch_file.py
+        实际用法，2026-11-09 合同起草会话被误拦）"""
+        blocked, _ = check_text_for_platform_source_paths(
+            "python3 scripts/fetch_file.py --src "
+            '"storage/tenants/tenant_aaa/knowledge/tpl.docx" '
+            "--dest $OUT/templates/"
+        )
+        assert blocked is False
+
+    def test_short_flag_src_not_blocked(self):
+        blocked, _ = check_text_for_platform_source_paths("tool -src x --dest y")
+        assert blocked is False
+
+    def test_flag_value_src_still_blocked(self):
+        """参数值本身指向源码目录（--src=src/core 形态）仍拦截"""
+        blocked, _ = check_text_for_platform_source_paths(
+            "python3 fetch_file.py --src=src/core/agent.py"
+        )
+        assert blocked is True
+
 
 class TestSkillExecutePlatformSourceGuard:
     @pytest.mark.asyncio
