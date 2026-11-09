@@ -35,13 +35,18 @@ class RunnerAuthorizer:
                   actor_user=None, actor_chat=None, actor_source=None, *, execute=True):
         self.verify_service(service_id, service_token, request.source)
         if request.session.kind == "web":
-            if (request.source not in ("chat", "scheduled")
+            if (request.source not in ("chat", "scheduled", "wecom_proxy")
                     or request.channel_user_id is not None or request.channel_chat_id is not None):
                 raise RunnerError("SESSION_SOURCE_MISMATCH", 400)
             if request.source == "scheduled":
                 # scheduled 来源：任务专属会话由 scheduler 服务身份提交；
                 # 用户 Bearer token 仅只读（设计 §5.2 三语义）。
                 return self._scheduled(request, service_id, user_token, target_tenant, execute=execute)
+            if request.source == "wecom_proxy":
+                # wecom_proxy 来源（代理任务契约 §6）：内部受信提交，无用户
+                # Bearer；身份按批次关联的任务持久行核定。
+                return self._wecom_proxy_in_tx_with_conn(request, service_id,
+                                                         target_tenant, execute=execute)
             user_id = self.token_verifier(user_token, auto_refresh=False) if user_token else None
             if not user_id:
                 raise RunnerError("USER_UNAUTHORIZED", 401)
@@ -77,6 +82,13 @@ class RunnerAuthorizer:
                 # profile 校验，不要求任务 active（已受理执行在任务暂停后继续完成）。
                 with self.connection_factory() as conn:
                     principal = self._scheduled_in_tx(conn.cursor(), request, row["service_id"],
+                        execute=execute, persisted={"tenant_id": row["tenant_id"], "user_id": row["user_id"]})
+            elif request.source == "wecom_proxy":
+                # 已受理重校验（代理任务契约 §6）：批次＋任务行存在 + 租户/用户
+                # active + 目标 active + profile（智能体权限）校验；不要求
+                # stop_requested=false——停止请求不阻断已受理批次。
+                with self.connection_factory() as conn:
+                    principal = self._wecom_proxy_in_tx(conn.cursor(), request, row["service_id"],
                         execute=execute, persisted={"tenant_id": row["tenant_id"], "user_id": row["user_id"]})
             else:
                 principal = self._web(request, row["service_id"], row["user_id"], row["tenant_id"],execute=execute)
@@ -121,7 +133,11 @@ class RunnerAuthorizer:
             intent['channel_chat_id'] = credentials.get('actor_chat')
         request = RunnerSubmit(client_request_id=row['client_request_id'], **intent)
         if row['session_kind'] == 'web':
-            if request.source == "scheduled":
+            if request.source == "wecom_proxy":
+                # wecom_proxy 行读取/控制（resume 等）：仅 wecom_proxy 服务身份，
+                # 无用户 token 路径（代理任务契约 §6）。
+                principal = self._wecom_proxy_in_tx(cursor, request, service_id, execute=False)
+            elif request.source == "scheduled":
                 # scheduled 行读取（任务视图事件流等）：用户 token 只读（属主
                 # 匹配）或 scheduler 服务重查；web 网关必须携带用户 token。
                 # verified_user_id 为事务外已验证结果，事务内不重复认证。
@@ -262,6 +278,86 @@ class RunnerAuthorizer:
             self._profile(cursor, request.profile_id, dict(user), tenant_id)
         return Principal(Identity(tenant_id, owner_id, request.session.session_id, "scheduled", "web"),
                          "system", "scheduler", service_id)
+
+    def _wecom_proxy_in_tx_with_conn(self, request, service_id, target_tenant, *, execute=True):
+        """wecom_proxy 提交鉴权入口（独立连接；幂等重查与受理同事务语义）。"""
+        with self.connection_factory() as conn:
+            return self._wecom_proxy_in_tx(conn.cursor(), request, service_id,
+                                           target_tenant=target_tenant, execute=execute)
+
+    def _wecom_proxy_in_tx(self, cursor, request, service_id, *, target_tenant=None,
+                           execute=True, persisted=None):
+        """wecom_proxy 来源鉴权（代理任务契约 §6）。
+
+        - 幂等键 '{batch_id}:{dispatch_seq}'：按批次行定位（区分于 scheduled 的
+          任务行定位）；会话必须等于批次登记的 web_session_id；
+        - 身份核定：tenant/user 取自批次行（创建时已认证固定），不经请求参数
+          或模型上下文传入；模型用量与积分按该 tenant/user 记账（与 chat 同语义）；
+        - 提交（execute=True）：任务 running 且未 stop_requested（派发检查点）＋
+          目标 active ＋ 租户 active ＋ 智能体订阅/用户授权（_profile）；
+        - 已受理重校验（persisted，worker 执行/恢复前）：任务未软删 ＋ 目标仍
+          active ＋ profile 校验；stop_requested 不核对（停止请求不阻断已运行
+          批次，契约 §6 核对检查点）；
+        - 读取/控制（execute=False）：仅 wecom_proxy 服务身份，无用户 token 路径。
+        """
+        client_request_id = getattr(request, "client_request_id", "")
+        batch_ref, _, dispatch_seq = client_request_id.partition(":")
+        if not client_request_id or not batch_ref or not dispatch_seq:
+            raise RunnerError("WECOM_PROXY_REQUEST_INVALID", 422)
+        if not batch_ref.isdigit():
+            raise RunnerError("WECOM_PROXY_REQUEST_INVALID", 422)
+        cursor.execute(
+            """SELECT b.id, b.task_id, b.session, b.web_session_id, b.agent_id,
+                      b.tenant_id, b.user_id, t.status AS task_status, t.stop_requested
+               FROM bs_wecom_proxy_batches b
+               JOIN bs_wecom_proxy_tasks t ON t.id=b.task_id AND t.tenant_id=b.tenant_id
+               WHERE b.id=%s""", (int(batch_ref),))
+        batch = cursor.fetchone()
+        if not batch or batch["web_session_id"] != request.session.session_id:
+            # 不泄露批次行存在性
+            raise RunnerError("RUNNER_NOT_FOUND", 404)
+        tenant_id, owner_id = batch["tenant_id"], batch["user_id"]
+        if persisted is not None and (tenant_id != persisted["tenant_id"]
+                                      or owner_id != persisted["user_id"]):
+            raise RunnerError("RUNNER_NOT_FOUND", 404)
+        if target_tenant is not None and target_tenant != tenant_id:
+            raise RunnerError("TENANT_FORBIDDEN", 403)
+        cursor.execute("SELECT user_id,tenant_id,role,status FROM users WHERE user_id=%s", (owner_id,))
+        user = cursor.fetchone()
+        if not user or user["status"] != UserStatus.ACTIVE.value:
+            raise RunnerError("USER_UNAUTHORIZED", 401)
+        is_platform = user["role"] == UserRole.PLATFORM_ADMIN.value
+        if not is_platform and user["tenant_id"] != tenant_id:
+            raise RunnerError("TENANT_FORBIDDEN", 403)
+        # 真实会话行必须存在且 tenant/user 与任务行一致（终态 write_history 归属
+        # 同一口径，见 _scheduled_in_tx 注释）
+        cursor.execute("""SELECT tenant_id,user_id FROM chat_sessions WHERE session_id=%s""",
+                       (request.session.session_id,))
+        session = cursor.fetchone()
+        if not session or session["user_id"] != owner_id or session["tenant_id"] != tenant_id:
+            raise RunnerError("SESSION_NOT_FOUND", 404)
+        if execute:
+            cursor.execute(
+                """SELECT status FROM bs_wecom_proxy_task_sessions
+                   WHERE tenant_id=%s AND task_id=%s AND session=%s""",
+                (tenant_id, batch["task_id"], batch["session"]))
+            target = cursor.fetchone()
+            if not target or target["status"] != "active":
+                raise RunnerError("WECOM_PROXY_TARGET_INVALID", 409)
+            if persisted is None:
+                # 新批派发检查点：任务 running 且未 stop_requested（已受理重校验
+                # 不核对 stop_requested——停止请求不阻断已运行批次）
+                if batch["task_status"] != "running" or batch["stop_requested"]:
+                    raise RunnerError("WECOM_PROXY_TASK_NOT_RUNNING", 409)
+            else:
+                # 已运行批次仅核对任务未软删（契约 §6）
+                if batch["task_status"] == "deleted":
+                    raise RunnerError("WECOM_PROXY_TASK_DELETED", 409)
+            self._tenant(cursor, tenant_id)
+            self._profile(cursor, request.profile_id, dict(user), tenant_id)
+        return Principal(Identity(tenant_id, owner_id, request.session.session_id,
+                                  "wecom_proxy", "web"),
+                         "system", "wecom_proxy", service_id)
 
     def _web_in_tx(self, cursor, request, service_id, user_id, target_tenant, *, execute=True):
         cursor.execute("SELECT user_id,tenant_id,role,status FROM users WHERE user_id=%s", (user_id,))

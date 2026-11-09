@@ -597,7 +597,7 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     windowOpenSpy.mockRestore()
   })
 
-  it('连接中心：普通租户用户可见 trigger，子菜单仅含本地工具（管理项隐藏）', async () => {
+  it('连接中心：普通租户用户可进入企微会话、每日总结和代理任务，管理项隐藏', async () => {
     // 普通用户（非管理员）
     routeState.path = '/t/test-tenant/chat'
     tenantIsLoggedIn.value = true
@@ -618,12 +618,15 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(flyout).not.toBeNull()
     const flyoutText = flyout!.textContent || ''
     expect(flyoutText).toContain('本地工具')
+    expect(flyoutText).toContain('企业微信会话')
+    expect(flyoutText).toContain('企业微信每日总结')
+    expect(flyoutText).toContain('企业微信代理任务')
     // 管理项对普通用户隐藏
     expect(flyoutText).not.toContain('API配置')
     expect(flyoutText).not.toContain('渠道配置')
   })
 
-  it('连接中心：管理员子菜单含全部 3 项（API配置/渠道配置/本地工具）', async () => {
+  it('连接中心：管理员子菜单包含配置入口和企业微信工作台', async () => {
     const wrapper = mountTenantSidebar()
     await flushPromises()
 
@@ -638,6 +641,27 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(flyoutText).toContain('API配置')
     expect(flyoutText).toContain('渠道配置')
     expect(flyoutText).toContain('本地工具')
+    expect(flyoutText).toContain('企业微信每日总结')
+    expect(flyoutText).toContain('企业微信代理任务')
+  })
+
+  it('连接中心：每日总结和代理任务入口跳转到各自页面', async () => {
+    const wrapper = mountTenantSidebar()
+    await flushPromises()
+    const trigger = findButtonByText(wrapper, '连接中心')
+    for (const [label, path] of [
+      ['企业微信每日总结', '/t/test-tenant/wecom-conversations/daily'],
+      ['企业微信代理任务', '/t/test-tenant/wecom-conversations/proxy'],
+    ]) {
+      await trigger.trigger('mouseenter')
+      await flushPromises()
+      const item = Array.from(findFlyout()!.querySelectorAll('button'))
+        .find(button => button.textContent?.trim() === label)
+      expect(item).toBeTruthy()
+      item!.click()
+      await nextTick()
+      expect(routerPush).toHaveBeenLastCalledWith(path)
+    }
   })
 
   it('数据源门控：默认（未开通任何数据源）管理员子菜单不含「商城产品同步」', async () => {

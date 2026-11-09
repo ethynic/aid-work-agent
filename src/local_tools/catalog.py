@@ -106,6 +106,11 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "wecom_group_poll",
             "wecom_read_sessions",
             "wecom_session_directory",
+            # 代理任务 P4（契约 §2/§3）：两个配置检查工具仅受信配置流程可发起，
+            # 不进 agent_tools（模型不可见，同 session_directory 先例）；
+            # 列入 tools 供设备闸门（device_ready_error）与 claim 行级过滤放行
+            "wecom_config_doctor",
+            "wecom_config_calibrate",
         ],
     },
     # 通用 Skill 脚本执行 Provider（M2，docs/system/runtime-plugin-host-architecture-design.md 第9节）：

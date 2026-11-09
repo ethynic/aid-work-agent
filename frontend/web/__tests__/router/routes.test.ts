@@ -75,6 +75,7 @@ describe('entry route responsibilities', () => {
         "daily-report",
         "wecom-conversations",
         "wecom-conversations/daily",
+        "wecom-conversations/proxy",
         "work-outcomes",
         "my-agents",
         "agent/:subagent_name/prompt",

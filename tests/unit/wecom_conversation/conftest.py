@@ -15,9 +15,12 @@ project_root = Path(__file__).parent.parent.parent.parent
 load_dotenv(project_root / ".env")
 db_url = os.getenv("DATABASE_URL", "")
 
-WECOM_TABLES = ("bs_wecom_daily_summaries", "bs_wecom_messages", "bs_wecom_conversations")
+WECOM_TABLES = ("bs_wecom_proxy_batches", "bs_wecom_proxy_task_sessions", "bs_wecom_proxy_tasks",
+                "bs_wecom_daily_summaries", "bs_wecom_messages", "bs_wecom_conversations")
 
-RECEIPT_TABLES = ("local_tool_invocations", "chat_sessions", "scheduled_tasks")
+RECEIPT_TABLES = ("local_tool_invocations", "chat_sessions", "scheduled_tasks",
+                  # P6 派发/核定测试直插的 Runner 行与权限行（按 tenant_id 清理）
+                  "user_agent_permissions", "subscriptions", "users", "agent_runners")
 
 
 def _cleanup_tenant(tenant_id: str) -> None:

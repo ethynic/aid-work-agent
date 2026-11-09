@@ -96,8 +96,12 @@ const WEIXIN_V2_WRITE_TOOLS: ReadonlySet<string> = new Set(['weixin_message_send
 // ——兼容旧工具及内部恢复，新增批量读取；Agent业务面由云端投影为读/发/批量读三项。
 // search/select 不单独接入（send 类内部已含 search 定位链）；
 // watch_poll/add_customer 不接入（轮询与获客动作不进 runtime 受信面）。
-// 写集合按现 CLI OPERATIONS 的 cli.write：仅三个发送工具为写；probe/unread/
-// read_session 只读（read_session 进会话清角标归 CLI 只读语义，锁屏前置不拦）
+// 代理任务 P3 增加两个配置工具（契约 §3：受信配置流程专用，不进模型工具集，
+// 可见性控制同 session_directory 先例——由云端投影决定，host core 不维护模型清单）。
+// 写集合按现 CLI OPERATIONS 的 cli.write：三个发送工具为写；probe/unread/
+// read_session 只读（read_session 进会话清角标归 CLI 只读语义，锁屏前置不拦）；
+// config_calibrate 为写（CLI cli.write=true：切会话/写标定缓存），沿既有写工具
+// 语义走锁屏前置与崩溃 unknown，不另造门禁；config_doctor 只读不加。
 const WECOM_TOOLS = [
   'wecom_probe',
   'wecom_message_send',
@@ -108,6 +112,8 @@ const WECOM_TOOLS = [
   'wecom_read_session',
   'wecom_read_sessions',
   'wecom_session_directory',
+  'wecom_config_doctor',
+  'wecom_config_calibrate',
   'wecom_unread_list',
 ] as const
 
@@ -115,6 +121,7 @@ const WECOM_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'wecom_message_send',
   'wecom_send_image',
   'wecom_send_file',
+  'wecom_config_calibrate',
 ])
 
 // M2 skill-runner：通用执行器 Provider（进程内 handler，非 MCP stdio）。

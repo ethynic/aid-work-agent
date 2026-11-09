@@ -5854,3 +5854,102 @@ CREATE TABLE IF NOT EXISTS bs_wecom_daily_summaries (
 );
 CREATE INDEX IF NOT EXISTS idx_bs_wecom_daily_summaries_range
     ON bs_wecom_daily_summaries (tenant_id, user_id, business_date DESC);
+
+-- ============================================================================
+-- 企微代理任务三表（代理任务契约 §4，P4；与 src/wecom_conversation/tables.py 同源）
+-- 状态机由服务端维护（无触发器/外键）；Runtime/账号/智能体创建后固定；
+-- 批次表即持久队列（一行一工作项），不另建队列表
+-- ============================================================================
+
+-- 代理任务配置（status: stopped|running|deleted；stop_requested=已请求停止、
+-- 当前批仍在执行；软删除仅可从已停止到达）
+CREATE TABLE IF NOT EXISTS bs_wecom_proxy_tasks (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    profile_id TEXT NOT NULL DEFAULT 'main',
+    instance_id TEXT,
+    device_id UUID NOT NULL,
+    wecom_account_id TEXT NOT NULL,
+    self_user_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    instruction TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'stopped',
+    stop_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    revision BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_tasks_owner
+    ON bs_wecom_proxy_tasks (tenant_id, user_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_tasks_account
+    ON bs_wecom_proxy_tasks (tenant_id, wecom_account_id, status);
+
+-- 任务会话目标（一任务多目标，一工作项一会话；每目标独立游标；
+-- wb1_cursor 可空=未建基线；baseline_origin: initial|edit_join_read；
+-- status: active|halted|removed；web_session_id 按任务＋目标固定）
+CREATE TABLE IF NOT EXISTS bs_wecom_proxy_task_sessions (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    task_id BIGINT NOT NULL,
+    session TEXT NOT NULL,
+    web_session_id TEXT,
+    source_generation TEXT,
+    wb1_cursor TEXT,
+    baseline_origin TEXT,
+    processed_position BIGINT,
+    latest_seen_msg_id BIGINT,
+    -- P7 评审补充（加性）：无候选仅推游标的监控轮次数（空闲读取，零回答 Runner）
+    idle_read_count INTEGER NOT NULL DEFAULT 0,
+    -- P7 评审补充（加性）：最近一次实际监控读取时刻（仅真实读取写入，新建/核定不写）
+    last_checked_at TIMESTAMPTZ,
+    status TEXT NOT NULL DEFAULT 'active',
+    halted_reason TEXT,
+    halted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    UNIQUE (tenant_id, task_id, session)
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_task_sessions_task
+    ON bs_wecom_proxy_task_sessions (tenant_id, task_id, status);
+
+-- 代理批次（持久队列；status: pending|running|waiting|reconcile_hold|
+-- succeeded|failed|ended_by_removal|ended_by_delete；waiting=Runner 持久等待
+-- 可自动恢复重排，reconcile_hold=发送 unknown 待对账不可自动恢复；
+-- input_snapshot=本批入站消息原文与身份，派发与恢复均从快照取内容）
+CREATE TABLE IF NOT EXISTS bs_wecom_proxy_batches (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    task_id BIGINT NOT NULL,
+    session TEXT NOT NULL,
+    batch_end_msg_id BIGINT,
+    input_snapshot JSONB,
+    agent_id TEXT,
+    instruction_snapshot TEXT,
+    web_session_id TEXT,
+    runner_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    submit_text TEXT,
+    end_json JSONB,
+    cli_error TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    -- P7 评审补充（加性）：本批回答 Runner 结算积分累计（重试跨 attempt 累加；
+    -- 取 Runner 终态 public_result.credit_cost，权威仍在 chat_records）
+    credit_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_batches_queue
+    ON bs_wecom_proxy_batches (tenant_id, task_id, session, status);
+CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_batches_task
+    ON bs_wecom_proxy_batches (tenant_id, task_id, status);
+-- 同会话单未决批不变式（代理任务契约 §9.3）：failed→pending 重试一次不受影响
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bs_wecom_proxy_batches_session_undecided
+    ON bs_wecom_proxy_batches (tenant_id, session)
+    WHERE status IN ('pending', 'running', 'waiting', 'reconcile_hold');

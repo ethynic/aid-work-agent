@@ -4,7 +4,7 @@ $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Drawing
 Add-Type 'public class WeComWin32 { public static uint Dpi = 96; public static uint GetDpiForWindow(System.IntPtr h) { return Dpi; } }'
 function Assert-True($Value,[string]$Why) { if (-not $Value) { throw $Why } }
-function Get-WeComWindowInfo { param($Hwnd) return @{W=$script:width;H=800} }
+function Get-WeComWindowInfo { param($Hwnd) return @{W=$script:width;H=$script:height} }
 function Throw-DriverError { param($Code,$Message) throw ('WECOMDRIVE|'+$Code+'|'+$Message) }
 function Invoke-RestMethod { param($Uri,$Method,$Headers,$ContentType,$Body,$TimeoutSec)
     $script:modelCalls++
@@ -20,7 +20,7 @@ $oldLocal=$env:LOCALAPPDATA;$oldUrl=$env:AID_WECOM_SERVER_URL;$oldToken=$env:AID
 $dir=Join-Path $env:TEMP ('wecom-send-points-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $dir | Out-Null
 $env:LOCALAPPDATA=$dir;$env:AID_WECOM_SERVER_URL='https://example.invalid';$env:AID_WECOM_SERVER_TOKEN='synthetic'
-$script:width=1000;$script:shot=Join-Path $dir 'shot.png'
+$script:width=1000;$script:height=800;$script:shot=Join-Path $dir 'shot.png'
 $bmp=[Drawing.Bitmap]::new(1000,800)
 try { $bmp.Save($script:shot,[Drawing.Imaging.ImageFormat]::Png) } finally { $bmp.Dispose() }
 try {
@@ -49,9 +49,16 @@ try {
     $cached=Get-WeComCachedPoints -Hwnd 101
     Assert-True ($cached.source -eq 'cache' -and $cached.x -eq 440 -and $cached.input_x -eq 620) 'same geometry reuses both cached points'
     Assert-True ($script:modelCalls -eq 1) 'cache read must not invoke GLM'
-    $script:width=1100
-    Assert-True ($null -eq (Get-WeComCachedPoints -Hwnd 101)) 'width change invalidates both points'
+    $script:width=1360
+    $grown=Get-WeComCachedPoints -Hwnd 101
+    Assert-True ($grown.source -eq 'cache' -and $grown.x -eq 440 -and $grown.y -eq 38 -and
+        $grown.input_x -eq 620 -and $grown.input_y -eq 710 -and $script:modelCalls -eq 1) 'external contact sidebar width growth keeps both original points without GLM'
+    $script:width=900
+    Assert-True ($null -eq (Get-WeComCachedPoints -Hwnd 101)) 'width shrink invalidates both points'
     $script:width=1000
+    $script:height=700
+    Assert-True ($null -eq (Get-WeComCachedPoints -Hwnd 101)) 'height change invalidates both points'
+    $script:height=800
     [WeComWin32]::Dpi=120
     Assert-True ($null -eq (Get-WeComCachedPoints -Hwnd 101)) 'DPI change invalidates both points'
     [WeComWin32]::Dpi=96

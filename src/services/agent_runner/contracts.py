@@ -49,7 +49,10 @@ class AttachmentRef(BaseModel):
 class SessionQuery(BaseModel):
     session: SessionRef
     # scheduled = 定时任务来源（任务专属会话，scheduler 服务身份提交，设计 §5.1）
-    source: Literal["chat", "wecom_kf", "feishu", "dingtalk", "wecom", "scheduled"] = "chat"
+    # wecom_proxy = 企微代理批次来源（代理任务契约 §6：内部受信提交，无用户
+    # Bearer，非零历史，身份按 bs_wecom_proxy_tasks 持久行核定）
+    source: Literal["chat", "wecom_kf", "feishu", "dingtalk", "wecom", "scheduled",
+                    "wecom_proxy"] = "chat"
     profile_id: str = Field(default="main", min_length=1, max_length=128)
     # Only platform identifiers are submitted for a channel actor. The internal
     # tenant/user are derived from the registered session, never supplied here.

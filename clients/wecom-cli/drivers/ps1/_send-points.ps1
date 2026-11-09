@@ -10,7 +10,8 @@ function Get-WeComCachedPoints([int64]$Hwnd) {
     if (-not (Test-Path -LiteralPath $path)) { return $null }
     try { $point = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json }
     catch { return $null }
-    if ($point.schema -ne 2 -or $point.w -ne $main.W -or $point.h -ne $main.H -or
+    # 外部联系人会自动展开右侧客户栏，只增加主窗宽度；左侧标题和输入区坐标不动。
+    if ($point.schema -ne 2 -or $point.w -gt $main.W -or $point.h -ne $main.H -or
             $point.dpi -ne $dpi -or $point.title_x -isnot [int] -or
             $point.title_y -isnot [int] -or $point.input_x -isnot [int] -or
             $point.input_y -isnot [int] -or $point.title_x -lt 0 -or

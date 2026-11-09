@@ -41,11 +41,12 @@ class RuntimeResources:
                  tenant_id=None, user_id=None, resource_directory=None, isolate_plan=False, session_kind='web',
                  plan_store=None, plan_scope=None, source='chat'):
         # 执行来源驱动装配层工具可见性过滤（根+子一致，设计 §5.3）：
-        # - scheduled：非交互执行，滤除 interactive_only 提问类控制工具
-        #   （ask_user/clarify——definitions 与 dispatch 同一过滤点）；
-        # - 非 chat 来源（渠道/scheduled）：chat_only 工具（仅 web 对话可见，
-        #   当前暂无声明，机制就位）从 registry 注销。
-        non_interactive = source == 'scheduled'
+        # - scheduled / wecom_proxy：非交互执行，滤除 interactive_only 提问类
+        #   控制工具（ask_user/clarify——definitions 与 dispatch 同一过滤点；
+        #   代理批次无网页用户可答，契约 §6 由任务指令自主判断）；
+        # - 非 chat 来源（渠道/scheduled/wecom_proxy）：chat_only 工具（仅 web
+        #   对话可见，当前暂无声明，机制就位）从 registry 注销。
+        non_interactive = source in ('scheduled', 'wecom_proxy')
         self.mode = AgentMode.SUBAGENT if mode == AgentMode.MASTER and not is_master else mode
         self.is_master = self.mode == AgentMode.MASTER
         self.subagent_config = subagent_config
@@ -87,7 +88,9 @@ class RuntimeResources:
             role=ToolAssemblyRole(self.mode.value), subagent_config=subagent_config,
             plan_manager=self.plan_manager, skill_registry=self.skill_registry,
             skill_executor=self.skill_executor, subagent_registry=self.subagent_registry,
-            non_interactive=non_interactive))
+            non_interactive=non_interactive,
+            additional_tools=('wecom_read_session', 'wecom_read_sessions', 'wecom_message_send')
+            if source == 'wecom_proxy' else ()))
         filter_source_visible_tools(self._tool_bundle, source)
         self.tool_registry, self._tool_controls = self._tool_bundle.registry, self._tool_bundle.controls
         self.tool_executor = ToolExecutor(self.tool_registry)

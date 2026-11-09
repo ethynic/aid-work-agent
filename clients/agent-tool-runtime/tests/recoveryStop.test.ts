@@ -99,7 +99,12 @@ test('actual busy call rejects idle-pool recovery; an already obtained manager c
   let stopped = false
   await assert.rejects(providers.recoverIdlePool(async () => { stopped = true }), /BUSY/)
   assert.equal(stopped, false)
-  await old.shutdown(); release()
+  // shutdown 会等待在途启动（资源停止证明要求返回时无残留 launch）：
+  // 必须先发起 shutdown、再放开闸门让搁浅的 prepareLaunch 落地，
+  // 顺序颠倒会与闸门形成循环等待（2026-11-08 死锁修复）
+  const shuttingDown = old.shutdown().catch(() => {})
+  release()
+  await shuttingDown
   assert.ok((await running) instanceof Error)
   assert.equal(old.childPid, null)
   await providers.recoverIdlePool(async () => true)

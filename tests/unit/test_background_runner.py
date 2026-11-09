@@ -76,6 +76,74 @@ class TestRegisterSystemJobs:
         job_ids = [c.kwargs.get("id") for c in m._scheduler.add_job.call_args_list]
         assert "job_system_publish_dispatch" not in job_ids
 
+    def test_registers_wecom_proxy_monitor(self):
+        """企微代理监控循环注册（P5，契约 Q1：background_runner 进程内 10s 轮询）"""
+        from datetime import timedelta
+
+        m = self._make_manager()
+        with patch("src.config.settings.settings") as mock_settings:
+            mock_settings.memory.long_term.enabled = False
+            mock_settings.memory.mid_term.enabled = False
+            mock_settings.memory.cleanup_interval = 300
+
+            m._register_system_jobs()
+
+        calls = {c.kwargs.get("id"): c for c in m._scheduler.add_job.call_args_list}
+        assert "job_system_wecom_proxy_monitor" in calls
+        call = calls["job_system_wecom_proxy_monitor"]
+        assert call.args[1].interval == timedelta(seconds=10)  # trigger 为位置参数
+        assert call.kwargs["max_instances"] == 1  # 整轮未完成不重叠
+        assert call.kwargs["coalesce"] is True
+
+    def test_wecom_proxy_monitor_callback_runs_tick_and_swallows_errors(self):
+        """回调经新 event loop 执行 run_tick（同视频轮询模式）；异常不外抛线程"""
+        from unittest.mock import AsyncMock
+
+        import src.wecom_conversation.proxy_monitor as proxy_monitor
+        from src.scheduler.manager import ScheduledTaskManager
+
+        m = ScheduledTaskManager.__new__(ScheduledTaskManager)
+        with patch.object(proxy_monitor, "run_tick", AsyncMock()) as tick:
+            m._run_wecom_proxy_monitor()
+        tick.assert_awaited_once()
+        with patch.object(proxy_monitor, "run_tick",
+                          AsyncMock(side_effect=RuntimeError("boom"))):
+            m._run_wecom_proxy_monitor()  # 不外抛（异常进日志）
+
+    def test_registers_wecom_proxy_dispatch(self):
+        """企微代理批次派发循环注册（P6，契约 §5/§6：核定/释放/恢复驱动/派发）"""
+        from datetime import timedelta
+
+        m = self._make_manager()
+        with patch("src.config.settings.settings") as mock_settings:
+            mock_settings.memory.long_term.enabled = False
+            mock_settings.memory.mid_term.enabled = False
+            mock_settings.memory.cleanup_interval = 300
+
+            m._register_system_jobs()
+
+        calls = {c.kwargs.get("id"): c for c in m._scheduler.add_job.call_args_list}
+        assert "job_system_wecom_proxy_dispatch" in calls
+        call = calls["job_system_wecom_proxy_dispatch"]
+        assert call.args[1].interval == timedelta(seconds=10)  # trigger 为位置参数
+        assert call.kwargs["max_instances"] == 1  # 整轮未完成不重叠
+        assert call.kwargs["coalesce"] is True
+
+    def test_wecom_proxy_dispatch_callback_runs_tick_and_swallows_errors(self):
+        """派发回调经新 event loop 执行 run_tick；异常不外抛线程"""
+        from unittest.mock import AsyncMock
+
+        import src.wecom_conversation.proxy_dispatcher as proxy_dispatcher
+        from src.scheduler.manager import ScheduledTaskManager
+
+        m = ScheduledTaskManager.__new__(ScheduledTaskManager)
+        with patch.object(proxy_dispatcher, "run_tick", AsyncMock()) as tick:
+            m._run_wecom_proxy_dispatch()
+        tick.assert_awaited_once()
+        with patch.object(proxy_dispatcher, "run_tick",
+                          AsyncMock(side_effect=RuntimeError("boom"))):
+            m._run_wecom_proxy_dispatch()  # 不外抛（异常进日志）
+
 
 # ==================== background_runner import 安全 ====================
 
