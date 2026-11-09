@@ -45,7 +45,8 @@ _TRANSIENT_READ_CODES = frozenset({
 # 会话占用状态：未决批次（pending/running/waiting/reconcile_hold，契约 §4 队列
 # 占用覆盖监控读与回答两阶段）＋仍运行任务的终态 failed。failed 释放队列
 # 位置（其他会话先执行），但原任务仍运行时，监控不得为其消息范围另建新批，
-# 否则绕过 §5 规则 3 的一次重试上限；已停止任务的失败批仅留作历史
+# 否则绕过 §5 规则 3 的一次重试上限；恢复后产生新批时，旧失败批仅留作历史。
+# 已停止任务的失败批也仅留作历史
 _OCCUPYING_BATCH_STATUSES = (
     proxy_tasks.BATCH_PENDING, proxy_tasks.BATCH_RUNNING, proxy_tasks.BATCH_WAITING,
     proxy_tasks.BATCH_RECONCILE_HOLD, proxy_tasks.BATCH_FAILED,
@@ -330,7 +331,7 @@ async def _run_group_locked(items):
 
 
 def _occupied_sessions(tenant_id, sessions):
-    """未决批占用会话；终态失败仅占用仍运行的原任务会话。"""
+    """未决批占用会话；运行任务只有尚未被新批取代的失败批继续占用。"""
     from src.db.database import get_db_connection
 
     with get_db_connection() as conn:
@@ -339,7 +340,10 @@ def _occupied_sessions(tenant_id, sessions):
             '''SELECT DISTINCT b.session FROM bs_wecom_proxy_batches b
                JOIN bs_wecom_proxy_tasks t ON t.id=b.task_id AND t.tenant_id=b.tenant_id
                WHERE b.tenant_id=%s AND b.session=ANY(%s) AND b.status=ANY(%s)
-                 AND (b.status<>%s OR t.status=%s)''',
+                  AND (b.status<>%s OR (t.status=%s AND NOT EXISTS (
+                      SELECT 1 FROM bs_wecom_proxy_batches newer
+                       WHERE newer.tenant_id=b.tenant_id AND newer.task_id=b.task_id
+                         AND newer.session=b.session AND newer.id>b.id)))''',
             (tenant_id, list(sessions), list(_OCCUPYING_BATCH_STATUSES),
              proxy_tasks.BATCH_FAILED, proxy_tasks.TASK_RUNNING))
         return {row['session'] for row in cursor.fetchall()}

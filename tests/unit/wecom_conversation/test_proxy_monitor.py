@@ -370,6 +370,34 @@ async def test_failed_batch_occupies_session_until_p6_resolution(tenant_id):
     assert len(_batch_rows(tenant_id, task['id'])) == 1  # 不为同消息范围另建新批
 
 
+@pytest.mark.asyncio
+async def test_recovered_success_no_longer_occupied_by_old_failed_batch(tenant_id):
+    """人工恢复的新批成功后，旧失败批只留历史，新消息仍须进入下一批。"""
+    locator = _locator(1)
+    _register(tenant_id, locator)
+    task = _create_started(tenant_id, [locator])
+    failed = _make_batch(tenant_id, task['id'], locator)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, failed['id'], 'running')
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, failed['id'], 'failed',
+                                           cli_error='zero_send_retry_exhausted')
+        conn.commit()
+    recovered = _make_batch(tenant_id, task['id'], locator)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, recovered['id'], 'running')
+        proxy_tasks.transition_batch_in_tx(cursor, tenant_id, recovered['id'], 'succeeded')
+        conn.commit()
+
+    read = await _tick([(_page(locator, [_peer(101)], cursor='wb1.after-recovery'), None)])
+
+    read.assert_awaited_once()
+    batches = _batch_rows(tenant_id, task['id'])
+    assert [batch['status'] for batch in batches] == ['failed', 'succeeded', 'pending']
+    assert batches[-1]['batch_end_msg_id'] == 101
+
+
 # ==================== 3. 重启：从持久事实继续 ====================
 
 @pytest.mark.asyncio
