@@ -38,7 +38,7 @@
 | W29 标题复制剪贴板诊断 | 分辨 OLE 读取阻塞、远控接管与 CAS 恢复结果 | ✅ 完成（2026-11-07） | 日志定位 AweSun 阻塞；剪贴板恢复可用后 select/send 真机通过 |
 | W30 无 OCR Agent→Runtime 真机验收 | 使用新版签名插件验收读发；补齐第四项只读目录工具 | ✅ 完成（2026-11-07） | A2/A3/A4 唯一出站回读通过；目录错名/多名/同名/唯一联系人真机通过；Skill 独测 27 项通过 |
 | W31 非文本剪贴板标题复制修复 | 五条标题复制路径只凭本次企微复制核对标题，均覆盖剪贴板 | ✅ 完成（2026-11-09） | 独测 PS 六组、Win32 fresh init、Node 66/66、typecheck/build 通过；真机标定、选择及文本发送本地库核验通过；CR 无阻断；0.2.13 验签并导入本机 Runtime，插件已启用且检查就绪，安装后标定成功。原代理批次 #15 未补发 |
-| W32 标定复用 Runtime 配对身份 | 后台设备鉴权专用接口、Runtime 注入、WeCom CLI 标定依次独立实施 | ✅ 完成（2026-11-09） | 独测后端 53/53＋相邻 API 29/29、Host 3/3、Desktop 17/17、CLI PS 回归、三模块类型检查与构建通过；CR 无阻断。未部署或真机联调；旧插件＋新 Runtime 二进制组合未实测 |
+| W32 标定复用 Runtime 配对身份 | 后台设备鉴权专用接口、Runtime 注入、WeCom CLI 标定依次独立实施 | ✅ 完成（2026-11-09） | 独测后端 53/53＋相邻 API 29/29、Host 3/3、Desktop 17/17、CLI PS 回归、三模块类型检查与构建通过；CR 无阻断；Runtime 0.0.40＋WeCom 0.2.14 验收包验签通过。未部署或真机联调；旧插件＋新 Runtime 二进制组合未实测 |
 
 ## W32 标定复用 Runtime 配对身份（2026-11-09）
 
@@ -48,6 +48,8 @@
 2. Runtime 模块 `clients/agent-tool-runtime/`、`clients/agent-desktop/`：从已保存配对配置与 DPAPI 凭据向 WeCom Provider 注入服务端地址和设备 token；保留旧企微凭据仅供已交付旧插件，新 CLI 不读取；独立验证 WeCom 收到正确身份且其他 Provider 不收到。
 3. WeCom CLI 模块 `clients/wecom-cli/`：截图经专用设备 API 标定，继续检查返回的整数坐标与本人标题；未由 Runtime 提供配对上下文时明确失败，不读取设备凭据文件；验证不依赖旧企微环境变量和请求目标正确。
 4. 组合验收：先完成后台、Runtime、CLI 独立测试和 CodeReview，再签包；部署、安装与真机代理任务保存另按项目授权规则执行。旧客户端仅升级服务端的组合须保持原路径。
+
+发行记录：从提交 `75a40690` 隔离构建 Runtime 0.0.40 与 WeCom 0.2.14 验收包；插件验签、本地库 Python/AES/SQLite 离线检查、Runtime 安装包静态校验、目标 Runtime 与插件兼容核验及打包定向测试全部通过。交付包及两个安装文件已复制到本机 Downloads；复制后的 SHA-256 与交付清单一致：Runtime `c6ccdd0c4e7634aff7a725afaf5a9100910f1908edfb39d8a29a8382a136e905`，WeCom `d460b6de3fdacf9647e0a3ed45f88597ea4bf5f1dcd6fce2a7b741f83af3b3b7`。未安装本机或其他设备，未部署 agent2；服务端新设备 API 仍需发布后才能真机标定。
 
 ## W31 发送标题复制解除原剪贴板纯文本门禁（2026-11-09）
 
