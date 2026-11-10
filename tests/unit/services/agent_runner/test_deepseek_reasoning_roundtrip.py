@@ -35,7 +35,12 @@ def test_private_history_reload_keeps_returned_strings_without_inventing_legacy_
     wire = DeepSeekProvider(api_key="sk-test")._format_messages(messages)
     assert wire[1]["tool_call_id"] == "read-1"
     if reasoning is None:
-        assert "reasoning_content" not in wire[0]
+        # fb6a1eae：思考模式开启时缺失的 reasoning_content 补空串兜底（DeepSeek
+        # 思考模式 API 接受形态，2026-11-03 生产 ai-quotation 事故）
+        assert wire[0]["reasoning_content"] == ""
+        # 思考关闭时不伪造，保持缺失即缺省的历史行为
+        assert "reasoning_content" not in DeepSeekProvider(
+            api_key="sk-test", enable_thinking=False)._format_messages(messages)[0]
     else:
         assert wire[0]["reasoning_content"] == reasoning
 
@@ -60,7 +65,8 @@ def test_new_worker_memory_cache_miss_preserves_private_metadata(monkeypatch, me
     if isinstance(metadata.get("reasoning_content"), str):
         assert wire[0]["reasoning_content"] == metadata["reasoning_content"]
     else:
-        assert "reasoning_content" not in wire[0]
+        # fb6a1eae：思考模式开启时缺失/None 补空串兜底（API 接受形态）
+        assert wire[0]["reasoning_content"] == ""
     assert memory.get_context("session") == messages
     read.assert_called_once_with("session")
 

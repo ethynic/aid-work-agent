@@ -29,7 +29,13 @@ class WriteHistoryCursor:
 
     def execute(self, sql, params=()):
         self.executed.append(sql)
-        self._next = self.session_row if "FROM chat_sessions" in sql else {"now": datetime(2026, 10, 28, 9, 5)}
+        if "FROM chat_sessions" in sql:
+            self._next = self.session_row
+        elif "MAX(created_at)" in sql and "FROM chat_messages" in sql:
+            # 回合块顺序钳制（web 来源）查询会话已有消息的最新时刻；空会话无消息
+            self._next = {"latest": None}
+        else:
+            self._next = {"now": datetime(2026, 10, 28, 9, 5)}
 
     def fetchone(self):
         return copy.deepcopy(self._next)
