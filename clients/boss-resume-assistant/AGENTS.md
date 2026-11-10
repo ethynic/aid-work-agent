@@ -46,7 +46,7 @@
 cd clients/boss-resume-assistant
 npm run build:main      # 编译（tsc -p tsconfig.main.json）→ dist/
 npm run typecheck       # 类型检查（0 错误才能提交）
-bash scripts/test-bounded.sh   # 测试：逐文件 90s 超时、8 并行，默认排除挂死文件（可加文件名子串过滤）
+bash scripts/test-bounded.sh   # 测试：逐文件 90s 超时、8 并行，默认排除挂死文件；可加多个关键词按「或」过滤（文件名含任一即选中）；退出码 0=全过 / 1=有失败 / 2=零匹配（未执行≠通过）
 node dist/src/cli/index.js <command> [--cdp-port 9222]   # 跑 CLI
 ```
 
