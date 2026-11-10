@@ -233,6 +233,25 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册渠道去重清理任务失败: {e}")
 
+        # ===== AI 获客邮件打开记录合并（每 10 分钟）=====
+        # 像素打点直写 bs_ai_lead_gen_opens，本任务按 message_id 聚合合并回
+        # emails.open_count/opens_at（替代技能侧 fetch_opens.py 手动 HTTP 回拉）
+        try:
+            from src.services.lead_opens_sync import sync_opens_once  # noqa: F401
+            self._scheduler.add_job(
+                self._run_lead_opens_sync,
+                IntervalTrigger(seconds=600),
+                id="job_system_lead_opens_sync",
+                name="AI Lead Gen Opens Sync",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册AI获客邮件打开记录合并任务 (interval=600s)")
+        except ImportError:
+            logger.debug("后端日志：lead_opens_sync 尚未实现，跳过")
+        except Exception as e:
+            logger.error(f"后端日志：注册AI获客打开记录合并任务失败: {e}")
+
         # ===== D14：wecom_kf_timeout（async，interval 60s）=====
         try:
             self._scheduler.add_job(
@@ -716,6 +735,23 @@ class ScheduledTaskManager:
             )
         except Exception as e:
             logger.opt(exception=True).error(f"后端日志：Channel dedup cleanup error: {e}")
+
+    # ===== AI 获客邮件打开记录合并回调（同步，每 10 分钟）=====
+    def _run_lead_opens_sync(self):
+        """把 opens 表新增打开事件合并进 emails 表（APScheduler 回调）。
+
+        实现见 src/services/lead_opens_sync.py；表不存在（技能未初始化）时静默跳过。
+        """
+        try:
+            import psycopg2
+            from src.services.lead_opens_sync import sync_opens_once
+            result = sync_opens_once()
+            if result.get("updated") or result.get("has_more"):
+                logger.info(f"后端日志：AI获客打开记录合并 {result}")
+        except psycopg2.errors.UndefinedTable:
+            logger.debug("后端日志：AI获客打开记录合并跳过（opens/emails 表未初始化）")
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：AI获客打开记录合并失败: {e}")
 
     # ===== 已删除租户夜间清理回调（同步）=====
     def _run_tenant_purge(self):

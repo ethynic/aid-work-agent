@@ -470,6 +470,16 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **失效时机**：驱动协程退出时释放；TTL 自动过期兜底（副本异常退出时），失锁后按 `LOCK_RETRY_SECONDS`（30s）空转重抢
 **源文件**：`src/wechat_mp/scheduler.py`、`src/tenant_custom/hongtao_shop/scheduler.py`（前缀注册：`src/core/cache_utils.py`）
 
+### 7.7 AI 获客打开记录合并水位
+
+AI 获客邮件打开追踪的定时合并任务（每 10 分钟）记录已扫描的 `bs_ai_lead_gen_opens.id` 水位，下轮只扫描增量打开事件。
+
+**存储**：Redis + 内存降级
+**键模式**：`ailg_opens_sync:watermark`（全局唯一，无 identifier 维度）
+**TTL**：无（持久键）
+**失效时机**：不失效（水位单调递增）；Redis 不可用时降级内存（仅当前进程有效，调度器单实例运行不影响正确性，退化行为是从 0 重扫，聚合幂等）
+**源文件**：`src/services/lead_opens_sync.py`（前缀注册：`src/core/cache_utils.py`）
+
 ---
 
 ## 8. 去重缓存（PostgreSQL）
