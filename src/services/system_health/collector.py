@@ -133,13 +133,15 @@ def _collect_runner_section() -> "tuple[Dict[str, Any], List[str]]":
         )
         section["oldest_queued_seconds"] = int(cur.fetchone()["s"] or 0)
 
-        # 今日排队等待分位（accepted -> 首次 running）与 attempt 重试占比
+        # 今日排队等待分位（accepted -> 首次 claim）与 attempt 重试占比。
+        # attempt 语义：acquire_claim 每次 claim 自增（首 claim 0->1），故 attempt>=2 才是重试；
+        # 重试行的 execution_started_at 是最后一次 claim 时间（含重试间隔），不计入排队等待分位。
         cur.execute(
             "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY "
-            "  EXTRACT(EPOCH FROM (execution_started_at - accepted_at))) AS p50, "
+            "  EXTRACT(EPOCH FROM (execution_started_at - accepted_at))) FILTER (WHERE attempt <= 1) AS p50, "
             "percentile_cont(0.95) WITHIN GROUP (ORDER BY "
-            "  EXTRACT(EPOCH FROM (execution_started_at - accepted_at))) AS p95, "
-            "COUNT(*) AS started, COUNT(*) FILTER (WHERE attempt > 0) AS retried "
+            "  EXTRACT(EPOCH FROM (execution_started_at - accepted_at))) FILTER (WHERE attempt <= 1) AS p95, "
+            "COUNT(*) AS started, COUNT(*) FILTER (WHERE attempt > 1) AS retried "
             "FROM agent_runners "
             "WHERE execution_started_at IS NOT NULL "
             "  AND accepted_at >= date_trunc('day', clock_timestamp())"
