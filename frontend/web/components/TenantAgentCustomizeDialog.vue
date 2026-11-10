@@ -6,7 +6,7 @@
         <h4 class="text-sm font-semibold text-default mb-2">基础信息</h4>
         <div>
           <label class="text-xs text-muted mb-1 block">显示名（留空继承父定义）</label>
-          <BaseInput v-model="form.display_name" size="sm" placeholder="留空则使用默认名称" :disabled="saving" />
+          <BaseInput v-model="form.display_name" size="sm" class="w-1/4 min-w-56" placeholder="留空则使用默认名称" :disabled="saving" />
         </div>
       </section>
 
@@ -19,7 +19,7 @@
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-2">
           <div>
             <label class="text-xs text-muted mb-1 block">LLM 提供者</label>
-            <BaseSelect v-model="form.llm_provider" size="sm" :disabled="saving">
+            <BaseSelect v-model="form.llm_provider" size="sm" class="w-1/4 min-w-56" :disabled="saving">
               <option value="">留空（继承父定义）</option>
               <option value="deepseek">deepseek</option>
               <option value="qwen">qwen</option>
@@ -30,7 +30,7 @@
         <div>
           <label class="text-sm text-muted mb-1 block">各 Provider Model 覆盖</label>
           <div class="bg-canvas rounded-lg p-2 space-y-1.5">
-            <div v-for="p in LLM_PROVIDERS" :key="p" class="grid grid-cols-[80px_1fr] items-center gap-2">
+            <div v-for="p in LLM_PROVIDERS" :key="p" class="grid grid-cols-[80px_280px] items-center gap-2">
               <span class="text-xs text-muted">{{ p }}</span>
               <input
                 v-model="form.llm_model_codes[p]"
