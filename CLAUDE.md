@@ -25,6 +25,7 @@
 | [.claude/rules/powershell.md](.claude/rules/powershell.md) | **PowerShell 脚本规范**：UTF-8 BOM、字符串插值用 `-f`、HTTP 用 curl.exe、外部 API 重试、写完强制 ParseFile 检查 |
 | [.claude/rules/docs_style.md](.claude/rules/docs_style.md) | **文档写作规范**：箭头统一用 `->`（U+2192）、破折号统一用 `--`；编辑文档前先探测实际字符，避免视觉相同字符导致 Edit 失败 |
 | [.claude/rules/knowledge_retrieval.md](.claude/rules/knowledge_retrieval.md) | **知识库检索规范**：所有搜索/读取知识库的工具、技能、独立 API 必须支持跨租户共享搜索（`load_shared_ranges` 三种模式 A/B/C），新增检索入口必读 |
+| [.claude/rules/git_parallel_sessions.md](.claude/rules/git_parallel_sessions.md) | **并行会话 Git 协作纪律**：多会话共享工作区时 stash/rebase 前先盘点他方改动（遇脏区先问用户）、勤提交缩小脏区窗口、误丢先查 stash list/reflog |
 
 **回答简洁**：每个响应不超过 5000 个 token
 **代码输出**：只输出修改的部分，不要输出完整文件
