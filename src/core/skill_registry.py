@@ -580,9 +580,10 @@ class SkillRegistry:
 
     def get_skill_tool_definition(self) -> Dict:
         """
-        获取Skill工具定义（仅包含允许的 skills）
+        获取Skill工具定义（仅使用规则，不含技能名单）
 
-        用于LLM function calling。
+        用于LLM function calling。技能名单只保留系统提示一处
+        （{skill_descriptions}），本定义保持稳定文本，避免每轮重复注入。
 
         Returns:
             工具定义字典
@@ -603,15 +604,9 @@ class SkillRegistry:
                 },
             }
 
-        # 只生成允许的 skills 描述（含 argument_hint）
-        skill_list = "\n".join(
-            f"- {name}: {skill.description}" + (f" (args: {skill.argument_hint})" if skill.argument_hint else "")
-            for name, skill in self._skills.items()
-        )
-
         return {
             "name": "use_skill",
-            "description": f"""加载技能，获取完整的操作指南（SKILL.md 正文）。技能本质是给 LLM 的操作手册，加载后根据手册指引决定下一步操作。
+            "description": """加载技能，获取完整的操作指南（SKILL.md 正文）。技能本质是给 LLM 的操作手册，加载后根据手册指引决定下一步操作。
 
 **使用流程：**
 1. 调用 use_skill(skill="技能名") 加载技能，获取操作指南
@@ -622,10 +617,7 @@ class SkillRegistry:
    - 手册给出多步骤工作流 → 按步骤逐步执行
 3. 所有步骤完成后，直接给出最终回复
 
-**注意：** 不要跳过步骤，严格按操作指南执行。不同技能的行为完全由其操作指南决定（有些需要执行脚本，有些是纯引导式的工作流）。
-
-可用技能：
-{skill_list}""",
+**注意：** 不要跳过步骤，严格按操作指南执行。不同技能的行为完全由其操作指南决定（有些需要执行脚本，有些是纯引导式的工作流）。""",
             "input_schema": {
                 "type": "object",
                 "properties": {
