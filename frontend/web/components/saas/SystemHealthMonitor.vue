@@ -87,7 +87,9 @@
             </div>
             <div class="flex justify-between">
               <span class="text-muted">今日重试占比 (attempt&gt;1)</span>
-              <span class="text-default">{{ fmtPercent(runner?.retried_share_today) }}</span>
+              <span :title="retryShareTitle" class="text-default">
+                {{ fmtPercent(runner?.retried_share_today) }}{{ retryShareSuffix }}
+              </span>
             </div>
             <div class="flex justify-between">
               <span class="text-muted">活跃告警</span>
@@ -343,6 +345,14 @@ let runnersTimer: number | undefined
 
 const runner = computed(() => overview.value?.snapshot?.runner)
 const system = computed(() => overview.value?.snapshot?.system)
+// 重试占比样本不足（<10）时后端置 null，展示原始计数帮助解读
+const retryShareSuffix = computed(() => {
+  const r = runner.value
+  if (!r) return ''
+  if (r.retried_share_today == null) return `（样本不足，重试 ${r.runner_retried_today ?? 0}/${r.runner_started_today ?? 0}）`
+  return `（${r.runner_retried_today ?? 0}/${r.runner_started_today ?? 0}）`
+})
+const retryShareTitle = computed(() => 'attempt>1 的任务数 / 今日已启动任务数；启动数不足 10 时不计算占比')
 const business = computed(() => overview.value?.snapshot?.business)
 const middleware = computed(() => overview.value?.snapshot?.middleware)
 

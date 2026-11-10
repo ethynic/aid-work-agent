@@ -34,6 +34,10 @@ STALL_ROUND_THRESHOLD = 20
 # 与 RunnerAlertRepository.candidates 同口径的容量上限（slot 拓扑约束，超出即异常）
 RUNNER_SCAN_LIMIT = 1024
 
+# 今日重试占比的最小样本数：任务基数小时占比被极少数重试放大（如 3/18=16.7%），
+# 不足以代表调度稳定性，置 None 跳过阈值离散（缺失指标不进研判哈希）
+RETRY_SHARE_MIN_SAMPLES = 10
+
 ACTIVE_STATUSES = ("queued", "running", "waiting", "paused", "interrupted", "finalizing")
 FINGERPRINT_STATUSES = ("queued", "running", "waiting", "paused", "interrupted", "finalizing")
 
@@ -82,6 +86,13 @@ def is_runner_stalled(stall: Dict[str, Any], queued_count: int) -> bool:
     长任务告警（agent-runner-monitor）兜底，DB 指纹无法区分慢任务与卡死。
     """
     return queued_count > 0 and int(stall.get("stalled_rounds", 0)) >= STALL_ROUND_THRESHOLD
+
+
+def retried_share_of(started: int, retried: int) -> Optional[float]:
+    """今日重试占比；样本不足 RETRY_SHARE_MIN_SAMPLES 时置 None（不参与研判）。"""
+    if started < RETRY_SHARE_MIN_SAMPLES:
+        return None
+    return round(retried / started, 4)
 
 
 def _percentile(values: List[float], pct: float) -> Optional[float]:
@@ -150,7 +161,9 @@ def _collect_runner_section() -> "tuple[Dict[str, Any], List[str]]":
         started = int(row["started"] or 0)
         section["wait_p50_seconds"] = round(float(row["p50"]), 1) if row["p50"] is not None else None
         section["wait_p95_seconds"] = round(float(row["p95"]), 1) if row["p95"] is not None else None
-        section["retried_share_today"] = round(int(row["retried"]) / started, 4) if started else None
+        section["runner_started_today"] = started
+        section["runner_retried_today"] = int(row["retried"] or 0)
+        section["retried_share_today"] = retried_share_of(started, section["runner_retried_today"])
 
         # 调度推进活性指纹（active 行全量；slot 拓扑约束行数，超限视为异常值）
         cur.execute(
