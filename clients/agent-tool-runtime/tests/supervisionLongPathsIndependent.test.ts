@@ -16,9 +16,12 @@ const { dpapiProtect, dpapiUnprotect, trustedSystemPowerShell } = await import(b
 const { checkConnectionRecoveryResources } = await import(built('connectionRecoveryResources'))
 const { configureRuntimeHome } = await import(built('config'))
 const { ProviderManager } = await import(built('providerManager'))
+const { ProcessSupervision } = await import(built('processSupervision'))
+const { loadSkillDir, SkillRunnerHandler } = await import(built('skillRunner'))
 const helper = join(runtime, 'dist/src/native/RuntimeProcessSupervisor.exe')
 const installedNode = resolve(process.env.AID_SUPERVISION_TEST_NODE ?? process.execPath)
 const bossPayload = process.env.AID_SUPERVISION_TEST_BOSS_PAYLOAD
+const pythonExecutable = process.env.AID_SUPERVISION_TEST_PYTHON
 const output = join(repo, 'clients/agent-desktop/build/supervision-longpaths-independent')
 mkdirSync(output, { recursive: true })
 const results: Record<string, unknown>[] = []
@@ -231,6 +234,56 @@ test('the old Runtime Local writer can still be stopped and confirmed', { skip: 
   assert.equal(await done, 0)
   assert.equal(alive(ready.node), false)
   await receiptProof(f.receipt, job, process.pid, 'node-exited')
+})
+
+test('Windows Python preserves argv and exit status while normal, aborted and timed-out Jobs stop their descendants', { skip: process.platform !== 'win32' || !pythonExecutable, timeout: 35_000 }, async t => {
+  const f = fixture(t)
+  const skills = join(f.root, '技能 目录'), skill = join(skills, 'fixture-skill')
+  mkdirSync(skill, { recursive: true })
+  writeFileSync(join(skill, 'SKILL.md'), '---\nname: fixture-skill\nmetadata:\n  entry: run.py\n---\n')
+  writeFileSync(join(skill, 'run.py'), `import json, os, subprocess, sys, time
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(90)'], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+print(json.dumps(dict(node=os.getpid(), child=child.pid, args=sys.argv[1:], cwd=os.getcwd(), stdin=sys.stdin.read())), flush=True)
+if sys.argv[1] in ('success', 'return'):
+    sys.exit(0 if sys.argv[1] == 'success' else 7)
+time.sleep(90)
+`)
+  writeFileSync(join(f.root, 'config.json'), JSON.stringify({ skills: { python: pythonExecutable } }))
+  const supervision = new ProcessSupervision(f.root, installedNode)
+  const instance = randomUUID()
+  const marker = JSON.stringify({ instance_id: instance, ...await supervision.marker(instance) })
+  let stopJob: (() => Promise<void>) | undefined
+  const handler = new SkillRunnerHandler({ skillsDir: skills, pythonPath: pythonExecutable!,
+    prepareSpawn: async (python: string, argv: string[], cwd: string) => {
+      const launch = await supervision.preparePythonLaunch(python, argv, cwd)
+      f.jobs.push(launch.args[2])
+      stopJob = launch.stop
+      return launch
+    } })
+  const skillFixture = loadSkillDir(skill)
+  assert.ok(skillFixture)
+  for (const [mode, expected] of [['success', undefined], ['return', 'SKILL_EXIT_NONZERO'], ['abort', 'SKILL_ABORTED'], ['timeout', 'SKILL_TIMEOUT'], ['recover', 'SKILL_EXIT_NONZERO']] as const) {
+    const controller = new AbortController()
+    const args = [mode, '中文 空格', 'a"b\\c']
+    let ready: { node: number; child: number; args: string[]; cwd: string; stdin: string } | undefined
+    let recovered: Promise<void> | undefined
+    const result = await handler.callTool('skill_script_run', { skill: 'fixture-skill', entry: 'run.py', exec_hash: skillFixture.execHash, args,
+      timeout_seconds: mode === 'timeout' ? 2 : 15 }, { signal: controller.signal, onProgress: ({ message }: { message: string }) => {
+      ready = JSON.parse(message)
+      if (mode === 'abort') controller.abort()
+      if (mode === 'recover') recovered = stopJob?.()
+    } })
+    await recovered
+    assert.equal(result.code, expected)
+    if (mode === 'success') { assert.equal(result.success, true); assert.equal(result.data.exit_code, 0) }
+    if (mode === 'return') assert.equal(result.data.exit_code, 7)
+    assert.ok(ready, 'Actual Python should reach its script entry before cleanup')
+    assert.deepEqual(ready.args, args)
+    assert.equal(ready.cwd, skill)
+    assert.equal(ready.stdin, '')
+    await until(() => !alive(ready!.node) && !alive(ready!.child), 'The Job must stop Python and its detached-process-group descendant')
+  }
+  assert.equal(await supervision.recover(marker), true, 'Configured and previously run Python does not leave a hold after the Job has stopped')
 })
 
 test('a historical reboot witness is retained but does not block or release a Global Job', { skip: process.platform !== 'win32', timeout: 30_000 }, async t => {

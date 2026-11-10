@@ -37,6 +37,7 @@ const asar = path.join(resources, 'app.asar')
 const entries = listPackage(asar).map(file => file.replaceAll('\\', '/'))
 if (!entries.includes('/dist/electron/runtimeStartup.js')) throw new Error('Runtime login startup adapter missing from packaged app')
 if (!entries.includes('/dist/electron/runtimeUpdate.js') || !existsSync(path.join(path.dirname(product.hostEntry), 'native/RuntimeProcessSupervisor.exe'))) throw new Error('Runtime upgrade recovery assets missing')
+if (!existsSync(path.join(path.dirname(product.hostEntry), 'pythonJobEntry.js'))) throw new Error('Runtime supervised Python entry missing')
 for (const required of ['/dist/electron/main.js', '/dist/electron/preload.cjs', '/dist/electron/productConfiguration.js', '/dist/electron/runtimeSupervisor.js', '/dist/electron/runtimeSelection.js', '/dist/renderer/index.html']) {
   if (!entries.includes(required)) throw new Error(`Runtime app.asar missing ${required}`)
 }

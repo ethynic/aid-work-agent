@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { fork, spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,7 +18,9 @@ import { main } from '../src/cli.js'
 import { appendJournalEntry } from '../src/journal.js'
 import { ResultOutbox, resultOutboxDir } from '../src/resultOutbox.js'
 import { openRuntimeHost } from '../src/runtimeHost.js'
+import { dpapiProtect } from '../src/dpapi.js'
 import { ManagementError } from '@aid/local-tool-host-core'
+import { recordOperationAck } from '@aid/local-tool-host-core/legacy/completionProof'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -108,6 +110,103 @@ test('independent: an event ACK returning after shutdown cannot submit a new ope
   } finally { engine.shutdown(); sync.resolve(); await running; rmSync(home, { recursive: true, force: true }) }
 })
 
+test('a metadata-only session can receive new events on a new assignment without repeating its opening', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'host-independent-old-assignment-'))
+  const old = new SessionStore({ runtimeHome: home, assignmentId: assignment.assignment_id, crypto })
+  await old.writeMeta({ task_id: assignment.task_id, conversation_binding_id: assignment.conversation_binding_id,
+    spec: assignment.spec, spec_revision: assignment.spec_revision, fence: assignment.fence, control_epoch: assignment.control_epoch,
+    binding_version: assignment.binding_version, account_identity_version: assignment.account_identity_version })
+  const next = { ...assignment, assignment_id: randomUUID(), fence: 2 }
+  const unrelated = { ...assignment, task_id: randomUUID(), assignment_id: randomUUID() }
+  const offers = [assignment, next, unrelated]
+  const fake = sessionApi()
+  const observed: string[] = []
+  const decisions: Array<{ id: string; batch: string }> = []
+  const oldCalls: string[] = []
+  const api = { ...fake.api,
+    sessionTaskClaim: async () => offers.shift() ?? null,
+    sessionTaskRenew: async (id: string) => { if (id === assignment.assignment_id) oldCalls.push('renew'); return fake.api.sessionTaskRenew() },
+    sessionTaskEvents: async (id: string, payload: Parameters<typeof fake.api.sessionTaskEvents>[1]) => {
+      if (id === assignment.assignment_id) oldCalls.push('events')
+      return fake.api.sessionTaskEvents(id, payload)
+    },
+    sessionTaskCreateDecision: async (id: string, body: { batch_id: string }) => {
+      decisions.push({ id, batch: body.batch_id }); return fake.api.sessionTaskCreateDecision()
+    },
+  }
+  const engine = new SessionTaskEngine({ api: api as unknown as ApiClient, runtimeHome: home, crypto,
+    runtimeInstanceId: 'new-after-interruption', resumePriorAssignments: false, claimIntervalMs: 1, batchSilenceMs: 1, batchMaxWaitMs: 1,
+    observer: async (task, input) => {
+      observed.push(task.taskId)
+      return { ...observation(), ordered_messages: input.watermark && task.taskId === assignment.task_id ? [{
+        local_message_id: 'new-after-baseline', source_evidence_ref: 'fixture', sender: 'peer', text: 'new event',
+      }] : [] }
+    } })
+  const running = engine.run()
+  try {
+    await waitFor(() => observed.includes(unrelated.task_id) && decisions.some(item => item.id === next.assignment_id), 'same task and unrelated task can receive new input', 6_000)
+    assert.equal(decisions.some(item => item.id === next.assignment_id && item.batch === 'opening'), false)
+    assert.deepEqual(oldCalls, [])
+    assert.match(engine.logPathFor(assignment.task_id)!, new RegExp(next.assignment_id))
+  } finally { engine.shutdown(); await running; await engine.drain(); rmSync(home, { recursive: true, force: true }) }
+})
+
+test('new session generations accept later input without looking up or sending any old operation', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'host-independent-old-send-'))
+  const prior = ['unknown', 'ack-no-journal', 'ack-with-journal'].map(outcome => ({ outcome, task: { ...assignment,
+    task_id: randomUUID(), assignment_id: randomUUID() }, invocationId: randomUUID() }))
+  const next = [...prior.map(({ task }) => ({ ...task, assignment_id: randomUUID(), fence: 2 })),
+    { ...assignment, task_id: randomUUID(), assignment_id: randomUUID(), fence: 2 }]
+  const permitId = randomUUID(), requestId = randomUUID()
+  writeFileSync(join(home, 'config.json'), JSON.stringify({ server: 'https://runtime.invalid', device_id: 'fixture' }))
+  const retained = new Map<string, string>()
+  for (const { task, invocationId, outcome } of prior) {
+    const store = new SessionStore({ runtimeHome: home, assignmentId: task.assignment_id, crypto })
+    await store.writeMeta({ task_id: task.task_id, conversation_binding_id: task.conversation_binding_id,
+      spec: task.spec, spec_revision: task.spec_revision, fence: task.fence, control_epoch: task.control_epoch,
+      binding_version: task.binding_version, account_identity_version: task.account_identity_version })
+    await store.appendEncrypted(randomUUID(), 'execution_phase', { invocation_id: invocationId, decision_id: randomUUID(), phase_to: 'executing' }, task.fence)
+    if (outcome !== 'unknown') {
+      await store.appendEncrypted(randomUUID(), 'execution_phase', { invocation_id: invocationId, phase_to: 'waiting_peer', outcome: 'reported' }, task.fence)
+      writeFileSync(join(home, 'session-tasks', task.assignment_id, '.acked'), '2')
+    }
+    if (outcome !== 'ack-no-journal') appendJournalEntry(home, { ts: new Date().toISOString(), invocation_id: invocationId,
+      request_id: requestId, permit_id: permitId, phase: 'may_have_started' })
+    if (outcome === 'ack-with-journal') recordOperationAck(home, invocationId, { claim_token: 'original', request_id: requestId,
+      permit_id: permitId, effect: 'applied', phase: 'verified', safe_to_retry: false }, { state: 'succeeded', effect: 'applied' })
+    const events = join(home, 'session-tasks', task.assignment_id, 'events.jsonl')
+    retained.set(events, readFileSync(events, 'utf8'))
+  }
+  const offers = [...prior.map(item => item.task), ...next]
+  const oldIds = new Set<string>(prior.map(item => item.task.assignment_id))
+  const oldCalls: string[] = [], batched = new Set<string>(), decisions: string[] = []
+  const fake = sessionApi()
+  const api = { ...fake.api,
+    sessionTaskClaim: async () => offers.shift() ?? null,
+    sessionTaskRenew: async (id: string) => { if (oldIds.has(id)) oldCalls.push('renew'); return fake.api.sessionTaskRenew() },
+    sessionTaskEvents: async (id: string, payload: Parameters<typeof fake.api.sessionTaskEvents>[1]) => {
+      if (oldIds.has(id)) oldCalls.push('events')
+      if (payload.records.some(record => record.type === 'batch')) batched.add(id)
+      return fake.api.sessionTaskEvents(id, payload)
+    },
+    sessionTaskCreateDecision: async (_id: string, body: { batch_id: string }) => { decisions.push(body.batch_id); return fake.api.sessionTaskCreateDecision() },
+    sessionTaskClaimInvocation: async () => { oldCalls.push('targeted claim'); return { invocation: null, state: 'queued' } },
+    sessionTaskGetDecision: async () => ({ decision_id: 'test-decision', status: 'superseded' }),
+  }
+  const engine = new SessionTaskEngine({ api: api as unknown as ApiClient, runtimeHome: home, crypto,
+    runtimeInstanceId: 'new-after-send', resumePriorAssignments: false, claimIntervalMs: 1, batchSilenceMs: 1, batchMaxWaitMs: 1,
+    observer: async (task, input) => ({ ...observation(), ordered_messages: input.watermark ? [{
+      local_message_id: `new-${task.taskId}`, source_evidence_ref: 'fixture', sender: 'peer', text: 'new event',
+    }] : [] }) })
+  const running = engine.run()
+  try {
+    await waitFor(() => next.every(item => batched.has(item.assignment_id)), 'every new generation accepts a genuinely later message', 7_000)
+    assert.deepEqual(oldCalls, [])
+    assert.equal(decisions.includes('opening'), false, 'A newer fence suppresses opening even with no local history')
+    for (const [path, before] of retained) assert.equal(readFileSync(path, 'utf8'), before)
+  } finally { engine.shutdown(); await running; await engine.drain(); rmSync(home, { recursive: true, force: true }) }
+})
+
 test('independent: drain awaits an accepted session runner and ACKs its final execution fact', async () => {
   const home = mkdtempSync(join(tmpdir(), 'host-independent-session-'))
   const runner = deferred<void>()
@@ -132,6 +231,30 @@ test('independent: drain awaits an accepted session runner and ACKs its final ex
   } finally { engine.shutdown(); runner.resolve(); await running; rmSync(home, { recursive: true, force: true }) }
 })
 
+test('an already accepted session runner can finish its original fact after its generation is replaced', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'host-independent-replaced-runner-'))
+  const original = deferred<void>()
+  const next = { ...assignment, assignment_id: randomUUID(), fence: 2 }
+  let offers = [assignment], invoked = 0
+  const fake = sessionApi()
+  fake.api.sessionTaskClaim = async () => offers.shift() ?? null
+  const engine = new SessionTaskEngine({ api: fake.api as unknown as ApiClient, runtimeHome: home, crypto,
+    runtimeInstanceId: 'replacement', resumePriorAssignments: false, claimIntervalMs: 1,
+    observer: async () => observation(), runInvocation: async () => { invoked++; await original.promise } })
+  const running = engine.run()
+  try {
+    await waitFor(() => invoked === 1, 'accepted original runner')
+    offers = [next]
+    await waitFor(() => engine.logPathFor(assignment.task_id)?.endsWith(next.assignment_id) === true, 'new assignment adopted')
+    original.resolve()
+    engine.shutdown(); await running; await engine.drain()
+    const store = new SessionStore({ runtimeHome: home, assignmentId: assignment.assignment_id, crypto })
+    assert.ok((await store.replay()).events.some(event => event.record.type === 'execution_phase'
+      && (event.payload as { outcome?: string }).outcome === 'reported'), 'Completion remains in the accepted original generation')
+    assert.equal(invoked, 1)
+  } finally { original.resolve(); engine.shutdown(); await running; rmSync(home, { recursive: true, force: true }) }
+})
+
 test('independent: PollLoop drain preserves progress and successful result while leaving the next invocation queued', async () => {
   const stack = await startTestStack({ progressIntervalMs: 40, heartbeatIntervalMs: 40 })
   try {
@@ -147,6 +270,82 @@ test('independent: PollLoop drain preserves progress and successful result while
     assert.ok(stack.cloud.heartbeatCount(stack.token) > heartbeatsAtStop, 'Heartbeats must stay alive while an action drains')
     assert.equal(stack.cloud.getInvocation(next)?.state, 'queued', 'Stop closes new claim admission')
   } finally { await stack.stop() }
+})
+
+test('original identity and receipt recover while an unrelated database task runs and stale desktop claims do not start', { skip: process.platform !== 'win32', timeout: 55_000 }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'host-independent-resource-'))
+  const cloud = new FakeCloud(); await cloud.start()
+  let host: Awaited<ReturnType<typeof openRuntimeHost>> | undefined
+  const providerEntry = join(dirname(fileURLToPath(import.meta.url)), 'helpers', 'fakeProvider.js')
+  const callLog = join(home, 'provider-calls.jsonl')
+  const generation = randomUUID(), job = `AidWorkRuntime.${randomUUID()}`, bootId = randomUUID(), sessionId = 0x7fffffff
+  const marker = JSON.stringify({ instance_id: generation, schemaVersion: 2,
+    supervision: await dpapiProtect(JSON.stringify({ generation, home, bootId, sessionId, rebootOnly: false })) })
+  const device = cloud.createDeviceDirectly()
+  const credentials = await dpapiProtect(device.token)
+  const command = async (method: 'start' | 'stop', request_key: string) => {
+    const first = await host!.request({ request_id: randomUUID(), method, params: { request_key } })
+    assert.equal(first.code, 0)
+    let operation = first.result as { status: string; operation_id: string }
+    const deadline = Date.now() + 10_000
+    while (operation.status === 'running') {
+      assert.ok(Date.now() < deadline, `${method} must settle`)
+      await delay(25)
+      const poll = await host!.request({ request_id: randomUUID(), method: 'operations.get', params: { operation_id: operation.operation_id } })
+      operation = poll.result as typeof operation
+    }
+    assert.equal(operation.status, 'succeeded', JSON.stringify(operation))
+  }
+  try {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ server: cloud.baseUrl, device_id: device.device_id,
+      providers: { wecom: { entry: providerEntry }, 'boss-recruiting': { entry: providerEntry } } }))
+    writeFileSync(join(home, 'credentials.bin'), credentials)
+    writeFileSync(join(home, 'host-running.json'), marker)
+    mkdirSync(join(home, 'process-supervision'))
+    writeFileSync(join(home, 'process-supervision', `${generation}.bin`), await dpapiProtect(JSON.stringify({
+      schemaVersion: 1, generation, home, bootId, sessionId, ownerPid: 12345, jobs: [job],
+    })))
+    writeFileSync(join(home, 'process-supervision', `${job}.receipt.json`), JSON.stringify({ schemaVersion: 1,
+      protectedData: await dpapiProtect(JSON.stringify({ schemaVersion: 1, jobName: job, ownerPid: 12345,
+        nodePid: 54321, processStopped: true, remainingBusinessApps: 1 })) }))
+    const old = cloud.enqueueInvocation('boss_greet')
+    const claimed = await new ApiClient(cloud.baseUrl, device.token).claim(0)
+    assert.equal(claimed?.invocation_id, old)
+    const result = { claim_token: claimed!.claim_token, success: true, effect: 'applied' }
+    new ResultOutbox(resultOutboxDir(home)).saveLegacy(old, result)
+    for (const attempt of [1, 2]) {
+      const startHeartbeat = cloud.heartbeatCount(device.token)
+      const stale = cloud.enqueueInvocation('boss_greet', { call_log_file: callLog }, { provider: null })
+      const staleObservation = cloud.enqueueInvocation('runtime_recovery_observe', { version: 2 }, { provider: 'runtime-recovery' })
+      const safe = cloud.enqueueInvocation('wecom_read_sessions', { call_log_file: callLog }, { provider: 'wecom' })
+      host = await openRuntimeHost({ home, supervisor: 'runtime_app', cleanGeneration: true })
+      assert.equal(host.recoveredAfterInterruption, false)
+      assert.equal(host.interruptedExecution, attempt === 1)
+      await command('start', `resource-start-${attempt}`)
+      await cloud.waitFor(() => cloud.getInvocation(safe)?.state === 'succeeded', 16_000, 'unrelated WeCom database call')
+      assert.ok(cloud.heartbeatCount(device.token) > startHeartbeat)
+      const advertised = cloud.lastCapabilities(device.token)
+      assert.deepEqual(advertised?.providers, ['wecom'])
+      assert.deepEqual(advertised?.capabilities, ['local_v2', 'wecom_read_sessions'])
+      assert.equal((host.getState().device as { device_id?: string })?.device_id, device.device_id)
+      assert.deepEqual(cloud.callsFor(old).map(call => call.payload), [result])
+      assert.deepEqual(cloud.callsFor(stale).map(call => call.type), ['result'], 'Legacy null provider cannot reach started')
+      assert.equal(cloud.getInvocation(stale)?.result?.code, 'DESKTOP_RESOURCE_BUSY')
+      assert.deepEqual(cloud.callsFor(staleObservation).map(call => call.type), ['result'], 'Stale automatic observation cannot reach started')
+      assert.equal(cloud.getInvocation(staleObservation)?.result?.code, 'TOOL_NOT_ALLOWED')
+      assert.equal(readFileSync(join(home, 'credentials.bin'), 'utf8'), credentials)
+      const pending = readdirSync(home).filter(name => name.startsWith('host-resource-pending-'))
+      assert.equal(pending.length, 1)
+      assert.equal(readFileSync(join(home, pending[0]!), 'utf8'), marker)
+      await command('stop', `resource-stop-${attempt}`)
+      await host.dispose(); host = undefined
+    }
+    assert.deepEqual(readFileSync(callLog, 'utf8').trim().split('\n').map(line => JSON.parse(line).name), ['wecom_read_sessions', 'wecom_read_sessions'])
+    assert.equal(cloud.lastPairToken, null)
+  } finally {
+    if (host) { await command('stop', 'resource-cleanup').catch(() => {}); await host.dispose().catch(() => {}) }
+    await cloud.stop(); rmSync(home, { recursive: true, force: true })
+  }
 })
 
 test('independent: real managed child uses inherited IPC, excludes missing providers and releases lease only after parent disconnect', { skip: process.platform !== 'win32' }, async () => {

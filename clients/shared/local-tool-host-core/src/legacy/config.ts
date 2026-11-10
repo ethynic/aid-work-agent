@@ -145,7 +145,8 @@ export function machineFingerprint(): string {
  * 上报字节与云端 catalog 归属，不可依赖对象插入顺序的隐式行为。
  */
 export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessReady = false, wecomDirectoryReady = false,
-  wecomDirectorySearchReady = false, wecomConfigDoctorReady = false, wecomConfigCalibrateReady = false): Record<string, unknown> {
+  wecomDirectorySearchReady = false, wecomConfigDoctorReady = false, wecomConfigCalibrateReady = false,
+  allowWecomTool: (tool: string) => boolean = () => true): Record<string, unknown> {
   const cfg = config === undefined ? loadConfig() : config
   const entries = resolveProviderEntries(cfg)
   const skillsPython = typeof cfg?.skills?.python === 'string' && cfg.skills.python !== '' ? cfg.skills.python : null
@@ -160,16 +161,17 @@ export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessR
       return a < b ? -1 : a > b ? 1 : 0
     })
   const manifests: Record<string, { provider_id: string; manifest_digest: string; protocol_version: number }> = {}
+  const wecomToolAvailable = (name: string) => allowWecomTool(name) &&
+    (name !== 'wecom_read_sessions' || wecomBusinessReady) &&
+    (name !== 'wecom_session_directory' || wecomDirectoryReady) &&
+    (name !== 'wecom_config_doctor' || wecomConfigDoctorReady) &&
+    (name !== 'wecom_config_calibrate' || wecomConfigCalibrateReady)
   for (const key of available) {
     // D5：上报/摘要统一读**实际生效** manifest（含 v2Send 显式协商变体）——
     // 运行时校验、能力上报与摘要计算三者同源，显式开启 v2 后不再上报旧 v1 摘要
     const current = effectiveManifestFor(key) ?? TRUSTED_MANIFESTS[key]!
     const manifest = key === 'wecom'
-      ? { ...current, tools: current.tools.filter(name =>
-          (name !== 'wecom_read_sessions' || wecomBusinessReady) &&
-          (name !== 'wecom_session_directory' || wecomDirectoryReady) &&
-          (name !== 'wecom_config_doctor' || wecomConfigDoctorReady) &&
-          (name !== 'wecom_config_calibrate' || wecomConfigCalibrateReady)) } : current
+      ? { ...current, tools: current.tools.filter(wecomToolAvailable) } : current
     manifests[key] = {
       provider_id: manifest.provider_id,
       manifest_digest: manifestDigestOf(manifest),
@@ -195,12 +197,8 @@ export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessR
   // search/select/watch_poll/add_customer 不出现）；Provider 未安装（无 entry）不上报
   if (available.includes('wecom')) {
     const effectiveWecom = effectiveManifestFor('wecom')
-    if (effectiveWecom) capabilities.push(...effectiveWecom.tools.filter(name =>
-      (name !== 'wecom_read_sessions' || wecomBusinessReady) &&
-      (name !== 'wecom_session_directory' || wecomDirectoryReady) &&
-      (name !== 'wecom_config_doctor' || wecomConfigDoctorReady) &&
-      (name !== 'wecom_config_calibrate' || wecomConfigCalibrateReady)))
-    if (wecomDirectoryReady && wecomDirectorySearchReady && effectiveWecom?.tools.includes('wecom_session_directory')) {
+    if (effectiveWecom) capabilities.push(...effectiveWecom.tools.filter(wecomToolAvailable))
+    if (wecomDirectorySearchReady && wecomToolAvailable('wecom_session_directory') && effectiveWecom?.tools.includes('wecom_session_directory')) {
       capabilities.push('wecom_session_directory_search')
     }
   }

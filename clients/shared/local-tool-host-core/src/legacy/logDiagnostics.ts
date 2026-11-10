@@ -77,6 +77,8 @@ const simpleRuntime: Readonly<Record<string, string>> = {
 const loopEvents: Readonly<Record<string, string>> = {
   'heartbeat-online': '运行心跳已建立', 'heartbeat-disconnected': '运行心跳失败，进入退避', 'heartbeat-recovered': '运行心跳已恢复',
   'claim-ready': '任务领取通道已建立', 'claim-disconnected': '任务领取请求失败，进入退避', 'claim-recovered': '任务领取通道已恢复',
+  'execution-desktop-restricted': '旧执行资源尚未确认停止，设备连接继续，共享桌面任务暂停',
+  'execution-chrome-restricted': '旧浏览器资源尚未确认停止，设备连接与独立数据库读取继续',
 }
 const structuredDesktop = (event: string) => event.startsWith('runtime-pair-') || event.startsWith('runtime-diagnostic-heartbeat-')
 function diagnosticFields(value: RuntimeDiagnosticFields): RuntimeDiagnosticFields {

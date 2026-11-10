@@ -398,6 +398,7 @@ export interface SkillRunnerHandlerOptions {
   readonly pythonPath: string
   readonly stdoutLimitChars?: number
   readonly stderrLimitChars?: number
+  readonly prepareSpawn?: (python: string, argv: string[], cwd: string) => Promise<{ command: string; args: string[]; input: string; stop: () => Promise<void> }>
 }
 
 interface GateFailure {
@@ -534,7 +535,15 @@ export class SkillRunnerHandler {
     const stdoutLimit = this.opts.stdoutLimitChars ?? SKILL_STDOUT_LIMIT_CHARS
     const stderrLimit = this.opts.stderrLimitChars ?? SKILL_STDERR_LIMIT_CHARS
     const startedAt = Date.now()
-    logInfo(`[skill-runner] 执行技能 '${info.name}'${info.version ? ` v${info.version}` : ''} entry=${entry} args=[${argv.join(' ')}] timeout=${timeoutSeconds}s`)
+    logInfo(`[skill-runner] 执行技能 '${info.name}'${info.version ? ` v${info.version}` : ''} entry=${entry} arg_count=${argv.length} timeout=${timeoutSeconds}s`)
+
+    const commandArgs = [entryAbs, ...argv]
+    let launch: Awaited<ReturnType<NonNullable<SkillRunnerHandlerOptions['prepareSpawn']>>> | undefined
+    if (this.opts.prepareSpawn) {
+      try { launch = await this.opts.prepareSpawn(this.opts.pythonPath, commandArgs, info.dir) }
+      catch { return { success: false, code: 'SKILL_SPAWN_FAILED', message: '未能保存本机启动记录，脚本未启动', effect: 'none', retryable: false } }
+    }
+    if (callOpts.signal?.aborted) return { success: false, code: 'CANCELLED', message: '脚本启动前已取消', effect: 'none', retryable: false }
 
     return await new Promise<Record<string, unknown>>((resolve) => {
       // argv 直传（shell:false 绝不拼接命令串）；stdio[0]='ignore'：读 stdin 的脚本
@@ -543,17 +552,28 @@ export class SkillRunnerHandler {
         cwd: info.dir,
         shell: false,
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: [launch ? 'pipe' : 'ignore', 'pipe', 'pipe'],
         detached: process.platform !== 'win32', // posix 进程组：kill(-pid) 树杀
         env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' } as NodeJS.ProcessEnv,
       }
-      const child = spawn(this.opts.pythonPath, [entryAbs, ...argv], spawnOpts)
+      const child = spawn(launch?.command ?? this.opts.pythonPath, launch?.args ?? commandArgs, spawnOpts)
+      if (launch) {
+        child.stdin?.on('error', () => {})
+        child.stdin?.end(launch.input)
+      }
       let stdout = ''
       let stderr = ''
       let pendingLine = ''
       let timedOut = false
       let externallyAborted = false
       let settled = false
+
+      const stopChild = () => {
+        if (launch) {
+          // Stop the registered Job, then close the exact helper process if a launch raced the stop.
+          void launch.stop().catch(() => {}).finally(() => { child.kill() })
+        } else killProcessTree(child.pid)
+      }
 
       const finish = (result: Record<string, unknown>): void => {
         if (settled) return
@@ -564,11 +584,11 @@ export class SkillRunnerHandler {
       }
       const timer = setTimeout(() => {
         timedOut = true
-        killProcessTree(child.pid)
+        stopChild()
       }, timeoutSeconds * 1000)
       const onAbort = (): void => {
         externallyAborted = true
-        killProcessTree(child.pid)
+        stopChild()
       }
       callOpts.signal?.addEventListener('abort', onAbort, { once: true })
 
@@ -606,7 +626,7 @@ export class SkillRunnerHandler {
           finish({
             success: false,
             code: 'SKILL_TIMEOUT',
-            message: `技能脚本执行超时（${timeoutSeconds}s），进程树已终止`,
+            message: launch ? `技能脚本执行超时（${timeoutSeconds}s）` : `技能脚本执行超时（${timeoutSeconds}s），进程树已终止`,
             effect: 'unknown',
             retryable: false,
             data: base,
@@ -617,7 +637,7 @@ export class SkillRunnerHandler {
           finish({
             success: false,
             code: 'SKILL_ABORTED',
-            message: `技能脚本执行已被中止（signal=${signal ?? '-'}），进程树已终止`,
+            message: launch ? '技能脚本执行已中止' : `技能脚本执行已被中止（signal=${signal ?? '-'}），进程树已终止`,
             effect: 'unknown',
             retryable: false,
             data: base,

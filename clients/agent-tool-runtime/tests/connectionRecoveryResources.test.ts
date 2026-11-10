@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import childProcess, { type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import fs, { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import fs, { mkdtempSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -135,6 +135,26 @@ test('an absent Local Job cannot override a protected receipt recording preserve
   const supervision = new ProcessSupervision(f.home, process.execPath)
   assert.equal(await supervision.recover(readFileSync(join(f.home, 'host-running.json'), 'utf8')), false)
   assert.deepEqual(await f.run(), { safe: false, needs_reboot: true, category: 'CONNECTION_RESOURCE_STOP_UNCONFIRMED' })
+})
+
+test('the next execution start can release a retained restriction with a direct stop and keep older evidence', windows, async t => {
+  const f = fixture(t)
+  const { job, generation } = f.global()
+  const pending = join(f.home, `host-resource-pending-${generation}.json`)
+  renameSync(join(f.home, 'host-running.json'), pending)
+  const original = readFileSync(pending, 'utf8')
+  f.file('identity-reconciliation.bin', 'earlier-proof')
+  f.state.jobs.set(job, 1)
+  f.state.failStop = true
+  const supervision = new ProcessSupervision(f.home, process.execPath)
+  assert.equal(await supervision.pendingScope(), 'desktop')
+  assert.equal(readFileSync(pending, 'utf8'), original)
+  f.state.failStop = false
+  assert.equal(await supervision.pendingScope(), 'none')
+  assert.equal(f.state.jobs.get(job), 0)
+  assert.equal(readFileSync(join(f.home, `host-interrupted-${generation}.json`), 'utf8'), original)
+  assert.equal(readFileSync(join(f.home, 'identity-reconciliation.bin'), 'utf8'), 'earlier-proof')
+  assert.ok(f.state.commands.every(args => args[0] === 'terminate'), 'Old evidence is refreshed without a boot or session probe')
 })
 
 test('uncontained external Python does not prevent stopping its unrelated owned Provider Job', windows, async t => {

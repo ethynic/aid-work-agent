@@ -77,6 +77,7 @@ export interface RunnerDeps {
    *  的 MCP 实例执行（无 MCP entry）；未注入 = 未配置 skills.python →
    *  PROVIDER_NOT_AVAILABLE（能力真实性，与 capabilities 上报同源） */
   beforeProviderCall?: (invocation: ClaimedInvocation) => Promise<void>
+  admissionFailure?: (provider: string, invocation: ClaimedInvocation) => { code: string; message: string } | undefined
   recoveryObservation?: Pick<ProviderManager, 'callTool'>
   skillRunner?: SkillRunnerHandler
   /** Runtime-only bridge; called after lock/precheck/permit/journal, never by a model. */
@@ -342,6 +343,11 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
   // skill-runner（M2）：进程内 handler，不走 ProviderSet/MCP entry——可用性以 deps.skillRunner
   // 注入为准（cli 按 config.skills.python 配置且存在注入），缺 handler = 未安装（fail-closed）
   const providerKey = inv.provider ?? 'boss-recruiting'
+  const denied = deps.admissionFailure?.(providerKey, inv)
+  if (denied) {
+    await sendFinalResult({ success: false, ...denied, effect: 'none', retryable: false, phase: 'prepared', safe_to_retry: false })
+    return
+  }
   const isRecoveryObservation = providerKey === 'runtime-recovery'
   const isSkillRunner = providerKey === SKILL_RUNNER_PROVIDER_KEY
   const manifest = deps.manifests?.[providerKey] ?? getProviderManifest(providerKey)

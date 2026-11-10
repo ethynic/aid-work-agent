@@ -579,7 +579,7 @@ if (!hasSingleInstanceLock) {
           const intent = await updateIntent?.read().catch(() => undefined)
           if (maintenanceRequested || runtimeConnectionRecovery?.busy || await runtimeConnectionRecovery?.registrationBlocksExecution()) return
           await readRuntimeStartupState(value => runtimeSupervisor!.request(value, 'startup'))
-          const recovered = runtimeSupervisor!.recoveredAfterInterruption || runtimeConnectionRecovery instanceof RuntimeCleanConnection && runtimeConnectionRecovery.restoredOriginal
+          const recovered = runtimeSupervisor!.interruptedExecution || runtimeConnectionRecovery instanceof RuntimeCleanConnection && runtimeConnectionRecovery.restoredOriginal
           if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && (cleanInstallation?.fresh && cleanInstallation.migrated || shouldResumeRuntime({ intent, recovered, login: loginLaunch }))) await resumeRuntimeAtLogin(async value => {
             if ((value as { method?: string }).method === 'start' && await runtimeConnectionRecovery?.registrationBlocksExecution()) throw new Error('RuntimeRegistrationPending')
             if (maintenanceRequested || runtimeConnectionRecovery?.busy) throw new Error('RuntimeMaintenanceInProgress')

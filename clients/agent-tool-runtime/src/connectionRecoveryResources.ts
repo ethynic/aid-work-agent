@@ -10,6 +10,7 @@ import { dpapiProtect, dpapiUnprotect } from './dpapi.js'
 import { assertNoLegacyRuntimeProcess } from './legacyProcessCheck.js'
 import { atomicWrite } from './pairingStore.js'
 import { ProcessSupervision, readSupervisionLedger, supervisionLedgerFile, type SupervisionLedger } from './processSupervision.js'
+import { pendingExecutionMarkerPattern } from '@aid/local-tool-host-core'
 
 export interface ConnectionRecoveryResourceResult { safe: boolean; needs_reboot: boolean; category: string }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -238,7 +239,7 @@ export async function registerConnectionRecoveryReboot(home: string, nodeExecuta
     requireResource(process.platform === 'win32', 'CONNECTION_RESOURCE_PLATFORM_UNSUPPORTED')
     validateHome(home, nodeExecutable); await protectionAvailable()
     const resources = snapshot(home)
-    if (hasGlobalSupervision(resources)) return result(false, false, 'CONNECTION_RESOURCE_STOP_UNCONFIRMED')
+    if (hasGlobalSupervision(resources) || resources.entries.some(name => pendingExecutionMarkerPattern.test(name))) return result(false, false, 'CONNECTION_RESOURCE_STOP_UNCONFIRMED')
     const now = await kernel(new ProcessSupervision(home, nodeExecutable).executable)
     await writeWitness(home, now, resources)
     return result(false, true, 'CONNECTION_RESOURCE_REBOOT_PREPARED')
@@ -328,6 +329,7 @@ async function checkResources(home: string, nodeExecutable: string,
     }
     const supervision = new ProcessSupervision(home, nodeExecutable)
     const resources = snapshot(home)
+    if (resources.entries.some(name => pendingExecutionMarkerPattern.test(name))) return result(false, false, 'CONNECTION_RESOURCE_STOP_UNCONFIRMED')
     if (hasGlobalSupervision(resources)) {
       if (legacy) return result(false, false, 'CONNECTION_RESOURCE_LEGACY_ACTIVE')
       return checkGlobalResources(home, supervision, resources, options.prepareReboot)

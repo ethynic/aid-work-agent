@@ -1,10 +1,10 @@
 import { execFile } from 'node:child_process'
 import { randomUUID, createHash } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dpapiProtect, dpapiUnprotect, trustedSystemPowerShell } from './dpapi.js'
-import { ManagementError } from '@aid/local-tool-host-core'
+import { ManagementError, pendingExecutionMarkerPattern } from '@aid/local-tool-host-core'
 import { assertNoLegacyRuntimeProcess } from './legacyProcessCheck.js'
 import { atomicWrite } from './pairingStore.js'
 
@@ -14,6 +14,11 @@ const localPrefix = 'AidWorkRuntime.'
 interface LedgerFields { generation: string; home: string; ownerPid: number; jobs: string[]; business_started?: boolean }
 export type SupervisionLedger = LedgerFields & ({ schemaVersion: 1; bootId: string; sessionId: number } | { schemaVersion: 2; externalPython: boolean })
 type GlobalLedger = Extract<SupervisionLedger, { schemaVersion: 2 }>
+export type PendingExecutionScope = 'none' | 'chrome' | 'desktop'
+export function hasPendingExecution(home: string, includeActive = false): boolean {
+  return readdirSync(home).some(name => pendingExecutionMarkerPattern.test(name)
+    || (includeActive && name.toLowerCase() === 'host-running.json'))
+}
 const isSession = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 export function supervisionLedgerFile(name: string): { schemaVersion: 1 | 2; generation: string } | null {
   if (!name.toLowerCase().endsWith('.bin')) return null
@@ -68,9 +73,8 @@ export class ProcessSupervision {
   async marker(instanceId: string): Promise<Record<string, unknown>> {
     if (process.platform !== 'win32') return {}
     if (!this.enabled) throw new Error('required process supervisor missing')
-    const config = JSON.parse(readFileSync(join(this.home, 'config.json'), 'utf8').replace(/^\uFEFF/, ''))
-    // External Python skill executors have not joined the Provider Job boundary.
-    const externalPython = Boolean(config.skills?.python)
+    // Windows Python joins the same Job as the fixed bootstrap process.
+    const externalPython = false
     this.ledger = { schemaVersion: 2, generation: instanceId, home: resolve(this.home), externalPython, ownerPid: process.pid, jobs: [], business_started: false }
     await this.write(this.ledger)
     return { schemaVersion: 3, supervision: await dpapiProtect(JSON.stringify({ generation: instanceId, home: resolve(this.home), externalPython })) }
@@ -88,23 +92,55 @@ export class ProcessSupervision {
     return { command: this.executable, args: ['run', '--job-name', jobName, '--node', this.node, '--entry', entry,
       '--owner-pid', String(process.pid), '--owner-start-time', ownerStart, '--receipt', join(this.directory(), receiptName(jobName))] }
   }
+  async preparePythonLaunch(python: string, argv: string[], cwd: string): Promise<{ command: string; args: string[]; input: string; stop: () => Promise<void> }> {
+    const launch = await this.prepareLaunch(fileURLToPath(new URL('./pythonJobEntry.js', import.meta.url)))
+    const jobName = launch.args[2]!
+    return { command: launch.command, args: [...launch.args, '--propagate-child-exit'], input: JSON.stringify({ python, argv, cwd }),
+      stop: async () => {
+        const result = await this.command(['terminate', '--job-name', jobName])
+        if (result.activeProcesses !== 0) throw new Error('process stop unconfirmed')
+      } }
+  }
   async recover(marker: string): Promise<boolean> {
-    if (!this.enabled) return false
+    return await this.resolveInterruptedMarker(marker, Date.now() + 20_000) === 'none'
+  }
+  private async resolveInterruptedMarker(marker: string, deadline: number): Promise<PendingExecutionScope> {
+    if (!this.enabled) return 'desktop'
     try {
       const parsed = JSON.parse(marker.replace(/^\uFEFF/, ''))
-      if (!uuid.test(parsed?.instance_id) || ![2, 3].includes(parsed.schemaVersion) || typeof parsed.supervision !== 'string') return false
+      if (!uuid.test(parsed?.instance_id) || ![2, 3].includes(parsed.schemaVersion) || typeof parsed.supervision !== 'string') return 'desktop'
       const proof = JSON.parse(await dpapiUnprotect(parsed.supervision))
-      if (!proof || proof.generation !== parsed.instance_id || proof.home !== resolve(this.home)) return false
+      if (!proof || proof.generation !== parsed.instance_id || proof.home !== resolve(this.home)) return 'desktop'
       const ledger = await this.readLedger(parsed.schemaVersion === 3 ? `global-${parsed.instance_id}.bin` : `${parsed.instance_id}.bin`)
       if (parsed.schemaVersion === 3) {
-        if (ledger.schemaVersion !== 2 || ledger.externalPython !== proof.externalPython) return false
-      } else if (ledger.schemaVersion !== 1 || ledger.bootId !== proof.bootId || ledger.sessionId !== proof.sessionId || typeof proof.rebootOnly !== 'boolean') return false
+        if (ledger.schemaVersion !== 2 || ledger.externalPython !== proof.externalPython) return 'desktop'
+      } else if (ledger.schemaVersion !== 1 || ledger.bootId !== proof.bootId || ledger.sessionId !== proof.sessionId || typeof proof.rebootOnly !== 'boolean') return 'desktop'
       // The caller holds the home lease. Only names bound by DPAPI can reach native termination.
-      if (!await this.stopLedgerJobs(ledger) || (ledger.schemaVersion === 2 ? ledger.externalPython : proof.rebootOnly)) return false
+      const scope = await this.ledgerScope(ledger, true, deadline)
+      if (ledger.schemaVersion === 2 ? ledger.externalPython : proof.rebootOnly) return 'desktop'
+      if (scope !== 'none') return scope
       const digest = createHash('sha256').update(marker).digest('hex')
-      atomicWrite(join(this.home, 'identity-reconciliation.bin'), await dpapiProtect(JSON.stringify({ markerDigest: digest, instanceId: parsed.instance_id })))
-      return true
-    } catch { return false }
+      const fence = join(this.home, 'identity-reconciliation.bin')
+      if (!existsSync(fence)) atomicWrite(fence, await dpapiProtect(JSON.stringify({ markerDigest: digest, instanceId: parsed.instance_id })))
+      return 'none'
+    } catch { return 'desktop' }
+  }
+  /** Only markers retained by Host lifecycle, never arbitrary old archives. */
+  async pendingScope(): Promise<PendingExecutionScope> {
+    const deadline = Date.now() + 20_000
+    try {
+      let scope: PendingExecutionScope = 'none'
+      for (const name of readdirSync(this.home).filter(name => pendingExecutionMarkerPattern.test(name))) {
+        const file = join(this.home, name)
+        const stat = lstatSync(file)
+        if (Date.now() >= deadline) return 'desktop'
+        if (!stat.isFile() || stat.size > 64 * 1024) { scope = 'desktop'; continue }
+        const result = await this.resolveInterruptedMarker(readFileSync(file, 'utf8'), deadline)
+        if (result === 'none') renameSync(file, join(this.home, name.replace('host-resource-pending-', 'host-interrupted-')))
+        else if (result === 'desktop' || scope === 'none') scope = result
+      }
+      return scope
+    } catch { return 'desktop' }
   }
   /** Trusted ordinary Provider dispatch only; observation never establishes business coverage. */
   async noteBusinessExecution(): Promise<void> {
@@ -155,22 +191,30 @@ export class ProcessSupervision {
     return (await this.receiptRemainingBusinessApps(job, ownerPid) ?? 0) > 0
   }
   async stopLedgerJobs(ledger: SupervisionLedger, terminate = true, deadline = Date.now() + 20_000): Promise<boolean> {
-    if (ledger.jobs.length === 0) return true
+    return await this.ledgerScope(ledger, terminate, deadline) === 'none'
+  }
+  private async ledgerScope(ledger: SupervisionLedger, terminate: boolean, deadline: number): Promise<PendingExecutionScope> {
+    if (ledger.jobs.length === 0) return 'none'
     // A Local name has no meaning outside its original session. There, only a
     // direct exit receipt may release it. Global names require no session probe.
-    if (ledger.schemaVersion === 1 && ledger.sessionId !== await this.sessionId()) {
-      for (const job of ledger.jobs) if (Date.now() >= deadline || await this.receiptRemainingBusinessApps(job, ledger.ownerPid) !== 0) return false
-      return true
-    }
+    const foreignSession = ledger.schemaVersion === 1 && ledger.sessionId !== await this.sessionId()
+    let scope: PendingExecutionScope = 'none'
     for (const job of ledger.jobs) {
       const remaining = deadline - Date.now()
-      if (remaining <= 0) return false
-      const result = await this.command([terminate ? 'terminate' : 'probe', '--job-name', job], Math.min(20_000, remaining))
-      if (typeof result.exists !== 'boolean' || result.activeProcesses !== 0) return false
-      // Older helpers could deliberately leave Chrome behind after the name disappeared.
-      if (ledger.schemaVersion === 1 && !result.exists && await this.hasPreservedLegacyProcesses(job, ledger.ownerPid)) return false
+      if (remaining <= 0) return 'desktop'
+      try {
+        if (foreignSession) {
+          const count = await this.receiptRemainingBusinessApps(job, ledger.ownerPid)
+          if (count === undefined) scope = 'desktop'
+          else if (count > 0 && scope === 'none') scope = 'chrome'
+        } else {
+          const result = await this.command([terminate ? 'terminate' : 'probe', '--job-name', job], Math.min(20_000, remaining))
+          if (typeof result.exists !== 'boolean' || result.activeProcesses !== 0) scope = 'desktop'
+          else if (scope === 'none' && ledger.schemaVersion === 1 && !result.exists && await this.hasPreservedLegacyProcesses(job, ledger.ownerPid)) scope = 'chrome'
+        }
+      } catch { scope = 'desktop' }
     }
-    return true
+    return scope
   }
 
   /** Caller owns this paired home's lease and the desktop lock; Provider admission

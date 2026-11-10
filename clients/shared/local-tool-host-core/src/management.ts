@@ -5,6 +5,7 @@ import { acquireHostLease, type InstanceLease } from './instanceLease.js'
 
 export type HostStatus = 'stopped' | 'starting' | 'running' | 'draining' | 'reconciling' | 'blocked'
 export type ConnectionStatus = 'unpaired' | 'connecting' | 'online' | 'offline' | 'revoked'
+export const pendingExecutionMarkerPattern = /^host-resource-pending-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.json$/i
 export interface DeviceSummary { device_id: string; name?: string }
 export interface PluginSummary {
   installation_id: string; plugin_id: string; display_name: string; release_id: string
@@ -24,6 +25,8 @@ export interface HostAdapter {
   initialize?(): Promise<void> | void
   executionMarker?(instanceId: string): Promise<Record<string, unknown>>
   recoverPreviousExecution?(marker: string): Promise<boolean>
+  /** This adapter enforces restrictions from retained execution markers before business dispatch. */
+  allowRestrictedExecution?: boolean
   onDisposed?(): void
   device(): DeviceSummary | undefined
   protect(value: string): Promise<string>
@@ -126,6 +129,7 @@ export class RuntimeHost {
   private closing = false
   private ownsExecution = false
   private recovered = false
+  private interrupted = false
   private operationsReadable = true
   private recoveryDevice?: DeviceSummary
   private retiredKeys = new Set<string>()
@@ -198,9 +202,14 @@ export class RuntimeHost {
         host.state = 'blocked'
       }
       failureMessage = '旧执行的停止证明无法读取，原设备和任务记录已保留'
-      if (!host.startupFailure && existsSync(host.markerFile) && await options.adapter.recoverPreviousExecution?.(readFileSync(host.markerFile, 'utf8'))) {
-        renameSync(host.markerFile, join(lease.home, `host-interrupted-${randomUUID()}.json`))
-        host.state = 'stopped'; host.recovered = true
+      if (!host.startupFailure && existsSync(host.markerFile)) {
+        if (!lstatSync(host.markerFile).isFile()) throw new ManagementError(11, failureMessage)
+        const stopped = await options.adapter.recoverPreviousExecution?.(readFileSync(host.markerFile, 'utf8')) === true
+        if (stopped || options.adapter.allowRestrictedExecution) {
+          const archive = stopped ? 'host-interrupted' : 'host-resource-pending'
+          renameSync(host.markerFile, join(lease.home, `${archive}-${randomUUID()}.json`))
+          host.state = 'stopped'; host.recovered = stopped; host.interrupted = true
+        }
       }
       await host.cleanupPluginImports()
       return host
@@ -234,6 +243,7 @@ export class RuntimeHost {
   }
   /** Local composition metadata; deliberately absent from strict H1 state schema. */
   get recoveredAfterInterruption(): boolean { return this.recovered }
+  get interruptedExecution(): boolean { return this.interrupted }
   private persist(): void { atomicWrite(this.operationsFile, JSON.stringify(this.operations)) }
 
   private async cleanupPluginImports(): Promise<void> {

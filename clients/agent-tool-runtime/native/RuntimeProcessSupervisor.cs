@@ -49,11 +49,12 @@ internal static class RuntimeProcessSupervisor
             }
             Need(args.Length >= 3, "INVALID_ARGUMENTS");
             var options = new Dictionary<string, string>(StringComparer.Ordinal);
-            bool preserve = false;
+            bool preserve = false, propagateChildExit = false;
             for (int i = 1; i < args.Length; i++)
             {
                 string key = args[i];
                 if (key == "--preserve-chrome") { Need(!preserve, "INVALID_ARGUMENTS"); preserve = true; continue; }
+                if (key == "--propagate-child-exit") { Need(!propagateChildExit, "INVALID_ARGUMENTS"); propagateChildExit = true; continue; }
                 Need(i + 1 < args.Length && !options.ContainsKey(key), "INVALID_ARGUMENTS");
                 options.Add(key, args[++i]);
             }
@@ -61,11 +62,12 @@ internal static class RuntimeProcessSupervisor
             Need(options.TryGetValue("--job-name", out name) && JobPattern.IsMatch(name), "INVALID_JOB_NAME");
             if (args[0] == "probe" || args[0] == "terminate")
             {
-                Need(options.Count == 1 && !preserve, "INVALID_ARGUMENTS");
+                Need(options.Count == 1 && !preserve && !propagateChildExit, "INVALID_ARGUMENTS");
                 return Inspect(name, args[0] == "terminate");
             }
             Need(args[0] == "run" && options.Count == 6, "INVALID_ARGUMENTS");
             Need(!preserve || !GlobalJob(name), "GLOBAL_JOB_PRESERVE_FORBIDDEN");
+            Need(!propagateChildExit || GlobalJob(name), "INVALID_ARGUMENTS");
             string node = null, entry = null, receipt = null, ownerText = null, ownerStartText = null;
             Need(options.TryGetValue("--node", out node) && options.TryGetValue("--entry", out entry)
                 && options.TryGetValue("--receipt", out receipt) && options.TryGetValue("--owner-pid", out ownerText)
@@ -77,7 +79,7 @@ internal static class RuntimeProcessSupervisor
             Need(AbsoluteFile(node) && File.Exists(IoPath(node)) && String.Equals(Path.GetFileName(node), "node.exe", StringComparison.OrdinalIgnoreCase), "INVALID_NODE");
             Need(AbsoluteFile(entry) && File.Exists(IoPath(entry)), "INVALID_ENTRY");
             Need(AbsoluteFile(receipt) && Directory.Exists(IoPath(Path.GetDirectoryName(receipt))) && !File.Exists(IoPath(receipt)), "INVALID_RECEIPT");
-            return Run(name, node, entry, owner, ownerStart, receipt, preserve);
+            return Run(name, node, entry, owner, ownerStart, receipt, preserve, propagateChildExit);
         }
         catch (Failure f) { Console.Error.WriteLine("{\"error\":\"" + f.Code + "\"}"); return 1; }
         catch (PathTooLongException) { Console.Error.WriteLine("{\"error\":\"SUPERVISOR_PATH_TOO_LONG\"}"); return 1; }
@@ -181,7 +183,7 @@ internal static class RuntimeProcessSupervisor
         limits.BasicLimitInformation.LimitFlags = flags;
         Need(SetInformationJobObject(job, JobExtendedLimits, ref limits, (uint)Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION))), "JOB_LIMIT_FAILED");
     }
-    static int Run(string name, string node, string entry, int ownerPid, long ownerStart, string receipt, bool preserve)
+    static int Run(string name, string node, string entry, int ownerPid, long ownerStart, string receipt, bool preserve, bool propagateChildExit)
     {
         IntPtr owner = IntPtr.Zero, job = IntPtr.Zero, security = IntPtr.Zero;
         PROCESS_INFORMATION child = new PROCESS_INFORMATION();
@@ -236,7 +238,7 @@ internal static class RuntimeProcessSupervisor
             Need(WaitForSingleObject(child.hProcess, 15000) == WAIT_OBJECT_0, "CHILD_STOP_UNCONFIRMED");
             if (remaining == 0) Need(Active(job) == 0, "JOB_STOP_UNCONFIRMED");
             WriteReceipt(receipt, name, ownerPid, child.dwProcessId, remaining, ownerGone ? "owner-exited" : "node-exited", sid);
-            return 0;
+            return propagateChildExit ? unchecked((int)childExit) : 0;
         }
         finally
         {

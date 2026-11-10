@@ -188,7 +188,21 @@ export class RuntimeCleanConnection {
   private async stopActive(): Promise<boolean> {
     let wasRunning = false
     await this.options.beforeChange()
-    await this.options.supervisor().stopAndExit(undefined, state => { wasRunning = state.state === 'running' || state.state === 'starting'; return Promise.resolve() })
+    const { hasPendingExecution } = await this.module('processSupervision.js')
+    const supervisor = this.options.supervisor(), home = this.options.home()
+    await supervisor.stopAndExit(undefined, async state => {
+      if (hasPendingExecution(home)) throw new Error('本机旧执行资源尚未确认停止')
+      wasRunning = state.state === 'running' || state.state === 'starting'
+    })
+    try {
+      // No live Main child is not stop evidence for an earlier Host.
+      if (supervisor !== this.options.supervisor() || !sameHome(home, this.options.home()) || hasPendingExecution(home, true)) {
+        throw new Error('本机旧执行资源尚未确认停止')
+      }
+    } catch (error) {
+      supervisor.suspend(false)
+      throw error
+    }
     return wasRunning
   }
   private async startActive(): Promise<void> {

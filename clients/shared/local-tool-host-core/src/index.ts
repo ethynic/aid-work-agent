@@ -11,7 +11,7 @@ export interface LocalToolHostCore {
   shutdown(): Promise<void>
 }
 
-export { RuntimeHost, ManagementError } from './management.js'
+export { RuntimeHost, ManagementError, pendingExecutionMarkerPattern } from './management.js'
 export type { HostAdapter, HostStatus, ConnectionStatus, DeviceSummary, PluginSummary, ManagementOperation, PreparedPluginImport } from './management.js'
 export { acquireHostLease } from './instanceLease.js'
 export type { SelectedPackageInput, SelectedPackageSnapshot, RuntimePlatform, RuntimePlatformRequest, RuntimePlatformResponse } from './platform.js'

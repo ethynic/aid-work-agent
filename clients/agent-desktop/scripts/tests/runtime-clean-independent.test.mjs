@@ -14,6 +14,7 @@ const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../.
 const host = process.env.AID_CLEAN_TEST_HOST_ENTRY ?? path.resolve(desktop, '../agent-tool-runtime/dist/src/managed-entry.js')
 const { RuntimeCleanConnection } = await import(pathToFileURL(path.join(desktop, 'dist/electron/runtimeCleanConnection.js')))
 const { RuntimeSupervisor } = await import(pathToFileURL(path.join(desktop, 'dist/electron/runtimeSupervisor.js')))
+const { resumeRuntimeAtLogin } = await import(pathToFileURL(path.join(desktop, 'dist/electron/runtimeStartup.js')))
 const installation = await import(pathToFileURL(path.join(desktop, 'dist/electron/runtimeInstallation.js')))
 const registration = await import(pathToFileURL(path.join(path.dirname(host), 'cleanRegistration.js')))
 const { dpapiProtect, dpapiUnprotect } = await import(pathToFileURL(path.join(path.dirname(host), 'dpapi.js')))
@@ -135,6 +136,8 @@ test('invalid code preserves old execution state while a new explicit submission
     assert.equal(await registration.readCleanRegistration(f.metadata), null)
     assert.equal(f.starts, 0)
     reject = false
+    // The next submission follows a verified stop of the original execution.
+    fs.renameSync(path.join(f.legacy, 'host-running.json'), path.join(f.legacy, `host-interrupted-${randomUUID()}.json`))
     const second = await c.reconfigure({ ...input, pairing_code: 'NEW-ISOLATED-OTP' })
     assert.equal(second.status, 'complete'); assert.equal(f.starts, 1)
     assert.equal(await c.registrationBlocksExecution(), false)
@@ -224,6 +227,8 @@ test('migration uses real DPAPI and loopback identity check but isolates damaged
 test('real owned Node Host stops and the new paired Host starts through its actual IPC port', { skip }, async () => {
   const f = fixture(), s = await service(), children = []
   let home = f.legacy, supervisor
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ server: s.url, device_id: randomUUID() }))
+  fs.writeFileSync(path.join(home, 'credentials.bin'), await dpapiProtect('e'.repeat(64)))
   const attach = () => supervisor = new RuntimeSupervisor({ nodeExecutable: process.env.AID_CLEAN_TEST_NODE ?? process.execPath,
     hostEntry: host, home, supervisor: 'runtime_app', takeSelectedPackage: async () => { throw new Error('unused fixture selection') },
     onEvent() {}, onDisconnect() {}, spawnChild(node, args, options) { const child = spawn(node, args, options); children.push(child); return child } })
@@ -237,10 +242,13 @@ test('real owned Node Host stops and the new paired Host starts through its actu
   try {
     const original = await supervisor.request({ request_id: randomUUID(), method: 'describe', params: {} })
     assert.equal(original.code, 0); assert.equal(children.length, 1)
+    await resumeRuntimeAtLogin(value => supervisor.request(value, 'startup'))
+    assert.equal(fs.existsSync(path.join(f.legacy, 'host-running.json')), true)
     const oldPid = children[0].pid
     const reply = await c.reconfigure({ mode: 'new_device', confirmed: true, server: s.url, device_name: 'Real owned Host fixture', pairing_code: 'ISOLATED-OTP' })
     assert.equal(reply.status, 'complete', reply.diagnosis.summary)
     assert.notEqual(children[0].exitCode, null)
+    assert.equal(fs.existsSync(path.join(f.legacy, 'host-running.json')), false, 'The real Host stop removes its active marker before confirmation')
     assert.equal(supervisor.instanceId.length > 0, true)
     const state = await supervisor.request({ request_id: randomUUID(), method: 'getState', params: {} })
     assert.equal(state.code, 0); assert.equal(state.result.state, 'running')
@@ -257,4 +265,73 @@ test('real owned Node Host stops and the new paired Host starts through its actu
     }
     f.clean(); await s.close()
   }
+})
+
+test('real Main IPC can resume the original device without falsely reporting old processes stopped', { skip, timeout: 30_000 }, async () => {
+  const f = fixture(), s = await service()
+  const id = randomUUID(), marker = '{"old":"unreadable supervision"}'
+  fs.writeFileSync(path.join(f.home, 'config.json'), JSON.stringify({ server: s.url, device_id: id }))
+  fs.writeFileSync(path.join(f.home, 'credentials.bin'), await dpapiProtect('c'.repeat(64)))
+  fs.writeFileSync(path.join(f.home, 'host-running.json'), marker)
+  const supervisor = new RuntimeSupervisor({ nodeExecutable: process.env.AID_CLEAN_TEST_NODE ?? process.execPath,
+    hostEntry: host, home: f.home, supervisor: 'runtime_app', takeSelectedPackage: async () => { throw new Error('unused fixture selection') },
+    onEvent() {}, onDisconnect() {} })
+  const request = value => supervisor.request(value, 'startup')
+  try {
+    const before = await request({ request_id: randomUUID(), method: 'getState', params: {} })
+    assert.equal(before.result.device.device_id, id)
+    assert.equal(supervisor.interruptedExecution, true)
+    assert.equal(supervisor.recoveredAfterInterruption, false)
+    await resumeRuntimeAtLogin(request, () => new Promise(resolve => setTimeout(resolve, 15)))
+    for (let attempt = 0; !s.calls.length && attempt < 200; attempt++) await new Promise(resolve => setTimeout(resolve, 15))
+    assert.deepEqual(s.calls.map(call => call.url), ['/api/local-tools/runtime/heartbeat'])
+    const pending = fs.readdirSync(f.home).find(name => name.startsWith('host-resource-pending-'))
+    assert.equal(fs.readFileSync(path.join(f.home, pending), 'utf8'), marker)
+  } finally { await supervisor.stopAndExit(); f.clean(); await s.close() }
+})
+
+test('real Main refuses pairing confirmation while execution evidence remains and keeps the original identity available', { skip, timeout: 40_000 }, async t => {
+  for (const withChild of [false, true]) await t.test(withChild ? 'running restricted Host' : 'cold Main without a child', async () => {
+    const f = fixture(), s = await service()
+    const original = f.legacy, id = randomUUID(), marker = '{"old":"execution proof unavailable"}'
+    const credentials = await dpapiProtect('d'.repeat(64))
+    fs.writeFileSync(path.join(original, 'config.json'), JSON.stringify({ server: s.url, device_id: id }))
+    fs.writeFileSync(path.join(original, 'credentials.bin'), credentials)
+    fs.writeFileSync(path.join(original, 'host-running.json'), marker)
+    let home = original, supervisor
+    const attach = () => supervisor = new RuntimeSupervisor({ nodeExecutable: process.execPath, hostEntry: host, home,
+      supervisor: 'runtime_app', takeSelectedPackage: async () => { throw new Error('unused fixture selection') }, onEvent() {}, onDisconnect() {} })
+    attach()
+    const connection = new RuntimeCleanConnection({ metadataHome: f.metadata, hostEntry: host,
+      home: () => home, supervisor: () => supervisor, beforeChange: async () => {}, restorePriorHome: async () => false,
+      stageHome: async () => { const staged = path.join(f.root, 'replacement'); fs.mkdirSync(staged); return staged },
+      validateHome() {}, commitHome: async target => { home = target; attach() } })
+    const request = value => supervisor.request(value, 'startup')
+    const resume = () => resumeRuntimeAtLogin(request, () => new Promise(resolve => setTimeout(resolve, 15)))
+    try {
+      if (withChild) await resume()
+      const previous = supervisor.instanceId
+      const reply = await connection.reconfigure({ mode: 'new_device', confirmed: true, server: s.url,
+        device_name: 'Isolated fixture', pairing_code: 'ISOLATED-OTP' })
+      assert.equal(s.calls.filter(call => call.url.endsWith('/pair/confirm')).length, 0, 'Old execution evidence forbids revoking the original device')
+      assert.equal(reply.diagnosis.category, 'PAIRING_STOP_FAILED')
+      assert.equal(home, original)
+      assert.equal(await registration.readCleanRegistration(f.metadata), null)
+      assert.equal(fs.readFileSync(path.join(original, 'credentials.bin'), 'utf8'), credentials)
+      if (!withChild) {
+        assert.equal(fs.readFileSync(path.join(original, 'host-running.json'), 'utf8'), marker)
+        await resume() // A post-exit rejection must reopen the same supervisor for startup.
+      } else assert.equal(supervisor.instanceId, previous, 'A running restricted Host keeps its original management connection')
+      const pending = fs.readdirSync(original).find(name => name.startsWith('host-resource-pending-'))
+      assert.equal(fs.readFileSync(path.join(original, pending), 'utf8'), marker)
+      let online = false
+      for (let attempt = 0; !online && attempt < 150; attempt++) {
+        const state = await request({ request_id: randomUUID(), method: 'getState', params: {} })
+        assert.equal(state.result.device.device_id, id)
+        online = state.result.connection === 'online'
+        if (!online) await new Promise(resolve => setTimeout(resolve, 15))
+      }
+      assert.equal(online, true)
+    } finally { connection.dispose(); await supervisor.stopAndExit(); f.clean(); await s.close() }
+  })
 })

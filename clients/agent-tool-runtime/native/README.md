@@ -32,6 +32,12 @@ cannot prove stop or authorize termination by the recovery helper.
 When an old Local Job is absent, its bound receipt can still record preserved
 Chrome, which keeps its resources unconfirmed.
 
+The Windows SkillRunner uses the fixed `pythonJobEntry.js` child in a Global
+Job. The helper's `--propagate-child-exit` option returns the wrapper's exit
+status after Job cleanup and receipt publication. Other `run` calls retain
+their original success status. The wrapper reads the prepared command once
+from its private stdin, then starts Python with empty stdin.
+
 The adapter owns a fresh UUID/job/receipt for each MCP process. `owner-start-time`
 is `Process.StartTime.ToUniversalTime().Ticks` for the Host (decimal string, not
 Unix time). The supervisor opens the exact process handle, verifies creation

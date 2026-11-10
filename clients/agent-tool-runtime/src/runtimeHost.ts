@@ -1,4 +1,3 @@
-import { recoveryObservation } from './recoveryObservation.js'
 import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID, randomBytes } from 'node:crypto'
 import { ApiClient } from './apiClient.js'
@@ -43,7 +42,7 @@ import { probePlugin } from './pluginProbe.js'
 import { loadPackagedTrust } from './productTrust.js'
 import { hasJournalCompletionProof } from '@aid/local-tool-host-core/legacy/completionProof'
 import { hasSessionCompletion } from './sessionTasks/completionProof.js'
-import { ProcessSupervision } from './processSupervision.js'
+import { hasPendingExecution, ProcessSupervision } from './processSupervision.js'
 import { resumeConnectionRecovery } from './connectionRecoveryStore.js'
 import { connectionFailure } from './connectionDiagnosis.js'
 import { recordFreshConnectionEpoch } from './connectionRecoveryResources.js'
@@ -57,6 +56,7 @@ function providerEnvironment(): Record<string, string> {
 }
 
 export class LegacyExecution implements HostAdapter {
+  readonly allowRestrictedExecution = process.platform === 'win32'
   private pluginStore: PluginStore | null = null
   private pluginsChanged: (() => void) | undefined
   mutatePlugin?: HostAdapter['mutatePlugin']
@@ -142,6 +142,7 @@ export class LegacyExecution implements HostAdapter {
     // Management drains these execution lanes before switching a release. Historical
     // journals/outbox stay authoritative, but do not prevent unrelated maintenance.
     return !this.loop && !this.engine && !this.providers && !this.runPromise && !this.sessionGuard
+      && !hasPendingExecution(this.home)
   }
   async initialize(): Promise<void> {
     configureRuntimeHome(this.home)
@@ -177,6 +178,7 @@ export class LegacyExecution implements HostAdapter {
   }
   async canReplaceIdentity(): Promise<boolean> {
     const home = runtimeHomeDir()
+    if (hasPendingExecution(home)) throw new ManagementError(11, '本机旧执行资源尚未确认停止，原设备可以继续连接')
     if (existsSync(join(home, 'identity-reconciliation.bin'))) throw new ManagementError(11, '旧任务结果待核对；原设备可以继续连接，暂不能更换配对身份')
     if (existsSync(join(home, 'pairing.pending.json'))) return false
     // Historical records without original ACK evidence stay blocked. New known-effect
@@ -226,7 +228,19 @@ export class LegacyExecution implements HostAdapter {
     let token: string
     try { token = await loadDeviceToken() } catch { throw new ManagementError(9, '设备凭证不可用，请核对本机身份') }
     await this.pluginStore?.refresh()
-    const entries = Object.fromEntries(Object.entries(this.resolveEntries(config)).filter(([, entry]) => existsSync(entry)))
+    let scope = await this.supervision.pendingScope()
+    const dataDir = runtimeHomeDir()
+    const sessionGuard = scope === 'none' && config.sessionTasks === true ? await acquireSessionTasksSingleInstance(dataDir) : null
+    if (config.sessionTasks === true && !sessionGuard && scope === 'none') scope = 'desktop'
+    if (scope !== 'none') logInfo(`[runtime-connection] execution-${scope}-restricted`)
+    this.sessionGuard = sessionGuard
+    const allowTool = (provider: string, tool: string) => scope === 'none' || scope === 'chrome' && provider === 'wecom'
+      && ['wecom_read_sessions', 'wecom_session_directory'].includes(tool)
+    const entries = Object.fromEntries(Object.entries(this.resolveEntries(config)).filter(([key, entry]) => existsSync(entry)
+      && (scope === 'none' || scope === 'chrome' && key === 'wecom')))
+    const admissionFailure = (provider: string, inv: Parameters<typeof runInvocation>[0]) => provider === 'runtime-recovery' || inv.tool_name === 'wecom_send_status' || inv.tool_name === 'boss_recovery_probe'
+      ? { code: 'TOOL_NOT_ALLOWED', message: '已中断任务不会自动查询业务结果' }
+      : allowTool(provider, inv.tool_name) ? undefined : { code: 'DESKTOP_RESOURCE_BUSY', message: '本机旧执行资源尚未确认停止，本次任务未启动' }
     const api = new ApiClient(server, token)
     const bridgeKey = randomBytes(32).toString('hex')
     const wecomLegacyEnv: Record<string, string> = {}
@@ -245,8 +259,9 @@ export class LegacyExecution implements HostAdapter {
     // skill-runner（M2）：config.skills.python 配置且存在才构造 handler（能力真实性——
     // 未配置/解释器缺失不上报能力、不注入 runner，行级 claim 天然不派发该设备）
     const skillsCfg = config.skills
-    const skillRunner = skillsCfg?.python && existsSync(skillsCfg.python)
-      ? new SkillRunnerHandler({ skillsDir: skillsCfg.dir ?? defaultSkillsDir(), pythonPath: skillsCfg.python })
+    const skillRunner = scope === 'none' && skillsCfg?.python && existsSync(skillsCfg.python)
+      ? new SkillRunnerHandler({ skillsDir: skillsCfg.dir ?? defaultSkillsDir(), pythonPath: skillsCfg.python,
+        ...(this.supervision.enabled ? { prepareSpawn: (python, argv, cwd) => this.supervision.preparePythonLaunch(python, argv, cwd) } : {}) })
       : undefined
     if (skillRunner) {
       logInfo(`[runtime] skill-runner 已启用：skills 目录=${skillsCfg!.dir ?? defaultSkillsDir()} 解释器=${skillsCfg!.python}`)
@@ -261,30 +276,24 @@ export class LegacyExecution implements HostAdapter {
     }
     logInfo(`[runtime] providers: ${Object.keys(entries).join(', ')}`)
     // v2 写路径数据目录（journal/ + result-outbox/，跟随 runtime home；启动重投共用同一 outbox 实例）
-    const dataDir = runtimeHomeDir()
-    const bossRecoveryReady = Boolean(entries['boss-recruiting'] && existsSync(resolve(dirname(entries['boss-recruiting']), '../main/operations/bossRecoveryProbe.js')))
-    const wecomRecoveryReady = Boolean(entries.wecom && this.supervision.enabled)
-    const recoveryReady = bossRecoveryReady || wecomRecoveryReady
+    let wecom: ProviderManager | undefined
+    let wecomDatabaseAdvertised = false
     const capabilities = () => {
-      let wecom: ProviderManager | undefined
       if (entries.wecom && !this.stopping) {
         try { wecom = providers.get('wecom') } catch { /* The existing recovery operation temporarily owns the pool. */ }
       }
       // Discovery never delays heartbeat/claim and cannot invoke a business tool.
       // A failed transport is retried by the next heartbeat, without another worker.
       void wecom?.inspectWecomBusinessTools().catch(() => {})
-      const value = deviceCapabilities(this.effectiveConfig(config), wecom?.wecomBusinessReady,
+      return deviceCapabilities({ ...this.effectiveConfig(config, entries), ...(scope === 'none' ? {} : { skills: undefined }) }, wecom?.wecomBusinessReady,
         wecom?.wecomDirectoryReady, wecom?.wecomDirectorySearchReady,
-        wecom?.wecomConfigDoctorReady, wecom?.wecomConfigCalibrateReady)
-      if (recoveryReady && this.supervision.enabled) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_stop_v1']
-      if (wecomRecoveryReady) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_wecom_v1']
-      if (recoveryReady) { value.providers = [...(value.providers as string[]), 'runtime-recovery']; value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_observe_v2'] }
-      return value
+        wecom?.wecomConfigDoctorReady, wecom?.wecomConfigCalibrateReady, tool => allowTool('wecom', tool) && tool !== 'wecom_send_status')
     }
     const loop = new PollLoop({
       api,
       runnerDeps: {
         providers,
+        admissionFailure,
         beforeProviderCall: async (inv) => {
           const provider = inv.provider ?? 'boss-recruiting'
           if (provider === 'boss-recruiting' && inv.tool_name !== 'boss_recovery_probe'
@@ -293,7 +302,6 @@ export class LegacyExecution implements HostAdapter {
           }
         },
         ...(skillRunner ? { skillRunner } : {}),
-        ...(recoveryReady ? { recoveryObservation: recoveryObservation(providers, this.supervision) } : {}),
         desktopCheck: async () => (await checkDesktopInteractive()).interactive,
         desktopResourceKey: deriveResourceKey(),
         runtimeDataDir: dataDir,
@@ -304,19 +312,16 @@ export class LegacyExecution implements HostAdapter {
       // logInfo = stderr + %APPDATA% 文件双写，前缀格式不变。
       onEvent: (msg) => logInfo(msg),
       capabilities,
-      canClaim: () => Object.values(this.resolveEntries(config)).some(entry => existsSync(entry)) || Boolean(skillRunner),
+      canClaim: () => scope === 'none' ? Object.values(entries).some(entry => existsSync(entry)) || Boolean(skillRunner) : wecomDatabaseAdvertised,
+      waitForInitialHeartbeat: scope !== 'none',
+      onHeartbeatAcknowledged: value => { wecomDatabaseAdvertised = (value.capabilities as string[]).some(tool => allowTool('wecom', tool)
+        && ['wecom_read_sessions', 'wecom_session_directory'].includes(tool)) },
       onConnection: connection,
     })
 
     // ----- 端侧会话任务引擎（C2）：与 pollLoop 共存，共享 Provider 与桌面锁 -----
     let sessionEngine: SessionTaskEngine | null = null
-    let sessionGuard: SingleInstanceGuard | null = null
-    if (config.sessionTasks === true) {
-      sessionGuard = await acquireSessionTasksSingleInstance(dataDir)
-      if (sessionGuard === null) {
-        throw new ManagementError(4, '已有旧会话任务实例，不能并行启动Runtime')
-      } else {
-        this.sessionGuard = sessionGuard
+    if (sessionGuard) {
         const retention = enforceRetention(dataDir, [], {}) // 启动时评估磁盘水位（终态清理由引擎周期执行）
         if (retention.stopNew) logInfo('[session-tasks] 本地会话日志已达上限（256MiB），停止新观察持久化')
         else if (retention.warn80) logInfo('[session-tasks] 本地会话日志超 80% 水位')
@@ -327,6 +332,7 @@ export class LegacyExecution implements HostAdapter {
           runtimeInstanceId: `rt-${RUNTIME_VERSION}-${randomUUID().slice(0, 8)}`,
           withLock: <T,>(fn: () => Promise<T>) => withDesktopLock(desktopLockName(deriveResourceKey()), fn),
           observer: nameBridge.observe,
+          resumePriorAssignments: false,
           emit: (msg) => logInfo(`[session-tasks] ${msg}`),
           // C3：会话任务发送复用既有 v2 单动作执行器（许可/journal/outbox 全在原链内）；
           // sessionPrecheck 为引擎构造的锁内会话复核（§7 顺序 4），由 runner 在桌面锁内、
@@ -335,6 +341,7 @@ export class LegacyExecution implements HostAdapter {
             runInvocation(inv, {
               api,
               providers,
+              admissionFailure,
               ...(skillRunner ? { skillRunner } : {}),
               desktopCheck: async () => (await checkDesktopInteractive()).interactive,
               desktopResourceKey: deriveResourceKey(),
@@ -345,7 +352,6 @@ export class LegacyExecution implements HostAdapter {
             }),
         })
         logInfo('[session-tasks] 会话任务引擎已启动（共享桌面锁；observer 经 weixin Provider）')
-      }
     }
     this.loop = loop
     this.providers = providers

@@ -30,6 +30,8 @@ export interface PollLoopOptions {
   onInvocationEnd?: (inv: ClaimedInvocation) => void
   capabilities?: () => Record<string, unknown>
   canClaim?: () => boolean
+  waitForInitialHeartbeat?: boolean
+  onHeartbeatAcknowledged?: (capabilities: Record<string, unknown>) => void
   onConnection?: (state: 'online' | 'offline' | 'revoked') => void
 }
 
@@ -65,6 +67,8 @@ export class PollLoop {
   private nextEvidenceCleanupAt = 0
   private evidenceCleanupCursor = ''
   private accepting = true
+  private acknowledgeInitialHeartbeat: () => void = () => {}
+  private readonly initialHeartbeat = new Promise<void>(resolve => { this.acknowledgeInitialHeartbeat = resolve })
 
   constructor(options: PollLoopOptions) {
     this.opts = {
@@ -87,12 +91,14 @@ export class PollLoop {
     this.runnerShutdown.abort()
     this.controller.abort()
     this.claimController.abort()
+    this.acknowledgeInitialHeartbeat()
   }
 
   /** Stop admission without cancelling an accepted invocation or its result delivery. */
   stopClaiming(): void {
     this.accepting = false
     this.claimController.abort()
+    this.acknowledgeInitialHeartbeat()
   }
 
   /** Heartbeats remain alive until the accepted invocation has drained. */
@@ -154,13 +160,16 @@ export class PollLoop {
     while (!this.stopped) {
       this.opts.onHeartbeatAttempt?.(Date.now())
       try {
+        const capabilities = this.opts.capabilities?.() ?? deviceCapabilities()
         const hb = await api.heartbeat({
           runtime_version: RUNTIME_VERSION,
-          capabilities: this.opts.capabilities?.() ?? deviceCapabilities(),
+          capabilities,
           manifest_digest: manifestDigest(),
         }, this.controller.signal)
         if (connected !== true) this.emit(`[runtime-connection] ${connected === false ? 'heartbeat-recovered' : 'heartbeat-online'}`)
         connected = true
+        this.opts.onHeartbeatAcknowledged?.(capabilities)
+        this.acknowledgeInitialHeartbeat()
         backoff = backoffBaseMs
         this.opts.onConnection?.('online')
         this.replayResults()
@@ -190,6 +199,7 @@ export class PollLoop {
     const { api, claimWaitSeconds, backoffBaseMs, backoffMaxMs } = this.opts
     let backoff = backoffBaseMs
     let connected: boolean | undefined
+    if (this.opts.waitForInitialHeartbeat) await this.initialHeartbeat
     while (!this.stopped && this.accepting) {
       if (this.opts.canClaim && !this.opts.canClaim()) {
         await sleep(this.opts.heartbeatIntervalMs, this.claimController.signal)

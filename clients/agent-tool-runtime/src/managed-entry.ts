@@ -109,7 +109,7 @@ async function main(): Promise<void> {
       cleanGeneration: supervisor === 'runtime_app' && process.env.AIDWORK_RUNTIME_CLEAN_GENERATION === '1' })
     attachManagementIpc(host, channel)
     channel.send({ kind: 'runtime_lifecycle', instance_id: host.instanceId, idle_exit: true, version: 1 })
-    if (host.recoveredAfterInterruption) channel.send({ kind: 'runtime_recovery', instance_id: host.instanceId, processes_stopped: true })
+    if (host.interruptedExecution) channel.send({ kind: 'runtime_recovery', instance_id: host.instanceId, processes_stopped: host.recoveredAfterInterruption })
     if (!connected) { await host.dispose(); return }
     for (const request of describes) for (const listener of messages) listener(request)
   } catch (error) {

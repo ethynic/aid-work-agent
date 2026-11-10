@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
@@ -113,6 +113,27 @@ test('passive historical Host dispose releases its OS lease without settling or 
     assert.deepEqual(response.result, stop)
   } finally { await reopened.dispose() }
   assert.equal((await request(host, 'start', { request_key: 'after-close' })).code, 4)
+})
+
+test('a resource-aware adapter can reconnect without losing or certifying an unresolved marker', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'aid-core-restricted-start-'))
+  const marker = '{"original":"unproved"}'
+  writeFileSync(join(home, 'host-running.json'), marker)
+  const a = adapter()
+  a.identity = { device_id: 'original-device' }
+  a.allowRestrictedExecution = true
+  a.recoverPreviousExecution = async () => false
+  const { host } = await open(t, a, home)
+  assert.equal(host.interruptedExecution, true)
+  assert.equal(host.recoveredAfterInterruption, false, 'The old process stop IPC must not be emitted')
+  assert.equal((await done(host, await request(host, 'start', { request_key: 'original' }))).status, 'succeeded')
+  assert.equal(host.getState().connection, 'online')
+  assert.equal(host.getState().device.device_id, 'original-device')
+  const records = readdirSync(home).filter(name => name.startsWith('host-resource-pending-'))
+  assert.equal(records.length, 1)
+  assert.equal(readFileSync(join(home, records[0]), 'utf8'), marker)
+  await done(host, await request(host, 'stop', { request_key: 'stop-new' }))
+  assert.equal(readFileSync(join(home, records[0]), 'utf8'), marker, 'Stopping the new Host must not erase unresolved old resources')
 })
 
 test('dispose waits an already accepted start and refuses owned running or reconciling execution until normal stop', async t => {

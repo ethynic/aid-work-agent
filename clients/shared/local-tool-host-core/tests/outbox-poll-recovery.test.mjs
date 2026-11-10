@@ -83,6 +83,33 @@ test('pending result delivery cannot delay initial heartbeats/claim and shutdown
   assert.deepEqual(outbox.load('pending').payload, payload, 'shutdown keeps the original pending send evidence')
 })
 
+test('restricted claim waits for acknowledged capabilities while old result delivery stays independent', async t => {
+  const outbox = fixture(t)
+  const payload = { claim_token: 'original-receipt', success: true, effect: 'applied' }
+  outbox.saveLegacy('old-result', payload)
+  let release, sentCapabilities, claims = 0, results = 0
+  const api = {
+    async heartbeat(input) {
+      sentCapabilities = input.capabilities
+      await new Promise(resolve => { release = resolve })
+      return { selected: true }
+    },
+    async claim() { claims++; await new Promise(resolve => setTimeout(resolve, 5)); return null },
+    async result(id, value) { assert.equal(id, 'old-result'); assert.deepEqual(value, payload); results++ },
+  }
+  const loop = new PollLoop({ api, runnerDeps: { resultOutbox: outbox }, waitForInitialHeartbeat: true,
+    capabilities: () => ({ providers: ['wecom'], capabilities: ['wecom_read_sessions'] }), onEvent() {} })
+  const running = loop.run()
+  try {
+    await until(() => release)
+    assert.deepEqual(sentCapabilities, { providers: ['wecom'], capabilities: ['wecom_read_sessions'] })
+    assert.equal(claims, 0)
+    release()
+    await until(() => claims > 0 && results === 1)
+  } finally { release?.(); loop.shutdown(); await running }
+  assert.equal(outbox.load('old-result'), null)
+})
+
 test('each replay pass is bounded and excludes the active invocation while other pending entries progress', async t => {
   const outbox = fixture(t)
   for (const id of ['active', 'pending-1', 'pending-2', 'pending-3']) {

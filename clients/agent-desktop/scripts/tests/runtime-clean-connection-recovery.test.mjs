@@ -102,7 +102,6 @@ async function fixture(t, respond) {
     async setOriginal(address = origin, token = oldToken) {
       await writeFile(path.join(original, 'config.json'), JSON.stringify({ server: address, device_id: originalId }))
       await writeFile(path.join(original, 'credentials.bin'), await dpapiProtect(token))
-      await writeFile(path.join(original, 'host-running.json'), 'retained history')
     },
     async legacy(address, alreadyRotated = false) {
       if (alreadyRotated) home = await rotateRuntimeConnection(installOptions, home)
@@ -117,6 +116,7 @@ async function fixture(t, respond) {
 test('a legacy HTTP transaction cannot gate the original HTTPS home, including an old empty-home switch', windows, async t => {
   const f = await fixture(t, () => ({ status: 500 }))
   await f.setOriginal('https://127.0.0.1:1')
+  await writeFile(path.join(f.home, 'host-running.json'), 'retained history')
   await f.legacy(f.origin)
   let recovery = f.open()
   assert.equal(await recovery.registrationBlocksExecution(), false)
@@ -287,8 +287,8 @@ test('only a new explicit submission can pair after a failed request', windows, 
   assert.equal(f.calls[1].body.code, 'retry-code')
 })
 
-test('a candidate write failure or rejected stop sends no confirmation and keeps the original home', windows, async t => {
-  for (const failedAt of ['candidate-write', 'stop']) {
+test('a candidate write failure, rejected stop, or retained resource sends no confirmation and keeps the original home', windows, async t => {
+  for (const failedAt of ['candidate-write', 'stop', 'pending-resources']) {
     const f = await fixture(t, async call => {
       if (failedAt === 'candidate-write') await mkdir(file)
       return success(call)
@@ -296,8 +296,9 @@ test('a candidate write failure or rejected stop sends no confirmation and keeps
     await f.setOriginal()
     const file = path.join(f.metadata, 'clean-registration.bin')
     if (failedAt === 'stop') f.failStop()
+    if (failedAt === 'pending-resources') await writeFile(path.join(f.home, `host-resource-pending-${randomUUID()}.json`), 'old resource evidence')
     const result = await f.open().reconfigure(begin(f.origin))
-    assert.equal(result.diagnosis.category, failedAt === 'stop' ? 'PAIRING_STOP_FAILED' : 'LOCAL_SYSTEM_ERROR')
+    assert.equal(result.diagnosis.category, failedAt === 'candidate-write' ? 'LOCAL_SYSTEM_ERROR' : 'PAIRING_STOP_FAILED')
     if (failedAt === 'candidate-write') await rmdir(file)
     assert.equal(await readCleanRegistration(f.metadata), null)
     assert.equal(f.home, f.original)

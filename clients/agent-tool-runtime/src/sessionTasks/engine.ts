@@ -69,6 +69,7 @@ export interface EngineOptions {
   crypto: SessionCrypto
   observer: ObserverFn
   runtimeInstanceId: string
+  resumePriorAssignments?: boolean
   /** 共享桌面锁包装（默认直通——生产接线 withDesktopLock；测试注入直通/伪锁） */
   withLock?: <T>(fn: () => Promise<T>) => Promise<T>
   now?: () => number
@@ -189,6 +190,8 @@ export class SessionTaskEngine {
   /** 磁盘水位（P2-8）：stopNew=true 时拒绝新观察持久化/新发送 */
   private diskStopNew = false
   private lastRetentionAt = 0
+  private readonly priorAssignmentIds = new Set<string>()
+  private readonly priorTaskIds = new Set<string>()
 
   constructor(options: EngineOptions) {
     this.opts = {
@@ -418,6 +421,22 @@ export class SessionTaskEngine {
     }
   }
 
+  private inspectPriorAssignments(): void {
+    const root = sessionTaskDir(this.opts.runtimeHome, '')
+    try {
+      if (!lstatSync(root).isDirectory()) throw new Error('会话证据目录无法读取')
+      for (const entry of readdirSync(root, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue
+        this.priorAssignmentIds.add(entry.name)
+        const directory = sessionTaskDir(this.opts.runtimeHome, entry.name)
+        try { if (!lstatSync(pathJoin(directory, 'meta.json')).isFile()) continue } catch { continue }
+        const store = new SessionStore({ runtimeHome: this.opts.runtimeHome, assignmentId: entry.name, crypto: this.opts.crypto })
+        const meta = store.readMetaTaskId()
+        if (meta.status === 'ok') this.priorTaskIds.add(meta.taskId)
+      }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+  }
+
   /** 记录旧任务工作：同 task_id 多代旧 assignment 并存时保守合并——已有条目
    * 含未完成工作/不可恢复则保留（任一有工作即须阻断，引用保留首个发现），
    * 否则用新扫描结果覆盖（可能携带工作或不可恢复标记）。 */
@@ -494,7 +513,8 @@ export class SessionTaskEngine {
     if (!this.recovered) {
       this.recovered = true
       try {
-        await this.recoverOrphanAssignments(signal)
+        if (this.opts.resumePriorAssignments === false) this.inspectPriorAssignments()
+        else await this.recoverOrphanAssignments(signal)
       } catch (err) {
         this.emit(`启动恢复扫描异常（不阻塞主循环）: ${err instanceof Error ? err.message : String(err)}`)
       }
@@ -539,18 +559,24 @@ export class SessionTaskEngine {
 
   private async claimOnce(signal?: AbortSignal): Promise<void> {
     const claimed = await this.opts.api.sessionTaskClaim(this.opts.runtimeInstanceId, signal)
-    if (claimed === null) return
+    if (claimed === null || this.priorAssignmentIds.has(claimed.assignment_id)) return
     const existing = this.tasks.get(claimed.task_id)
     if (existing && existing.assignmentId === claimed.assignment_id) return
     if (existing) {
       existing.gate = 'lease_stale'
-      // 保留换代前的未 ACK 事实，独立历史补交通道继续处理。
-      const replayed = await existing.store.replay()
-      this.recordOldTaskWork(existing.taskId, extractOldTaskWork(existing.assignmentId, replayed.events))
-      const events = replayed.events.filter((e) => e.record.local_seq > existing.store.ackedLocalSeq)
-      if (events.length) this.recoveryPending.set(existing.assignmentId, {
-        store: existing.store, events, retryAt: 0, backoff: this.opts.syncRetryBaseMs,
-      })
+      if (this.opts.resumePriorAssignments === false) {
+        this.priorAssignmentIds.add(existing.assignmentId)
+        this.priorTaskIds.add(existing.taskId)
+        this.dropTask(existing)
+      } else {
+        // 保留换代前的未 ACK 事实，独立历史补交通道继续处理。
+        const replayed = await existing.store.replay()
+        this.recordOldTaskWork(existing.taskId, extractOldTaskWork(existing.assignmentId, replayed.events))
+        const events = replayed.events.filter((e) => e.record.local_seq > existing.store.ackedLocalSeq)
+        if (events.length) this.recoveryPending.set(existing.assignmentId, {
+          store: existing.store, events, retryAt: 0, backoff: this.opts.syncRetryBaseMs,
+        })
+      }
     }
     await this.adoptTask(claimed)
   }
@@ -574,6 +600,7 @@ export class SessionTaskEngine {
       assignmentId: claimed.assignment_id,
       crypto: this.opts.crypto,
     })
+    if (this.opts.resumePriorAssignments === false && store.exists()) return
     const task: TaskRuntime = {
       taskId: claimed.task_id,
       assignmentId: claimed.assignment_id,
@@ -619,18 +646,7 @@ export class SessionTaskEngine {
     // 身份（fence/control_epoch）——写入失败则不激活（不加入 tasks/ReadyQueue），
     // 本轮领取放弃，等下一轮 claim 重试；spec 经 crypto 加密落盘
     try {
-      await store.writeMeta({
-        input_version_base: task.inputVersionBase,
-        fresh_baseline: task.freshBaseline,
-        task_id: task.taskId,
-        conversation_binding_id: task.conversationBindingId,
-        binding_version: task.expectedBindingVersion,
-        account_identity_version: task.expectedAccountIdentityVersion,
-        spec_revision: task.specRevision,
-        spec: task.spec,
-        fence: task.fence,
-        control_epoch: task.controlEpoch,
-      })
+      await this.persistMeta(task)
     } catch (err) {
       this.emit(`task ${task.taskId} meta.json 写入失败，任务不激活: ${err instanceof Error ? err.message : String(err)}`)
       return
@@ -1318,10 +1334,11 @@ export class SessionTaskEngine {
       this.queue.set(task.taskId, 'observe', task.observeDueAt)
       return
     }
-    let result: ObserverResult
+    let result: ObserverResult | null
     try {
-      result = await this.withLock(() =>
-        this.opts.observer(
+      result = await this.withLock(async () => {
+        if (this.opts.resumePriorAssignments === false && this.tasks.get(task.taskId) !== task) return null
+        return this.opts.observer(
           {
             taskId: task.taskId,
             conversationBindingId: task.conversationBindingId,
@@ -1330,9 +1347,10 @@ export class SessionTaskEngine {
             targetName: taskTargetName(task.spec),
           },
           { watermark: task.watermark },
-        ),
-      )
+        )
+      })
     } catch (err) {
+      if (this.opts.resumePriorAssignments === false && this.tasks.get(task.taskId) !== task) return
       // 观察失败（引擎不可用/超时）：退避，不猜测
       task.observeBackoffIndex = Math.min(task.observeBackoffIndex + 1, OBSERVE_BACKOFF.length - 1)
       task.observeDueAt = now + OBSERVE_BACKOFF[task.observeBackoffIndex]!
@@ -1340,6 +1358,7 @@ export class SessionTaskEngine {
       this.emit(`task ${task.taskId} 观察失败退避: ${err instanceof Error ? err.message : String(err)}`)
       return
     }
+    if (!result || (this.opts.resumePriorAssignments === false && this.tasks.get(task.taskId) !== task)) return
     task.lastObservationAt = now
     // 身份三字段校验（评审 P1-9，session_observer_v1 契约）：任一不符 → blocked，
     // 在飞决策作废（不推进水位、不再观察）
@@ -1446,7 +1465,7 @@ export class SessionTaskEngine {
   /** 基线建立后提交开场白决策（§13.2：不调模型、仅一次；合成批次免 ACK 门禁）。
    * 已有新入站在聚合时不提交——服务端也按"已有接纳批次"拒绝/取消。 */
   private maybeEnqueueOpening(task: TaskRuntime, now: number): void {
-    if (task.freshBaseline) return // 人工恢复重建基线不再发起开场白
+    if (task.freshBaseline || (this.opts.resumePriorAssignments === false && (task.fence > 1 || this.priorTaskIds.has(task.taskId)))) return
     const opening = task.spec['opening_text']
     if (typeof opening !== 'string' || !opening) return
     if (task.decidedByDecisionIds.has('opening')) return
@@ -1710,6 +1729,7 @@ export class SessionTaskEngine {
     try {
       resp = await this.opts.api.sessionTaskPrepareSend(task.assignmentId, sr.decisionId, task.fence)
     } catch (err) {
+      if (this.opts.resumePriorAssignments === false && this.tasks.get(task.taskId) !== task) return false
       if (err instanceof NetworkError) {
         this.queue.set(task.taskId, 'send', now + 1_000)
         return false
@@ -1723,6 +1743,7 @@ export class SessionTaskEngine {
       this.queue.set(task.taskId, 'send', now + 5_000)
       return false
     }
+    if (this.opts.resumePriorAssignments === false && this.tasks.get(task.taskId) !== task) return false
     if (!resp.invocation_id) {
       await this.logEvent(
         task,
@@ -1857,6 +1878,7 @@ export class SessionTaskEngine {
     try {
       claim = await this.opts.api.sessionTaskClaimInvocation(task.assignmentId, ex.invocationId, task.fence)
     } catch (err) {
+      if (this.opts.resumePriorAssignments === false && this.tasks.get(task.taskId) !== task) return
       if (err instanceof NetworkError) {
         this.queue.set(task.taskId, 'send', now + 1_000)
         return
@@ -1877,6 +1899,7 @@ export class SessionTaskEngine {
       this.queue.set(task.taskId, 'send', now + 5_000)
       return
     }
+    if (this.opts.resumePriorAssignments === false && this.tasks.get(task.taskId) !== task) return
     const inv = claim.invocation
     if (inv === null) {
       if (claim.state === 'queued' || claim.state === 'claimed' || claim.state === 'running') {
@@ -1920,6 +1943,7 @@ export class SessionTaskEngine {
     )
     task.execution = null
     task.phase = 'waiting_peer'
+    if (this.opts.resumePriorAssignments === false && this.tasks.get(task.taskId) !== task) return
     task.observeDueAt = now + OBSERVE_BACKOFF[0]!
     this.queue.set(task.taskId, 'observe', task.observeDueAt)
     await this.drainDecisionQueue(task, now)
@@ -1993,7 +2017,7 @@ export class SessionTaskEngine {
   }
 }
 
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { lstatSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join as pathJoin } from 'node:path'
 
 function writeAckedMarker(runtimeHome: string, assignmentId: string, ackedSeq: number): void {

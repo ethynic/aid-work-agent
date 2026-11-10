@@ -371,6 +371,10 @@ Main 接收准备回执后先持久候选与证明，保留原目录指针。DPA
 
 恢复 1B 登记 Windows 直接进程证据。受信 native 辅助器是 Job 创建、停止、活动计数及退出回执的唯一生产者，Runtime 的既有 DPAPI 监督层是台账和标记的唯一写入者。新全局 Job 采用标记 v3 与台账 v2 区分本地 Job 历史；存量标记 v2、台账 v1 和受保护退出回执仍可读。新证据只在受信 home、generation、Windows 用户与 Job 对应时有效，跨会话不会把本地 Job 缺失当成零。辅助器原有本地模式保留。回退前先停稳并归档新版活动标记，旧程序不能解释新版活跃证据。恢复 1B 不改业务 API 或 H1/H3；恢复 1C 的资源 admission 与恢复 1D 的服务端任务语义分别登记后实施。
 
+恢复 1C 登记客户端资源 admission。持 home 租约的共享 Host 唯一接替活动标记，缺停稳证据时先原样移入 `host-resource-pending-<UUID>.json`，Runtime DPAPI 监督层唯一读取这些记录与对应台账并求资源范围。待处理文件不能授予权限，只有绑定的直接进程或退出回执才能缩小范围。标记 v3、台账 v2 不变，新版 Windows SkillRunner 经固定受信 Node 入口在 Global Job 内启动 Python，原业务参数经父子 stdin 一次传递。native Global run 增加可选退出码透传，旧调用保持原退出语义；历史外部 Python 标识仍按原值读取。受限启动复用现有设备身份、心跳能力字段与结果 ACK。Main 私有 Host 启动意图区分中断续启和已确认停稳，既有 H1/H3 和 Device API schema 保持。未解决的范围记录仍在时，旧版不能解释该限制，回退前先按当前版确认资源停止。服务端旧任务结束与调度由恢复 1D 负责。
+
+恢复 1C 会话换代复验。新版 Runtime 不接续已持久的旧 assignment，只以服务端下发的新 assignment、fence 和 input_version_base 建立新基线，不装载旧决策或 invocation。已见 task 或 fence 大于一时不启动旧开场白。仅活动进程冲突参与资源准入，旧业务历史原样保留，原结果按原 outbox/ACK 补传。SessionStore v1 字段与 Device API 保持原契约。
+
 两份计划共用同一登记项；仅完成本文不代表下列项已完成。
 
 每项实施记录以主导工作流的计划为唯一进度来源，另一计划引用；共同契约记录语义和兼容决议，不复制双方开发日志。

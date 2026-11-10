@@ -44,15 +44,17 @@ export class RuntimeSupervisor {
   private accepting = true
   instanceId = ''
   private recoveredInstanceId = ''
+  private interruptedInstanceId = ''
   private lifecycleInstanceId = ''
   get recoveredAfterInterruption(): boolean { return !!this.instanceId && this.recoveredInstanceId === this.instanceId }
+  get interruptedExecution(): boolean { return !!this.instanceId && this.interruptedInstanceId === this.instanceId }
   constructor(private options: RuntimeSupervisorOptions) {}
 
   private ensure(): Promise<Reply> {
     if (this.ready) return this.ready
     if (this.child && !this.childExited) return this.handshake(this.generation)
     const generation = ++this.generation
-    this.childExited = false; this.instanceId = ''; this.stopOperation = undefined; this.recoveredInstanceId = ''; this.lifecycleInstanceId = ''
+    this.childExited = false; this.instanceId = ''; this.stopOperation = undefined; this.recoveredInstanceId = ''; this.interruptedInstanceId = ''; this.lifecycleInstanceId = ''
     const env: NodeJS.ProcessEnv = {}
     for (const key of ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'USERNAME', 'SESSIONNAME', 'PROCESSOR_ARCHITECTURE', 'AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN']) if (process.env[key] !== undefined) env[key] = process.env[key]
     env.AIDWORK_RUNTIME_HOME = this.options.home
@@ -85,7 +87,10 @@ export class RuntimeSupervisor {
         return
       }
       if (object(message) && message.kind === 'runtime_recovery') {
-        if (Object.keys(message).sort().join(',') === 'instance_id,kind,processes_stopped' && typeof message.instance_id === 'string' && message.instance_id && message.processes_stopped === true) this.recoveredInstanceId = message.instance_id
+        if (Object.keys(message).sort().join(',') === 'instance_id,kind,processes_stopped' && typeof message.instance_id === 'string' && message.instance_id && typeof message.processes_stopped === 'boolean') {
+          this.interruptedInstanceId = message.instance_id
+          if (message.processes_stopped) this.recoveredInstanceId = message.instance_id
+        }
         return
       }
       if (object(message) && message.kind === 'runtime_platform_request') { void this.platformRequest(message, child, generation); return }

@@ -15,6 +15,7 @@ interface FakeDevice {
   device_id: string
   token: string
   heartbeats: number[]
+  capabilities?: Record<string, unknown>
 }
 
 export interface FakeInvocation {
@@ -144,6 +145,9 @@ export class FakeCloud {
   heartbeatCount(token: string): number {
     return this.devices.get(token)?.heartbeats.length ?? 0
   }
+  lastCapabilities(token: string): Record<string, unknown> | undefined {
+    return this.devices.get(token)?.capabilities
+  }
 
   /** 等待条件满足（轮询），超时抛错 */
   async waitFor(predicate: () => boolean, timeoutMs = 10_000, label = 'condition'): Promise<void> {
@@ -212,6 +216,8 @@ export class FakeCloud {
     }
 
     if (path === '/api/local-tools/runtime/heartbeat' && req.method === 'POST') {
+      const body = await this.readBody(req)
+      device.capabilities = body.capabilities as Record<string, unknown> | undefined
       device.heartbeats.push(Date.now())
       this.sendJson(res, 200, { success: true, selected: true, server_time: new Date().toISOString() })
       return
@@ -221,6 +227,7 @@ export class FakeCloud {
       const wait = Math.min(Number(url.searchParams.get('wait') ?? '20'), 30)
       const deadline = Date.now() + wait * 1000
       for (;;) {
+        if (res.destroyed) return
         for (const inv of this.invocations.values()) {
           if (inv.state === 'queued') {
             inv.state = 'claimed'
