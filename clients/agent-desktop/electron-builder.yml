@@ -24,6 +24,7 @@ files:
   - dist/electron/runtimeStartup.js
   - dist/electron/runtimeUpdate.js
   - dist/electron/runtimeLogs.js
+  - dist/electron/runtimeDiagnosticEvidence.js
   - dist/renderer/**/*
   - package.json
   - "!**/*.map"

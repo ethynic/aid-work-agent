@@ -7,7 +7,9 @@ import test from 'node:test'
 import { createRequire } from 'node:module'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { normalizeTrust, filesUnder, nodeSpecification, assertNoSensitiveAssets, validateReleaseInputs, digest, runtimeNodeSignExclusion, authenticodeStatus,
+import { load as loadYaml } from 'js-yaml'
+import ts from 'typescript'
+import { desktopRoot, normalizeTrust, filesUnder, nodeSpecification, assertNoSensitiveAssets, validateReleaseInputs, digest, runtimeNodeSignExclusion, authenticodeStatus,
   acceptanceTrustRegistryPath, runtimeR15TrustSnapshotPath, loadAcceptanceTrustRegistry, assertHistoricalTrustCoverage, assertRegisteredPublisherTrust, assertUnusedAcceptanceTestKeyId, main as prepareRuntime,
 } from '../prepare-runtime.mjs'
 import { mergePublisherTrust, registerPublisherTrust } from '../../../runtime-plugin-packaging/register-publisher-trust.mjs'
@@ -17,6 +19,29 @@ const { WinPackager } = require('app-builder-lib/out/winPackager.js')
 
 const key = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' })
 const roots = [{ key_id: 'name-does-not-define-trust', public_key: key, providers: ['ai.aidwork.weixin'], test_only: true }]
+
+test('actual Electron package allowlist includes all compiled local startup dependencies', () => {
+  const configuration = loadYaml(readFileSync(path.join(desktopRoot, 'electron-builder.yml'), 'utf8'))
+  const packaged = new Set(configuration.files)
+  assert.ok(packaged.has('dist/electron/main.js'))
+  assert.ok(packaged.has('dist/electron/preload.cjs'))
+  const tsconfig = ts.getParsedCommandLineOfConfigFile(path.join(desktopRoot, 'tsconfig.json'), {}, {
+    ...ts.sys, onUnRecoverableConfigFileDiagnostic: diagnostic => assert.fail(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')),
+  })
+  assert.ok(tsconfig && tsconfig.errors.length === 0)
+  const missing = []
+  for (const entry of packaged) {
+    if (!/^dist\/electron\/[^/]+\.(?:js|cjs)$/.test(entry)) continue
+    const source = path.join(desktopRoot, entry.slice('dist/'.length).replace(/\.cjs$/, '.cts').replace(/\.js$/, '.ts'))
+    const emitted = ts.transpileModule(readFileSync(source, 'utf8'), { fileName: source, compilerOptions: tsconfig.options }).outputText
+    for (const { fileName } of ts.preProcessFile(emitted, true, true).importedFiles) {
+      if (!/^\.\.?\//.test(fileName)) continue
+      if (!packaged.has(path.posix.join(path.posix.dirname(entry), fileName))) missing.push(`${entry} -> ${fileName}`)
+    }
+  }
+  assert.deepEqual(missing, [], 'Compiled Electron modules must resolve against the actual package allowlist')
+})
+
 test('打包仅原样消费最终wrapped信任输入', () => {
   const trust = { schemaVersion: 1, profile: 'acceptance', roots }
   assert.equal(normalizeTrust(trust, 'acceptance'), trust)
