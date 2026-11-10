@@ -157,12 +157,13 @@ test('independent: popup appearing during capture discards the image instead of 
   } finally { await rm(directory, { recursive: true, force: true }) }
 })
 
-test('independent: popup appearing after a segment scroll blocks the next capture before any contaminated frame', async () => {
+test('independent: popup appearing after a segment scroll is caught by the post-capture check and never stitched', async () => {
   let blocked = false
   const clear = fixture(), obstruction = fixture({ where: 'root', paint: 51 })
   const h = readerHarness(() => blocked ? obstruction : clear, undefined, count => { if (count === 2) blocked = true })
   await assert.rejects(h.reader.readResume(), ResumeReadError)
-  assert.deepEqual(h.counts(), { captures: 1, wheels: 2, stitches: 0 })
+  // Phase 2（设计 §3.3 决策 8）：后续段无截前快照，弹窗由截后校验拦截——该帧被拍摄但即弃，绝不入列/拼接
+  assert.deepEqual(h.counts(), { captures: 2, wheels: 2, stitches: 0 })
 })
 
 test('independent: a genuinely short, unobstructed resume can still confirm bottom using repeated pixels', async () => {

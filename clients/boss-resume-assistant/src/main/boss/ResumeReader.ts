@@ -371,7 +371,8 @@ export class ResumeReader {
         if (this.deps.signal?.aborted) throw new CancelledError('已取消：分段截图阶段中止')
         if (parts.length >= MAX_SEGMENTS) break // 段数上限：未确认到底，bottomReached=false（调用方警告）
         if (captures >= MAX_CAPTURES) break // 总截图次数安全上限（同上，不静默当到底）
-        const cap = await this.capturePart(tmpDir, captures++)
+        // parts.length===0 即首段（capturePart 内走前后双快照校验，见方法注释）
+        const cap = await this.capturePart(tmpDir, captures++, parts.length === 0)
         let buf = cap.buf
         let file = cap.file
         if (parts.length > 0 && Math.abs(buf.length - prevBytes) < BOTTOM_SIZE_EPSILON) {
@@ -386,7 +387,8 @@ export class ResumeReader {
             }
             await this.deps.wheel(-120, SEGMENT_WHEEL_NOTCHES)
             await this.sleep(BOTTOM_CONFIRM_DELAY)
-            const cap2 = await this.capturePart(tmpDir, captures++)
+            // 到底确认路径只在 parts.length ≥ 1 时进入，恒为后续段（截后单快照校验）
+            const cap2 = await this.capturePart(tmpDir, captures++, false)
             const confirmed =
               Math.abs(cap2.buf.length - prevBytes) < BOTTOM_SIZE_EPSILON &&
               (await this.sameViewOrFail(cap2.file, lastFile))
@@ -442,22 +444,42 @@ export class ResumeReader {
     }
   }
 
-  /** 截一段整页图落盘（文件名按截图次序编号，含到底确认路径的额外截图） */
+  /**
+   * 截一段整页图落盘（文件名按截图次序编号，含到底确认路径的额外截图）。
+   *
+   * 快照校验精简（2026-11-10 提速 Phase 2，设计 §3.3 决策 8，原每段截图前后各一次快照校验
+   * 实测约 2-5s/份开销）：
+   * - 首段（first=true）保留前后双校验——首段是整条链路的几何/遮挡基准：readResume 入口定位的
+   *   activeRect 在此被证明与当前页面一致，此后各段才可只对 activeRect 比对；
+   * - 后续段（first=false）仅截图后一次校验：滚动是本链路自发行为，段间页面几何不会自变，
+   *   截前快照只会重复证明已知事实；弹窗若在截图前后中途出现，由截后校验（rect 比对 +
+   *   assertResumeUnobstructed 全量执行）拦截，受污染截图不会写盘。
+   * 比较基准：首段截后比对 current（现状语义）；后续段比对 activeRect——首段 after 校验通过
+   * 即证明 current===activeRect，两者在首段之后等价。
+   * 中止语义不变：画布消失/几何变化/遮挡一律 fail-loud 抛 ResumeReadError。
+   */
   private async capturePart(
     tmpDir: string,
     index: number,
+    first: boolean,
   ): Promise<{ buf: Buffer; file: string }> {
-    const before = await this.deps.snapshot()
-    const current = locateResumeCanvas(before)
-    if (!current || !this.activeRect || Object.keys(this.activeRect).some((key) =>
-      current[key as keyof DeviceRect] !== this.activeRect![key as keyof DeviceRect])) {
-      throw new ResumeReadError('分段采图前原简历画布消失或几何已变化，未继续采集其他页面')
+    let current: DeviceRect | null = null
+    if (first) {
+      const before = await this.deps.snapshot()
+      const found = locateResumeCanvas(before)
+      if (!found || !this.activeRect || Object.keys(this.activeRect).some((key) =>
+        found[key as keyof DeviceRect] !== this.activeRect![key as keyof DeviceRect])) {
+        throw new ResumeReadError('分段采图前原简历画布消失或几何已变化，未继续采集其他页面')
+      }
+      assertResumeUnobstructed(before, found)
+      current = found
     }
-    assertResumeUnobstructed(before, current)
     const buf = await this.deps.captureFullpage()
     const after = await this.deps.snapshot()
     const afterRect = locateResumeCanvas(after)
-    if (!afterRect || Object.keys(current).some(key => current[key as keyof DeviceRect] !== afterRect[key as keyof DeviceRect])) {
+    const base = current ?? this.activeRect
+    if (!afterRect || !base || Object.keys(base).some((key) =>
+      base[key as keyof DeviceRect] !== afterRect[key as keyof DeviceRect])) {
       throw new ResumeReadError('分段采图期间原简历画布消失或几何已变化，未保存当前截图')
     }
     assertResumeUnobstructed(after, afterRect)
