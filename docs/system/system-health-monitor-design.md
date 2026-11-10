@@ -32,7 +32,7 @@
 | 分组 | 指标 | 数据来源 |
 |---|---|---|
 | Runner 执行面 | 槽位占用（running/finalizing ÷ concurrency）、排队深度（queued 数）、最老任务运行时长、排队等待时长（accepted→首次 running）、当前 active 告警 | `agent_runners` 表 + supervisor 槽位状态；复用 `RunnerAlertRepository.candidates()` |
-| 系统资源 | CPU% / load / 内存 / 磁盘 IO 速率 / storage 与日志分区使用率 | psutil（主 API 容器内，/proc 反映宿主机级） |
+| 系统资源 | CPU% / load / 内存 / 磁盘 IO 速率 / 网络 IO 速率 / storage 与日志分区使用率 | psutil（主 API 容器内，/proc 反映宿主机级）；网络 IO 跨轮差分、排除回环/虚拟网卡，带宽占满研判需环境变量 `PUBLIC_BANDWIDTH_MBPS`（Mbps，未配置则只展示不研判，观察 ≥80% / 警告 ≥95%） |
 | 业务面 | 在线用户（最近 5 分钟活跃会话数）、今日请求量、今日错误率 | `chat_records` / `chat_sessions` 聚合 |
 | 响应时长 | 任务执行耗时 P50/P95、模型调用错误率 | `chat_records` 或追踪库 obs_spans |
 
@@ -123,7 +123,7 @@ runner 栈已有 `agent-runner-monitor` 容器（`src/services/agent_runner/moni
 
 ### 6.1 页面结构（PC）
 
-- **顶部**：AI 研判横幅（绿/黄/红 + 一句话结论 + 建议动作，标注「AI 研判」；LLM 不可用时回落为规则层判定文案），见 §9
+- **顶部**：AI 研判横幅（绿/黄/红 + 总状态徽标 + 一句话结论 + 建议动作，标注「AI 研判」；LLM 不可用时回落为规则层判定文案），见 §9
 - **上部**：状态卡区——Runner 负载 / 系统资源 / 业务活跃 / 告警四张卡，卡内为数字指标（如「槽位 2/4」「排队 3」「最老任务 12 分」），异常值红/黄高亮，右上显示采集时间戳与刷新暂停开关
 - **下部**：两张表——「运行中任务」（runner_id/租户/数字员工/已运行时长，超 30 分钟标红）与「排队任务」（已等待时长倒序）
 - 遵循 page_patterns 统计页规范 + Base* 组件；路由注册 `frontend/web/router/portalRoutes.ts`，组件 `frontend/web/components/saas/SystemHealthMonitor.vue`
@@ -166,10 +166,10 @@ runner 栈已有 `agent-runner-monitor` 容器（`src/services/agent_runner/moni
 ### 9.2 架构
 
 - **位置**：研判任务在采集器侧后台执行，**不在 HTTP 请求路径**（页面轮询 15s 只读 Redis 缓存好的结论，不触发 LLM）
-- **触发**：默认每 60s 评估一次；**哈希去重的口径是「阈值带离散化」**——所有指标先按阈值表离散为 normal/watch/critical 三态再拼哈希（剔除采集时间戳等纯时变字段），阈值带组合不变则复用上次结论（平静时段零 LLM 调用）。**不能直接对原始数值做内容哈希**：最老任务时长、今日请求量等字段每轮必然变化，原始哈希永远不相等、去重失效；异常出现后最坏 ~2 分钟出结论（60s 评估间隔 + LLM 推理 + 15s 页面轮询），横幅红/黄高亮由规则层即时驱动、不等 LLM
+- **触发**：默认每 60s 评估一次；**哈希去重的口径是「阈值带离散化」**——所有指标先按阈值表离散为 normal/watch/critical，硬故障（Redis 不可用、Runner 调度停摆）直接判 error，再拼哈希（剔除采集时间戳等纯时变字段），阈值带组合不变则复用上次结论（平静时段零 LLM 调用）。**不能直接对原始数值做内容哈希**：最老任务时长、今日请求量等字段每轮必然变化，原始哈希永远不相等、去重失效；异常出现后最坏 ~2 分钟出结论（60s 评估间隔 + LLM 推理 + 15s 页面轮询），横幅红/黄高亮由规则层即时驱动、不等 LLM
 - **输入**：紧凑指标 JSON（仅数值，无敏感内容）+ 判定标准（阈值表来自配置，与规则层同源，避免两套口径）
-- **输出**：结构化 JSON——`{overall: normal|watch|critical, summary: 一句话结论, items: [{group, status, note}], suggestion: 建议动作}`；解析失败降级为规则层判定并记日志
-- **展示**：页面顶部大状态横幅（绿/黄/红 + summary + suggestion，标注「AI 研判」）；原始数据仍完整展示，LLM 结论只解释数据、不隐藏数据
+- **输出**：结构化 JSON——`{overall: normal|watch|critical, summary: 一句话结论, items: [{group, status, note}], suggestion: 建议动作}`；解析失败降级为规则层判定并记日志。**error 态兜底**：LLM 不输出 error（error 仅由规则层硬故障确定性判定），LLM 结论经 `apply_error_floor` 抬升——状态中存在 error 时整体与受影响分组一并抬为 error
+- **展示**：页面顶部大状态横幅（绿/黄/红 + 总状态徽标 + summary + suggestion，标注「AI 研判」）；四张状态卡右上角各有分组状态徽标，与总状态同一组四级划分（正常/观察/警告/错误，2026-11-10 改版）。原始数据仍完整展示，LLM 结论只解释数据、不隐藏数据
 - **降级**：LLM 失败/超时不影响任何数据展示，横幅回落为规则层判定文案（硬阈值兜底）
 
 ### 9.3 与规则层的关系（双层判定分工）

@@ -16,6 +16,7 @@ from src.services.system_health.collector import (
 from src.services.system_health.assessment import (
     THRESHOLDS,
     _parse_llm_verdict,
+    apply_error_floor,
     discretize,
     overall_of,
     rule_fallback,
@@ -136,7 +137,7 @@ class TestDiscretize:
 
     def test_runner_stalled_boolean(self):
         snap = _make_snapshot(runner={"runner_stalled": True})
-        assert discretize(snap)["runner.runner_stalled"] == "critical"
+        assert discretize(snap)["runner.runner_stalled"] == "error"
 
     def test_system_cpu_bands(self):
         snap = _make_snapshot(system={"cpu_percent": 85.0})
@@ -156,9 +157,23 @@ class TestDiscretize:
         states = discretize(snap)
         assert "system.cpu_percent" not in states
 
-    def test_redis_unavailable_critical(self):
+    def test_net_load_ratio_bands(self):
+        # 收/发取较大者：0.5 MB/s × 8 = 4 Mbps，对 5 Mbps 带宽 = 80% -> watch
+        snap = _make_snapshot(system={"net_recv_mb_per_s": 0.5, "net_sent_mb_per_s": 0.1,
+                                      "net_bandwidth_mbps": 5})
+        assert discretize(snap)["system.net_load_ratio"] == "watch"
+        snap = _make_snapshot(system={"net_recv_mb_per_s": 0.6, "net_sent_mb_per_s": 0.1,
+                                      "net_bandwidth_mbps": 5})
+        assert discretize(snap)["system.net_load_ratio"] == "critical"
+
+    def test_net_load_ratio_skipped_without_bandwidth(self):
+        snap = _make_snapshot(system={"net_recv_mb_per_s": 5.0, "net_sent_mb_per_s": 5.0,
+                                      "net_bandwidth_mbps": None})
+        assert "system.net_load_ratio" not in discretize(snap)
+
+    def test_redis_unavailable_error(self):
         snap = _make_snapshot(middleware={"redis_available": False})
-        assert discretize(snap)["middleware.redis_available"] == "critical"
+        assert discretize(snap)["middleware.redis_available"] == "error"
 
 
 class TestStateHashAndOverall:
@@ -176,6 +191,7 @@ class TestStateHashAndOverall:
         assert overall_of({"a": "normal", "b": "watch"}) == "watch"
         assert overall_of({"a": "watch", "b": "critical"}) == "critical"
         assert overall_of({"a": "normal"}) == "normal"
+        assert overall_of({"a": "critical", "b": "error"}) == "error"
 
 
 class TestRuleFallback:
@@ -184,10 +200,41 @@ class TestRuleFallback:
         states = discretize(snap)
         verdict = rule_fallback(states)
         assert verdict["source"] == "rule"
-        assert verdict["overall"] in ("normal", "watch", "critical")
+        assert verdict["overall"] in ("normal", "watch", "critical", "error")
         assert verdict["items"]
         assert verdict["summary"]
         assert "suggestion" in verdict
+
+    def test_hard_failure_yields_error(self):
+        snap = _make_snapshot(middleware={"redis_available": False})
+        verdict = rule_fallback(discretize(snap))
+        assert verdict["overall"] == "error"
+        middleware_item = next(i for i in verdict["items"] if i["group"] == "middleware")
+        assert middleware_item["status"] == "error"
+
+
+class TestApplyErrorFloor:
+    def test_lifts_overall_and_affected_group(self):
+        verdict = {
+            "overall": "watch",
+            "items": [
+                {"group": "middleware", "status": "watch"},
+                {"group": "runner", "status": "watch"},
+            ],
+        }
+        states = {"middleware.redis_available": "error", "runner.queued": "watch"}
+        apply_error_floor(verdict, states)
+        assert verdict["overall"] == "error"
+        by_group = {i["group"]: i["status"] for i in verdict["items"]}
+        assert by_group["middleware"] == "error"
+        assert by_group["runner"] == "watch"
+
+    def test_no_error_state_noop(self):
+        verdict = {"overall": "watch", "items": [{"group": "runner", "status": "watch"}]}
+        states = {"runner.queued": "watch"}
+        apply_error_floor(verdict, states)
+        assert verdict["overall"] == "watch"
+        assert verdict["items"][0]["status"] == "watch"
 
 
 # ==================== assessment: LLM 解析 ====================

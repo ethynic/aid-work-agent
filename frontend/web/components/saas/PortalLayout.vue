@@ -215,7 +215,6 @@ const logoUrl = computed(() => {
 const portalMenuItems = [
   // 系统健康：心跳波形（登录后默认页）
   { path: '/portal/system-health', label: '系统健康', icon: 'M22 12h-4l-3 9L9 3l-3 9H2' },
-  { path: '/portal/notifications', label: '通知设置', icon: 'M18 8a6 6 0 00-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4' },
   // 仪表盘：九宫格统计图（与参考图风格一致）
   { path: '/portal', label: '仪表盘', icon: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z' },
   // 租户管理：办公建筑
@@ -245,6 +244,8 @@ const portalMenuItems = [
   { path: '/portal/redis-cache', label: 'Redis缓存', icon: 'M4 6h16v4H4zM4 14h16v4H4zM8 6v4M8 14v4M16 6v4M16 14v4' },
   // 回复风格：对话气泡
   { path: '/portal/reply-styles', label: '回复风格', icon: 'M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z' },
+  // 通知设置：铃铛
+  { path: '/portal/notifications', label: '通知设置', icon: 'M18 8a6 6 0 00-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4' },
 ]
 
 // 根据路由选择菜单
