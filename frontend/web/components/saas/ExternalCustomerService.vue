@@ -272,11 +272,11 @@
                   <img
                     v-for="img in getAssistantImages(msg)"
                     :key="img.file_id"
-                    :src="img.download_url"
+                    :src="inlineFileUrl(img.file_id)"
                     :alt="img.display_name || '图片'"
                     loading="lazy"
                     class="max-w-[240px] max-h-[240px] rounded-lg cursor-pointer border border-default"
-                    @click="previewImage(img.download_url)"
+                    @click="previewImage(inlineFileUrl(img.file_id))"
                   />
                 </div>
                 <!-- AI 消息：可下载文件 -->
@@ -593,7 +593,7 @@ import AttachmentCard from './AttachmentCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAmrPlayer } from '@/composables/useAmrPlayer'
 // import { getUserSourceInfo } from '@/api/enums'
-import { formatFileSize } from '@/utils/file'
+import { formatFileSize, inlineFileUrl } from '@/utils/file'
 import type { DownloadableFile } from '@/types'
 import { useToast } from 'vue-toastification'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'

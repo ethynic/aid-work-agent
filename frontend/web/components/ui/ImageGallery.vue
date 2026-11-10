@@ -7,7 +7,7 @@
       @click="openLightbox(idx)"
     >
       <img
-        :src="img.download_url"
+        :src="fileUrl(img.file_id)"
         :alt="img.display_name"
         loading="lazy"
         class="gallery-img"
@@ -25,7 +25,7 @@
       @update:model-value="lightboxOpen = false"
     >
       <img
-        :src="images[lightboxIndex]?.download_url"
+        :src="images[lightboxIndex] ? fileUrl(images[lightboxIndex].file_id) : ''"
         class="lightbox-img"
         :alt="images[lightboxIndex]?.display_name"
       />
@@ -42,6 +42,7 @@ import { ref, computed } from 'vue'
 import type { ImageRef } from '@/types'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
+import { useReplyResources } from '@/utils/replyResources'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
 /**
@@ -62,6 +63,10 @@ const props = defineProps<{
 // 租户偏好：会话图片“AI生成”角标开关（缺省显示）
 const { tenant } = useTenantAuth()
 const showSourceBadge = computed(() => tenant.value?.show_ai_badge !== false)
+
+// 图片展示 URL：分享上下文走共享 resolver，普通上下文走 /api/files/{id}（inline 端点，
+// 不在 nginx 下载限速 location 内，避免多图并发被 limit_conn 503）
+const { fileUrl } = useReplyResources()
 
 /** 布局模式：根据图片数量自动选择 */
 const layoutMode = computed<'single' | 'row' | 'grid'>(() => {
