@@ -323,57 +323,68 @@
       </div>
 
       <!-- 数字员工授权标签页 -->
-      <div v-show="activeTab === 'agents'" class="overflow-y-auto" style="max-height: calc(90vh - 220px);">
+      <div v-show="activeTab === 'agents'" class="table-scroll-wrapper" style="max-height: calc(90vh - 220px);">
         <div v-if="loadingAgents" class="text-center py-6 text-muted text-sm">加载中...</div>
-        <div v-else-if="availableAgents.length === 0" class="text-center py-6 text-muted text-sm">暂无可用数字员工</div>
-        <div v-else class="space-y-2 py-2">
-          <div v-for="agent in availableAgents" :key="agent.agent_id" class="flex items-center p-2 hover:bg-canvas rounded">
+        <BaseTable
+          v-else-if="availableAgents.length > 0"
+          :columns="agentColumns"
+          :data="availableAgents"
+          row-key="agent_id"
+          table-fixed
+        >
+          <template #seq="{ index }">{{ index + 1 }}</template>
+          <template #authorized="{ row }">
             <input
               type="checkbox"
-              :checked="isAgentAuthorized(agent.agent_id)"
-              @change="toggleAgentSelection(agent.agent_id)"
-              class="w-4 h-4 text-primary-600 border-hover rounded focus:ring-primary-500"
+              :checked="isAgentAuthorized(row.agent_id)"
+              @change="toggleAgentSelection(row.agent_id)"
+              class="table-checkbox"
             />
-            <div class="ml-3 flex-1">
-              <div class="text-sm font-medium text-default">
-                {{ agent.name }} <span class="text-xs text-muted font-normal ml-1">{{ agent.agent_id }}</span>
-              </div>
-              <div v-if="agent.description" class="text-xs text-muted">{{ agent.description }}</div>
-            </div>
-            <span class="ml-2 text-xs px-1.5 py-0.5 rounded"
-              :class="agent.type === 'builtin' ? 'bg-info-100 text-info-700' : 'bg-success-100 text-success-700'">
-              {{ agent.type === 'builtin' ? '内置' : '定制' }}
+          </template>
+          <template #name="{ row }">
+            <span class="text-sm font-medium text-default">{{ row.name }}</span>
+            <span class="text-xs text-muted font-normal ml-1 whitespace-nowrap">{{ row.agent_id }}</span>
+          </template>
+          <template #type="{ row }">
+            <span class="text-xs px-1.5 py-0.5 rounded whitespace-nowrap"
+              :class="row.type === 'builtin' ? 'bg-info-100 text-info-700' : 'bg-success-100 text-success-700'">
+              {{ row.type === 'builtin' ? '内置' : '定制' }}
             </span>
-            <button
-              :disabled="!isAgentAuthorized(agent.agent_id)"
-              @click="openEnvVarDialog(agent)"
-              class="ml-2 text-xs px-2 py-1 rounded border border-primary-200 bg-primary-50 text-primary-700 hover:bg-primary-100 hover:border-primary-400 transition-colors disabled:border-default disabled:bg-surface disabled:text-muted disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-surface disabled:hover:border-default disabled:hover:text-muted"
-              title="环境变量设置"
-            >环境变量</button>
-            <button
-              :disabled="!isAgentAuthorized(agent.agent_id)"
-              @click="openKnowledgeDialog(agent)"
-              class="ml-1 text-xs px-2 py-1 rounded border border-success-200 bg-success-50 text-success-700 hover:bg-success-100 hover:border-success-400 transition-colors disabled:border-default disabled:bg-surface disabled:text-muted disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-surface disabled:hover:border-default disabled:hover:text-muted"
-              title="知识库关联"
-            >知识库</button>
-            <button
-              :disabled="!isAgentAuthorized(agent.agent_id)"
-              @click="openConfigFileDialog(agent)"
-              class="ml-1 text-xs px-2 py-1 rounded border border-info-200 bg-info-50 text-info-700 hover:bg-info-100 hover:border-info-400 transition-colors disabled:border-default disabled:bg-surface disabled:text-muted disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-surface disabled:hover:border-default disabled:hover:text-muted"
-              title="API 配置文件"
-            >API 配置</button>
-            <a
-              v-if="isEdit"
-              :href="isAgentAuthorized(agent.agent_id) ? getAgentChatUrl(currentTenant?.tenant_id, agent.agent_id) : undefined"
-              target="_blank"
-              :tabindex="isAgentAuthorized(agent.agent_id) ? 0 : -1"
-              :aria-disabled="!isAgentAuthorized(agent.agent_id)"
-              class="ml-1 text-xs px-2 py-1 rounded border border-primary-200 bg-primary-50 text-primary-700 hover:bg-primary-100 hover:border-primary-400 transition-colors aria-disabled:border-default aria-disabled:bg-surface aria-disabled:text-muted aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-surface aria-disabled:hover:border-default aria-disabled:hover:text-muted"
-              :title="isAgentAuthorized(agent.agent_id) ? getAgentChatUrl(currentTenant?.tenant_id, agent.agent_id) : '未授权数字员工不可访问入口链接'"
-              @click="!isAgentAuthorized(agent.agent_id) && $event.preventDefault()"
-            >入口链接</a>
-          </div>
-        </div>
+          </template>
+          <template #actions="{ row }">
+            <div class="flex items-center justify-center gap-1 whitespace-nowrap">
+              <button
+                :disabled="!isAgentAuthorized(row.agent_id)"
+                @click="openEnvVarDialog(row as AgentItem)"
+                class="text-xs px-2 py-1 rounded border border-primary-200 bg-primary-50 text-primary-700 hover:bg-primary-100 hover:border-primary-400 transition-colors disabled:border-default disabled:bg-surface disabled:text-muted disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-surface disabled:hover:border-default disabled:hover:text-muted"
+                title="环境变量设置"
+              >环境变量</button>
+              <button
+                :disabled="!isAgentAuthorized(row.agent_id)"
+                @click="openKnowledgeDialog(row as AgentItem)"
+                class="text-xs px-2 py-1 rounded border border-success-200 bg-success-50 text-success-700 hover:bg-success-100 hover:border-success-400 transition-colors disabled:border-default disabled:bg-surface disabled:text-muted disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-surface disabled:hover:border-default disabled:hover:text-muted"
+                title="知识库关联"
+              >知识库</button>
+              <button
+                :disabled="!isAgentAuthorized(row.agent_id)"
+                @click="openConfigFileDialog(row as AgentItem)"
+                class="text-xs px-2 py-1 rounded border border-info-200 bg-info-50 text-info-700 hover:bg-info-100 hover:border-info-400 transition-colors disabled:border-default disabled:bg-surface disabled:text-muted disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-surface disabled:hover:border-default disabled:hover:text-muted"
+                title="API 配置文件"
+              >API 配置</button>
+              <a
+                v-if="isEdit"
+                :href="isAgentAuthorized(row.agent_id) ? getAgentChatUrl(currentTenant?.tenant_id, row.agent_id) : undefined"
+                target="_blank"
+                :tabindex="isAgentAuthorized(row.agent_id) ? 0 : -1"
+                :aria-disabled="!isAgentAuthorized(row.agent_id)"
+                class="text-xs px-2 py-1 rounded border border-primary-200 bg-primary-50 text-primary-700 hover:bg-primary-100 hover:border-primary-400 transition-colors aria-disabled:border-default aria-disabled:bg-surface aria-disabled:text-muted aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-surface aria-disabled:hover:border-default aria-disabled:hover:text-muted"
+                :title="isAgentAuthorized(row.agent_id) ? getAgentChatUrl(currentTenant?.tenant_id, row.agent_id) : '未授权数字员工不可访问入口链接'"
+                @click="!isAgentAuthorized(row.agent_id) && $event.preventDefault()"
+              >入口链接</a>
+            </div>
+          </template>
+        </BaseTable>
+        <div v-else class="text-center py-6 text-muted text-sm">暂无可用数字员工</div>
       </div>
 
       <!-- 数据迁移标签页 -->
@@ -688,6 +699,14 @@ const activeTab = ref<'basic' | 'agents' | 'migration' | 'activation' | 'sources
 const availableAgents = ref<AgentItem[]>([])
 const selectedAgentIds = ref<string[]>([])
 const loadingAgents = ref(false)
+
+const agentColumns: TableColumn[] = [
+  { key: 'seq', label: '序号', width: '60px' },
+  { key: 'authorized', label: '授权', width: '60px' },
+  { key: 'name', label: '数字员工', thAlign: 'left', tdAlign: 'left', tooltip: (row: any) => `${row.name} (${row.agent_id})` },
+  { key: 'type', label: '类型', width: '70px' },
+  { key: 'actions', label: '操作', width: '350px' },
+]
 
 // 环境变量弹窗
 const showEnvVarDialog = ref(false)
