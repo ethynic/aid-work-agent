@@ -122,7 +122,7 @@ Node 固定22.23.3 / Windows x64 / ABI127；Host 资源从模块路径解析，�
 
 BOSS/weixin/wecom 是独立按需安装的 MCP 包，空 Host 可配对、联网和诊断。客户机无需 npm/Git/系统 Python；第一方包包含批准工具所需依赖，不将源码仓库/experiments/venv 路径当发行输入。
 
-管理安装记录及停用/卸载墓碑优先于显式 legacy 入口，不能回退手工入口绕过停用。单包坏损/缺失不阻断其他包或空 Host。旧 clients/pack.sh 对新独立布局前置拒绝，使用当前 Desktop 构建链；不拿旧捆绑 BOSS 的发货包证明新机制可用。
+管理安装记录及停用/卸载墓碑优先于显式 legacy 入口，不能回退手工入口绕过停用。单包坏损/缺失不阻断其他包或空 Host。独立布局的出包和验收使用[统一打包手册](../ops/runtime-boss-release-guide.md)，旧内嵌 BOSS 交付记录仅供历史追溯。
 
 Provider 业务、云端特殊代理/计费仍按原实现，不把任意 MCP tools/list 注入 Agent，也不为通过测试扩大静态受信子集。
 

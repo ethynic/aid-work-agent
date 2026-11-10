@@ -1,24 +1,10 @@
 # 客户端构建与安装入口
 
-## Runtime 与 BOSS 插件
+## 构建入口
 
-**当前唯一打包流程：[Runtime 与 BOSS 插件构建及 ZIP 交付手册](../docs/ops/runtime-boss-release-guide.md)。**
-
-手册覆盖 Windows 构建环境、组件版本、原生共享依赖、固定 Node、BOSS 签名插件、历史公钥登记、Host tgz、Runtime 安装器、验包、说明与摘要以及最终 ZIP。最终交付统一放在 `clients/release/`，仓库根 `release/` 不作为交付目录。
-
-当前 Runtime 和 BOSS 是独立安装的组件：组合 ZIP 内有 Runtime EXE 和 BOSS `.aidplugin.zip`；用户先安装 Runtime，再在其界面导入插件。安装 Runtime 不会自动升级 BOSS。首次配对后自动复用服务器和设备身份，视觉调用无需用户额外配置 token。
-
-| 需求 | 入口 |
-|---|---|
-| 从源码生成新的 Runtime + BOSS ZIP | [完整出包步骤](../docs/ops/runtime-boss-release-guide.md) |
-| 收件人安装或升级 | 使用本次 ZIP 内的“先读我.md”；[说明生成及安装顺序](../docs/ops/runtime-boss-release-guide.md#8-复制交付文件说明和源码状态) |
-| 完整桌面对话客户端（非独立 Runtime） | [桌面客户端构建手册](../docs/system/desktop-agent-client-build-manual.md) |
-| 插件容器、签名及其他 Provider 资产 | [插件打包说明](runtime-plugin-packaging/README.md) |
-| 共同契约及实际完成范围 | [集成契约](../docs/system/runner-desktop-runtime-integration-contract.md)、[Runtime 计划](../docs/plans/plan-runtime-plugin-host.md) |
-
-## 历史流程
-
-原本文的 `bash clients/pack.sh <版本>`、Runtime 内嵌 BOSS 的全局 npm tgz、计划任务安装方式适用于旧交付；当前 `clients/pack.sh` 已在修改文件前拒绝独立插件布局，不再推荐执行。历史文件、版本记录及已交付包保留原意，不作为当前构建步骤。旧部署内容可通过 Git 历史查阅；不要把历史 `clients/release/安装手册.md` 当作新 Runtime 的安装说明。
+- Runtime 安装器、BOSS 和 WeCom 离线插件见[统一打包手册](../docs/ops/runtime-boss-release-guide.md)。安装使用本批 ZIP 中的“先读我.md”。
+- 完整桌面对话客户端见[桌面客户端构建手册](../docs/system/desktop-agent-client-build-manual.md)。
+- 插件容器格式和其他 Provider 资产见[插件打包说明](runtime-plugin-packaging/README.md)。
 
 ## 九、客户端计费接入规范（三模式，新客户端必读）
 

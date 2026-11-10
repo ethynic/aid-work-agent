@@ -64,6 +64,8 @@
 
 ## Desktop / Runtime 共同契约
 
+Runtime 安装器和 BOSS、WeCom 离线插件统一走 [打包手册](docs/ops/runtime-boss-release-guide.md)。从仓库根运行 `clients/agent-desktop/scripts/release-batch.ps1`，三件一起用 `-Component All`，单件用 `Runtime`、`Boss` 或 `Wecom`。先带 `-Plan` 核对，成品默认在 Windows「下载」的 `AID-Work-Releases` 中。
+
 涉及桌面客户端重设计、Runtime、插件或任务级设备/workspace 授权时，先读取并遵守 [Runner / Desktop / Runtime 集成契约](docs/system/runner-desktop-runtime-integration-contract.md)，再读各自设计与计划。页面与产品壳可独立调整；共用 Runtime core、Device API、binding、授权和 wire schema 不得各自实现或单方面改义。修改共同接口先登记版本、唯一写入者与兼容方案，实施前完成契约中的共同检查点；旧 D1/本地 Coordinator 不作为新开发基线。已有代码事实与计划扩展须明确区分。
 
 **已交付客户端兼容原则**：已有客户试用 Runtime＋CLI，服务端修改必须默认兼容已交付的旧客户端，保留其原有工具、任务恢复、结果上报和计费能力。旧客户端满足客户需求即可，不能因服务端更新或新增功能要求所有客户升级。新能力沿现有能力协商按需启用；缺少新能力只影响对应新功能，不能让原有 BOSS 等功能失效或整项任务卡死。发布兼容验证覆盖“只升级服务端、客户机保持旧版本”的实际交付组合，按受影响范围验证，不为所有历史版本逐代增加门禁和测试。详细要求见[后端规范](.claude/rules/backend_dev.md#runtime--cli-服务端升级兼容)。
