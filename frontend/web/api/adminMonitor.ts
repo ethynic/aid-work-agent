@@ -9,7 +9,7 @@ const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/admin/monitor`
 
 // ==================== 类型 ====================
 
-export type HealthLevel = 'normal' | 'watch' | 'critical'
+export type HealthLevel = 'normal' | 'watch' | 'critical' | 'error'
 export type CollectorStatus = 'ok' | 'collector_down' | 'storage_unavailable'
 
 export interface RunnerSection {
@@ -44,6 +44,9 @@ export interface SystemSection {
   disk_write_mb_per_s?: number
   disk_used_percent_storage?: number | null
   disk_used_percent_log?: number | null
+  net_recv_mb_per_s?: number
+  net_sent_mb_per_s?: number
+  net_bandwidth_mbps?: number | null
   error?: string
 }
 

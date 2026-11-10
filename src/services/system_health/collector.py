@@ -222,6 +222,35 @@ def _collect_system_section(prev_snapshot: Optional[Dict[str, Any]]) -> Dict[str
     except Exception as e:  # noqa: BLE001 无磁盘计数器（部分容器环境）时跳过
         logger.debug(f"后端日志：健康监控磁盘 IO 采集跳过: {e}")
 
+    # 网络 IO 速率：跨轮差分（口径同磁盘 IO）；排除回环与本机虚拟网卡，避免内部流量污染
+    try:
+        recv = sent = 0
+        for name, nio in (psutil.net_io_counters(pernic=True) or {}).items():
+            lowered = name.lower()
+            if lowered == "lo" or lowered.startswith(("docker", "veth", "br-", "tun", "tap", "virbr")):
+                continue
+            recv += nio.bytes_recv
+            sent += nio.bytes_sent
+        prev_net = (prev_snapshot or {}).get("_net_prev")
+        now = time.time()
+        if prev_net and now > prev_net.get("ts", 0):
+            dt = now - prev_net["ts"]
+            section["net_recv_mb_per_s"] = round(
+                max(0, recv - prev_net["recv_bytes"]) / dt / (1024 ** 2), 2)
+            section["net_sent_mb_per_s"] = round(
+                max(0, sent - prev_net["sent_bytes"]) / dt / (1024 ** 2), 2)
+        section["_net_prev"] = {"ts": now, "recv_bytes": recv, "sent_bytes": sent}
+    except Exception as e:  # noqa: BLE001 无网络计数器时跳过
+        logger.debug(f"后端日志：健康监控网络 IO 采集跳过: {e}")
+
+    # 公网带宽基准（Mbps，PUBLIC_BANDWIDTH_MBPS 环境变量）：仅用于带宽占满研判，
+    # 未配置时网络 IO 只展示不参与阈值离散
+    bw_raw = os.environ.get("PUBLIC_BANDWIDTH_MBPS", "").strip()
+    try:
+        section["net_bandwidth_mbps"] = float(bw_raw) if bw_raw else None
+    except ValueError:
+        section["net_bandwidth_mbps"] = None
+
     # storage 与日志分区使用率（可能同分区，分别取值便于独立告警）
     for name, path in (("storage", "storage"), ("log", "log")):
         try:

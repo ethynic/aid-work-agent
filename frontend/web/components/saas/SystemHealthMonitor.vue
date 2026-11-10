@@ -29,16 +29,13 @@
           <span :class="['shrink-0 text-xs font-medium px-2 py-0.5 rounded', assessmentBanner.tagCls]">
             {{ overview?.assessment?.source === 'llm' ? 'AI 研判' : '规则判定' }}
           </span>
+          <BaseBadge :class="['shrink-0', levelBadgeCls(overallLevel)]" :intent="levelIntent(overallLevel)">
+            {{ levelLabel(overallLevel) }}
+          </BaseBadge>
           <div class="min-w-0 flex-1">
             <div class="text-sm font-medium text-default">{{ overview?.assessment?.summary }}</div>
             <div v-if="overview?.assessment?.suggestion" class="text-xs text-muted mt-1">
               建议：{{ overview?.assessment?.suggestion }}
-            </div>
-            <div class="flex flex-wrap gap-2 mt-2">
-              <BaseBadge v-for="item in overview?.assessment?.items || []" :key="item.group"
-                :intent="levelIntent(item.status)">
-                {{ groupLabel(item.group) }} · {{ levelLabel(item.status) }}
-              </BaseBadge>
             </div>
           </div>
         </div>
@@ -50,8 +47,8 @@
         <div class="bg-white rounded-lg border border-default p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold text-default">Runner 负载</h2>
-            <BaseBadge v-if="runnerStallLevel" :intent="levelIntent(runnerStallLevel)">
-              {{ runnerStallLevel === 'critical' ? '调度停摆' : '调度观察' }}
+            <BaseBadge :class="levelBadgeCls(runnerGroupLevel)" :intent="levelIntent(runnerGroupLevel)">
+              {{ levelLabel(runnerGroupLevel) }}
             </BaseBadge>
           </div>
           <div class="space-y-2 text-sm">
@@ -102,7 +99,12 @@
 
         <!-- 系统资源卡 -->
         <div class="bg-white rounded-lg border border-default p-4">
-          <h2 class="text-sm font-semibold text-default mb-3">系统资源</h2>
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold text-default">系统资源</h2>
+            <BaseBadge :class="levelBadgeCls(systemGroupLevel)" :intent="levelIntent(systemGroupLevel)">
+              {{ levelLabel(systemGroupLevel) }}
+            </BaseBadge>
+          </div>
           <div v-if="!system?.available" class="text-sm text-muted">psutil 不可用</div>
           <div v-else class="space-y-2 text-sm">
             <div class="flex justify-between">
@@ -129,6 +131,13 @@
               </span>
             </div>
             <div class="flex justify-between">
+              <span class="text-muted">网络 IO 收 / 发</span>
+              <span :class="levelCls(netLoadLevel)"
+                :title="system?.net_bandwidth_mbps ? `公网带宽 ${system.net_bandwidth_mbps} Mbps，观察 ≥80% / 警告 ≥95%` : undefined">
+                {{ system?.net_recv_mb_per_s ?? '-' }} / {{ system?.net_sent_mb_per_s ?? '-' }} MB/s
+              </span>
+            </div>
+            <div class="flex justify-between">
               <span class="text-muted">storage 分区</span>
               <span :class="levelCls(valueLevel('system.disk_used_percent_storage', system?.disk_used_percent_storage))" class="font-medium">
                 {{ system?.disk_used_percent_storage ?? '-' }}%
@@ -145,7 +154,12 @@
 
         <!-- 业务活跃卡 -->
         <div class="bg-white rounded-lg border border-default p-4">
-          <h2 class="text-sm font-semibold text-default mb-3">业务活跃</h2>
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold text-default">业务活跃</h2>
+            <BaseBadge :class="levelBadgeCls(businessGroupLevel)" :intent="levelIntent(businessGroupLevel)">
+              {{ levelLabel(businessGroupLevel) }}
+            </BaseBadge>
+          </div>
           <div class="space-y-2 text-sm">
             <div class="flex justify-between">
               <span class="text-muted">在线会话（5 分钟）</span>
@@ -176,7 +190,12 @@
 
         <!-- 中间件与告警卡 -->
         <div class="bg-white rounded-lg border border-default p-4">
-          <h2 class="text-sm font-semibold text-default mb-3">中间件</h2>
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold text-default">中间件</h2>
+            <BaseBadge :class="levelBadgeCls(middlewareGroupLevel)" :intent="levelIntent(middlewareGroupLevel)">
+              {{ levelLabel(middlewareGroupLevel) }}
+            </BaseBadge>
+          </div>
           <div class="space-y-2 text-sm">
             <div class="flex justify-between">
               <span class="text-muted">DB 连接数</span>
@@ -193,9 +212,9 @@
             </div>
             <div class="flex justify-between">
               <span class="text-muted">Redis</span>
-              <BaseBadge :intent="middleware?.redis_available ? 'success' : 'danger'">
+              <span :class="middleware?.redis_available ? 'text-default font-medium' : 'text-danger-600 font-medium'">
                 {{ middleware?.redis_available ? '正常' : '不可用/降级' }}
-              </BaseBadge>
+              </span>
             </div>
             <div class="flex justify-between">
               <span class="text-muted">模型 Key 并发</span>
@@ -381,7 +400,7 @@ function valueLevel(key: string, value: number | null | undefined): HealthLevel 
 }
 
 const runnerStallLevel = computed<HealthLevel>(() =>
-  runner.value?.runner_stalled ? 'critical' : 'normal')
+  runner.value?.runner_stalled ? 'error' : 'normal')
 
 const loadLevel = computed<HealthLevel>(() => {
   const load = system.value?.load_1
@@ -402,6 +421,19 @@ const dbConnLevel = computed<HealthLevel>(() => {
   return 'normal'
 })
 
+// 网络带宽占满：收/发取较大者对比 PUBLIC_BANDWIDTH_MBPS 基准（未配置则不研判）
+const netLoadLevel = computed<HealthLevel>(() => {
+  const s = system.value
+  const bw = s?.net_bandwidth_mbps
+  const recv = s?.net_recv_mb_per_s
+  const sent = s?.net_sent_mb_per_s
+  if (!bw || bw <= 0 || recv == null || sent == null) return 'normal'
+  const ratio = Math.max(recv, sent) * 8 / bw
+  if (ratio >= 0.95) return 'critical'
+  if (ratio >= 0.8) return 'watch'
+  return 'normal'
+})
+
 const keyPoolLevel = computed<HealthLevel>(() => {
   const active = middleware.value?.key_pool_active
   const max = middleware.value?.key_pool_max
@@ -411,6 +443,54 @@ const keyPoolLevel = computed<HealthLevel>(() => {
   if (ratio >= 0.8) return 'watch'
   return 'normal'
 })
+
+// ==================== 总状态与分组状态（四级：normal/watch/critical/error） ====================
+// error 仅用于基础设施硬故障（Redis 不可用、调度停摆、采集中断），与后端 assessment.py 同源
+
+const LEVEL_RANK: Record<HealthLevel, number> = { normal: 0, watch: 1, critical: 2, error: 3 }
+
+function worstLevel(levels: HealthLevel[]): HealthLevel {
+  return levels.reduce((worst, l) => (LEVEL_RANK[l] > LEVEL_RANK[worst] ? l : worst), 'normal' as HealthLevel)
+}
+
+const runnerGroupLevel = computed<HealthLevel>(() => {
+  if (runner.value?.runner_stalled) return 'error'
+  return worstLevel([
+    valueLevel('runner.queued', runner.value?.queued),
+    valueLevel('runner.oldest_running_seconds', runner.value?.oldest_running_seconds),
+    valueLevel('runner.oldest_queued_seconds', runner.value?.oldest_queued_seconds),
+    valueLevel('runner.wait_p95_seconds', runner.value?.wait_p95_seconds),
+    valueLevel('runner.active_alerts', runner.value?.active_alerts),
+  ])
+})
+
+const systemGroupLevel = computed<HealthLevel>(() => {
+  if (!system.value?.available) return 'watch'
+  return worstLevel([
+    valueLevel('system.cpu_percent', system.value?.cpu_percent),
+    loadLevel.value,
+    valueLevel('system.mem_used_percent', system.value?.mem_used_percent),
+    valueLevel('system.disk_used_percent_storage', system.value?.disk_used_percent_storage),
+    valueLevel('system.disk_used_percent_log', system.value?.disk_used_percent_log),
+    netLoadLevel.value,
+  ])
+})
+
+const middlewareGroupLevel = computed<HealthLevel>(() => {
+  if (middleware.value?.redis_available === false) return 'error'
+  return worstLevel([
+    dbConnLevel.value,
+    valueLevel('middleware.db_select1_ms', middleware.value?.db_select1_ms),
+    keyPoolLevel.value,
+    valueLevel('model_error_rate_today', business.value?.error_rate_today),
+  ])
+})
+
+const businessGroupLevel = computed<HealthLevel>(() =>
+  worstLevel([
+    valueLevel('business.error_rate_today', business.value?.error_rate_today),
+    valueLevel('business.errors_last_hour', business.value?.errors_last_hour),
+  ]))
 
 // ==================== 横幅与样式映射 ====================
 
@@ -429,12 +509,12 @@ const assessmentBanner = computed(() => {
   const a = overview.value?.assessment
   if (!a) return null
   if (a.overall === 'normal' && collectorBanner.value) return null
-  const cls = a.overall === 'critical'
+  const cls = a.overall === 'critical' || a.overall === 'error'
     ? 'bg-danger-50 border-danger-200'
     : a.overall === 'watch'
       ? 'bg-warning-50 border-warning-200'
       : 'bg-success-50 border-success-200'
-  const tagCls = a.overall === 'critical'
+  const tagCls = a.overall === 'critical' || a.overall === 'error'
     ? 'bg-danger-600 text-white'
     : a.overall === 'watch'
       ? 'bg-warning-600 text-white'
@@ -442,10 +522,24 @@ const assessmentBanner = computed(() => {
   return { cls, tagCls }
 })
 
+// 总状态：采集中断视为 error；AI 研判缺失时按前端分组状态兜底
+const overallLevel = computed<HealthLevel>(() => {
+  if (collectorBanner.value) return 'error'
+  const a = overview.value?.assessment
+  if (a) return a.overall
+  return worstLevel([runnerGroupLevel.value, systemGroupLevel.value,
+    middlewareGroupLevel.value, businessGroupLevel.value])
+})
+
 function levelIntent(level: HealthLevel) {
-  if (level === 'critical') return 'danger' as const
+  if (level === 'critical' || level === 'error') return 'danger' as const
   if (level === 'watch') return 'warning' as const
   return 'success' as const
+}
+
+// 错误态在红色基础上加粗，与警告（仅红色）拉开视觉层级
+function levelBadgeCls(level: HealthLevel) {
+  return level === 'error' ? 'font-bold' : ''
 }
 
 function levelCls(level: HealthLevel) {
@@ -455,7 +549,8 @@ function levelCls(level: HealthLevel) {
 }
 
 function levelLabel(level: HealthLevel) {
-  if (level === 'critical') return '异常'
+  if (level === 'error') return '错误'
+  if (level === 'critical') return '警告'
   if (level === 'watch') return '观察'
   return '正常'
 }
@@ -486,12 +581,12 @@ const METRIC_META: Record<string, { label: string; get: () => number | null | un
 
 const hasAnomaly = computed(() => {
   if (collectorBanner.value) return true
-  const overall = overview.value?.assessment?.overall
-  if (overall === 'watch' || overall === 'critical') return true
+  if (LEVEL_RANK[overallLevel.value] > 0) return true
   // 兜底：后端研判缺失或滞后时，按前端阈值判断
   if (middleware.value?.redis_available === false) return true
   if (runnerStallLevel.value !== 'normal' || loadLevel.value !== 'normal'
-    || dbConnLevel.value !== 'normal' || keyPoolLevel.value !== 'normal') return true
+    || dbConnLevel.value !== 'normal' || keyPoolLevel.value !== 'normal'
+    || netLoadLevel.value !== 'normal') return true
   return Object.entries(METRIC_META).some(([key, meta]) => {
     const value = meta.get()
     return value != null && valueLevel(key, value) !== 'normal'
@@ -500,34 +595,41 @@ const hasAnomaly = computed(() => {
 
 function collectAnomalyLines(): string[] {
   const lines: string[] = []
-  if (runner.value?.runner_stalled) lines.push('- [异常] Runner 调度停摆（runner_stalled=true）')
-  if (middleware.value?.redis_available === false) lines.push('- [异常] Redis 不可用/降级（redis_available=false）')
+  if (runner.value?.runner_stalled) lines.push('- [错误] Runner 调度停摆（runner_stalled=true）')
+  if (middleware.value?.redis_available === false) lines.push('- [错误] Redis 不可用/降级（redis_available=false）')
   for (const [key, meta] of Object.entries(METRIC_META)) {
     const value = meta.get()
     const level = valueLevel(key, value)
     if (level === 'normal' || value == null) continue
     const [watch, critical] = THRESHOLDS[key]
-    lines.push(`- [${levelLabel(level)}] ${meta.label}: ${meta.fmt(value)}（观察 ≥${meta.fmt(watch)} / 异常 ≥${meta.fmt(critical)}）`)
+    lines.push(`- [${levelLabel(level)}] ${meta.label}: ${meta.fmt(value)}（观察 ≥${meta.fmt(watch)} / 警告 ≥${meta.fmt(critical)}）`)
   }
   if (loadLevel.value !== 'normal') {
     const load = system.value?.load_1
     const cpuCount = system.value?.cpu_count
     if (load != null && cpuCount) {
-      lines.push(`- [${levelLabel(loadLevel.value)}] Load (1m): ${load}（CPU 核数 ${cpuCount}，观察 ≥${cpuCount} / 异常 ≥${cpuCount * 2}）`)
+      lines.push(`- [${levelLabel(loadLevel.value)}] Load (1m): ${load}（CPU 核数 ${cpuCount}，观察 ≥${cpuCount} / 警告 ≥${cpuCount * 2}）`)
     }
   }
   if (dbConnLevel.value !== 'normal') {
     const conns = middleware.value?.db_connections
     const max = middleware.value?.db_max_connections
     if (conns != null && max) {
-      lines.push(`- [${levelLabel(dbConnLevel.value)}] DB 连接数: ${conns}/${max}（观察 ≥80% / 异常 ≥95%）`)
+      lines.push(`- [${levelLabel(dbConnLevel.value)}] DB 连接数: ${conns}/${max}（观察 ≥80% / 警告 ≥95%）`)
     }
   }
   if (keyPoolLevel.value !== 'normal') {
     const active = middleware.value?.key_pool_active
     const max = middleware.value?.key_pool_max
     if (active != null && max) {
-      lines.push(`- [${levelLabel(keyPoolLevel.value)}] 模型 Key 并发: ${active}/${max}（观察 ≥80% / 异常 ≥100%）`)
+      lines.push(`- [${levelLabel(keyPoolLevel.value)}] 模型 Key 并发: ${active}/${max}（观察 ≥80% / 警告 ≥100%）`)
+    }
+  }
+  if (netLoadLevel.value !== 'normal') {
+    const s = system.value
+    if (s?.net_bandwidth_mbps) {
+      lines.push(`- [${levelLabel(netLoadLevel.value)}] 网络 IO 收/发: ${s.net_recv_mb_per_s}/${s.net_sent_mb_per_s} MB/s`
+        + `（公网带宽 ${s.net_bandwidth_mbps} Mbps，观察 ≥80% / 警告 ≥95%）`)
     }
   }
   return lines

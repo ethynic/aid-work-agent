@@ -4,8 +4,9 @@
 
 - 评估任务在采集器侧后台执行（APScheduler 60s 一轮），**不在 HTTP 请求路径**：
   页面轮询只读 Redis 缓存好的结论，绝不触发 LLM
-- 去重口径是「阈值带离散化」：全部指标先按 THRESHOLDS 离散为 normal/watch/critical
-  再拼哈希（剔除采集时间戳等纯时变字段），阈值带组合不变则复用上次结论。
+- 去重口径是「阈值带离散化」：全部指标先按 THRESHOLDS 离散为 normal/watch/critical，
+  硬故障（Redis 不可用、Runner 调度停摆）直接判 error，再拼哈希（剔除采集时间戳等
+  纯时变字段），阈值带组合不变则复用上次结论。
   不能对原始数值做内容哈希——最老任务时长等字段每轮必变，原始哈希永远不相等
 - 双层判定分工：规则层（runner_alerts/硬阈值）即时可信零成本，负责页面红黄高亮与
   飞书推送；LLM 研判层综合判读组合异常（CPU 高/低 × 队列不推进），**仅供人看，
@@ -48,6 +49,8 @@ THRESHOLDS: Dict[str, Dict[str, Any]] = {
     "system.mem_used_percent": {"watch": 80, "critical": 92},
     "system.disk_used_percent_storage": {"watch": 80, "critical": 92},
     "system.disk_used_percent_log": {"watch": 80, "critical": 92},
+    # 网络带宽占满（方向取收/发较大者；仅配置 PUBLIC_BANDWIDTH_MBPS 后产出派生指标）
+    "system.net_load_ratio": {"watch": 0.8, "critical": 0.95},
     # 中间件
     "middleware.db_conn_ratio": {"watch": 0.8, "critical": 0.95},
     "middleware.db_select1_ms": {"watch": 200, "critical": 1000},
@@ -60,7 +63,7 @@ THRESHOLDS: Dict[str, Dict[str, Any]] = {
     "model_error_rate_today": {"watch": 0.05, "critical": 0.2},
 }
 
-_STATE_ORDER = {"normal": 0, "watch": 1, "critical": 2}
+_STATE_ORDER = {"normal": 0, "watch": 1, "critical": 2, "error": 3}
 _GROUP_LABELS = {
     "runner": "Runner 执行面",
     "system": "系统资源",
@@ -84,6 +87,10 @@ def _derived_metrics(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     sys_ = snapshot.get("system") or {}
     if sys_.get("available") and sys_.get("cpu_count"):
         derived["system.cpu_count"] = sys_["cpu_count"]
+    bandwidth = sys_.get("net_bandwidth_mbps")
+    rates = [sys_.get("net_recv_mb_per_s"), sys_.get("net_sent_mb_per_s")]
+    if bandwidth and all(r is not None for r in rates):
+        derived["system.net_load_ratio"] = round(max(rates) * 8 / bandwidth, 4)
     biz = snapshot.get("business") or {}
     if biz.get("duration_p95_ms") is not None:
         derived["business.duration_p95_ms"] = biz["duration_p95_ms"]
@@ -128,7 +135,7 @@ def discretize(snapshot: Dict[str, Any]) -> Dict[str, str]:
                 if st:
                     states[f"runner.{key}"] = st
         if runner.get("runner_stalled"):
-            states["runner.runner_stalled"] = "critical"
+            states["runner.runner_stalled"] = "error"
         else:
             states["runner.runner_stalled"] = "normal"
 
@@ -143,6 +150,10 @@ def discretize(snapshot: Dict[str, Any]) -> Dict[str, str]:
             st = _discretize_one(sys_["load_1"], THRESHOLDS["system.load_1"], derived)
             if st:
                 states["system.load_1"] = st
+        if derived.get("system.net_load_ratio") is not None:
+            st = _discretize_one(derived["system.net_load_ratio"], THRESHOLDS["system.net_load_ratio"], derived)
+            if st:
+                states["system.net_load_ratio"] = st
 
     mw = snapshot.get("middleware") or {}
     if "error" not in mw:
@@ -156,7 +167,7 @@ def discretize(snapshot: Dict[str, Any]) -> Dict[str, str]:
                 if st:
                     states[f"middleware.{key}"] = st
         states["middleware.redis_available"] = (
-            "normal" if mw.get("redis_available") else "critical"
+            "normal" if mw.get("redis_available") else "error"
         )
 
     biz = snapshot.get("business") or {}
@@ -214,12 +225,26 @@ def rule_fallback(states: Dict[str, str]) -> Dict[str, Any]:
     }
 
 
+def apply_error_floor(verdict: Dict[str, Any], states: Dict[str, str]) -> None:
+    """错误态兜底：硬故障（error）由规则层确定性判定，LLM 结论不得低于 error。
+
+    就地修改：整体 overall 与受影响分组的 item status 一并抬升为 error。
+    """
+    if "error" not in states.values():
+        return
+    verdict["overall"] = "error"
+    for item in verdict.get("items") or []:
+        group_states = {k: s for k, s in states.items() if k.startswith(item.get("group", "") + ".")}
+        if "error" in group_states.values():
+            item["status"] = "error"
+
+
 def _build_llm_prompt(states: Dict[str, str], snapshot: Dict[str, Any]) -> str:
     compact = {
         "states": states,
         "metrics": {
             "runner": {k: v for k, v in (snapshot.get("runner") or {}).items() if k != "error"},
-            "system": {k: v for k, v in (snapshot.get("system") or {}).items() if k != "_io_prev"},
+            "system": {k: v for k, v in (snapshot.get("system") or {}).items() if k not in ("_io_prev", "_net_prev")},
             "middleware": {k: v for k, v in (snapshot.get("middleware") or {}).items() if k != "error"},
             "business": {k: v for k, v in (snapshot.get("business") or {}).items() if k != "error"},
         },
@@ -227,7 +252,8 @@ def _build_llm_prompt(states: Dict[str, str], snapshot: Dict[str, Any]) -> str:
     }
     return (
         "你是企业智能体系统的运维研判助手。以下是系统健康监控的当前指标："
-        "states 是按阈值表离散出的三态（normal/watch/critical），metrics 是原始数值，"
+        "states 是按阈值表离散出的状态（normal/watch/critical，error 为规则层硬故障判定"
+        "（Redis 不可用、调度停摆），你不需要输出 error），metrics 是原始数值，"
         "thresholds 是阈值表。请综合研判，重点捕捉组合异常（例如 CPU 高且队列不推进"
         "指向同步阻塞，CPU 低且队列不推进指向事件循环卡死；模型 P95 高但 Runner 队列"
         "正常则问题在模型侧而非调度侧）。\n"
@@ -315,6 +341,8 @@ def assess_once() -> str:
 
     if verdict is None:
         verdict = rule_fallback(states)
+    else:
+        apply_error_floor(verdict, states)
 
     verdict["hash"] = digest
     verdict["assessed_at"] = datetime.now().isoformat(timespec="seconds")
