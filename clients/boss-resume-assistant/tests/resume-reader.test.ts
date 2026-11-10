@@ -22,6 +22,8 @@ import {
   canvasCandidates,
   SCROLL_TOP_NOTCHES,
   SEGMENT_WHEEL_NOTCHES,
+  SCROLL_TOP_SETTLE_DELAY,
+  SEGMENT_REPAINT_DELAY,
   BOTTOM_CONFIRM_DELAY,
   MAX_SEGMENTS,
   MAX_CAPTURES,
@@ -252,8 +254,20 @@ test('正常 3 段：第 4 段字节相同 → sameView 确认 → 再滚再截�
       ['part-raw-4.png', 'part-raw-2.png'],
     ],
   )
-  // 确认路径等待 BOTTOM_CONFIRM_DELAY（懒加载留时间），普通段间隔 SEGMENT_REPAINT_DELAY
-  assert.deepEqual(f.sleeps, [1500, 900, 900, 900, BOTTOM_CONFIRM_DELAY])
+  // 确认路径等待 BOTTOM_CONFIRM_DELAY（懒加载留时间，定值 1000）；回顶 settle 与各段间 repaint
+  // 为 {500,600} 区间抖动（2026-11-10 提速 Phase 1 随机化，区间语义见 timing.test.ts）
+  assert.equal(f.sleeps.length, 5)
+  assert.equal(f.sleeps[4]!, BOTTOM_CONFIRM_DELAY)
+  assert.ok(
+    f.sleeps[0]! >= SCROLL_TOP_SETTLE_DELAY.min && f.sleeps[0]! <= SCROLL_TOP_SETTLE_DELAY.max,
+    `回顶 settle 等待 ${f.sleeps[0]}ms 不在抖动区间`,
+  )
+  for (const ms of f.sleeps.slice(1, 4)) {
+    assert.ok(
+      ms >= SEGMENT_REPAINT_DELAY.min && ms <= SEGMENT_REPAINT_DELAY.max,
+      `段间 repaint 等待 ${ms}ms 不在抖动区间`,
+    )
+  }
   assert.equal(f.stitchCalls.length, 1)
   assert.equal(f.stitchCalls[0]!.parts.length, 3)
   assert.match(f.stitchCalls[0]!.parts[0]!, /part-raw-0\.png$/)
@@ -267,6 +281,24 @@ test('正常 3 段：第 4 段字节相同 → sameView 确认 → 再滚再截�
   assert.deepEqual(res.imageBuffer, STITCHED_PNG)
   const tmpDir = path.dirname(f.stitchCalls[0]!.parts[0]!)
   assert.equal(existsSync(tmpDir), false)
+})
+
+test('Phase 1 等待抖动：多次运行，settle/repaint 恒落区间、确认路径恒定值（随机性覆盖）', async () => {
+  for (let round = 0; round < 8; round++) {
+    const f = makeFake([1000, 2000, 3000, 3000, 3000])
+    await makeReader(f).readResume()
+    assert.equal(f.sleeps.length, 5)
+    for (const [i, ms] of f.sleeps.entries()) {
+      if (i === 4) {
+        assert.equal(ms, BOTTOM_CONFIRM_DELAY) // 到底确认路径不做随机化（判到底必须稳）
+      } else {
+        assert.ok(
+          ms >= SCROLL_TOP_SETTLE_DELAY.min && ms <= SCROLL_TOP_SETTLE_DELAY.max,
+          `第 ${round} 轮第 ${i} 个等待 ${ms}ms 不在 [${SCROLL_TOP_SETTLE_DELAY.min},${SCROLL_TOP_SETTLE_DELAY.max}] 抖动区间`,
+        )
+      }
+    }
+  }
 })
 
 test('单段：第 2 段即到底（简历一屏放得下），只拼 1 段（连续两次相同才确认）', async () => {

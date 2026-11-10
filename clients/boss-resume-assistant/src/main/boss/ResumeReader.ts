@@ -54,6 +54,7 @@ import {
 import { viewportOf, FILTER_SNAPSHOT_OPTIONS } from './FilterSetter.js'
 import { snapshotNodeVisible } from './SnapshotVisibility.js'
 import { frameViewport } from './LoadedCandidateNavigation.js'
+import { jitter, type DelayRange } from './timing.js'
 import { CancelledError } from '../operations/types.js'
 
 export class ResumeReadError extends Error {
@@ -110,8 +111,9 @@ export interface ResumeReadResult {
 
 /** 回顶防护格数：向上滚 50 格（DeltaY=+120×50）确保从简历顶部开始分段（防护值，多余滚动无害） */
 export const SCROLL_TOP_NOTCHES = 50
-/** 回顶后等 canvas 重绘稳定（ms） */
-export const SCROLL_TOP_SETTLE_DELAY = 1500
+/** 回顶后等 canvas 重绘稳定（ms）。2026-11-10 提速 Phase 1：定值 1500 → 区间 {500,600} 随机抖动
+ *  （固定间隔是可被识别的机器人特征，区间随机化拟人；重绘实测 ~500ms 内完成，500 保底不截早图） */
+export const SCROLL_TOP_SETTLE_DELAY: DelayRange = { min: 500, max: 600 }
 /**
  * 每段向下滚 5 格（-120×5）：真机校准 2026-09-02（黄钰鑫简历）——旧值 8 格 ≈ 1000px 接近整视口
  * （canvas ~1230px），wheel 惯性/累积时不时会跃过整整一个视口 → 相邻段**零重叠** → cv-stitch 在
@@ -119,12 +121,15 @@ export const SCROLL_TOP_SETTLE_DELAY = 1500
  * 代价是段数增多（~3662px 简历 4 段→约 6-7 段，每段 +~1.2s）。
  */
 export const SEGMENT_WHEEL_NOTCHES = 5
-/** 滚动后等 canvas WASM 重绘（ms）。太早截图会拿到上一段内容 */
-export const SEGMENT_REPAINT_DELAY = 900
+/** 滚动后等 canvas WASM 重绘（ms）。太早截图会拿到上一段内容。2026-11-10 提速 Phase 1：
+ *  定值 900 → 区间 {500,600} 随机抖动（固定间隔是机器人特征，拟人化；重绘下限经真机 ~500ms 校准） */
+export const SEGMENT_REPAINT_DELAY: DelayRange = { min: 500, max: 600 }
 /** 相邻段整页 PNG 字节数差 < 200 → 候选「相同」，需 sameView 像素级确认（快路径：差 ≥ 200 直接判不同） */
 export const BOTTOM_SIZE_EPSILON = 200
-/** 到底确认路径的额外等待（ms）：比常规重绘等待更久，给 canvas 懒加载留时间（假到底主因之一） */
-export const BOTTOM_CONFIRM_DELAY = 1800
+/** 到底确认路径的额外等待（ms）：比常规重绘等待更久，给 canvas 懒加载留时间（假到底主因之一）。
+ *  2026-11-10 提速 Phase 1：1800 → 1000（保持定值语义不变——确认路径判到底必须稳，
+ *  不做随机化，避免到底误判；懒加载窗口实测 1000ms 足够） */
+export const BOTTOM_CONFIRM_DELAY = 1000
 /** 分段数上限（防护：异常页面无限不重复时终止）。P1 2026-09-02 从 12 提到 16：假到底修复后
  *  （滚动被吞不再被误判到底），单份简历实际段数会比 P0 观测值更多 */
 export const MAX_SEGMENTS = 16
@@ -351,7 +356,7 @@ export class ResumeReader {
     try {
       // 1. 回顶（防护值，多余滚动无害；canvas 虚拟滚动 scrollOffset 不可用，只能盲滚回顶）
       await this.deps.wheel(120, SCROLL_TOP_NOTCHES)
-      await this.sleep(SCROLL_TOP_SETTLE_DELAY)
+      await this.sleep(jitter(SCROLL_TOP_SETTLE_DELAY.min, SCROLL_TOP_SETTLE_DELAY.max))
 
       // 2. 分段循环（P1 三层到底判定，见类头注释）：
       //    截图 → 字节差 ≥ epsilon 直接入列（快路径）；字节差 < epsilon → sameView 像素确认 →
@@ -403,7 +408,7 @@ export class ResumeReader {
         prevBytes = buf.length
         if (parts.length >= MAX_SEGMENTS) break // 已满段：后面不允许再截图，不再滚动（滚了也白滚）
         await this.deps.wheel(-120, SEGMENT_WHEEL_NOTCHES)
-        await this.sleep(SEGMENT_REPAINT_DELAY)
+        await this.sleep(jitter(SEGMENT_REPAINT_DELAY.min, SEGMENT_REPAINT_DELAY.max))
       }
       if (parts.length === 0) {
         throw new ResumeReadError('分段截图 0 段：未产出任何截图，请人工查看页面（Chrome 窗口是否可见）')

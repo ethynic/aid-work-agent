@@ -59,6 +59,7 @@ import {
   type DeviceRect,
   type ResumeReadResult,
 } from './ResumeReader.js'
+import { jitter, type DelayRange } from './timing.js'
 
 /**
  * 批量诊断日志（stderr）：经 providerManager 的 stderr 转发落 runtime.log。
@@ -148,18 +149,21 @@ export interface ResumeBatchCheckpoint {
 
 /** 点卡片后轮询等详情 canvas 出现的总超时（ms）。真机 ~600ms 出现，轮询容错 */
 export const OPEN_POLL_TIMEOUT = 8000
-/** 点卡片后轮询间隔（ms） */
-export const OPEN_POLL_INTERVAL = 600
+/** 点卡片后轮询间隔（ms）。2026-11-10 提速 Phase 1：600 → 400（首查即 400ms；总超时 8000 不变，
+ *  openAttempts = ceil(8000/400) = 20 自动收紧，重点逻辑 OPEN_RECLICK_AFTER/OPEN_CLICK_ATTEMPTS 不动） */
+export const OPEN_POLL_INTERVAL = 400
 /** 打开轮询中每隔多少次重点一次卡片（真机 2026-08-17 实证：首击偶发被吞，重击即开） */
 export const OPEN_RECLICK_AFTER = 3
 /** 打开轮询中最多点击次数（防风控：不无限重点） */
 export const OPEN_CLICK_ATTEMPTS = 2
-/** 相邻卡片之间的节奏间隔（ms）：拟人降速，降低风控事件节流风险 */
-export const CARD_PACE_DELAY = 2000
+/** 相邻卡片之间的节奏间隔（ms）：拟人降速，降低风控事件节流风险。2026-11-10 提速 Phase 1：
+ *  定值 2000 → 区间 {500,600} 随机抖动（固定间隔是机器人特征，区间随机化拟人）。
+ *  ⚠️ 风控权衡项：独立常量，真机若见风控异常（事件节流/滑块）一键调回 2000 */
+export const CARD_PACE_DELAY: DelayRange = { min: 500, max: 600 }
 /** Escape 后轮询等详情 canvas 消失的总超时（ms） */
 export const CLOSE_POLL_TIMEOUT = 5000
-/** Escape 后轮询间隔（ms） */
-export const CLOSE_POLL_INTERVAL = 500
+/** Escape 后轮询间隔（ms）。2026-11-10 提速 Phase 1：500 → 250（关闭轮询翻倍次数、总超时 5000 不变） */
+export const CLOSE_POLL_INTERVAL = 250
 
 export class ResumeBatchReader {
   private readonly sleep: (ms: number) => Promise<void>
@@ -338,7 +342,7 @@ export class ResumeBatchReader {
       if (resumes.length >= limit) { stopReason = 'limit_reached'; break }
       if (excluded.size + processedNames.size >= 1000) { stopReason = 'history_limit'; break }
       // 拟人节奏：相邻卡片间留间隔（含失败重试路径），降低风控事件节流风险
-      if (attempted > 0) await this.sleep(CARD_PACE_DELAY)
+      if (attempted > 0) await this.sleep(jitter(CARD_PACE_DELAY.min, CARD_PACE_DELAY.max))
       const snap = await this.deps.snapshot()
       const viewport = viewportOf(snap)
       const cards = this.locateCards(snap)
