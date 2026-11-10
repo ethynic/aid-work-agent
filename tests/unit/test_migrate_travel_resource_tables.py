@@ -17,7 +17,6 @@ import pytest
 pytestmark = pytest.mark.unit
 
 # scripts/ 无 __init__.py；按文件路径显式加载，不依赖 sys.path 状态
-# （与 test_tenant_migrate_kb_target_storage.py 同模式）
 _spec = importlib.util.spec_from_file_location(
     "_migrate_travel_resource_tables",
     Path(__file__).resolve().parents[2] / "scripts" / "migrate_travel_resource_tables_to_metadata.py",

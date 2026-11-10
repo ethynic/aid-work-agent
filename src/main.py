@@ -1931,7 +1931,7 @@ app.include_router(work_outcomes.router)
 # SaaS 多租户 API（始终注册，未启用时返回友好提示）
 from src.saas.api import tenant_auth, tenant_mgmt, subscriptions
 from src.saas.api import channel_config, tenant_skills, channel_routes
-from src.saas.api import tenant_users, usage_reports, permissions, reply_styles, external_customers, tenant_migration
+from src.saas.api import tenant_users, usage_reports, permissions, reply_styles, external_customers
 from src.saas.api import web_sessions
 from src.saas.api import context_compression_routes
 from src.saas.api import billing_recharges, billing_balance
@@ -1957,7 +1957,6 @@ from src.api.runner_alerts import router as runner_alerts_router
 from src.api.runner_alert_targets import router as runner_alert_targets_router
 app.include_router(runner_alerts_router)
 app.include_router(runner_alert_targets_router)
-app.include_router(tenant_migration.router)
 app.include_router(context_compression_routes.router)
 app.include_router(billing_recharges.router)
 app.include_router(billing_balance.router)

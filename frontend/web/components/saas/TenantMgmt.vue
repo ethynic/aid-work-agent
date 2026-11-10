@@ -175,18 +175,6 @@
           </button>
           <button
             v-if="isEdit"
-            @click="activeTab = 'migration'"
-            :class="[
-              'pb-2 text-sm font-medium border-b-2 transition-colors',
-              activeTab === 'migration'
-                ? 'text-primary-600 border-primary-600'
-                : 'text-muted border-transparent hover:text-default hover:border-hover'
-            ]"
-          >
-            数据迁移
-          </button>
-          <button
-            v-if="isEdit"
             @click="activeTab = 'activation'"
             :class="[
               'pb-2 text-sm font-medium border-b-2 transition-colors',
@@ -381,11 +369,6 @@
           </div>
         </div>
         <div v-else class="text-center py-6 text-muted text-sm">暂无可用数字员工</div>
-      </div>
-
-      <!-- 数据迁移标签页 -->
-      <div v-show="activeTab === 'migration'" class="overflow-y-auto" style="max-height: calc(90vh - 220px);">
-        <TenantMigration v-if="currentTenant" :tenant-id="currentTenant.tenant_id" />
       </div>
 
       <!-- 激活码标签页 -->
@@ -639,7 +622,6 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import LogoUpload from '@/components/ui/LogoUpload.vue'
 import { listTenants, createTenant, updateTenant, deleteTenant, setTenantLlmProviderEdit, type TenantFormData } from '@/api/saasTenant'
 import { getAllAvailableAgents, getTenantAgentPermissions, setTenantAgentPermissions, getSubagentEnvVars, setSubagentEnvVars, getConfigFileStatus, uploadConfigFile, downloadConfigFile, deleteConfigFile, type AgentItem, type EnvVarItem, getSubagentKnowledgeSources, setSubagentKnowledgeSources, type KnowledgeSourceItem, listTenantKnowledgeCategories, getTenantKnowledgeShares, setTenantKnowledgeShares, type KnowledgeShareItem } from '@/api/saasPermissions'
-import TenantMigration from '@/components/saas/TenantMigration.vue'
 import TenantActivationCodes from '@/components/saas/TenantActivationCodes.vue'
 import TenantDataSources from '@/components/saas/TenantDataSources.vue'
 import { TenantStatus, TenantStatusMap, TenantType, TenantTypeMap } from '@/api/enums'
@@ -691,7 +673,7 @@ const isFormDirty = computed(() => {
 })
 
 // 数字员工授权标签页相关
-const activeTab = ref<'basic' | 'agents' | 'migration' | 'activation' | 'sources'>('basic')
+const activeTab = ref<'basic' | 'agents' | 'activation' | 'sources'>('basic')
 const availableAgents = ref<AgentItem[]>([])
 const selectedAgentIds = ref<string[]>([])
 const loadingAgents = ref(false)
