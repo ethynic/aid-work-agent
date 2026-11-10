@@ -518,7 +518,8 @@ async def list_versions(request: Request, agent_id: str, page: int = 1, page_siz
         return _error("获取版本列表失败")
 
 
-@router.get("/{agent_id}/versions/{version}")
+# :int 转换器避免 /versions/diff 等字面量子路径被本路由抢先匹配（version="diff" 422）
+@router.get("/{agent_id}/versions/{version:int}")
 async def get_version(request: Request, agent_id: str, version: int):
     """获取特定版本"""
     try:

@@ -58,3 +58,29 @@ class TestRollbackSystemPrompt:
 
         assert resp.status_code == 404
         assert resp.json()["success"] is False
+
+
+class TestVersionsDiffRouteOrder:
+    def test_versions_diff_not_shadowed_by_version_route(self, client, monkeypatch):
+        """/versions/diff 字面量子路径不被 /versions/{version} 遮蔽（version="diff" 曾 422）
+
+        命中 diff 处理器时先过 _require_admin（已 mock 为通过），再走 _get_prompt_id；
+        未命中则被 get_version 以 version="diff" 触发 422。用 404（无关联 Prompt）
+        证明请求到达了 diff 处理器。
+        """
+        monkeypatch.setattr(api_mod, "_get_prompt_id", lambda agent_id: None)
+
+        resp = client.get("/api/admin/agent-definitions/emp_a/versions/diff", params={"v1": 1, "v2": 2})
+
+        assert resp.status_code == 404
+        assert resp.json()["success"] is False
+
+    def test_versions_numeric_still_resolves_version_route(self, client, monkeypatch):
+        """:int 转换器不影响正常数字版本号路由"""
+        monkeypatch.setattr(api_mod, "_get_prompt_id", lambda agent_id: "pid-1")
+        monkeypatch.setattr(api_mod.PromptRegistryService, "get_version", lambda prompt_id, version: {"version": version})
+
+        resp = client.get("/api/admin/agent-definitions/emp_a/versions/3")
+
+        assert resp.status_code == 200
+        assert resp.json()["data"]["version"] == 3
