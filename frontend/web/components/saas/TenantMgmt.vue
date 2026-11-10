@@ -329,7 +329,7 @@
           <div
             v-for="(pair, rowIdx) in agentRows"
             :key="rowIdx"
-            class="flex items-stretch divide-x divide-default border-b border-default transition-colors"
+            class="flex items-stretch gap-x-10 divide-x divide-default border-b border-default transition-colors"
             :class="rowIdx % 2 === 0 ? 'bg-white hover:bg-surface-hover' : 'bg-primary-50 hover:bg-primary-100'"
           >
             <div v-for="(agent, cellIdx) in pair" :key="agent.agent_id" class="flex items-center gap-2 px-3 py-1.5 flex-1 min-w-0">
