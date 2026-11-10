@@ -150,6 +150,11 @@
                   </template>
                   <template #status="{ row }">
                     <BaseBadge :intent="targetBadge(row.status).intent">{{ targetBadge(row.status).label }}</BaseBadge>
+                    <div v-if="row.opening_send_status" class="mt-1 text-xs text-muted [overflow-wrap:anywhere]">
+                      首次发送：{{ openingStatusLabel(row.opening_send_status) }}
+                      <span v-if="row.opening_send_error"> · {{ row.opening_send_error }}</span>
+                      <span v-if="row.opening_send_error && row.opening_send_invocation_id" class="block">调用编号：{{ row.opening_send_invocation_id }}</span>
+                    </div>
                     <span v-if="row.halted_reason" class="block text-xs text-warning-700 mt-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ row.status === 'active' ? '待启动重试：' : '' }}{{ row.halted_reason }}</span>
                     <BaseButton v-if="detailTask.status === 'stopped' && row.status === 'halted' && row.halted_reason === 'zero_send_retry_exhausted'"
                       size="sm" intent="secondary" class="mt-2 !px-2" :disabled="actionPending(detailTask.id)"
@@ -274,6 +279,18 @@
           <textarea id="proxy-task-instruction" v-model="formInstruction" rows="4" maxlength="5000"
             class="w-full text-sm rounded-lg border border-default bg-surface text-default px-3 py-2 outline-none focus:ring-1 focus:ring-primary-600"
             aria-label="任务指令" />
+        </div>
+        <div v-if="!editingTask?.has_started">
+          <label class="flex items-center gap-2 text-sm text-default">
+            <input v-model="formOpeningEnabled" type="checkbox" />
+            首次执行时立即发送以下消息
+          </label>
+          <div v-if="formOpeningEnabled" class="mt-2">
+            <label class="block text-xs font-medium text-muted mb-1" for="proxy-task-opening-message">首次发送正文（不超过 2000 字）</label>
+            <textarea id="proxy-task-opening-message" v-model="formOpeningMessage" rows="3" maxlength="2000"
+              class="w-full text-sm rounded-lg border border-default bg-surface text-default px-3 py-2 outline-none focus:ring-1 focus:ring-primary-600" />
+            <p class="text-xs text-muted m-0 mt-1">第一次成功启动时，向所选的每个会话原样发送一次。</p>
+          </div>
         </div>
         <p v-if="formError" role="alert" class="text-sm text-danger-700 m-0" data-testid="form-error">{{ formError }}</p>
       </div>
@@ -711,6 +728,8 @@ function unansweredReason(item: ProxyBatchUnanswered): string {
 const formOpen = ref(false)
 const formTitle = ref('')
 const formInstruction = ref('')
+const formOpeningEnabled = ref(false)
+const formOpeningMessage = ref('')
 const formAgent = ref('')
 const formSessions = ref(new Set<string>())
 const editingTask = ref<WecomProxyTask | null>(null)
@@ -721,6 +740,8 @@ function openCreate() {
   editingTask.value = null
   formTitle.value = ''
   formInstruction.value = ''
+  formOpeningEnabled.value = false
+  formOpeningMessage.value = ''
   formAgent.value = ''
   formSessions.value = new Set()
   formError.value = ''
@@ -744,6 +765,8 @@ async function openEdit(task: WecomProxyTask) {
   editingTask.value = source
   formTitle.value = source.title
   formInstruction.value = source.instruction
+  formOpeningMessage.value = source.opening_message ?? ''
+  formOpeningEnabled.value = !!source.opening_message && !source.has_started
   formAgent.value = source.agent_id
   formSessions.value = new Set((source.targets || [])
     .filter(item => item.status === 'active' || item.status === 'halted')
@@ -761,6 +784,9 @@ function validateForm(): string {
   if (!editingTask.value && !formAgent.value) return '请选择智能体'
   if (!formInstruction.value.trim()) return '请填写任务指令'
   if (formInstruction.value.trim().length > 5000) return '任务指令不超过 5000 字'
+  if (formOpeningEnabled.value && (!formOpeningMessage.value.trim() || formOpeningMessage.value.length > 2000)) {
+    return '请填写不超过 2000 字的首次发送正文'
+  }
   return ''
 }
 
@@ -771,6 +797,7 @@ async function submitForm() {
   submitting.value = true
   formError.value = ''
   try {
+    const openingMessage = formOpeningEnabled.value ? formOpeningMessage.value : null
     if (editingTask.value) {
       const existing = (editingTask.value.targets || [])
         .filter(item => item.status === 'active' || item.status === 'halted')
@@ -782,6 +809,8 @@ async function submitForm() {
         instruction: formInstruction.value.trim(),
         ...(add.length ? { add_sessions: add } : {}),
         ...(remove.length ? { remove_sessions: remove } : {}),
+        ...(!editingTask.value.has_started && openingMessage !== (editingTask.value.opening_message ?? null)
+          ? { opening_message: openingMessage } : {}),
       })
     } else {
       const agent = agents.value.find(item => item.agent_id === formAgent.value)
@@ -791,6 +820,7 @@ async function submitForm() {
         agent_id: formAgent.value,
         sessions: [...formSessions.value],
         ...(agent?.instance_id ? { instance_id: agent.instance_id } : {}),
+        ...(openingMessage !== null ? { opening_message: openingMessage } : {}),
       })
     }
     formOpen.value = false
@@ -800,6 +830,11 @@ async function submitForm() {
   } finally {
     submitting.value = false
   }
+}
+
+function openingStatusLabel(status: NonNullable<WecomProxyTarget['opening_send_status']>) {
+  return { pending: '待发送', sending: '处理中', succeeded: '已发送', failed: '发送失败',
+    unknown: '结果未确认', unconfirmed: '结果未确认', cancelled: '已取消' }[status]
 }
 
 // ==================== 会话目录（复用每日总结目录来源） ====================

@@ -99,7 +99,7 @@ async def run_tick(group_key=None):
         batches = await asyncio.to_thread(_load_active_batches)
     else:
         batches = await asyncio.to_thread(_load_active_batches, group_key)
-    if not batches:
+    if not batches and group_key is None:
         return
     runner_states = await asyncio.to_thread(
         _load_runner_states, [item['runner_id'] for item in batches if item['runner_id']])
@@ -128,6 +128,18 @@ async def run_tick(group_key=None):
     # 同组派发前按当前占用重查：running/孤儿批（含本轮新占用）阻塞同组其余批次
     busy_groups = {(item['tenant_id'], str(item['device_id']), item['wecom_account_id'])
                    for item in running + orphans}
+    if group_key is not None:
+        from . import proxy_opening
+
+        lock = group_lock(group_key)
+        if not lock.acquire(blocking=False):
+            request_dispatch_turn(group_key)
+            return
+        try:
+            if await proxy_opening.run_tick(group_key, runner_busy=group_key in busy_groups):
+                return
+        finally:
+            lock.release()
     dispatched = set()
     for batch in pending:
         key = (batch['tenant_id'], str(batch['device_id']), batch['wecom_account_id'])
@@ -282,8 +294,8 @@ async def _dispatch_batch(batch, runner_states):
     if not await _agent_allowed(batch):
         clear_dispatch_turn(key)
         # 失权走占用→终态路径（状态白名单 running→failed；同时停任务）
-        await asyncio.to_thread(_occupy_batch, batch)
-        await _fail_deterministic(batch, 'AGENT_NOT_ALLOWED', stop_task=True)
+        if await asyncio.to_thread(_occupy_batch, batch):
+            await _fail_deterministic(batch, 'AGENT_NOT_ALLOWED', stop_task=True)
         return False
     lock = group_lock(key)
     if not lock.acquire(blocking=False):
@@ -294,11 +306,8 @@ async def _dispatch_batch(batch, runner_states):
     clear_dispatch_turn(key)
     try:
         # 占用＋提交在同一临界区：监控组读（同锁）不会与 Runner 启动交错
-        if await asyncio.to_thread(_group_has_running, tenant_id, device_id,
-                                   batch['wecom_account_id']):
-            return False
         if not await asyncio.to_thread(_occupy_batch, batch):
-            return False  # 并发下批次状态已变（停止/删除/他方派发），跳过
+            return False  # 同组正在发送首启、占用已被取得或本批失效
         if batch['runner_id']:
             # 等待恢复来源：恢复原 Runner（占用已取得，工具门随之放行）
             state = runner_states.get(batch['runner_id']) or {}
@@ -354,28 +363,13 @@ def proxy_monitor_error_parts(error):
     return 'PROXY_READ_FAILED', ''
 
 
-def _group_has_running(tenant_id, device_id, account):
-    """同组已占用核对（与 proxy_monitor._group_runner_busy 同口径）。"""
-    from src.db.database import get_db_connection
-
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            '''SELECT 1 FROM bs_wecom_proxy_batches b
-               JOIN bs_wecom_proxy_tasks t ON t.id=b.task_id AND t.tenant_id=b.tenant_id
-               WHERE b.tenant_id=%s AND t.device_id=%s AND t.wecom_account_id=%s
-                 AND b.status=%s LIMIT 1''',
-            (tenant_id, device_id, account, proxy_tasks.BATCH_RUNNING))
-        return cursor.fetchone() is not None
-
-
 def _occupy_batch(batch):
     """pending→running（组内占用原子取得；核对失效返回 False，批次保持 pending）。
 
     迁移与派发前核对同事务闭合窗口（评审问题 2）：任务行 FOR UPDATE 复核
     running 且未 stop_requested、目标行 active——用户停止（settle 落 stopped）
     或目标移除与派发并发时不得再占用/提交（停止任务的 pending 批留待下次
-    启动，P4 语义）。锁序 task→target→batch 与停止/编辑/建批路径一致。
+    启动，P4 语义）。先锁任务，再用持久组身份取得组锁，最后锁目标与批次。
     """
     from src.db.database import get_db_connection
 
@@ -383,12 +377,17 @@ def _occupy_batch(batch):
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                '''SELECT status, stop_requested FROM bs_wecom_proxy_tasks
+                '''SELECT tenant_id, device_id, wecom_account_id, status, stop_requested
+                   FROM bs_wecom_proxy_tasks
                    WHERE id=%s AND tenant_id=%s FOR UPDATE''',
                 (batch['task_id'], batch['tenant_id']))
             task = cursor.fetchone()
             if (task is None or task['status'] != proxy_tasks.TASK_RUNNING
                     or task['stop_requested']):
+                conn.rollback()
+                return False
+            proxy_tasks.lock_device_group_in_tx(cursor, task)
+            if proxy_tasks.device_group_busy_in_tx(cursor, task, include_pending_opening=True):
                 conn.rollback()
                 return False
             cursor.execute(

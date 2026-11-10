@@ -92,7 +92,7 @@ async def test_dispatcher_clears_turn_after_acquiring_lock(monkeypatch):
     monkeypatch.setattr(proxy_dispatcher, '_proxy_api',
                         lambda: SimpleNamespace(_task_device=task_device))
     monkeypatch.setattr(proxy_dispatcher, '_agent_allowed', agent_allowed)
-    monkeypatch.setattr(proxy_dispatcher, '_group_has_running', lambda *_: True)
+    monkeypatch.setattr(proxy_dispatcher, '_occupy_batch', lambda *_: False)
     batch = {'tenant_id': 'tenant', 'device_id': 'device-d',
              'wecom_account_id': 'account', 'user_id': 'user', 'id': 2}
     proxy_monitor.request_dispatch_turn(key)

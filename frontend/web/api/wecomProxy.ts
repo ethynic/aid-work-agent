@@ -83,6 +83,8 @@ export interface WecomProxyTask {
   title: string
   agent_id: string
   instruction: string
+  opening_message?: string | null
+  has_started?: boolean
   status: ProxyTaskStatus
   stop_requested: boolean
   revision: number
@@ -133,6 +135,9 @@ export interface WecomProxyTarget {
   /** 空闲读取轮次（监控无候选推游标时累加；P7 评审补充） */
   idle_read_count: number
   status: ProxyTargetStatus
+  opening_send_status?: 'pending' | 'sending' | 'succeeded' | 'failed' | 'unknown' | 'unconfirmed' | 'cancelled' | null
+  opening_send_error?: string | null
+  opening_send_invocation_id?: string | null
   halted_reason: string | null
   halted_at: string | null
   created_at: string
@@ -242,6 +247,7 @@ export interface ProxyTaskCreateInput {
   sessions: string[]
   profile_id?: string
   instance_id?: string
+  opening_message?: string
 }
 
 export interface ProxyTaskEditInput {
@@ -249,6 +255,7 @@ export interface ProxyTaskEditInput {
   instruction?: string
   add_sessions?: string[]
   remove_sessions?: string[]
+  opening_message?: string | null
 }
 
 export interface ProxyTaskListOptions {
