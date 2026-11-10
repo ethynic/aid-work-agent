@@ -51,12 +51,6 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
             # A late receipt may settle the hold after the page rendered its button.
             # Treat that race as an idempotent refresh, not an error or new action.
             return with_local_operation_facts(cursor, row)
-        if previous.get('state') in {'queued', 'claimed', 'running'}:
-            cursor.execute('SELECT state,deadline_at,deadline_at>clock_timestamp() AS unexpired FROM local_tool_invocations WHERE id=%s AND tenant_id=%s',
-                (previous['invocation_id'], row['tenant_id']))
-            pending = cursor.fetchone()
-            if pending and pending['state'] not in local.TERMINAL_STATES and pending['unexpired']:
-                raise RunnerError('LOCAL_VERIFICATION_PENDING', 409)
         cursor.execute('SELECT * FROM local_tool_invocations WHERE tenant_id=%s AND id=ANY(%s::uuid[])',
             (row['tenant_id'], ids))
         originals = [dict(item) for item in cursor.fetchall()]
@@ -67,6 +61,15 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
         cursor.execute('SELECT capabilities_json FROM local_tool_devices WHERE id=%s AND tenant_id=%s AND user_id=%s AND status=\'active\' FOR SHARE',
             (device_id, row['tenant_id'], row['user_id']))
         device = cursor.fetchone()
+        from src.local_tools.catalog import runtime_resource_scope
+        if device and runtime_resource_scope(device['capabilities_json']) is not None:
+            raise RunnerError('LOCAL_EXECUTION_INTERRUPTED', 409)
+        if previous.get('state') in {'queued', 'claimed', 'running'}:
+            cursor.execute('SELECT state,deadline_at,deadline_at>clock_timestamp() AS unexpired FROM local_tool_invocations WHERE id=%s AND tenant_id=%s',
+                (previous['invocation_id'], row['tenant_id']))
+            pending = cursor.fetchone()
+            if pending and pending['state'] not in local.TERMINAL_STATES and pending['unexpired']:
+                raise RunnerError('LOCAL_VERIFICATION_PENDING', 409)
         required_capability = STOP_CAPABILITY if stop_resources else CAPABILITY
         providers = {(item.get('provider_key') or 'boss-recruiting') for item in originals}
         if len(providers) != 1 or not providers <= {'boss-recruiting', 'wecom'}:

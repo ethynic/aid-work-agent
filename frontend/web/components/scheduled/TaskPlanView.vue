@@ -570,6 +570,7 @@ const runnerStatusLabel: Record<string, string> = {
   interrupted: '已中断', finalizing: '收尾中', completed: '已完成', failed: '失败', cancelled: '已取消',
 }
 const runnerErrorLabels: Record<string, string> = {
+  LOCAL_EXECUTION_INTERRUPTED: '本机操作已中断，未收到结果。',
   CREDIT_BLOCKED: '积分不足', NO_CREDIT: '积分不足',
   PROFILE_FORBIDDEN: '数字员工不可用',
   TENANT_FORBIDDEN: '租户不可用或已过期', TENANT_UNAVAILABLE: '租户不可用或已过期', TENANT_EXPIRED: '租户不可用或已过期',

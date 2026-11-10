@@ -276,6 +276,7 @@ class RunnerWorker:
         self.jobs = {}
         self._cancel_ready_scan_at = 0.0
         self._cancel_scan_after = 0
+        self._local_interrupt_scan_after = 0
         self._recovery_scan_after = 0
         self._timer_scan_after = 0
         self._continuous_scan_after = 0
@@ -856,8 +857,11 @@ class RunnerWorker:
             await hook()
         if time.monotonic() >= self._cancel_ready_scan_at:
             from .local_recovery import release_ready_cancellations
+            from .local_wait import stage_interrupted_local_waits
             self._cancel_scan_after = await asyncio.to_thread(release_ready_cancellations,
                 self.repository.connection_factory,after_queue_order=self._cancel_scan_after)
+            self._local_interrupt_scan_after = await asyncio.to_thread(stage_interrupted_local_waits,
+                self.repository.connection_factory, after_queue_order=self._local_interrupt_scan_after)
             self._cancel_ready_scan_at = time.monotonic()+10.0
         if not getattr(self.config,'durable_sleep_enabled',False):
             return await self._acquire_controls() or await self._acquire_queued()

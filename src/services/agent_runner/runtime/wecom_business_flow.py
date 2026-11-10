@@ -717,6 +717,7 @@ async def _run_daily(execution, descriptor, local_adapter, base_context):
         except WecomSourceError:
             raise
         except WecomBusinessFlowError as error:
+            from src.core.agent_engine.contracts import LOCAL_EXECUTION_INTERRUPTED, LOCAL_EXECUTION_INTERRUPTED_MESSAGE
             # 单会话业务缺口：记录并继续其他会话（设计 §5.1）；失败不冒充空日。
             failed.append({'conversation_id': conversation['id'], 'name': name,
                            'code': error.code})
@@ -725,8 +726,9 @@ async def _run_daily(execution, descriptor, local_adapter, base_context):
             await _save_fact(control, state, 'daily_conversation_failed')
             logger.warning(f'后端日志：企微日报单会话失败 conversation={conversation.get("id")} '
                            f'runner={runner_id} date={business_date} phase={item["phase"]} code={error.code}')
-            await _emit_progress(observer, state,
-                                 f'会话「{name}」日报生成失败（{error.code}），继续其他会话')
+            message = (f'{LOCAL_EXECUTION_INTERRUPTED_MESSAGE}继续其他会话。' if error.code == LOCAL_EXECUTION_INTERRUPTED
+                else f'日报生成失败（{error.code}），继续其他会话')
+            await _emit_progress(observer, state, f'会话「{name}」{message}')
         except Exception as error:
             if getattr(error, 'authoritative_storage_failure', False):
                 raise

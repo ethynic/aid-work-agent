@@ -6,6 +6,7 @@ Prepared before the ordinary Local slice freeze; run only after handoff.
 """
 from decimal import Decimal
 import json
+import os
 import re
 import time
 import uuid
@@ -49,12 +50,15 @@ try:
     while time.monotonic()<deadline:
         heartbeat()
         if (root/'allow-claim').exists():
-            invocation=repository.claim_next(str(device['id']),tenant,claim_hash,90)
+            modern = (root/'modern-runtime').exists()
+            invocation=repository.claim_next(str(device['id']),tenant,claim_hash,90,
+                **({'runtime_resource_admission': 1} if modern else {}))
             if invocation: break
         time.sleep(.05)
     assert invocation and invocation['tool_name']=='boss_select_job'
     identifier=str(invocation['id'])
-    assert repository.mark_started(identifier,tenant,claim_hash)['state']=='running'
+    assert repository.mark_started(identifier,tenant,claim_hash,
+        **({'runtime_resource_admission': 1} if modern else {}))['state']=='running'
     repository.append_event(identifier,tenant,claim_hash,'fixture-started',1,1,'Fixture started',90)
     (root/'device-claimed.json').write_text(json.dumps({'invocation_id':identifier}))
     while not (root/'allow-result').exists() and time.monotonic()<deadline:
@@ -103,6 +107,47 @@ def committed_local(row):
     state=decoded(row['checkpoint']).get('execution',{})
     refs=state.get('resources',{}).get('local_invocations',{})
     return next(iter(refs.values()),None)
+
+
+def test_modern_unknown_ends_original_runner_without_followup_model(workers, ordinary_local, service_database):
+    actor, profile, folder, _ = ordinary_local
+    device_id = json.loads((folder / 'device-ready.json').read_text())['device_id']
+    from src.local_tools import repository
+    repository.touch_device_seen(device_id, capabilities={
+        'provider_id': 'ai.aidwork.boss-recruiting',
+        'runtime_resource_admission': {'version': 1, 'scope': 'none'},
+    })
+    marker = workers.provider.register(tool_reply('boss_select_job', {'job_name': 'Fixture exact job'}),
+        Reply('Unexpected followup'))
+    accepted = accept(workers.api, actor, marker, profile_id=profile)
+    if os.name == 'nt':
+        # Windows asyncio lacks Unix signal registration. The real CLI still
+        # loads its resources, gateway, repositories and Engine in this child.
+        bootstrap = ('import asyncio; asyncio.BaseEventLoop.add_signal_handler = lambda *_: None; '
+            'from src.services.agent_runner.worker import main; main()')
+        child = workers.processes.start(['-c', bootstrap, '--once'], environment=workers.environment,
+                                        private_working_directory=True)
+        workers.children.append((child, 'windows-once'))
+    else:
+        child, _ = workers.start()
+    try:
+        (folder / 'modern-runtime').touch()
+        (folder / 'allow-claim').touch()
+        try:
+            wait_for((folder / 'device-claimed.json').exists, timeout=15)
+        except AssertionError:
+            raise AssertionError(local_diagnosis(workers, service_database, accepted['runner_id'])) from None
+        (folder / 'result-mode').write_text('unknown')
+        (folder / 'allow-result').touch()
+        ended = terminal(service_database, accepted['runner_id'], timeout=8)
+        result = decoded(ended['result'])
+        assert ended['status'] == 'failed' and result['error_code'] == 'LOCAL_EXECUTION_INTERRUPTED'
+        assert '本机操作已中断，未收到结果' in result['output']
+        assert service_database.rows('SELECT state,effect FROM local_tool_invocations WHERE tenant_id=%s',
+            (actor.tenant_id,)) == [{'state': 'unknown', 'effect': 'unknown'}]
+        assert len(workers.provider.requests(marker)) == 1
+    finally:
+        workers.processes.stop(child)
 
 
 def interrupted(workers,database,accepted,child,*,hard=False):

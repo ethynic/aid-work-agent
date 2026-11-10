@@ -434,6 +434,37 @@ class TestCompletionRules:
         task = _task_row(tenant_id, claimed["task_id"])
         assert task["status"] == "blocked" and task["blocked_reason"] == "unknown_send_result"
 
+    def test_modern_device_resumes_events_after_an_unknown_send_without_recreating_it(
+            self, tenant_id, device_row, verified_binding):
+        from src.local_tools import repository
+
+        _, claimed = _publish_and_claim(tenant_id, device_row, verified_binding)
+        _, old = _submit_reply(tenant_id, device_row, claimed, verified_binding, 1, [_peer_msg('m1', 'First')])
+        model, _ = _fake_model([json.dumps({'action': 'reply', 'reply_text': 'First reply'})])
+        decisions_mod.run_decision_tick(model_call=model)
+        _mark_link(tenant_id, claimed['task_id'], old['decision_id'], state='unknown')
+        decisions_mod.evaluate_tasks()
+        assert _task_row(tenant_id, claimed['task_id'])['status'] == 'blocked'
+
+        caps = dict(device_row['capabilities_json'], runtime_resource_admission={'version': 1, 'scope': 'none'})
+        repository.touch_device_seen(str(device_row['id']), capabilities=caps)
+        decisions_mod.evaluate_tasks()
+        task = _task_row(tenant_id, claimed['task_id'])
+        assert task['status'] == 'active' and task['blocked_reason'] is None
+        from src.db.database import get_db_connection
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE session_task_assignments SET lease_expires_at=NOW()-INTERVAL '1 second' WHERE id=%s",
+                (claimed['assignment_id'],))
+            conn.commit()
+        replacement = service.claim_task(_device_dict(tenant_id, device_row), 'after-upgrade')
+        assert replacement['fence'] > claimed['fence']
+        original_send = decisions_mod.prepare_send(tenant_id, device_row['id'], uuid.UUID(replacement['assignment_id']),
+            replacement['fence'], uuid.UUID(old['decision_id']), runtime_resource_admission=1)
+        assert original_send['status'] == 'interrupted' and original_send['invocation_id'] is None
+        _, new = _submit_reply(tenant_id, device_row, replacement, verified_binding, 2, [_peer_msg('m2', 'Later event')])
+        assert new['decision_id'] != old['decision_id']
+
 
 # ---------------------------------------------------------------------------
 # supersede / 人工回复

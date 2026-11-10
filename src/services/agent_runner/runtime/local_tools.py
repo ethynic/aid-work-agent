@@ -50,7 +50,7 @@ class LocalToolAdapter:
                               _trusted_user_id=context.user_id, _session_id=context.session_id)
         progress_queue: asyncio.Queue = ProgressQueue(maxsize=256)
         execution_args["_progress_queue"] = progress_queue
-        from src.local_tools.durable_flow import LocalContinuationRequired
+        from src.local_tools.durable_flow import LocalContinuationRequired, LocalExecutionInterrupted
         from src.local_tools.lifecycle import local_operation_scope, current_local_operation
         tool = self.tool_executor.registry.get_tool(tool_name)
         owner = None
@@ -125,6 +125,8 @@ class LocalToolAdapter:
                         user_id=user_id, tool_call_id=context.tool_call_id,
                         state=self.state, assembler=self.attachments)
                 yield ("result", result)
+            except LocalExecutionInterrupted as error:
+                yield ('result', error.result)
             except LocalContinuationRequired as error:
                 yield ("verification", {"kind":"verification", "error_code":error.code,
                     "invocation_id":error.invocation_id, "tool_call_id":context.tool_call_id})

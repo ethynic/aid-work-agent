@@ -241,7 +241,7 @@ export class LegacyExecution implements HostAdapter {
     const admissionFailure = (provider: string, inv: Parameters<typeof runInvocation>[0]) => provider === 'runtime-recovery' || inv.tool_name === 'wecom_send_status' || inv.tool_name === 'boss_recovery_probe'
       ? { code: 'TOOL_NOT_ALLOWED', message: '已中断任务不会自动查询业务结果' }
       : allowTool(provider, inv.tool_name) ? undefined : { code: 'DESKTOP_RESOURCE_BUSY', message: '本机旧执行资源尚未确认停止，本次任务未启动' }
-    const api = new ApiClient(server, token)
+    const api = new ApiClient(server, token, true)
     const bridgeKey = randomBytes(32).toString('hex')
     const wecomLegacyEnv: Record<string, string> = {}
     for (const key of ['AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN']) {
@@ -285,9 +285,10 @@ export class LegacyExecution implements HostAdapter {
       // Discovery never delays heartbeat/claim and cannot invoke a business tool.
       // A failed transport is retried by the next heartbeat, without another worker.
       void wecom?.inspectWecomBusinessTools().catch(() => {})
-      return deviceCapabilities({ ...this.effectiveConfig(config, entries), ...(scope === 'none' ? {} : { skills: undefined }) }, wecom?.wecomBusinessReady,
+      const current = deviceCapabilities({ ...this.effectiveConfig(config, entries), ...(scope === 'none' ? {} : { skills: undefined }) }, wecom?.wecomBusinessReady,
         wecom?.wecomDirectoryReady, wecom?.wecomDirectorySearchReady,
         wecom?.wecomConfigDoctorReady, wecom?.wecomConfigCalibrateReady, tool => allowTool('wecom', tool) && tool !== 'wecom_send_status')
+      return { ...current, runtime_resource_admission: { version: 1, scope } }
     }
     const loop = new PollLoop({
       api,

@@ -124,6 +124,122 @@ def _prepare(client, request):
             "registration_id": request["registration_id"], "registration_token": request["registration_token"]}
 
 
+class TestResourceAdmission:
+    def test_explicit_scope_skips_old_conflicting_queue_but_legacy_claim_does_not(self, users, monkeypatch):
+        from fastapi import FastAPI
+        from src.local_tools import api, repository
+
+        user = users[0]
+        async def current_user(_request):
+            return user, user["tenant_id"]
+        monkeypatch.setattr(api, "_current_user_and_tenant", current_user)
+        app = FastAPI()
+        app.include_router(api.router)
+        client = TestClient(app)
+        device_id, device_token = _pair_device(client, user)
+        runtime = {"Authorization": f"Bearer {device_token}"}
+        boss = repository.create_invocation(user["tenant_id"], user["user_id"], device_id,
+            "boss_goto", {"url": "https://example.test"})
+        safe = repository.create_invocation(user["tenant_id"], user["user_id"], device_id,
+            "wecom_read_sessions", {})
+        heartbeat = client.post("/api/local-tools/runtime/heartbeat", headers=runtime, json={
+            "capabilities": {"provider_id": PROVIDER_ID, "providers": ["wecom"],
+                "capabilities": ["wecom_read_sessions", "boss_goto"],
+                "runtime_resource_admission": {"version": 1, "scope": "chrome"}},
+        })
+        assert heartbeat.status_code == 200
+
+        modern = client.post("/api/local-tools/runtime/claim?wait=0&runtime_resource_admission=1",
+            headers=runtime).json()
+        assert (modern.get("invocation_id"), modern.get("provider")) == (safe, "wecom")
+        assert repository.get_invocation(boss, user["tenant_id"])["state"] == "queued"
+        assert client.post(f"/api/local-tools/runtime/invocations/{safe}/started?runtime_resource_admission=1",
+            headers=runtime, json={"claim_token": modern["claim_token"]}).status_code == 200
+        later = repository.create_invocation(user["tenant_id"], user["user_id"], device_id,
+            "wecom_read_sessions", {})
+        later_claim = client.post("/api/local-tools/runtime/claim?wait=0&runtime_resource_admission=1",
+            headers=runtime).json()
+        assert later_claim['invocation_id'] == later
+        assert client.post("/api/local-tools/runtime/heartbeat", headers=runtime, json={
+            "capabilities": {"provider_id": PROVIDER_ID,
+                "runtime_resource_admission": {"version": 1, "scope": "desktop"}},
+        }).status_code == 200
+        refused_start = client.post(f"/api/local-tools/runtime/invocations/{later}/started?runtime_resource_admission=1",
+            headers=runtime, json={"claim_token": later_claim['claim_token']})
+        assert refused_start.status_code == 409 and refused_start.json()['detail']['error'] == 'DESKTOP_RESOURCE_BUSY'
+        assert repository.get_invocation(later, user['tenant_id'])['state'] == 'claimed'
+
+        # The same installed identity may have already returned to an old client,
+        # whose first claim can arrive before its replacement heartbeat.
+        legacy = client.post("/api/local-tools/runtime/claim?wait=0", headers=runtime).json()
+        assert (legacy.get("invocation_id"), legacy.get("provider")) == (boss, "boss-recruiting")
+
+    def test_delivered_037_transport_keeps_original_heartbeat_claim_start_and_result(self, users):
+        import json
+        import os
+        from pathlib import Path
+        import socket
+        import subprocess
+        import uvicorn
+        from fastapi import FastAPI
+        from src.local_tools import api, repository
+        from src.local_tools.security import generate_device_token, sha256_hex
+
+        bundle_path = os.environ.get('AID_RUNTIME_RECOVERY_TEST_037')
+        if not bundle_path:
+            pytest.skip('Requires an extracted Runtime 0.0.37 resources/runtime directory')
+        bundle = Path(bundle_path).resolve(strict=True)
+        node = bundle / 'node' / 'win-x64' / 'node.exe'
+        api_module = bundle / 'host' / 'apiClient.js'
+        assert node.is_file() and api_module.is_file()
+        assert Path(os.environ['AIDWORK_RUNTIME_HOME']).is_absolute()
+        user = users[0]
+        device_token = generate_device_token()
+        capabilities = {'provider_id': PROVIDER_ID, 'providers': ['boss-recruiting']}
+        device = repository.create_device(user['tenant_id'], user['user_id'], sha256_hex(device_token), capabilities=capabilities)
+        device_id = str(device['id'])
+        assert repository.select_device(user['tenant_id'], user['user_id'], device_id)
+        original = repository.create_invocation(user['tenant_id'], user['user_id'], device_id,
+            'boss_goto', {'url': 'https://example.test'})
+        app = FastAPI()
+        app.include_router(api.router)
+        script = """
+import assert from 'node:assert/strict'
+import {readFileSync} from 'node:fs'
+const {origin, token, moduleUrl, expected, capabilities} = JSON.parse(readFileSync(0, 'utf8'))
+const {ApiClient} = await import(moduleUrl)
+const api = new ApiClient(origin, token)
+assert.equal((await api.heartbeat({runtime_version: '0.0.37', capabilities})).selected, true)
+const claim = await api.claim(0)
+assert.equal(claim.invocation_id, expected)
+assert.equal(claim.provider, 'boss-recruiting')
+await api.started(expected, claim.claim_token)
+const result = {claim_token: claim.claim_token, success: true, effect: 'none', data: {synthetic: true}}
+await api.result(expected, result)
+await api.result(expected, result)
+"""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen()
+            origin = f'http://127.0.0.1:{listener.getsockname()[1]}'
+            server = uvicorn.Server(uvicorn.Config(app, lifespan='off', log_level='warning'))
+            thread = threading.Thread(target=server.run, kwargs={'sockets': [listener]}, daemon=True)
+            thread.start()
+            try:
+                result = subprocess.run([str(node), '--input-type=module', '-e', script], input=json.dumps({
+                    'origin': origin, 'token': device_token, 'moduleUrl': api_module.as_uri(),
+                    'expected': original, 'capabilities': capabilities,
+                }), text=True, capture_output=True, timeout=20)
+                assert result.returncode == 0
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+            assert not thread.is_alive()
+        row = repository.get_invocation(original, user['tenant_id'])
+        assert str(row['device_id']) == device_id and row['state'] == 'succeeded'
+        assert row['result_json']['data'] == {'synthetic': True}
+
+
 class TestFullFlow:
     def test_full_invocation_lifecycle(self, client, users):
         """全链路：配对 → 心跳 → 选定 → claim → started → progress×2 → result → 幂等"""

@@ -14,6 +14,13 @@ class LocalContinuationRequired(RuntimeError):
         self.code, self.invocation_id = code, invocation_id
 
 
+class LocalExecutionInterrupted(LocalContinuationRequired):
+    def __init__(self, result):
+        from src.core.agent_engine.contracts import LOCAL_EXECUTION_INTERRUPTED, LOCAL_EXECUTION_INTERRUPTED_MESSAGE
+        super().__init__(LOCAL_EXECUTION_INTERRUPTED, result.get('invocation_id'))
+        self.result = {**result, 'success': False, 'code': self.code, 'message': LOCAL_EXECUTION_INTERRUPTED_MESSAGE}
+
+
 class LocalModelAttemptConsumed(RuntimeError):
     """A dispatched model attempt already holds its immutable usage receipt.
 

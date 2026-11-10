@@ -100,6 +100,38 @@ def test_older_runtime_has_actionable_upgrade_error_and_no_probe(lost_local):
     assert 'local_verification' not in repository.get(row['runner_id'])['checkpoint']
 
 
+def test_detached_history_hides_old_probe_after_modern_heartbeat_and_keeps_the_audit(lost_local, service_database):
+    from .test_storage import attempt
+    from src.services.agent_runner.finalizer import RunnerFinalizer
+    from src.services.agent_runner.public_view import public_runner
+    from src.services.agent_runner.worker import execution_result
+
+    repository, executions, principal, row, device, original, _ = lost_local
+    enable(service_database, device)
+    requested = verify_local(repository, principal, row['runner_id'], 'before-upgrade')
+    probe_id = requested['checkpoint']['local_verification']['invocation_id']
+    end_waiting(repository, principal, row['runner_id'])
+    finalizing = executions.acquire('historical-finalizer', 60)
+    state = ExecutionState.restore(finalizing['checkpoint']['execution'])
+    executions.stage_finalization(attempt(finalizing), finalizing['revision'], finalizing['checkpoint'],
+        {**execution_result(state, 'cancelled'), 'output': '已结束原任务的云端等待。'}, finalizing['public_snapshot'])
+    RunnerFinalizer(service_database.connect).finalize(attempt(finalizing))
+    assert public_runner(repository.get(row['runner_id']))['local_verification_available']
+
+    devices.touch_device_seen(str(device['id']), capabilities={
+        'runtime_resource_admission': {'version': 1, 'scope': 'none'},
+    })
+    current = repository.get(row['runner_id'])
+    public = public_runner(current)
+    assert 'local_verification_available' not in public and 'local_verification' not in public
+    assert public['result']['output'] == '本机操作已中断，未收到结果。'
+    assert current['checkpoint']['local_verification']['invocation_id'] == probe_id
+    assert current['checkpoint']['detached_local_invocations'] == [original]
+    with pytest.raises(RunnerError) as error:
+        verify_local(repository, principal, row['runner_id'], 'stale-ui')
+    assert error.value.code == 'LOCAL_EXECUTION_INTERRUPTED'
+
+
 @pytest.mark.parametrize('state', ['queued', 'running', 'cancel_requested'])
 def test_readonly_verification_never_cancels_an_active_original(lost_local, service_database, state):
     repository, _, principal, row, device, original, _ = lost_local

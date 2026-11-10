@@ -80,7 +80,7 @@ class ToolDispatcher:
                     images = _extract_image_refs_from_tool_result(payload) if isinstance(payload,dict) else []
                     _normalize_image_placement(images)
                     preserve = bool(isinstance(payload,dict) and payload.pop('_no_truncate',False))
-                    terminal = DispatchResult(payload, success=payload.get('success', True),
+                    terminal = self._local_interruption(payload) or DispatchResult(payload, success=payload.get('success', True),
                         preserve_content=preserve, images=tuple(images))
             if terminal is None:
                 raise CheckpointFailure('LOCAL_TOOL_MISSING_RESULT')
@@ -90,6 +90,14 @@ class ToolDispatcher:
         # adapters resolve known invocation/continuation IDs before re-entering.
         return DispatchResult(None, wait={"kind": "verification", "tool_call_id": call.id,
             "invocation_id": state.tools[call.id].invocation_id})
+
+    @staticmethod
+    def _local_interruption(result):
+        from src.core.agent_engine.contracts import LOCAL_EXECUTION_INTERRUPTED, TerminalDirective
+        if isinstance(result, dict) and result.get('code') == LOCAL_EXECUTION_INTERRUPTED:
+            return DispatchResult(result, success=False, preserve_content=True,
+                                  terminal_directive=TerminalDirective.LOCAL_EXECUTION_INTERRUPTED)
+        return None
 
     async def _finish_plan_task(self, state, call, terminal):
         binding = (state.resources.get('plan_tasks') or {}).get(call.id)
@@ -209,7 +217,7 @@ class ToolDispatcher:
                         elif kind == 'verification':
                             result = DispatchResult(None, wait=payload)
                         else:
-                            result = payload
+                            result = self._local_interruption(payload) or payload
                     if result is None:
                         raise RuntimeError("LOCAL_TOOL_MISSING_RESULT")
                 else:

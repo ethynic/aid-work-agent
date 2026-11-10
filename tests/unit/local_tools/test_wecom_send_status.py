@@ -235,6 +235,7 @@ class AdmissionDatabase:
     def __init__(self):
         self.source = original()
         self.status = status_row()
+        self.capabilities = {}
         self.holds = [{**original(), 'checkpoint': {'detached_local_invocations': [SEND]}}]
         self.statements, self.selected = [], None
         self.connection = MagicMock()
@@ -244,6 +245,8 @@ class AdmissionDatabase:
         self.statements.append((sql, params))
         if 'SELECT * FROM local_tool_invocations WHERE id=%s AND tenant_id=%s' in sql and 'user_id=%s' in sql:
             self.selected = self.source
+        elif 'SELECT capabilities_json FROM local_tool_devices' in sql:
+            self.selected = {'capabilities_json': self.capabilities}
         elif 'SELECT i.id FROM local_tool_invocations' in sql:
             self.selected = None
         elif 'SELECT i.id,i.state' in sql:
@@ -285,6 +288,15 @@ def enqueue(database):
     return repository.create_invocation_in_tx(database, 'tenant', 'user', DEVICE, scope.TOOL,
         {'receipt_id': RECEIPT}, 'session', provider_key='wecom', business_kind=scope.BUSINESS_KIND,
         business_ref={'version': 1, 'send_invocation_id': SEND})
+
+
+def test_modern_device_cannot_enqueue_a_status_probe_for_an_old_unknown_send():
+    database = AdmissionDatabase()
+    database.capabilities = {'runtime_resource_admission': {'version': 1, 'scope': 'none'}}
+    with patch.object(repository, 'lock_operation_admission'), patch.object(repository, 'lock_active_device', return_value=True):
+        with pytest.raises(repository.DeviceOperationUnresolved, match='LOCAL_EXECUTION_INTERRUPTED'):
+            enqueue(database)
+    assert not any('INSERT INTO local_tool_invocations' in sql for sql, _ in database.statements)
 
 
 def test_actual_admission_chain_rechecks_scope_at_enqueue_claim_and_start_without_releasing_hold():

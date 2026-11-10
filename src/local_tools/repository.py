@@ -16,6 +16,7 @@ from psycopg2.extras import Json
 from src.core.cache_utils import invalidate_tenant_cache
 from src.db.client_binding_db import ClientUsageLogDB
 from src.db.database import get_db_connection
+from src.local_tools import catalog
 from src.local_tools.pricing import tool_credit_price
 from src.local_tools.security import sha256_hex
 
@@ -126,6 +127,57 @@ def assert_device_stop_available(cursor, tenant_id, device_id, *, exclude=None, 
         LIMIT 1""", (device_id, tenant_id, exclude, exclude, stop_only))
     if cursor.fetchone():
         raise DeviceOperationUnresolved('LOCAL_RECOVERY_BUSY')
+
+
+def _runtime_desktop_busy(cursor, tenant_id, device_id):
+    """Live detached work and an already dispatched stop can still hold the shared desktop."""
+    cursor.execute("""SELECT 1 FROM local_tool_invocations i
+        JOIN local_tool_devices original ON original.id=i.device_id
+        JOIN local_tool_devices target ON target.id=%s AND target.tenant_id=i.tenant_id AND target.user_id=i.user_id
+        WHERE i.tenant_id=%s AND i.state IN ('claimed','running','cancel_requested')
+          AND i.lease_expires_at>NOW()
+          AND (i.device_id=target.id OR original.machine_fingerprint_hash IS NOT NULL
+            AND original.machine_fingerprint_hash<>'' AND target.machine_fingerprint_hash=original.machine_fingerprint_hash)
+          AND NOT (i.tool_name=ANY(%s) AND (i.provider_key='wecom' OR i.provider_key IS NULL))
+          AND ((i.business_kind='agent_runner_recovery' AND i.business_ref->>'version'='3') OR
+            (i.business_kind='agent_runner' AND EXISTS (SELECT 1 FROM agent_runners r
+              WHERE r.runner_id=i.business_ref->>'runner_id' AND r.tenant_id=i.tenant_id
+                AND r.checkpoint->>'detached_local_wait'='true'
+                AND (NOT r.checkpoint ? 'detached_local_invocations'
+                  OR r.checkpoint->'detached_local_invocations' ? i.id::text))))
+        LIMIT 1""", (device_id, tenant_id, list(catalog.INDEPENDENT_RUNTIME_TOOLS)))
+    return cursor.fetchone() is not None
+
+
+def _locked_capabilities(cursor, tenant_id, device_id):
+    cursor.execute('SELECT capabilities_json FROM local_tool_devices WHERE tenant_id=%s AND id=%s',
+        (tenant_id, device_id))
+    device = cursor.fetchone()
+    return (device['capabilities_json'] or {}) if device else {}
+
+
+def uses_runtime_resource_admission(tenant_id, user_id, device_id):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT capabilities_json FROM local_tool_devices WHERE tenant_id=%s AND user_id=%s AND id=%s',
+            (tenant_id, user_id, device_id))
+        device = cursor.fetchone()
+        return bool(device and catalog.runtime_resource_scope(device['capabilities_json']) is not None)
+
+
+def assert_invocation_resources(cursor, tenant_id, device_id, invocation, runtime_resource_admission):
+    if runtime_resource_admission != 1:
+        return False
+    capabilities = _locked_capabilities(cursor, tenant_id, device_id)
+    scope = catalog.runtime_resource_scope(capabilities)
+    if scope is None:
+        raise DeviceOperationUnresolved('DESKTOP_RESOURCE_BUSY')
+    tool = invocation['tool_name']
+    provider = invocation.get('provider_key') or catalog.unique_tool_provider(tool)
+    busy = tool not in catalog.INDEPENDENT_RUNTIME_TOOLS and _runtime_desktop_busy(cursor, tenant_id, device_id)
+    if (provider, tool) not in catalog.runtime_admitted_tools(capabilities, scope, busy):
+        raise DeviceOperationUnresolved('DESKTOP_RESOURCE_BUSY')
+    return True
 
 
 def assert_device_operations_settled(cursor, tenant_id, device_id, *, observation=None, send_status=None):
@@ -969,7 +1021,10 @@ def create_invocation_in_tx(
         send_status = _send_status_scope(cursor, dict(tenant_id=tenant_id, user_id=user_id, session_id=session_id,
             device_id=device_id, tool_name=tool_name, arguments_json=arguments, provider_key=provider_key,
             business_kind=business_kind, business_ref=business_ref))
-    assert_device_operations_settled(cursor, tenant_id, device_id, observation=observation, send_status=send_status)
+    if catalog.runtime_resource_scope(_locked_capabilities(cursor, tenant_id, device_id)) is None:
+        assert_device_operations_settled(cursor, tenant_id, device_id, observation=observation, send_status=send_status)
+    elif tool_name in catalog.OLD_RUNTIME_OBSERVATIONS:
+        raise DeviceOperationUnresolved('LOCAL_EXECUTION_INTERRUPTED')
     if tool_name == 'boss_resume_next':
         # Lock the parent in the same transaction as insertion. Competing calls
         # cannot fork the cursor, without changing the Runner's own dedupe key.
@@ -1119,6 +1174,15 @@ def list_events(invocation_id: str, since_seq: int = 0) -> List[Dict[str, Any]]:
         return [dict(r) for r in cursor.fetchall()]
 
 
+_EXPIRE_STALE_CLAIMS = """
+    UPDATE local_tool_invocations
+    SET state = 'unknown', effect = 'unknown', finished_at = NOW()
+    WHERE state IN ('claimed', 'running', 'cancel_requested')
+      AND lease_expires_at IS NOT NULL
+      AND lease_expires_at < NOW()
+"""
+
+
 def expire_stale_claims() -> int:
     """租约过期的 claimed/running/cancel_requested → unknown/effect=unknown（claim 路径顺带调用）
 
@@ -1127,20 +1191,18 @@ def expire_stale_claims() -> int:
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            UPDATE local_tool_invocations
-            SET state = 'unknown', effect = 'unknown', finished_at = NOW()
-            WHERE state IN ('claimed', 'running', 'cancel_requested')
-              AND lease_expires_at IS NOT NULL
-              AND lease_expires_at < NOW()
-            """
-        )
+        cursor.execute(_EXPIRE_STALE_CLAIMS)
         count = cursor.rowcount
         conn.commit()
         if count:
             logger.warning(f"后端日志：{count} 条本地工具 invocation 租约过期，置为 unknown")
         return count
+
+
+def expire_stale_claims_in_tx(cursor, *, tenant_id, invocation_ids) -> int:
+    """Expire only the caller's validated original invocations."""
+    cursor.execute(_EXPIRE_STALE_CLAIMS + ' AND tenant_id=%s AND id=ANY(%s::uuid[])', (tenant_id, invocation_ids))
+    return cursor.rowcount
 
 
 def claim_lease_expired(invocation_id: str, tenant_id: str) -> bool:
@@ -1173,6 +1235,7 @@ def claim_next(
     provider_keys: Optional[List[str]] = None,
     execution_lane: Optional[str] = "standard",
     expected_invocation_id: Optional[str] = None,
+    runtime_resource_admission: int = 0,
 ) -> Optional[Dict[str, Any]]:
     """领取下一条 queued invocation（事务 + FOR UPDATE SKIP LOCKED 防重复领取）。
 
@@ -1193,15 +1256,28 @@ def claim_next(
     if expected_invocation_id is not None:
         lane_filter += " AND id = %s"
         params.append(expected_invocation_id)
-    provider_filter = ""
-    if provider_keys is not None:
-        provider_filter = " AND (provider_key IS NULL OR provider_key = ANY(%s))"
-        params.append(list(provider_keys))
     with get_db_connection() as conn:
         cursor = conn.cursor()
         lock_operation_admission(cursor, tenant_id)
         if not lock_active_device(cursor, tenant_id, device_id):
             return None
+        provider_filter = ""
+        modern = runtime_resource_admission == 1
+        if modern:
+            capabilities = _locked_capabilities(cursor, tenant_id, device_id)
+            scope = catalog.runtime_resource_scope(capabilities)
+            if scope is None:
+                return None  # Wait for this client's capability heartbeat.
+            tools = catalog.runtime_admitted_tools(capabilities, scope,
+                scope == 'none' and _runtime_desktop_busy(cursor, tenant_id, device_id))
+            provider_filter = """ AND EXISTS (
+                SELECT 1 FROM unnest(%s::text[], %s::text[], %s::boolean[]) AS admitted(provider, tool, legacy)
+                WHERE admitted.tool=tool_name AND (admitted.provider=provider_key OR (provider_key IS NULL AND admitted.legacy)))"""
+            params.extend(([key for key, _ in tools], [tool for _, tool in tools],
+                [catalog.unique_tool_provider(tool) == key for key, tool in tools]))
+        elif provider_keys is not None:
+            provider_filter = " AND (provider_key IS NULL OR provider_key = ANY(%s))"
+            params.append(list(provider_keys))
         cursor.execute(
             f"""
             SELECT * FROM local_tool_invocations
@@ -1221,17 +1297,18 @@ def claim_next(
         if not row:
             conn.commit()
             return None
-        from .recovery_observation import observation_scope
-        try:
-            send_status = _send_status_scope(cursor, row, dispatch=True)
-        except DeviceOperationUnresolved as error:
-            if row.get('tool_name') != 'wecom_send_status' or str(error) != 'WECOM_SEND_SCOPE_INVALID':
-                raise
-            _reject_undispatched_send_status(cursor, row, 'queued')
-            conn.commit()
-            return None
-        assert_device_operations_settled(cursor, tenant_id, device_id,
-            observation=observation_scope(cursor, row, dispatch=True), send_status=send_status)
+        if not modern:
+            from .recovery_observation import observation_scope
+            try:
+                send_status = _send_status_scope(cursor, row, dispatch=True)
+            except DeviceOperationUnresolved as error:
+                if row.get('tool_name') != 'wecom_send_status' or str(error) != 'WECOM_SEND_SCOPE_INVALID':
+                    raise
+                _reject_undispatched_send_status(cursor, row, 'queued')
+                conn.commit()
+                return None
+            assert_device_operations_settled(cursor, tenant_id, device_id,
+                observation=observation_scope(cursor, row, dispatch=True), send_status=send_status)
         cursor.execute(
             """
             UPDATE local_tool_invocations
@@ -1248,11 +1325,14 @@ def claim_next(
             (claim_token_hash, lease_seconds, row["id"]),
         )
         invocation = dict(cursor.fetchone())
+        if modern and invocation['provider_key'] is None:
+            invocation['provider_key'] = catalog.unique_tool_provider(invocation['tool_name'])
         conn.commit()
         return invocation
 
 
-def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str) -> Optional[Dict[str, Any]]:
+def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str, *,
+                 runtime_resource_admission: int = 0) -> Optional[Dict[str, Any]]:
     """claimed → running。hash 匹配时返回当前记录（无论是否迁移），不匹配/不存在返回 None"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -1262,6 +1342,7 @@ def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str) -> O
         owner = cursor.fetchone()
         if not owner or not lock_active_device(cursor, tenant_id, str(owner['device_id'])):
             return None
+        modern = assert_invocation_resources(cursor, tenant_id, str(owner['device_id']), owner, runtime_resource_admission)
         from .recovery_observation import observation_scope
         observation = observation_scope(cursor, owner, dispatch=True)
         try:
@@ -1276,7 +1357,8 @@ def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str) -> O
         if (owner.get('business_kind') == 'agent_runner_recovery'
                 and (owner.get('business_ref') or {}).get('version') == 3 and observation is None):
             return None
-        assert_device_operations_settled(cursor, tenant_id, str(owner['device_id']), observation=observation, send_status=send_status)
+        if not modern:
+            assert_device_operations_settled(cursor, tenant_id, str(owner['device_id']), observation=observation, send_status=send_status)
         cursor.execute(
             """
             UPDATE local_tool_invocations

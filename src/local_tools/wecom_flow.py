@@ -79,7 +79,7 @@ async def _reconcile(owner, pending, identity, progress):
 
 async def run(proxy, operation, kwargs):
     from .overlay_flow import poll_operation
-    from .repository import DeviceOperationUnresolved
+    from .repository import DeviceOperationUnresolved, uses_runtime_resource_admission
     from .wecom_send_status import SendStatusScopeError
 
     owner = operation.owner
@@ -88,9 +88,20 @@ async def run(proxy, operation, kwargs):
     arguments = {key: value for key, value in kwargs.items() if not key.startswith('_')}
     progress = kwargs.get('_progress_queue')
     pending = state.resources.setdefault('wecom_pending_sends', {})
+    modern_devices = {}
+
+    async def legacy_pending(item):
+        device_id = item['device_id']
+        if device_id not in modern_devices:
+            modern_devices[device_id] = await asyncio.to_thread(uses_runtime_resource_admission,
+                identity.tenant_id, identity.user_id, device_id)
+        return not modern_devices[device_id]
+
     requested = target = arguments.get('session')
     blocked_key = next((key for key, item in pending.items()
         if target is not None and target in {key, item.get('requested_session')}), None)
+    if blocked_key is not None and not await legacy_pending(pending[blocked_key]):
+        blocked_key = None
     expected_device = None
     if named_send(proxy.name,arguments) and blocked_key is None:
         from .lifecycle import LocalOperationScope
@@ -117,11 +128,19 @@ async def run(proxy, operation, kwargs):
         expected_device = saved['request']['device_id']
         blocked_key = next((key for key,item in pending.items()
             if target in {key,item.get('requested_session')}),None)
+        if blocked_key is not None and not await legacy_pending(pending[blocked_key]):
+            blocked_key = None
     blocked = pending.get(blocked_key)
     resolutions = []
     # Bound the work per tool invocation; the next ordinary read continues
     # the remaining targets without another scheduler or a model status tool.
-    for session, item in list(pending.items())[:4]:
+    attempted = 0
+    for session, item in list(pending.items()):
+        if not await legacy_pending(item):
+            continue
+        if attempted == 4:
+            break
+        attempted += 1
         try:
             checked = await _reconcile(owner, item, identity, progress)
         except (DeviceOperationUnresolved, SendStatusScopeError):

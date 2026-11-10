@@ -207,9 +207,13 @@ export class ApiClient {
   private readonly baseUrl: string
   private readonly token: string | null
 
-  constructor(baseUrl: string, token?: string) {
+  constructor(baseUrl: string, token?: string, private readonly resourceAdmission = false) {
     this.baseUrl = baseUrl.replace(/\/+$/, '')
     this.token = token ?? null
+  }
+
+  private admissionQuery(separator = '?'): string {
+    return this.resourceAdmission ? `${separator}runtime_resource_admission=1` : ''
   }
 
   private async post(path: string, body: unknown, opts: { auth?: boolean; timeoutMs?: number; signal?: AbortSignal; classifyPairingRedirect?: boolean } = {}): Promise<unknown> {
@@ -381,7 +385,7 @@ export class ApiClient {
 
   /** 长轮询领取 invocation（服务端最长 wait 秒；超时返回 null） */
   async claim(waitSeconds: number, signal?: AbortSignal): Promise<ClaimedInvocation | null> {
-    const res = (await this.post(`/api/local-tools/runtime/claim?wait=${waitSeconds}`, {}, {
+    const res = (await this.post(`/api/local-tools/runtime/claim?wait=${waitSeconds}${this.admissionQuery('&')}`, {}, {
       timeoutMs: (waitSeconds + 15) * 1000,
       signal,
     })) as Record<string, unknown>
@@ -398,7 +402,7 @@ export class ApiClient {
   }
 
   async started(invocationId: string, claimToken: string, signal?: AbortSignal): Promise<void> {
-    await this.post(`/api/local-tools/runtime/invocations/${invocationId}/started`, { claim_token: claimToken }, { signal })
+    await this.post(`/api/local-tools/runtime/invocations/${invocationId}/started${this.admissionQuery()}`, { claim_token: claimToken }, { signal })
   }
 
   /** Frozen text payload, device-authenticated; never follows caller supplied URLs. */
@@ -450,7 +454,7 @@ export class ApiClient {
 
   /** v2 写动作许可申请（Runtime 内部 API，不暴露给 LLM；§5.2） */
   async writeAuthorize(invocationId: string, payload: WriteAuthorizePayload): Promise<WriteAuthorizeResponse> {
-    const res = (await this.post(`/api/local-tools/runtime/invocations/${invocationId}/write-authorize`, payload)) as Record<string, unknown>
+    const res = (await this.post(`/api/local-tools/runtime/invocations/${invocationId}/write-authorize${this.admissionQuery()}`, payload)) as Record<string, unknown>
     const permitId = res['permit_id']
     const permitToken = res['permit_token']
     const deadlineAt = res['deadline_at']
@@ -579,7 +583,7 @@ export class ApiClient {
    * 决策已 superseded/失配时返回 {invocation_id: null, decision_status}（200）。 */
   async sessionTaskPrepareSend(assignmentId: string, decisionId: string, fence: number, signal?: AbortSignal): Promise<SessionTaskPrepareSendResult> {
     const res = (await this.post(
-      `/api/local-tools/runtime/session-tasks/${assignmentId}/decisions/${decisionId}/prepare-send`,
+      `/api/local-tools/runtime/session-tasks/${assignmentId}/decisions/${decisionId}/prepare-send${this.admissionQuery()}`,
       { fence },
       { signal, timeoutMs: 30_000 },
     )) as Record<string, unknown>
@@ -596,7 +600,7 @@ export class ApiClient {
    * 不可领取（非 queued/任务非 active）返回 {invocation: null, state}，不抛错。 */
   async sessionTaskClaimInvocation(assignmentId: string, invocationId: string, fence: number, signal?: AbortSignal): Promise<SessionTaskTargetedClaim> {
     const res = (await this.post(
-      `/api/local-tools/runtime/session-tasks/${assignmentId}/invocations/${invocationId}/claim`,
+      `/api/local-tools/runtime/session-tasks/${assignmentId}/invocations/${invocationId}/claim${this.admissionQuery()}`,
       { fence },
       { signal },
     )) as Record<string, unknown>

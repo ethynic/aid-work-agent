@@ -14,6 +14,15 @@ class AgentMode(str, Enum):
 
 class TerminalDirective(str, Enum):
     STOP_EXECUTION = "stop_execution"
+    LOCAL_EXECUTION_INTERRUPTED = "local_execution_interrupted"
+
+
+LOCAL_EXECUTION_INTERRUPTED = 'LOCAL_EXECUTION_INTERRUPTED'
+LOCAL_EXECUTION_INTERRUPTED_MESSAGE = '本机操作已中断，未收到结果。'
+
+
+def interrupted_local_output(output):
+    return f'{output.rstrip()}\n\n{LOCAL_EXECUTION_INTERRUPTED_MESSAGE}' if output else LOCAL_EXECUTION_INTERRUPTED_MESSAGE
 
 
 class Outcome(str, Enum):

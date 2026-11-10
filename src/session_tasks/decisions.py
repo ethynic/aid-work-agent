@@ -1816,7 +1816,8 @@ def handle_manual_intervention(conn, tenant_id: str, task_id) -> None:  # noqa: 
 # ---------------------------------------------------------------------------
 
 
-def prepare_send(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: int, decision_id: UUID) -> Dict[str, Any]:
+def prepare_send(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: int, decision_id: UUID, *,
+                 runtime_resource_admission: int = 0) -> Dict[str, Any]:
     """ready reply/opening → 幂等物化单条底座执行单元（§9/§10）。
 
     Phase A 校验（subject→task→assignment→decision，与控制/领取/评估同序）：assignment 当前/fence/租约、
@@ -1919,20 +1920,32 @@ def prepare_send(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: in
             supersede_decisions_on_batch(conn, tenant_id, task_id, cur_version)
             conn.commit()
             return {"status": "superseded", "invocation_id": None, "decision_status": "superseded"}
-        if not _work_window_open(spec, now):
-            conn.rollback()
-            raise SessionTaskError("当前不在任务工作时段（WORK_WINDOW_CLOSED）", "WORK_WINDOW_CLOSED", 409)
         # max_replies 预算：已占链接（非 failed/skipped delivery）+ 1 ≤ max_replies
         cursor.execute(
             """
-            SELECT l.decision_id, d.state AS delivery_state
+            SELECT l.decision_id, d.state AS delivery_state, i.state AS invocation_state,
+                   (i.state IN ('claimed','running','cancel_requested') AND i.lease_expires_at<NOW()) AS invocation_expired
             FROM session_task_execution_links l
             LEFT JOIN desktop_automation_deliveries d ON d.tenant_id=l.tenant_id AND d.id=l.delivery_id
+            LEFT JOIN local_tool_invocations i ON i.tenant_id=l.tenant_id AND i.id=l.invocation_id
             WHERE l.tenant_id=%s AND l.task_id=%s
             """,
             (tenant_id, task_id),
         )
         links = [dict(r) for r in cursor.fetchall()]
+        existing_link = next((l for l in links if str(l["decision_id"]) == str(decision_id)), None)
+        if runtime_resource_admission == 1 and existing_link and (
+                existing_link['invocation_expired'] or 'unknown' in (existing_link['delivery_state'], existing_link['invocation_state'])):
+            from src.local_tools.catalog import runtime_resource_scope
+            cursor.execute('SELECT capabilities_json FROM local_tool_devices WHERE tenant_id=%s AND id=%s',
+                (tenant_id, device_id))
+            device = cursor.fetchone()
+            if device and runtime_resource_scope(device['capabilities_json']) is not None:
+                conn.commit()
+                return {"status": "interrupted", "invocation_id": None, "decision_status": decision['status']}
+        if not _work_window_open(spec, now):
+            conn.rollback()
+            raise SessionTaskError("当前不在任务工作时段（WORK_WINDOW_CLOSED）", "WORK_WINDOW_CLOSED", 409)
         # 已结算发送 + 未决预留共同占额度：非 failed/skipped 的链接都占用（含无
         # delivery 的未决链接）；重试本决策自身的既有链接不重复计数
         occupied = [
@@ -1945,7 +1958,6 @@ def prepare_send(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: in
             conn.rollback()
             _transition_task_standalone(tenant_id, task_id, STATUS_STOPPED, "max_replies_exhausted")
             raise SessionTaskError("回复上限已用尽（max_replies）", ERR_BUDGET_EXCEEDED, 409)
-        existing_link = next((l for l in links if str(l["decision_id"]) == str(decision_id)), None)
         spec_row_id = str(task["current_spec_id"])
 
         # ---- B1.2 Phase A 场景门禁（设计 §5.5.2 原子顺序冻结）------------------
@@ -2225,7 +2237,7 @@ def existing_link_invocation(tenant_id: str, task_id, decision_id, run) -> Optio
 
 def claim_session_invocation(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: int,
                              invocation_id: UUID, claim_token_hash: str, lease_seconds: int,
-                             provider_keys: Optional[List[str]]) -> Dict[str, Any]:
+                             provider_keys: Optional[List[str]], *, runtime_resource_admission: int = 0) -> Dict[str, Any]:
     """定向领取 session 道 invocation（§9）：仅绑定 assignment 的 queued 行可领。
 
     返回 {"invocation": row} 或 {"invocation": None, "state": 当前状态}。
@@ -2280,6 +2292,7 @@ def claim_session_invocation(tenant_id: str, device_id: UUID, assignment_id: UUI
         str(device_id), tenant_id, claim_token_hash, lease_seconds,
         provider_keys=provider_keys, execution_lane=_LANE_SESSION_TASK,
         expected_invocation_id=str(invocation_id),
+        **({'runtime_resource_admission': 1} if runtime_resource_admission == 1 else {}),
     )
     if claimed is None:
         fresh = repository.get_invocation(str(invocation_id), tenant_id)
@@ -2342,7 +2355,10 @@ def evaluate_tasks(*, now: Optional[datetime] = None, limit: int = 50) -> int:
         cursor.execute(
             """
             SELECT t.id, t.tenant_id, t.scenario_key FROM session_tasks t
-            WHERE t.status='active'
+            WHERE t.status='active' OR (t.status='blocked' AND t.blocked_reason='unknown_send_result'
+              AND EXISTS (SELECT 1 FROM local_tool_devices d WHERE d.id=t.device_id AND d.tenant_id=t.tenant_id
+                AND d.user_id=t.user_id AND d.status='active'
+                AND d.capabilities_json->'runtime_resource_admission'->'version'='1'::jsonb))
             ORDER BY t.updated_at DESC LIMIT %s
             """,
             (limit,),
@@ -2362,19 +2378,32 @@ def evaluate_tasks(*, now: Optional[datetime] = None, limit: int = 50) -> int:
 def evaluate_task(tenant_id: str, task_id, *, now: datetime) -> bool:  # noqa: ANN001
     """单任务完成评估（subject→task 锁内；幂等，CAS active）。"""
     from .scenario_hooks import require_hooks
+    from src.local_tools.catalog import runtime_resource_scope
 
     with _conn() as conn:
         _lock_task_subject(conn, tenant_id, task_id)
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, user_id, scenario_key, status, spec_revision, current_spec_id
+            SELECT id, user_id, device_id, scenario_key, status, blocked_reason, spec_revision, current_spec_id
             FROM session_tasks WHERE tenant_id=%s AND id=%s FOR UPDATE
             """,
             (tenant_id, task_id),
         )
         task = cursor.fetchone()
-        if task is None or task["status"] != STATUS_ACTIVE:
+        if task is None:
+            conn.rollback()
+            return False
+        cursor.execute('SELECT capabilities_json FROM local_tool_devices WHERE tenant_id=%s AND user_id=%s AND id=%s AND status=\'active\'',
+            (tenant_id, task['user_id'], task['device_id']))
+        device = cursor.fetchone()
+        modern = bool(device and runtime_resource_scope(device['capabilities_json']) is not None)
+        if task['status'] == STATUS_BLOCKED and task['blocked_reason'] == 'unknown_send_result' and modern:
+            migrated = _apply_task_transition(conn, tenant_id, task_id, STATUS_ACTIVE, 'runtime_execution_interrupted',
+                                              expected_status=STATUS_BLOCKED)
+            conn.commit()
+            return migrated
+        if task['status'] != STATUS_ACTIVE:
             conn.rollback()
             return False
         task_dict, spec = _load_task_spec(conn, tenant_id, task_id)
@@ -2382,10 +2411,12 @@ def evaluate_task(tenant_id: str, task_id, *, now: datetime) -> bool:  # noqa: A
         hooks = require_hooks(task["scenario_key"])
         cursor.execute(
             """
-            SELECT l.decision_id, l.invocation_id, d.state AS delivery_state,
+            SELECT l.decision_id, l.invocation_id, d.state AS delivery_state, i.state AS invocation_state,
+                   (i.state IN ('claimed','running','cancel_requested') AND i.lease_expires_at<NOW()) AS invocation_expired,
                    dec.decision_kind AS decision_kind
             FROM session_task_execution_links l
             LEFT JOIN desktop_automation_deliveries d ON d.tenant_id=l.tenant_id AND d.id=l.delivery_id
+            LEFT JOIN local_tool_invocations i ON i.tenant_id=l.tenant_id AND i.id=l.invocation_id
             LEFT JOIN session_task_decisions dec ON dec.tenant_id=l.tenant_id AND dec.id=l.decision_id
             WHERE l.tenant_id=%s AND l.task_id=%s
             """,
@@ -2396,19 +2427,16 @@ def evaluate_task(tenant_id: str, task_id, *, now: datetime) -> bool:  # noqa: A
         pending = False
         unknown = False
         for l in links:
-            if l.get("delivery_state") in ("pending", "dispatched"):
-                pending = True
+            if modern and l['invocation_expired']:
+                l['invocation_state'] = 'unknown'  # A stopped claim poll cannot keep this lease alive.
+            if modern and l['invocation_state'] == 'unknown' and l['delivery_state'] in (None, 'pending', 'dispatched'):
+                l['delivery_state'] = 'unknown'  # Projection only; the original late result can still settle.
             if l.get("delivery_state") == "unknown":
                 unknown = True
-            if l.get("invocation_id"):
-                cursor.execute(
-                    "SELECT state FROM local_tool_invocations WHERE tenant_id=%s AND id=%s",
-                    (tenant_id, l["invocation_id"]),
-                )
-                inv = cursor.fetchone()
-                if inv is not None and inv["state"] in ("queued", "claimed", "running"):
-                    pending = True
-        if unknown:
+            if (l.get("delivery_state") in ("pending", "dispatched")
+                    or l['invocation_state'] in ("queued", "claimed", "running")):
+                pending = True
+        if unknown and not modern:
             conn.rollback()
             if _transition_task_standalone(tenant_id, task_id, STATUS_BLOCKED, "unknown_send_result"):
                 logger.warning(f"任务因未知发送结果阻断 tenant={tenant_id} task={task_id}")

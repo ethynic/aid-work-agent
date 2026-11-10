@@ -389,7 +389,13 @@ class LocalToolProxyTool(BaseTool):
             )
             if invocation and invocation["state"] in repository.TERMINAL_STATES:
                 result = self._map_terminal(invocation)
-                return self._attach_credit_cost(invocation, result)
+                result = self._attach_credit_cost(invocation, result)
+                if (durable and (result.get('code') == 'EXECUTION_UNKNOWN' or result.get('effect') == 'unknown')
+                        and invocation.get('user_id') and invocation.get('device_id') and await asyncio.to_thread(
+                            repository.uses_runtime_resource_admission, tenant_id, invocation['user_id'], invocation['device_id'])):
+                    from .durable_flow import LocalExecutionInterrupted
+                    raise LocalExecutionInterrupted(result)
+                return result
 
             if durable:
                 if durable_deadline is not None:

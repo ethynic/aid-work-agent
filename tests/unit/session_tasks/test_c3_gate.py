@@ -60,8 +60,8 @@ def gate_env(monkeypatch):
     registration.reset_registration()
 
 
-def _ready_reply(tenant_id, device_row, binding, runtime="rt-1", text="您好，周五14:00可以吗"):
-    _, claimed = _publish_and_claim(tenant_id, device_row, binding, runtime=runtime)
+def _ready_reply(tenant_id, device_row, binding, runtime="rt-1", text="您好，周五14:00可以吗", spec=None):
+    _, claimed = _publish_and_claim(tenant_id, device_row, binding, spec=spec, runtime=runtime)
     _, decision = _submit_reply(
         tenant_id, device_row, claimed, binding, 1,
         [{"local_message_id": "m1", "sender": "peer", "text": "在吗", "source_evidence_ref": "e1"}],
@@ -91,7 +91,7 @@ def _prepare_and_claim(tenant_id, device_row, claimed, decision_id):
     return result["invocation_id"], token_hash
 
 
-def _authorize(tenant_id, device_row, invocation_id, token_hash):
+def _authorize(tenant_id, device_row, invocation_id, token_hash, **options):
     from src.local_tools import repository
     from src.local_tools.permits import PermitError, write_authorize
 
@@ -106,6 +106,7 @@ def _authorize(tenant_id, device_row, invocation_id, token_hash):
             request_id=args["request_id"],
             target_version=args.get("target_version"),
             payload_hash=args.get("payload_hash"),
+            **options,
         )
         return {"allowed": True, "permit": permit}
     except PermitError as exc:
@@ -118,6 +119,72 @@ def _authorize(tenant_id, device_row, invocation_id, token_hash):
 
 
 class TestPermitAuthorization:
+    def test_modern_session_closes_expired_send_without_repeating_original_decision(self, tenant_id, device_row, verified_binding):
+        from src.db.database import get_db_connection
+        from src.local_tools import operation_result, repository
+
+        spec = build_spec()
+        spec['limits']['max_replies'] = 1
+        assignment, decision = _ready_reply(tenant_id, device_row, verified_binding, spec=spec)
+        invocation, claim_hash = _prepare_and_claim(tenant_id, device_row, assignment, decision)
+        permit = _authorize(tenant_id, device_row, invocation, claim_hash)['permit']
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''UPDATE local_tool_invocations SET lease_expires_at=NOW()-INTERVAL '1 second'
+                WHERE tenant_id=%s AND id=%s''', (tenant_id, invocation))
+            conn.commit()
+        task_id = assignment['task_id']
+        now = datetime.now(timezone.utc)
+        assert not decisions_mod.evaluate_task(tenant_id, task_id, now=now)
+        assert _task_row(tenant_id, task_id)['status'] == 'active'
+
+        caps = dict(device_row['capabilities_json'], runtime_resource_admission={'version': 1, 'scope': 'desktop'})
+        repository.touch_device_seen(str(device_row['id']), capabilities=caps)
+        original = decisions_mod.prepare_send(tenant_id, device_row['id'], uuid.UUID(assignment['assignment_id']),
+            assignment['fence'], uuid.UUID(decision), runtime_resource_admission=1)
+        assert original['status'] == 'interrupted' and original['invocation_id'] is None
+        assert decisions_mod.evaluate_task(tenant_id, task_id, now=now)
+        ended = _task_row(tenant_id, task_id)
+        assert ended['status'] == 'stopped' and ended['completion_reason'] == 'max_replies_exhausted'
+        stored = repository.get_invocation(invocation, tenant_id)
+        assert stored['state'] == 'running'
+        request_id = stored['arguments_json']['request_id']
+        receipt = operation_result.apply_operation_result(tenant_id=tenant_id, device_id=str(device_row['id']),
+            invocation_id=invocation, claim_token_hash=claim_hash, request_id=request_id, effect='applied', phase='verified',
+            evidence_ref=f'weixin-evidence:{request_id}:1', permit_id=permit['permit_id'], permit_token=permit['permit_token'])
+        assert receipt['acked'] and receipt['state'] == 'succeeded'
+        assert _task_row(tenant_id, task_id)['status'] == 'stopped'
+
+    def test_modern_targeted_claim_and_permit_recheck_latest_resource_scope(self, tenant_id, device_row, verified_binding):
+        from src.local_tools import repository
+
+        assignment, decision = _ready_reply(tenant_id, device_row, verified_binding)
+        device = device_row['id']
+        assignment_id = uuid.UUID(assignment['assignment_id'])
+        fence = assignment['fence']
+        invocation = decisions_mod.prepare_send(tenant_id, device, assignment_id, fence, uuid.UUID(decision))['invocation_id']
+
+        def scope(value):
+            caps = dict(device_row['capabilities_json'], runtime_resource_admission={'version': 1, 'scope': value})
+            repository.touch_device_seen(str(device), capabilities=caps)
+
+        token_hash = uuid.uuid4().hex
+        def claim():
+            return decisions_mod.claim_session_invocation(tenant_id, device, assignment_id, fence,
+                uuid.UUID(invocation), token_hash, 120, None, runtime_resource_admission=1)
+
+        scope('chrome')
+        assert claim() == {'invocation': None, 'state': 'queued'}
+        scope('none')
+        assert str(claim()['invocation']['id']) == invocation
+        assert repository.mark_started(invocation, tenant_id, token_hash, runtime_resource_admission=1)['state'] == 'running'
+        scope('chrome')
+        denied = _authorize(tenant_id, device_row, invocation, token_hash, runtime_resource_admission=1)
+        assert not denied['allowed'] and denied['code'] == 'DESKTOP_RESOURCE_BUSY'
+        assert repository.get_invocation(invocation, tenant_id)['write_phase'] != 'may_have_started'
+        scope('none')
+        assert _authorize(tenant_id, device_row, invocation, token_hash, runtime_resource_admission=1)['allowed']
+
     def test_happy_path_issues_permit(self, tenant_id, device_row, verified_binding):
         claimed, decision_id = _ready_reply(tenant_id, device_row, verified_binding)
         invocation_id, token_hash = _prepare_and_claim(tenant_id, device_row, claimed, decision_id)

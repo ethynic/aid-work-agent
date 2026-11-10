@@ -11,6 +11,11 @@ from src.local_tools.wecom_business import BUSINESS_TOOLS, project_definitions
 from src.local_tools import wecom_flow
 
 
+@pytest.fixture(autouse=True)
+def legacy_resource_admission(monkeypatch):
+    monkeypatch.setattr('src.local_tools.repository.uses_runtime_resource_admission', lambda *_: False)
+
+
 def test_only_four_business_schemas_are_advertised_without_removing_legacy_execution():
     tools = [WecomReadSessionTool(), WecomMessageSendTool(), WecomReadSessionsTool(),
              WecomSessionDirectoryTool(), WecomGroupPollTool(), WecomSendStatusTool()]
@@ -113,6 +118,21 @@ async def test_fifth_pending_target_is_not_starved_by_four_persistent_unknowns(m
     await wecom_flow.run(WecomReadSessionsTool(), operation, {})
     await wecom_flow.run(WecomReadSessionsTool(), operation, {})
     assert checked[:5] == ['0', '1', '2', '3', '4']
+
+
+@pytest.mark.asyncio
+async def test_modern_history_never_queries_send_status_or_starves_legacy_targets(monkeypatch):
+    pending = {str(number): {'invocation_id': str(number), 'device_id': 'modern'} for number in range(4)}
+    pending['legacy'] = {'invocation_id': 'legacy', 'device_id': 'old'}
+    monkeypatch.setattr('src.local_tools.repository.uses_runtime_resource_admission',
+                        lambda tenant, user, device: device == 'modern')
+    reconcile = AsyncMock(return_value=None)
+    monkeypatch.setattr(wecom_flow, '_reconcile', reconcile)
+    dispatch = AsyncMock(return_value={'success': True, 'data': {}})
+    monkeypatch.setattr('src.local_tools.overlay_flow.poll_operation', dispatch)
+    result = await wecom_flow.run(WecomReadSessionsTool(), context(pending), {})
+    assert result['success'] and dispatch.await_count == 1
+    assert [call.args[1]['invocation_id'] for call in reconcile.await_args_list] == ['legacy']
 
 
 def test_late_read_projects_server_recovered_candidates_without_exposing_private_index():

@@ -137,6 +137,35 @@ def get_provider(provider_key: str) -> Optional[Dict[str, Any]]:
     return TRUSTED_PROVIDERS.get(provider_key)
 
 
+INDEPENDENT_RUNTIME_TOOLS = frozenset({'wecom_read_sessions', 'wecom_session_directory'})
+OLD_RUNTIME_OBSERVATIONS = frozenset({'runtime_recovery_observe', 'wecom_send_status', 'boss_recovery_probe'})
+
+
+def runtime_resource_scope(capabilities):
+    admission = (capabilities or {}).get('runtime_resource_admission')
+    if isinstance(admission, dict) and type(admission.get('version')) is int and admission['version'] == 1:
+        scope = admission.get('scope')
+        if scope in ('none', 'chrome', 'desktop'):
+            return scope
+    return None
+
+
+def runtime_admitted_tools(capabilities, scope, desktop_busy):
+    advertised = capabilities.get('capabilities')
+    advertised = advertised if isinstance(advertised, list) else []
+    providers = get_provider_keys_for_device(capabilities)
+    return [(key, tool) for key in providers for tool in allowed_tools(key)
+            if tool not in OLD_RUNTIME_OBSERVATIONS
+            and (key != 'wecom' or tool in advertised)
+            and (scope == 'none' and not desktop_busy
+                 or scope != 'desktop' and key == 'wecom' and tool in INDEPENDENT_RUNTIME_TOOLS)]
+
+
+def unique_tool_provider(tool):
+    keys = [key for key in TRUSTED_PROVIDERS if is_tool_allowed(key, tool)]
+    return keys[0] if len(keys) == 1 else None
+
+
 def get_provider_key_for_device(capabilities: Optional[Dict[str, Any]]) -> Optional[str]:
     """从设备 capabilities_json 解析 provider key
 

@@ -122,7 +122,7 @@ def test_public_verification_projection_uses_actual_receipts_without_modifying_f
         'checkpoint': {'detached_local_wait': True, 'detached_local_invocations': [INVOCATION_ID]}}
     original = copy.deepcopy(row)
     cursor = Mock()
-    cursor.fetchall.return_value = [lost_row(result_json=receipt)]
+    cursor.fetchall.return_value = [{**lost_row(result_json=receipt), 'original_capabilities': None}]
     projected = with_local_operation_facts(cursor, row)
     assert bool(projected['_unresolved_local_invocations']) is still_held
     assert row == original, 'a GET projection cannot erase frozen IDs or change unknown audit history'

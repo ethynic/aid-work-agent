@@ -373,6 +373,10 @@ Main 接收准备回执后先持久候选与证明，保留原目录指针。DPA
 
 恢复 1C 登记客户端资源 admission。持 home 租约的共享 Host 唯一接替活动标记，缺停稳证据时先原样移入 `host-resource-pending-<UUID>.json`，Runtime DPAPI 监督层唯一读取这些记录与对应台账并求资源范围。待处理文件不能授予权限，只有绑定的直接进程或退出回执才能缩小范围。标记 v3、台账 v2 不变，新版 Windows SkillRunner 经固定受信 Node 入口在 Global Job 内启动 Python，原业务参数经父子 stdin 一次传递。native Global run 增加可选退出码透传，旧调用保持原退出语义；历史外部 Python 标识仍按原值读取。受限启动复用现有设备身份、心跳能力字段与结果 ACK。Main 私有 Host 启动意图区分中断续启和已确认停稳，既有 H1/H3 和 Device API schema 保持。未解决的范围记录仍在时，旧版不能解释该限制，回退前先按当前版确认资源停止。服务端旧任务结束与调度由恢复 1D 负责。
 
+恢复 1D 登记可选 Device API 能力 `runtime_resource_admission` v1。独立 Runtime Host 是心跳 `capabilities.runtime_resource_admission` 的唯一生产者，取值 `{version: 1, scope: 'none' | 'chrome' | 'desktop'}`，与同次既有 tool 列表来自相同本机判断。普通与定向 claim、started、write-authorize 及会话 prepare-send 使用可选查询参数 `runtime_resource_admission=1` 明确启用。领取、开始和许可沿既有 admission 锁与设备锁读取认证设备的最新快照，按服务端目录约束工具和资源。`prepare-send` 仅据此拒绝重建已未知的原决策，保留既有会话授权。没有新请求参数的旧客户端即使抢在旧心跳前也按旧规则领取，旧服务端忽略新增字段与参数。H1/H3、本地标记、授权持有人、结果和计费接口不变。
+
+新版在原任务结案时由 Runner 沿既有写入路径记录 `LOCAL_EXECUTION_INTERRUPTED`，保留原历史、计费及迟到 ACK，免业务核对或重放。引擎 checkpoint 的可选 `terminal_directive` 加入 `local_execution_interrupted`，新版仍读存量值；回退服务端 worker 前先让已持该指令的活动 checkpoint 结案。持续任务仍使用原会话决策与额度唯一写入者。
+
 恢复 1C 会话换代复验。新版 Runtime 不接续已持久的旧 assignment，只以服务端下发的新 assignment、fence 和 input_version_base 建立新基线，不装载旧决策或 invocation。已见 task 或 fence 大于一时不启动旧开场白。仅活动进程冲突参与资源准入，旧业务历史原样保留，原结果按原 outbox/ACK 补传。SessionStore v1 字段与 Device API 保持原契约。
 
 两份计划共用同一登记项；仅完成本文不代表下列项已完成。

@@ -379,6 +379,7 @@ export function useAgent() {
 
   /** runner 错误文案归约：control 保留文案 / NO_CREDIT 积分提示 / 通用兜底 */
   function runnerIssueText(issue: Error): string {
+    if (issue.message === 'LOCAL_EXECUTION_INTERRUPTED') return '本机操作已中断，未收到结果。'
     const safeMessages = new Set([
       ...Object.values(LOCAL_RECOVERY_MESSAGES),
       '消息操作未成功，请稍后重试。',

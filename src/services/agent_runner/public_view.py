@@ -169,11 +169,19 @@ def with_local_operation_facts(cursor, row):
     held = set(checkpoint.get('detached_local_invocations') or []) - set(checkpoint.get('verified_local_invocations') or [])
     if not held or not checkpoint.get('detached_local_wait'):
         return row
+    from src.local_tools.catalog import runtime_resource_scope
     from src.local_tools.repository import operation_completion_known
-    cursor.execute('SELECT * FROM local_tool_invocations WHERE tenant_id=%s AND user_id=%s AND session_id=%s AND id=ANY(%s::uuid[])',
+    cursor.execute('''SELECT i.*,d.capabilities_json AS original_capabilities FROM local_tool_invocations i
+        JOIN local_tool_devices d ON d.id=i.device_id AND d.tenant_id=i.tenant_id AND d.user_id=i.user_id
+        WHERE i.tenant_id=%s AND i.user_id=%s AND i.session_id=%s AND i.id=ANY(%s::uuid[])''',
         (row['tenant_id'], row['user_id'], row['session_id'], sorted(held)))
-    settled = {str(item['id']) for item in cursor.fetchall() if operation_completion_known(dict(item))}
-    return {**row, '_unresolved_local_invocations': sorted(held - settled)}
+    invocations = cursor.fetchall()
+    settled = {str(item['id']) for item in invocations if operation_completion_known(dict(item))}
+    modern_unknown = {str(item['id']) for item in invocations if (item['state'] == 'unknown' or item['effect'] == 'unknown')
+        and runtime_resource_scope(item['original_capabilities']) is not None}
+    unresolved = held - settled
+    return {**row, '_unresolved_local_invocations': sorted(unresolved),
+        '_local_wait_interrupted': bool(unresolved and unresolved <= modern_unknown)}
 
 
 def public_runner(row):
@@ -206,6 +214,7 @@ def public_runner(row):
                 value["scheduled"] = projected
     checkpoint = row.get('checkpoint') or {}
     verification = checkpoint.get('local_verification')
+    local_interrupted = row.get('_local_wait_interrupted') or (value.get('result') or {}).get('error_code') == 'LOCAL_EXECUTION_INTERRUPTED'
     from .continuous import enabled
     if enabled(checkpoint,row.get('input')):
         value['execution_mode'] = 'continuous'
@@ -217,7 +226,7 @@ def public_runner(row):
         code = blocked['error_code']
         value['sleep_blocked'] = {'error_code':code if len(code)<=128 and code.replace('_','').isalnum()
             else 'SLEEP_RECOVERY_BLOCKED'}
-    if isinstance(verification, dict):
+    if isinstance(verification, dict) and not local_interrupted:
         value['local_verification'] = {key: verification.get(key) for key in
             ('invocation_id', 'state', 'resource_stopped', 'page_observed', 'target_relation', 'error_code', 'stop_error_code')}
         if isinstance(verification.get('page_summary'), dict):
@@ -230,8 +239,12 @@ def public_runner(row):
                 value['local_verification'].update(state='failed', error_code='LOCAL_VERIFICATION_FAILED')
     held = set(checkpoint.get('detached_local_invocations') or []) - set(checkpoint.get('verified_local_invocations') or [])
     held = set(row.get('_unresolved_local_invocations', held))
-    if held and checkpoint.get('detached_local_wait'):
+    if held and checkpoint.get('detached_local_wait') and not local_interrupted:
         value['local_verification_available'] = True
+    if row.get('_local_wait_interrupted') and value.get('result') and row['status'] in {'failed','completed','cancelled'}:
+        from src.core.agent_engine.contracts import LOCAL_EXECUTION_INTERRUPTED_MESSAGE
+        if (value['result'].get('output') or '').startswith('已结束原任务的云端等待'):
+            value['result']['output'] = LOCAL_EXECUTION_INTERRUPTED_MESSAGE
     if local_recovery_applicable(row):
         value['local_recovery'] = True
         root = checkpoint.get('execution') or {}

@@ -509,7 +509,7 @@ async def get_decision(request: Request, assignment_id: str, decision_id: str):
 
 
 @device_router.post("/{assignment_id}/decisions/{decision_id}/prepare-send")
-async def prepare_send(request: Request, assignment_id: str, decision_id: str):
+async def prepare_send(request: Request, assignment_id: str, decision_id: str, runtime_resource_admission: int = 0):
     """ready reply/opening → 幂等物化单条底座执行单元，返回 invocation_id（§9）。
 
     决策已 superseded/版本失配时 200 返回 {invocation_id: null, decision_status}，
@@ -525,6 +525,7 @@ async def prepare_send(request: Request, assignment_id: str, decision_id: str):
             _parse_path_uuid(assignment_id, "assignment_id"),
             int(body.get("fence", -1)),
             _parse_path_uuid(decision_id, "decision_id"),
+            **({'runtime_resource_admission': 1} if runtime_resource_admission == 1 else {}),
         )
         return _ok(result)
     except SessionTaskError as exc:
@@ -534,7 +535,7 @@ async def prepare_send(request: Request, assignment_id: str, decision_id: str):
 
 
 @device_router.post("/{assignment_id}/invocations/{invocation_id}/claim")
-async def claim_session_invocation(request: Request, assignment_id: str, invocation_id: str):
+async def claim_session_invocation(request: Request, assignment_id: str, invocation_id: str, runtime_resource_admission: int = 0):
     """定向领取 session 道 invocation（§9：不领取任意 invocation；复用 claim token/
     租约与 v2 校验；通用 claim 在 SQL 层排除 session_task）。"""
     try:
@@ -553,6 +554,7 @@ async def claim_session_invocation(request: Request, assignment_id: str, invocat
             sha256_hex(claim_token),
             60,
             catalog.get_provider_keys_for_device(device.get("capabilities_json")),
+            **({'runtime_resource_admission': 1} if runtime_resource_admission == 1 else {}),
         )
         invocation = result.get("invocation")
         if invocation is None:

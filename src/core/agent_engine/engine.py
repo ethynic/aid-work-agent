@@ -14,7 +14,8 @@ from typing import AsyncIterator
 from src.core.agent_events import (
     _truncate_tool_content, make_event, make_image_event, mask_tool_args,
 )
-from .contracts import AgentMode, DispatchResult, ExecutionState, Outcome, ToolCall, ToolFact, TerminalDirective
+from .contracts import (AgentMode, DispatchResult, ExecutionState, Outcome, ToolCall, ToolFact, TerminalDirective,
+                        LOCAL_EXECUTION_INTERRUPTED, LOCAL_EXECUTION_INTERRUPTED_MESSAGE, interrupted_local_output)
 from .ports import ControlPort, ModelPort, ObserverPort, ToolPort
 
 
@@ -69,11 +70,13 @@ class AgentEngine:
         for child in state.children.values():
             if isinstance(child.get('checkpoint'),dict):descendants(child['checkpoint'])
         checked=[TerminalDirective(value) for value in values if value is not None]
-        return TerminalDirective.STOP_EXECUTION in checked
+        if TerminalDirective.LOCAL_EXECUTION_INTERRUPTED in checked:
+            return TerminalDirective.LOCAL_EXECUTION_INTERRUPTED
+        return TerminalDirective.STOP_EXECUTION if TerminalDirective.STOP_EXECUTION in checked else None
 
     async def _stop_execution(self,state,control,tools):
         """Pair only proven undispatched calls; preserve every uncertain effect."""
-        state.terminal_directive=TerminalDirective.STOP_EXECUTION
+        state.terminal_directive=self._directive(state)
         unresolved=[]
         for call in tuple(state.pending):
             fact=state.tools[call.id]
@@ -115,8 +118,14 @@ class AgentEngine:
                            'tool_call_ids':unresolved}
             await control.save(state,'terminal_effect_waiting')
             return make_event('waiting',reason=state.waiting)
-        state.outcome=Outcome.COMPLETED
         state.waiting=None
+        if state.terminal_directive == TerminalDirective.LOCAL_EXECUTION_INTERRUPTED:
+            state.outcome = Outcome.FAILED
+            state.error_code = LOCAL_EXECUTION_INTERRUPTED
+            state.output = interrupted_local_output(state.output)
+            await control.save(state, 'failed')
+            return make_event('error', code=state.error_code, data=LOCAL_EXECUTION_INTERRUPTED_MESSAGE)
+        state.outcome=Outcome.COMPLETED
         await control.save(state,'completed')
         return make_event('execution_completed')
 

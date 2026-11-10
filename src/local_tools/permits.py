@@ -72,6 +72,7 @@ def write_authorize(
     payload_hash: Optional[str],
     now: Optional[datetime] = None,
     ttl_seconds: int = PERMIT_TTL_SECONDS,
+    runtime_resource_admission: int = 0,
 ) -> Dict[str, Any]:
     """签发写动作许可（单事务校验链）。成功返回 {permit_id, permit_token, deadline_at}。
 
@@ -91,7 +92,7 @@ def write_authorize(
         #    arguments_json/business_ref 创建后不可变）
         cursor.execute(
             """
-            SELECT claim_token_hash, business_kind, business_ref, device_id
+            SELECT claim_token_hash, business_kind, business_ref, device_id, tool_name, provider_key
             FROM local_tool_invocations
             WHERE id = %s AND tenant_id = %s
             """,
@@ -116,9 +117,10 @@ def write_authorize(
         lock_operation_admission(cursor, tenant_id)
         if not lock_active_device(cursor, tenant_id, device_id):
             raise PermitError("DEVICE_REVOKED", 401, "设备已失效，请重新配对")
-        from .repository import assert_device_operations_settled, DeviceOperationUnresolved
+        from .repository import assert_device_operations_settled, assert_invocation_resources, DeviceOperationUnresolved
         try:
-            assert_device_operations_settled(cursor, tenant_id, device_id)
+            if not assert_invocation_resources(cursor, tenant_id, device_id, pre, runtime_resource_admission):
+                assert_device_operations_settled(cursor, tenant_id, device_id)
         except DeviceOperationUnresolved as error:
             raise PermitError(str(error), 409, '原本机操作尚未确认停止，暂不能执行新的桌面操作') from error
         business_ref = pre["business_ref"] or {}

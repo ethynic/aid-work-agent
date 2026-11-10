@@ -360,7 +360,7 @@ async def runtime_heartbeat(body: HeartbeatRequest, device: Dict = Depends(_requ
 
 
 @router.post("/runtime/claim")
-async def runtime_claim(wait: int = 20, device: Dict = Depends(_require_device)):
+async def runtime_claim(wait: int = 20, runtime_resource_admission: int = 0, device: Dict = Depends(_require_device)):
     """长轮询领取 invocation（claim_token 明文仅此一次返回）。
     超时返回 {"success": true, "invocation": null}（200，简化客户端）。
 
@@ -388,6 +388,7 @@ async def runtime_claim(wait: int = 20, device: Dict = Depends(_require_device))
                 sha256_hex(claim_token),
                 LEASE_SECONDS,
                 provider_keys,
+                **({'runtime_resource_admission': 1} if runtime_resource_admission == 1 else {}),
             )
             if invocation:
                 # 校验 tool_name 在该 invocation Provider（行 provider_key 优先）批准的 tools 内
@@ -434,13 +435,14 @@ async def runtime_claim(wait: int = 20, device: Dict = Depends(_require_device))
 
 @router.post("/runtime/invocations/{invocation_id}/started")
 async def runtime_started(
-    invocation_id: str, body: StartedRequest, device: Dict = Depends(_require_device)
+    invocation_id: str, body: StartedRequest, device: Dict = Depends(_require_device), runtime_resource_admission: int = 0,
 ):
     """claimed → running（幂等：重复调用返回当前状态）"""
     tenant_id = device["tenant_id"]
     try:
         row = await asyncio.to_thread(
-            repository.mark_started, invocation_id, tenant_id, sha256_hex(body.claim_token)
+            repository.mark_started, invocation_id, tenant_id, sha256_hex(body.claim_token),
+            **({'runtime_resource_admission': 1} if runtime_resource_admission == 1 else {}),
         )
         if not row:
             raise _http_error(404, "invocation 不存在或 claim token 不匹配")
@@ -753,7 +755,7 @@ async def runtime_resume_evaluate(
 
 @router.post("/runtime/invocations/{invocation_id}/write-authorize")
 async def runtime_write_authorize(
-    invocation_id: str, body: WriteAuthorizeRequest, device: Dict = Depends(_require_device)
+    invocation_id: str, body: WriteAuthorizeRequest, device: Dict = Depends(_require_device), runtime_resource_admission: int = 0,
 ):
     """v2 写动作许可签发（§5.2）：单事务校验 claim/租约/取消/业务类型/截止/场景授权/额度，
     返回 permit_id/permit_token（明文仅此一次）/deadline_at。旧 invocation（business_kind
@@ -771,6 +773,7 @@ async def runtime_write_authorize(
             request_id=body.request_id,
             target_version=body.target_version,
             payload_hash=body.payload_hash,
+            **({'runtime_resource_admission': 1} if runtime_resource_admission == 1 else {}),
         )
         return {
             "success": True,
