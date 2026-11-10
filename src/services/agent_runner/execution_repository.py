@@ -121,10 +121,16 @@ class ExecutionRepository:
             if cancel_only:
                 checkpoint = {**checkpoint, "finalization_intent": "cancel_only"}
                 checkpoint.pop('cancel_completion_blocked',None)
+            if row['status'] == 'finalizing':
+                # A reclaimed finalizer starts a new attempt without leaving
+                # the active status. End the previous attempt in this claim txn.
+                from .runner_alerts import close_alert_in_tx
+                close_alert_in_tx(cursor, row['runner_id'], row['attempt'])
             cursor.execute("""UPDATE agent_runners SET status=CASE WHEN status='queued' THEN 'running'
                 WHEN status IN ('waiting','paused','interrupted') THEN 'finalizing' ELSE status END,
                 checkpoint=%s::jsonb,
                 attempt=attempt+1, worker_id=%s, lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),
+                execution_started_at=clock_timestamp(),
                 revision=revision+1,view_revision=view_revision+1,updated_at=CURRENT_TIMESTAMP
                 WHERE runner_id=%s RETURNING *""", (capped_checkpoint_dumps(checkpoint), worker_id, lease_seconds, row["runner_id"]))
             row = decoded(cursor.fetchone())
@@ -149,6 +155,25 @@ class ExecutionRepository:
             conn.commit()
             return {"closed":False,"cancel_requested": row["cancel_requested"], "pause_requested": row.get('pause_requested',False),
                     "control_revision": row["control_revision"]}
+
+    def owned_attempts(self, worker_id):
+        """Find only live claims of this execution process; renewal uses heartbeat's fence."""
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""SELECT runner_id, attempt FROM agent_runners
+                WHERE worker_id=%s AND status IN ('running','finalizing')
+                AND lease_until>clock_timestamp()""", (worker_id,))
+            return [Attempt(row['runner_id'], worker_id, row['attempt']) for row in cursor.fetchall()]
+
+    def business_finished(self, attempt):
+        """A released attempt has committed business state, independent of trace cleanup."""
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""SELECT attempt, worker_id, lease_until, status, checkpoint,
+                result, cancel_requested, revision FROM agent_runners WHERE runner_id=%s""",
+                (attempt.runner_id,))
+            row = cursor.fetchone()
+            return row is not None and released_by(decoded(row), attempt)
 
     def assert_dispatch(self, attempt, *, source_prepared=None):
         with self.connection_factory() as conn:

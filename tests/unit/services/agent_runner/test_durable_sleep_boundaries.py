@@ -338,6 +338,10 @@ async def test_runtime_identity_version_gate_accepts_only_exact_supported_intege
     runtime.initial_followup_inputs=[]
     runtime.control=SimpleNamespace(durable_owner=True,envelope={'business_round_policy':{}},intent={})
     runtime.supports_sleep=True
+    # run() 入口先 prime 本地工具（企微设备绑定接线），与被测的身份版本闸门无关；
+    # __new__ 裸构造需补最小 stub，否则 run() 在闸门前先 AttributeError
+    runtime.catalog=SimpleNamespace(prime_local_tools=AsyncMock())
+    runtime.identity=SimpleNamespace(tenant_id=None,user_id=None,session_id=None,source='web',session_kind='web')
     def passed(*args): raise RuntimeError('IDENTITY_GATE_PASSED')
     monkeypatch.setattr(MainProfileCatalog,'resolve',passed)
     error,match=(RuntimeError,'IDENTITY_GATE_PASSED') if accepted else (

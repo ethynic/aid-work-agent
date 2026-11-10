@@ -75,9 +75,9 @@
             </div>
           </div>
 
-          <!-- 描述（JS 截断 30 字 + CSS line-clamp-2 双保险） -->
+          <!-- 描述（JS 截断 30 字 + CSS line-clamp-2 双保险；定制弹框已去掉简介描述，优先用能力摘要覆盖） -->
           <p class="text-sm text-muted line-clamp-2 break-words flex-1 mb-4">
-            {{ truncateDescription(agent.description) }}
+            {{ truncateDescription(agent.greeting_summary || agent.description) }}
           </p>
 
           <!-- 操作按钮：管理员显示「立即使用 + 定制」双按钮，普通用户仅「立即使用」 -->

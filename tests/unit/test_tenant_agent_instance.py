@@ -66,13 +66,16 @@ class TestGenerateInstanceId:
 
 class TestCreateCopy:
     def test_from_base_requires_subscription(self):
-        with patch.object(svc, "_resolve_base_config", return_value={"base_source": "builtin"}), \
+        # create_copy 先解析来源实例行（TenantAgentInstanceDB.get），无 DB 环境需 patch
+        with patch.object(svc, "TenantAgentInstanceDB"), \
+             patch.object(svc, "_resolve_base_config", return_value={"base_source": "builtin"}), \
              patch.object(svc, "get_tenant_subscribed_agent_ids", return_value=["other"]):
             with pytest.raises(TenantAgentInstanceError, match="未订阅"):
                 create_copy("t1", "sales", "南京销售助手")
 
     def test_from_base_unknown_agent(self):
-        with patch.object(svc, "_resolve_base_config", return_value=None):
+        with patch.object(svc, "TenantAgentInstanceDB"), \
+             patch.object(svc, "_resolve_base_config", return_value=None):
             with pytest.raises(TenantAgentInstanceError, match="不存在"):
                 create_copy("t1", "nope", "x")
 

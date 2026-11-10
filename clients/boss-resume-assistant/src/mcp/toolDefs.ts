@@ -8,7 +8,8 @@
  * 用 zod v4 toJSONSchema 生成 list_tools 的 inputSchema）。
  *
  * 写动作硬上限在 schema 层收紧（设计 §14）：greet 单次最大 3、accept 最大 1、reject 固定 1；
- * resume_batch 因单份约 30 秒滚动截图也收紧到 3；CLI/operation 层的上限（10）不变。
+ * resume_batch 因单份约 37-40 秒滚动截图（2026-11-10 提速一期推算值，真机验收后复核）也收紧到 3；
+ * CLI/operation 层的上限（10）不变。
  */
 import { z } from 'zod'
 

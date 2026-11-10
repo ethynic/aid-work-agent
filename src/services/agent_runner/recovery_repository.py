@@ -93,7 +93,7 @@ class RecoveryRepository:
                 snapshot={**row.get('public_snapshot',{}),'waiting':None,
                     'progress':'正在接续原持续任务。'},status='running')
             cursor.execute('''UPDATE agent_runners SET status='running',attempt=%s,worker_id=%s,
-                lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),checkpoint=%s::jsonb,
+                lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),execution_started_at=clock_timestamp(),checkpoint=%s::jsonb,
                 public_snapshot=%s::jsonb,wake_at=NULL,revision=revision+1,view_revision=view_revision+1,
                 updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
                 (number,worker_id,lease_seconds,capped_checkpoint_dumps(checkpoint),
@@ -209,7 +209,7 @@ class RecoveryRepository:
                 RETURNING consumed_at''',(number,control_id))
             consumed_at = (cursor.fetchone() or {}).get('consumed_at')
             cursor.execute('''UPDATE agent_runners SET status='running',attempt=%s,worker_id=%s,
-                lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),checkpoint=%s::jsonb,
+                lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),execution_started_at=clock_timestamp(),checkpoint=%s::jsonb,
                 pause_requested=FALSE,resume_control_id=NULL,wake_at=NULL,revision=revision+1,
                 control_revision=control_revision+1,view_revision=view_revision+1,updated_at=clock_timestamp()
                 WHERE runner_id=%s RETURNING *''',

@@ -191,7 +191,12 @@ def is_source_storage_reference(text: str) -> bool:
 # source/srcs 等含 src 前缀的单词不命中；
 # 前置连字符的 CLI 参数名（--src、-src）不命中——技能脚本自有参数
 # （如 contract-generator fetch_file.py --src），真实误拦案例 2026-11-09。
-# 路径引用形态（空格/引号/= 后跟 src）仍全部命中。
+# `src` 后紧跟 = / , / ) 的形态不命中——python -c / shell 里 src 作为
+# 变量名或函数实参（src='/tmp/x'、shutil.copy(src, dst)、copy(src=...)），
+# 真实误拦案例 2026-10-28（tr_runner_d458a80a…，pptx-vi-gen 会话
+# python -c shutil 拷贝被拦）；路径引用形态（空格/引号/= 后跟 src、
+# cd src、src/ 带斜杠）仍全部命中，赋值值指向源码目录（src=src/core）
+# 由 = 后那个 src 命中，不漏拦。
 _PLATFORM_SRC_RE = re.compile(r"(?<![A-Za-z0-9_-])src(?![A-Za-z0-9_])")
 
 
@@ -208,6 +213,15 @@ def check_text_for_platform_source_paths(text: str) -> Tuple[bool, Optional[str]
     for match in _PLATFORM_SRC_RE.finditer(text):
         rest = text[match.end():]
         if re.match(r"/skills(?:/|[\r\n]|$)", rest):
+            continue
+        if rest[:1] in ("=", ",", ")"):
+            # python -c / shell 里 src 作为变量名或函数实参的形态：
+            #   src='/tmp/x.pptx'（赋值）、shutil.copy(src, dst)（实参）、
+            #   copy(src=..., dst=...)（kwarg）。真实误拦案例 2026-10-28
+            # （tr_runner_d458a80a…，pptx-vi-gen 会话 python -c shutil 拷贝）。
+            # shell 探测形态（cd src、ls src、src/tools、/app/src）均不属
+            # 这三类后继字符，不漏拦；赋值值指向源码目录（src=src/core）
+            # 由 = 后的 src 独立命中。
             continue
         return True, text[max(0, match.start() - 20):match.end() + 40].strip()
     return False, None

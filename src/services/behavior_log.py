@@ -394,7 +394,7 @@ def _find_request(*fn_args, **fn_kwargs) -> Optional[Request]:
 
     - fastapi.Request 实例优先（isinstance 精确匹配）；
     - 关键字参数也必须 isinstance 校验：FastAPI 全 kwargs 传参，且部分端点的
-      Pydantic body 参数名恰好叫 request（如 tenant_migration.py），直接
+      Pydantic body 参数名恰好叫 request，直接
       kwargs.get("request") 会误拿 body；
     - 形状兜底（method/url 鸭子类型）：扫描位置与关键字参数值，排除 Pydantic
       BaseModel（body 模型可能恰好定义 method/url 字段，防止误伤）。

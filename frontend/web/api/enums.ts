@@ -123,6 +123,7 @@ export enum BehaviorAction {
   DELETE = 'delete',
   BATCH_DELETE = 'batch_delete',
   EXPORT = 'export',
+  PHONE_VIEW = 'phone_view',
 }
 
 export const BehaviorActionMap: Record<string, { label: string; color: string }> = {
@@ -139,6 +140,7 @@ export const BehaviorActionMap: Record<string, { label: string; color: string }>
   [BehaviorAction.DELETE]: { label: '删除', color: 'red' },
   [BehaviorAction.BATCH_DELETE]: { label: '批量删除', color: 'red' },
   [BehaviorAction.EXPORT]: { label: '导出', color: 'blue' },
+  [BehaviorAction.PHONE_VIEW]: { label: '查看手机号', color: 'blue' },
 };
 
 /** 请求入口（user_behavior_logs.entry） */

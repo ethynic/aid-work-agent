@@ -2,7 +2,10 @@
 AI获客智能体 — 业务数据查询 API（只读）
 
 提供获客活动、线索公司、联系人、邮件记录、回复记录的只读列表/详情端点，
-供租户前台业务数据页面查询使用。数据由 ai-lead-gen 技能脚本写入，本模块不做任何写操作。
+供租户前台业务数据页面查询使用。数据由 ai-lead-gen 技能脚本写入，本模块不做业务写操作；
+唯一例外是联系人手机号显码端点（写入用户行为审计日志）。
+
+联系人 phone 在列表接口一律返回掩码值，完整号码只能经显码端点逐条获取（每次显码落审计）。
 """
 
 import re
@@ -14,6 +17,7 @@ from pydantic import BaseModel
 from loguru import logger
 
 from src.db.database import get_db_connection
+from src.utils.masking import mask_phone
 
 
 def sanitize_error_info(error_msg: str) -> str:
@@ -280,10 +284,58 @@ async def list_contacts(
                 LIMIT %s OFFSET %s
             """, params + [page_size, offset])
             items = [_row_to_dict(row) for row in cursor.fetchall()]
+        for item in items:
+            item["phone"] = mask_phone(item.get("phone"))
 
         return JsonResponse(success=True, data={"total": total, "page": page, "page_size": page_size, "items": items})
     except Exception as e:
         logger.error(f"查询联系人列表失败: {e}\n{traceback.format_exc()}")
+        return JsonResponse(success=False, error="查询失败", debug=sanitize_error_info(str(e)))
+
+
+@router.get("/contacts/{contact_id}/reveal_phone", response_model=JsonResponse)
+async def reveal_contact_phone(
+    request: Request,
+    contact_id: int,
+    tenant_id: Optional[str] = Query(None),
+):
+    """联系人手机号显码（逐条，每次显码落用户行为审计日志，审计 detail 不含号码本身）"""
+    try:
+        tid = _resolve_tenant(request, tenant_id)
+        if not tid:
+            return JsonResponse(success=False, error="缺少租户上下文")
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, name, phone
+                FROM bs_ai_lead_gen_contacts
+                WHERE id = %s AND tenant_id = %s
+            """, (contact_id, tid))
+            row = cursor.fetchone()
+        if not row:
+            return JsonResponse(success=False, error="联系人不存在")
+        contact = _row_to_dict(row)
+        phone = contact.get("phone")
+        if not phone:
+            return JsonResponse(success=True, data={"contact_id": contact_id, "phone": None})
+
+        try:
+            from src.services.behavior_log import record_behavior
+            from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+            await record_behavior(
+                request,
+                BehaviorAction.PHONE_VIEW.value,
+                resource_type=BehaviorResourceType.EXTERNAL_CUSTOMER.value,
+                resource_id=str(contact_id),
+                resource_name=contact.get("name"),
+            )
+        except Exception as audit_err:
+            # 审计尽力而为：显码成功优先，写审计失败只记日志（与 record_behavior 内部语义一致）
+            logger.opt(exception=True).error(f"后端日志：联系人显码审计写入失败 contact_id={contact_id}: {audit_err}")
+
+        return JsonResponse(success=True, data={"contact_id": contact_id, "phone": phone})
+    except Exception as e:
+        logger.error(f"联系人手机号显码失败: {e}\n{traceback.format_exc()}")
         return JsonResponse(success=False, error="查询失败", debug=sanitize_error_info(str(e)))
 
 
