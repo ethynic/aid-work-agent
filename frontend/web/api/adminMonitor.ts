@@ -29,6 +29,7 @@ export interface RunnerSection {
   stalled_rounds: number
   runner_stalled: boolean
   active_alerts: number
+  worker_slots?: number
   error?: string
 }
 

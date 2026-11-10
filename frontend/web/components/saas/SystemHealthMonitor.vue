@@ -53,9 +53,10 @@
           </div>
           <div class="space-y-2 text-sm">
             <div class="flex justify-between">
-              <span class="text-muted">运行中 / 收尾</span>
-              <span class="text-default font-medium">
-                {{ runner?.running ?? '-' }} / {{ runner?.finalizing ?? '-' }}
+              <span class="text-muted">运行中 / 收尾 / 总槽位</span>
+              <span class="text-default font-medium"
+                :title="`总槽位 = runner-worker 副本数（AGENT_RUNNER_WORKER_SLOTS，部署配置口径）`">
+                {{ runner?.running ?? '-' }} / {{ runner?.finalizing ?? '-' }} / {{ runner?.worker_slots ?? '-' }}
               </span>
             </div>
             <div class="flex justify-between">
