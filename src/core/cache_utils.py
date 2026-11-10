@@ -118,6 +118,12 @@ class CacheKeys:
     # recap 延迟补推 payload：recap_deferred_payload:{tenant_id}:{session_id}:{task_name}
     # （同会话同任务重复跳过时 latest-wins 覆盖；TTL = 补推延迟 + 缓冲，过期即放弃补推）
     RECAP_DEFERRED_PAYLOAD = "recap_deferred_payload"
+    # workspace 产物 path -> file_id 反查索引：ws_file_idx:{sha256(绝对路径)}
+    # （AgentRunner 附件/工具产物落盘 workspace 后注册 ImageRegistry 时写入，
+    # value JSON {file_id,name,tenant_id,registered_at}；供跨轮历史路径改写把
+    # 已清理的旧 workspace 路径还原为 file_id。TTL 24h 与 ImageRegistry.DEFAULT_TTL
+    # 对齐，file_id 副本过期后索引同步失效，改写统一走失效标记）
+    WORKSPACE_FILE_INDEX = "ws_file_idx"
 
 
 # ============== 通用缓存函数 ==============

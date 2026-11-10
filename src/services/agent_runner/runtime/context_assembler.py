@@ -40,6 +40,11 @@ class ContextAssembler:
                         events.append(self.compression.event)
                 await asyncio.to_thread(self.history._reload_memory_from_db, self.identity.session_id, text)
                 raw_history = self.history.memory.get_context(self.identity.session_id)
+                # 跨轮 workspace 旧路径改写：必须在 append incoming/resumed_tool 之前，
+                # 保证当轮有效路径（incoming 附件路径、continuation 工具结果）不被误改
+                from src.services.agent_runner.runtime.workspace_path_rewriter import rewrite_history_workspace_paths
+                raw_history = await rewrite_history_workspace_paths(
+                    raw_history, self.identity.tenant_id)
             else:
                 raw_history = []
             incoming = None

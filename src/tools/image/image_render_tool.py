@@ -144,7 +144,15 @@ class ImageRenderTool(BaseTool):
                 from src.tools.image._path_guard import guard_local_image_path
                 local_path = guard_local_image_path(path, tenant_id)
             if not local_path or not local_path.exists():
-                raise ValueError(f"参考图文件不存在: {item}")
+                hint = ""
+                try:
+                    from src.services.agent_runner.runtime.workspace_path_rewriter import is_workspace_path
+                    if is_workspace_path(item):
+                        hint = ("（该路径为上一轮临时工作区路径，工作区已在轮次结束后清理；"
+                                "请改用工具结果中返回的 file_id，或请用户重新上传）")
+                except ImportError:
+                    pass
+                raise ValueError(f"参考图文件不存在: {item}{hint}")
             data_urls.append(await asyncio.to_thread(self._to_data_url, local_path))
         return data_urls
 

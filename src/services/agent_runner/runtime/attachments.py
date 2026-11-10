@@ -141,6 +141,35 @@ class AttachmentAssembler:
         return parts
 
 
+    def _register_image_attachment(self, file_path: Path, att_name: str, identity) -> Optional[str]:
+        """图片附件注册 ImageRegistry 获得 file_id，并写 workspace 路径反查索引。
+
+        - 仅图片扩展名 + 有租户上下文时注册；非图片/无租户直接跳过。
+        - 注册失败仅 warning 不阻断附件装配（跨轮改写侧降级为失效标记）。
+        - prepare 本身运行在 asyncio.to_thread 中，可直接调同步 register_sync。
+        """
+        try:
+            ext = Path(file_path).suffix.lstrip(".").lower()
+            if ext not in self._IMAGE_EXT_MIME or not identity.tenant_id:
+                return None
+            from src.core.image_asset import get_image_registry
+            ref = get_image_registry().register_sync(
+                source_path=str(file_path),
+                tenant_id=identity.tenant_id,
+                user_id=identity.user_id,
+                display_name=att_name,
+                source="user_upload",
+                usage="attachment",
+                source_ref=f"session:{identity.session_id}",
+            )
+            from src.services.agent_runner.runtime.workspace_path_rewriter import index_workspace_file
+            index_workspace_file(str(file_path), ref.file_id, ref.display_name, identity.tenant_id)
+            logger.info(f"[SUBAGENT] 附件图片已注册 file_id={ref.file_id} name={att_name}")
+            return ref.file_id
+        except Exception as e:
+            logger.opt(exception=True).warning(f"[SUBAGENT] 附件图片注册 file_id 失败（不阻断装配）: {e}")
+            return None
+
     def prepare(self, user_input, attachments, identity, skill_registry):
         import base64
         import tempfile
@@ -204,6 +233,13 @@ class AttachmentAssembler:
                                 logger.info(f"Copied file from URL: {file_path}")
                         except Exception as e:
                             logger.error(f"Failed to save file {att_name}: {e}")
+
+                        if file_path.exists():
+                            file_id = self._register_image_attachment(file_path, att_name, identity)
+                            if file_id:
+                                for info in uploaded_files_info:
+                                    if info.get("path") == str(file_path):
+                                        info["file_id"] = file_id
             
                 if attachment_info:
                     # 构建文件路径信息（无论是否有 auto_loaded_skill 都添加）
@@ -212,6 +248,8 @@ class AttachmentAssembler:
                         files_context = "\n\n**📎 Uploaded files available:**\n"
                         for f in uploaded_files_info:
                             files_context += f"- File: `{f['name']}`\n"
+                            if f.get("file_id"):
+                                files_context += f"  File ID: `{f['file_id']}`（跨轮引用图片请用此 ID）\n"
                             files_context += f"  Full path: `{f['path']}`\n"
                             files_context += f"  Size: {f['size']} bytes\n"
                         files_context += "\n**IMPORTANT: When delegating to subagent, include the file paths above in task_description!**\n"
