@@ -1155,6 +1155,15 @@ class AnalysisAgent:
                 "trace_id": self.analysis_id,
             },
         }
+        # 产物文件名含生成时间戳后缀且各不相同，主智能体凭记忆拼名会把时间戳
+        # 写错（2026-10-28 tr_runner_d458a80a… 实证：_111611 写成 _111600，
+        # PPT 生成报文件不存在）。在结果里显式提示逐字复制
+        if self._artifacts:
+            result["artifact_path_note"] = (
+                "以上 artifacts 的 download_path 文件名含生成时间戳后缀，每个产物均不同；"
+                "在后续工具调用（如 PPT 生成 content.json 的 image 字段）引用产物时，"
+                "必须逐字复制 download_path 全文，严禁凭记忆改写文件名或复用其他产物的时间戳"
+            )
         # 本次运行新注册的中间产物：主智能体可在后续 analyze_data 的 requirement 中
         # 引用这些 output_var 实现复用（无新产物时不携带，避免结果膨胀）
         if self._new_artifacts:
