@@ -4524,6 +4524,39 @@
     ALTER TABLE bs_wecom_daily_summaries ADD COLUMN IF NOT EXISTS source_runner_id TEXT;
     CREATE INDEX IF NOT EXISTS idx_bs_wecom_conversations_plan
         ON bs_wecom_conversations (tenant_id, user_id, daily_plan_task_id);
+- datetime: "2026-11-06 11:10:00"
+  remark: "Runner Phase 3：本次执行起点、运行告警、阈值覆盖与监控扫描状态"
+  statements: |
+    ALTER TABLE agent_runners ADD COLUMN IF NOT EXISTS execution_started_at TIMESTAMPTZ;
+    CREATE TABLE IF NOT EXISTS agent_runner_alert_thresholds (
+        tenant_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        threshold_minutes INTEGER NOT NULL CHECK (threshold_minutes >= 1),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        PRIMARY KEY (tenant_id, profile_id)
+    );
+    CREATE TABLE IF NOT EXISTS agent_runner_alerts (
+        alert_id TEXT PRIMARY KEY,
+        runner_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        tenant_id TEXT,
+        profile_id TEXT NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL,
+        threshold_minutes INTEGER NOT NULL,
+        alerted_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        ended_at TIMESTAMPTZ,
+        notification_ref TEXT,
+        UNIQUE (runner_id, attempt)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_runner_alerts_recent
+        ON agent_runner_alerts(alerted_at DESC, alert_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_agent_runner_alerts_current
+        ON agent_runner_alerts(alerted_at DESC, alert_id DESC) WHERE ended_at IS NULL;
+    CREATE TABLE IF NOT EXISTS agent_runner_monitor_status (
+        monitor_key TEXT PRIMARY KEY CHECK (monitor_key='runner-long-running'),
+        last_successful_scan_at TIMESTAMPTZ
+    );
+    INSERT INTO agent_runner_monitor_status (monitor_key) VALUES ('runner-long-running') ON CONFLICT DO NOTHING;
 - datetime: "2026-11-06 11:30:00"
   remark: "图像生成按张计费单价种子：qwen-image-3.0-pro 复用 token_cost_prices 通用 price_per_call 列（0.25 元/张为 1K 输出档单价，已按百炼控制台核实；默认出图 1280*960 面积属 1K 档，2K 档 0.5 元/张如启用需另行调价；×image_usage_factor 100 = 25 积分/张；运营改 DB 调价）"
   statements: |
@@ -4679,3 +4712,37 @@
   remark: "租户数字员工实例表加 LLM 覆盖列 llm_provider（定制弹框 LLM 提供者/Model 覆盖；JSONB 与 subagent_definitions.llm_provider 同构，是否生效由 tenants.settings.allow_llm_provider_edit 把关；加性）"
   statements: |
     ALTER TABLE tenant_agent_instances ADD COLUMN IF NOT EXISTS llm_provider JSONB;
+
+- datetime: "2026-11-10 13:47:17"
+  remark: "补齐 Runner Phase 3 告警结构：旧迁移时间早于已升级环境水位，按原 SQL 幂等补跑"
+  statements: |
+    ALTER TABLE agent_runners ADD COLUMN IF NOT EXISTS execution_started_at TIMESTAMPTZ;
+    CREATE TABLE IF NOT EXISTS agent_runner_alert_thresholds (
+        tenant_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        threshold_minutes INTEGER NOT NULL CHECK (threshold_minutes >= 1),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        PRIMARY KEY (tenant_id, profile_id)
+    );
+    CREATE TABLE IF NOT EXISTS agent_runner_alerts (
+        alert_id TEXT PRIMARY KEY,
+        runner_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        tenant_id TEXT,
+        profile_id TEXT NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL,
+        threshold_minutes INTEGER NOT NULL,
+        alerted_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        ended_at TIMESTAMPTZ,
+        notification_ref TEXT,
+        UNIQUE (runner_id, attempt)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_runner_alerts_recent
+        ON agent_runner_alerts(alerted_at DESC, alert_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_agent_runner_alerts_current
+        ON agent_runner_alerts(alerted_at DESC, alert_id DESC) WHERE ended_at IS NULL;
+    CREATE TABLE IF NOT EXISTS agent_runner_monitor_status (
+        monitor_key TEXT PRIMARY KEY CHECK (monitor_key='runner-long-running'),
+        last_successful_scan_at TIMESTAMPTZ
+    );
+    INSERT INTO agent_runner_monitor_status (monitor_key) VALUES ('runner-long-running') ON CONFLICT DO NOTHING;

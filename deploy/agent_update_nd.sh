@@ -166,7 +166,7 @@ fi
 # 5. 后端重启（与前端编译并行）
 #    显式列出 api/background 两个服务，避免连 redis 一起重建造成 ~10s 不可用窗口；
 #    runner overlay 固定取 deploy/nuodu/ 版本（仓库根级同名文件是 243 版，勿用），
-#    不叠加会被 --remove-orphans 把 aid-runner-api/aid-runner-worker 删掉
+#    不叠加会被 --remove-orphans 把 runner-api/runner-worker/runner-monitor 删掉
 echo "[5] 重启后端服务..."
 RUNNER_OVERLAY="deploy/nuodu/docker-compose.agent-runner.yml"
 COMPOSE_ARGS=(-f docker-compose.main.yml)

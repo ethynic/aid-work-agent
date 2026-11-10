@@ -25,8 +25,13 @@ class EventRepository:
             if after is None:
                 cursor.execute('SELECT * FROM agent_runners WHERE runner_id=%s', (before['runner_id'],))
                 after = decoded(cursor.fetchone())
-            return EventRepository.append_in_tx(cursor, before, after, kind=kind,
-                                               cancellation_ready=cancellation_ready)[0]
+            updated = EventRepository.append_in_tx(cursor, before, after, kind=kind,
+                                                    cancellation_ready=cancellation_ready)[0]
+            if (before is not None and before['status'] in ('running', 'finalizing')
+                    and updated['status'] not in ('running', 'finalizing')):
+                from .runner_alerts import close_alert_in_tx
+                close_alert_in_tx(cursor, updated['runner_id'], updated['attempt'])
+            return updated
         except CheckpointFailure:
             raise
         except Exception as error:

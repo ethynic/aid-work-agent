@@ -41,6 +41,7 @@ from src.core.agent_events import make_verbose_event
 from src.services.agent_runner.authorization import RunnerAuthorizer
 from src.services.agent_runner.contracts import canonical_json
 from src.services.agent_runner.worker import RunnerWorker
+from src.services.agent_runner.supervisor import SlotState
 
 _CHANNEL_USERS = {"feishu": "ou1", "dingtalk": "staff_1", "wecom": "wecom_user_1"}
 
@@ -277,6 +278,8 @@ async def test_worker_execute_delivers_channel_user_and_verbose_config(
         },
     )
     finalizer = SimpleNamespace(finalize=MagicMock())
+    slot = SlotState(tmp_path / 'slot')
+    slot.reset('worker-test')
     worker = RunnerWorker(
         config,
         worker_id="worker-test",
@@ -288,6 +291,7 @@ async def test_worker_execute_delivers_channel_user_and_verbose_config(
         usage_repository=SimpleNamespace(),
         finalizer=finalizer,
         runtime_factory=factory,
+        slot_state=slot,
     )
 
     # IO 边界 monkeypatch（见模块 docstring；被测路径本身不 patch）
@@ -301,14 +305,18 @@ async def test_worker_execute_delivers_channel_user_and_verbose_config(
             "phone": "13800000000",
         },
     )
-    monkeypatch.setattr(
-        RunnerWorker, "_persist_trace", lambda self, *args, **kwargs: None
-    )
+    trace_slot_states = []
+    def observe_trace(self, *args, **kwargs):
+        assert finalizer.finalize.called
+        trace_slot_states.append(slot.read()['state'])
+    monkeypatch.setattr(RunnerWorker, "_persist_trace", observe_trace)
     monkeypatch.setattr(
         settings.agent, "verbose_feedback", SimpleNamespace(force_disabled=force_disabled), raising=False
     )
 
     await worker.execute(row)  # 正常返回不抛即主断言之一
+    assert trace_slot_states == ['BUSY']
+    assert slot.read() == {'state': 'IDLE', 'worker_id': 'worker-test'}
 
     runtime = factory.runtime
     assert factory.create_calls == [("runner-1", "channel")]

@@ -94,9 +94,12 @@ services:
       context: .
       dockerfile: Dockerfile
     image: aid-agent-api:latest
-    container_name: aid-runner-worker
     restart: unless-stopped
-    mem_limit: 3g
+    stop_grace_period: 75s
+    deploy:
+      replicas: ${AGENT_RUNNER_WORKER_SLOTS:-1}
+    cpus: ${AGENT_RUNNER_WORKER_CPUS:-1}
+    mem_limit: ${AGENT_RUNNER_WORKER_MEMORY:-3g}
     shm_size: 512m
     # 先起独立 API（schema 断言/接单面就绪）再起 worker；worker 自身也会 assert_schema，
     # 该依赖只为启动顺序确定性，不构成运行时耦合（worker 只访问 DB，不调用 API）。
@@ -112,7 +115,7 @@ services:
       - AGENT_RUNNER_STORAGE_ROOT=/app/storage
       - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
     entrypoint: ["sh", "-c"]
-    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.services.agent_runner.worker"]
+    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.services.agent_runner.supervisor"]
     volumes:
       - .:/app
       - ./log:/app/log
@@ -144,6 +147,39 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  runner-monitor:
+    image: aid-agent-api:latest
+    restart: unless-stopped
+    cpus: 0.25
+    mem_limit: 256m
+    depends_on:
+      runner-api:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - SERVER_MODE=agent-runner-monitor
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    entrypoint: ["sh", "-c"]
+    command: ["exec gosu appuser python -m src.services.agent_runner.monitor"]
+    volumes:
+      - .:/app
+      - ./log:/app/log
+      - ./configs:/app/configs
+    networks:
+      - ${AGENT_RUNNER_NETWORK:-aid-network}
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.services.agent_runner.monitor", "--healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 1
+      start_period: 4m
     logging:
       driver: "json-file"
       options:

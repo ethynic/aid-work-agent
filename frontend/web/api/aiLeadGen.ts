@@ -280,6 +280,9 @@ export const aiLeadGenAPI = {
   listContacts: (params: ListParams = {}) =>
     request<ListResponse<Contact>>('/api/ai-lead-gen/contacts', params),
 
+  revealContactPhone: (contactId: number) =>
+    request<{ contact_id: number; phone: string | null }>(`/api/ai-lead-gen/contacts/${contactId}/reveal_phone`),
+
   listEmails: (params: ListParams = {}) =>
     request<ListResponse<EmailRecord>>('/api/ai-lead-gen/emails', params),
 

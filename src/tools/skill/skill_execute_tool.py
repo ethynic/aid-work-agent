@@ -178,14 +178,18 @@ class SkillExecuteTool(BaseTool):
         real_user_id = user_id
         real_session_id = session_id
 
-        # 如果没有传入 user_id，从 session 中获取
+        # 如果没有传入 user_id，从 session 中获取（尽力解析：DB 异常时降级
+        # 为不解析，与下方租户回查方式2的容错口径一致，不阻断技能执行）
         if tool_context is None and not real_user_id and session_id:
-            from src.db.models import SessionDB
-            session_info = SessionDB.get_by_id(session_id)
-            if session_info:
-                real_user_id = session_info.get("user_id")
-                real_session_id = session_id
-                logger.info(f"后端日志：skill_execute 获取真实 user_id={real_user_id}")
+            try:
+                from src.db.models import SessionDB
+                session_info = SessionDB.get_by_id(session_id)
+                if session_info:
+                    real_user_id = session_info.get("user_id")
+                    real_session_id = session_id
+                    logger.info(f"后端日志：skill_execute 获取真实 user_id={real_user_id}")
+            except Exception as e:
+                logger.warning(f"后端日志：skill_execute 会话回查 user_id 失败，跳过解析: {e}")
 
         # 替换占位符
         if "{user_id}" in processed_command and (real_user_id or tool_context is not None):
@@ -258,11 +262,15 @@ class SkillExecuteTool(BaseTool):
             pass
 
         if tool_context is None and not resolved_tenant_id and real_session_id:
-            # 方式1：从 chat_sessions 表查询（Web端会话）
-            from src.db.models import SessionDB
-            session_info = SessionDB.get_by_id(real_session_id)
-            if session_info:
-                resolved_tenant_id = session_info.get("tenant_id")
+            # 方式1：从 chat_sessions 表查询（Web端会话，尽力解析：DB 异常时
+            # 降级到方式2/3，不阻断技能执行——口径与方式2一致）
+            try:
+                from src.db.models import SessionDB
+                session_info = SessionDB.get_by_id(real_session_id)
+                if session_info:
+                    resolved_tenant_id = session_info.get("tenant_id")
+            except Exception as e:
+                logger.warning(f"后端日志：skill_execute 会话回查 tenant_id 失败，跳过解析: {e}")
 
             # 方式2：从 channel_sessions 表查询（企业微信/钉钉/飞书等渠道会话）
             if not resolved_tenant_id:

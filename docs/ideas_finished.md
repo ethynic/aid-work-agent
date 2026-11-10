@@ -49,7 +49,8 @@
 | 20260629-1329 | 服务器部署现状文档 | 记录腾讯云服务器（124.222.3.254）当前部署架构：Nginx 反代 + 生产/测试双 Docker 容器 + PostgreSQL 单实例双库 + 腾讯云 Redis，含端口/目录速查、… | [文档](../deploy/服务器部署现状.md) | — |
 | 20260701-2009 | 三智能体开发流程规范 | 非平凡开发任务（新功能/Phase/多文件改动）的标准流程：开发智能体→测试智能体（独立测试+回归+启动安全检查）→CodeReview智能体（独立审查+修复必要问题）… | [规范](../.claude/rules/dev_workflow.md) | — |
 | 20260624-2005 | 会话内上下文压缩（中期记忆） | 解决单 session 长会话上下文爆 token 问题（web/微信客服/钉钉/飞书 全渠道通用）。 | [设计](infrastructure/memory/context_compression_design.md) / [调研](research/context_compression_research.md) | [开发计划](infrastructure/memory/context_compression_dev_plan.md) |
-| 20260608-1610 | 租户数据迁移 | 跨数据库租户数据迁移（知识库 + 业务表），UUID 稳定标识符 + replace/merge 模式 + Excel 导出导入。2026-06-08 | — | — |
+| 20260608-1610 | 租户数据迁移 | 跨数据库租户数据迁移（知识库 + 业务表），UUID 稳定标识符 + replace/merge 模式 + Excel 导出导入。2026-06-08。**功能已于 2026-11-10 删除**（前提失效：生产已迁至 243，跨库直连+共享存储不再成立）；后续个别租户迁移按 [迁移手册](system/tenant-data-migration-manual.md) 人工执行 | [迁移手册](system/tenant-data-migration-manual.md) | — |
+| 20261110-1449 | 删除租户数据迁移功能 | 测试/生产同机前提随生产迁至 243 失效且数月未用，删除平台功能（后端 API+前端 tab+迁移脚本+单测）；新增迁移手册供后续 AI 按文档执行个别租户迁移。 | [迁移手册](system/tenant-data-migration-manual.md) | — |
 | 20260629-1354 | Gunicorn 多 Worker 定时任务单 Worker 执行 | Gunicorn 多 worker 部署下，scheduled_tasks 表内的定时任务会被每个 worker 重复触发。 | — | — |
 | 20260602-1415 | ✅ Prompt 全生命周期管理 | 子智能体 Prompt 的版本化管理（编辑→提交版本→对比→回滚）+ 独立智能体管理页面 + 租户定制 Prompt（extra_md）DB 化。 | [设计](infrastructure/prompt-lifecycle-design.md) | [计划](infrastructure/prompt-lifecycle-dev-plan.md) |
 | 20260428-1639 | 租户附件存储路径规范改造 | 把全项目 `storage/uploads/{tenant}/{user}/` 旧路径统一改造为 `storage/tenants/{tenant_id}/{scene}/` 新规范（依据 `.cla… | [规范](../.claude/rules/backend_dev.md) | — |
@@ -123,6 +124,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261110-0916 | 提示词直达生效与一键回退 | ✅ 已完成开发；独测/CR/独立评审修复通过，合并 master，待部署宏陶场景真机验收。 | [设计](system/prompt-direct-delivery-rollback-design.md) | [计划](plans/plan-prompt-direct-delivery-rollback.md) |
 | 20261014-boss-resume-recovery | BOSS 续筛评分与故障恢复 | ✅ 已完成开发；存量未知受管资源闭环通过独立验证，不要求Windows重启，未部署。 | [设计](system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量) / [复盘](incidents/recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md) | [计划](plans/plan-boss-resume-next-recovery-fix.md) |
 | 20261030-1213 | AI获客交互改造：问卷瘦身 + 去邮件预览直接发送 | ✅ 已完成并部署：问卷只必问地域+行业、去预览直接发送、统一大白话汇报口径（ce5a0ec3c），57 单测绿。 | [设计](subagent/ai-lead-gen/ai-lead-gen-agent-design.md) | — |
 | 20261028-2200 | AI获客业务数据页面（5 个只读列表页） | ✅ 已完成并部署：五表 5 个只读列表页，8 端点强制租户过滤、正文仅预览，集成测试 28 passed。 | [设计](subagent/ai-lead-gen/ai-lead-gen-agent-design.md) | — |

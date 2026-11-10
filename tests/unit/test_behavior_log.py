@@ -380,7 +380,7 @@ class _FakeBody(BaseModel):
 
 
 class _MigrationBody(BaseModel):
-    """模拟 tenant_migration.py 的 body（参数名恰好叫 request）"""
+    """模拟参数名恰好叫 request 的 Pydantic body"""
     source_tenant: str = "src_tenant"
 
 
@@ -395,7 +395,7 @@ def _audit_request(method: str = "POST", path: str = "/api/admin/x") -> SimpleNa
 
 @pytest.mark.asyncio
 async def test_audit_action_pydantic_body_named_request_not_mistaken_for_request():
-    """body 参数名恰为 request 时不得误当 Request（tenant_migration 场景），Request 形参名叫 req 也能定位"""
+    """body 参数名恰为 request 时不得误当 Request，Request 形参名叫 req 也能定位"""
     @audit_action(BehaviorAction.UPDATE, BehaviorResourceType.TENANT,
                   id_arg="tenant_id", name_arg="source_tenant")
     async def ep(tenant_id=None, request: _MigrationBody = None, req=None):

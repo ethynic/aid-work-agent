@@ -13,6 +13,10 @@ P11证实单独新插件并不满足当前客户机测试前提：当前Runtime�
 
 不新增信任协议、根更新服务、恢复框架或发布调度；沿原稳定签名者/历史完整根/production与acceptance区分。构建层实际配套验证不是给旧客户端新增运行门禁。实现与独测/CodeReview/实包证据见[计划P12](../../plans/plan-wecom-cli-localdb.md#p12-统一打包脚本与可安装配套交付2026-11-02)。
 
+2026-11-10 构建机输入约定：acceptance 的 BOSS/WeCom 共用已登记的 `aidwork-acceptance-cli-v1`，未传 `-Signer` 时使用 `%LOCALAPPDATA%\AidWorkBuild\signers\acceptance-cli-v1\signer.json`。显式参数优先，production 仍要求显式签名配置及公开根。WeCom 沿用已准备的仓库资产，缺失时从同一构建目录下的 `assets\localdb-python-final` 取用，缺件直接给出准备命令。签名与目标 Runtime 验包沿既有流程，`-Plan` 可在输入缺失时查看，构建输入路径见[打包手册](../../ops/runtime-boss-release-guide.md)。
+
+2026-11-10 交付入口收口：`release-batch.ps1 -Component All` 在一个 `SourceRef` 上构建一次 Runtime，并分别生成、验签 BOSS 与 WeCom 的 `.aidplugin.zip`，以同批 Runtime 的实际资源逐包核验。已有单件和双件模式保留，单插件可用 `-TargetRuntimeResources` 核对目标 Runtime。默认输出到 Windows「下载」的 `AID-Work-Releases`，用户可覆盖输出目录，签名配置、构建资产和隔离临时目录仍在原构建位置。安装器、离线插件、外层交付 ZIP 与 BOSS 独立 npm tgz 的用途在[统一手册](../../ops/runtime-boss-release-guide.md)区分。只改打包和验包入口，使用现有 Runtime 信任和包格式。
+
 ## P10 图片与文件时间线及按需读取（2026-10-30，设计草案）
 
 2026-10-31实施更新：本节方案已在master源码实现，验收以计划P10记录为准；标题保留原草案日期用于链接。仅支持本地已有缓存的图片和UTF-8文本片段，不宣称已安装新版插件或完成真实Web/生产验收。

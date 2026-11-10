@@ -10,9 +10,9 @@
 # 部署前提与核查项见 deploy/agent-runner-deploy-checklist.md。
 #
 # 与生产 overlay（docker-compose.agent-runner.yml）的差异：
-#   - restart: "no"（仿真按需启停，对齐 docker-compose.sim.yml 的 api 服务）
-#   - 容器名带 1 后缀（aid-runner-api1 / aid-runner-worker1），
-#     避免与生产未来部署的 aid-runner-api / aid-runner-worker 同主机冲突
+#   - restart: on-failure（仿真按需启停，异常退出后重建干净槽位）
+#   - API 容器名带 1 后缀；worker 容器由 Compose 按 project/service/副本命名，
+#     避免与生产环境同名冲突
 #   - 网络/卷路径对齐 docker-compose.sim.yml（agent_default 外部网络、
 #     附件共享生产目录、SIMULATION_MODE=1 门控随 .env 注入）
 #   - 主 API 容器经 .env 注入 AGENT_RUNNER_API_URL 与
@@ -102,9 +102,12 @@ services:
   # 内存口径对齐 aid-agent-api1（加载整套 Agent 运行时）。
   runner-worker-sim:
     image: aid-agent-api:latest
-    container_name: aid-runner-worker1
-    restart: "no"
-    mem_limit: 4g
+    restart: on-failure
+    stop_grace_period: 75s
+    deploy:
+      replicas: ${AGENT_RUNNER_WORKER_SLOTS:-1}
+    cpus: ${AGENT_RUNNER_WORKER_CPUS:-1}
+    mem_limit: ${AGENT_RUNNER_WORKER_MEMORY:-4g}
     shm_size: 512m
     # 先起独立 API（schema 断言/接单面就绪）再起 worker；只为启动顺序确定性，
     # 不构成运行时耦合（worker 只访问 DB，不调用 API）
@@ -120,7 +123,7 @@ services:
       - AGENT_RUNNER_STORAGE_ROOT=/app/storage
       - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
     entrypoint: ["sh", "-c"]
-    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.services.agent_runner.worker"]
+    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.services.agent_runner.supervisor"]
     volumes:
       - /var/www/agent1:/app
       - /var/www/agent1/log:/app/log
@@ -141,6 +144,39 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  runner-monitor-sim:
+    image: aid-agent-api:latest
+    restart: on-failure
+    cpus: 0.25
+    mem_limit: 256m
+    depends_on:
+      runner-api-sim:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - SERVER_MODE=agent-runner-monitor
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    entrypoint: ["sh", "-c"]
+    command: ["exec gosu appuser python -m src.services.agent_runner.monitor"]
+    volumes:
+      - /var/www/agent1:/app
+      - /var/www/agent1/log:/app/log
+      - /var/www/agent1/configs:/app/configs
+    networks:
+      - aid-prod-net
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.services.agent_runner.monitor", "--healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 1
+      start_period: 4m
     logging:
       driver: "json-file"
       options:

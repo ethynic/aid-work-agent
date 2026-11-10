@@ -10,6 +10,8 @@ EVENT_TYPES = frozenset({'task.completed', 'task.failed', 'notification.test',
                          'billing.credit_low', 'billing.tenant_expiry', 'abuse.rule_triggered'})
 # 规则引擎事件级消息 policy_key（设计 §2/§5）：recipient NULL，展开阶段按租户规则路由
 RULE_EVENT_POLICY_KEY = 'rule_event'
+PLATFORM_RUNNER_POLICY_KEY = 'platform_runner_alert'
+PLATFORM_RUNNER_INSTALLATION_REF = 'runner_alert_platform'
 
 
 class NotificationError(Exception):
@@ -56,6 +58,11 @@ class TestRequest(StrictDTO):
 
 class ImWebhookConfiguration(StrictDTO):
     webhook_url: str = Field(min_length=1, max_length=2048)
+
+
+class PlatformRunnerTargetRequest(StrictDTO):
+    webhook_url: str = Field(min_length=1, max_length=2048)
+    expected_binding_version: StrictInt | None = Field(default=None, ge=1)
 
 
 class EmailConfiguration(StrictDTO):

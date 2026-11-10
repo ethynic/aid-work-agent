@@ -1,8 +1,9 @@
 # AgentRunner 分进程部署检查清单（同一代码制品 overlay）
 
-适用对象：`docker-compose.agent-runner.yml`（叠加到目标环境主 compose 使用）。两服务同镜像
+适用对象：`docker-compose.agent-runner.yml`（叠加到目标环境主 compose 使用）。三服务同镜像
 `aid-agent-api:latest`：`runner-api`（`python -m src.services.agent_runner.bootstrap`）、
-`runner-worker`（`python -m src.services.agent_runner.worker`）。微信 KF 恢复主 API 原渠道入口，
+`runner-worker`（每副本由 `python -m src.services.agent_runner.supervisor` 管理一个单并发 Worker）、
+`runner-monitor`（`python -m src.services.agent_runner.monitor` 每分钟扫描运行告警）。微信 KF 恢复主 API 原渠道入口，
 overlay 不再包含 KF ingress/admission 或 `wecom-kf` profile。
 
 Agent/AgentRunner 架构重构已完成，本清单继续作为各环境发布与核查说明，不是“重构未完成”事项。KF agent2 切换及真机验收已于 2026-10-08 完成，agent3 旧 KF 开关/凭据清理见[恢复计划 Phase 5](../docs/plans/plan-wecom-kf-channel-restore.md)；其他环境不能据此视为已验收。后续渠道保留原业务，只接入共用 Runner，不新增渠道专属容器。
@@ -50,11 +51,12 @@ runner-api(8091, /health) ◄── HTTP ── 主 API 的 Web / KF gateway
         │ DB lease/事件/控制
         ▼
 runner-worker(执行/恢复, 无HTTP)
+runner-monitor(只读 Runner 状态、写告警/通知/扫描状态, 无HTTP)
 
 主 API 的微信 KF 原渠道：回调 → 拉取/合并/语音/人工 → Runner HTTP → 原渲染发送
 ```
 
-- 两服务只经共享数据库协作；`runner-worker` 不调用 HTTP API。
+- 三服务经共享数据库协作；`runner-worker` 和 `runner-monitor` 不调用 HTTP API。
 - 共享产物路径：`AGENT_RUNNER_STORAGE_ROOT=/app/storage`（`src/core/storage.py`
   `configured_storage_root`）与 `AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner`
   （`src/services/agent_runner/worker.py` RuntimeFactory）在两服务显式注入，均落在与主
@@ -80,7 +82,9 @@ runner-worker(执行/恢复, 无HTTP)
 `agent_runner_events` 五表存在，缺表直接 `AGENT_RUNNER_SCHEMA_REQUIRED` 启动失败，**不建表**。
 建表/变更唯一入口是迁移脚本。
 
-`deploy/db_update.yaml` 保留全部已提交历史块，`deploy/init-postgres.sql` 保留累积建表内容。仅在两文件末尾追加同一 gate 退役操作：`2026-10-08 15:21:10`，`ALTER TABLE IF EXISTS agent_runner_session_claims DROP COLUMN IF EXISTS gate`。新库沿完整历史建表后移除 gate，已有库按 `last_datetime` 只执行新增块；新旧最终结构一致。旧 KF 表/数据保留，不做 DROP TABLE。通用执行 claim 仍在终态释放，代码不再使用 delivery gate。
+`deploy/db_update.yaml` 保留全部已提交历史块，`deploy/init-postgres.sql` 保留累积建表内容。历史 gate 退役操作登记于 `2026-10-08 15:21:10`：`ALTER TABLE IF EXISTS agent_runner_session_claims DROP COLUMN IF EXISTS gate`。新库沿完整历史建表后移除 gate，已有库按 `last_datetime` 只执行新增块；新旧最终结构一致。旧 KF 表/数据保留，不做 DROP TABLE。通用执行 claim 仍在终态释放，代码不再使用 delivery gate。
+
+Phase 3 的 `execution_started_at`、告警/阈值/扫描状态表须在启动 `runner-monitor` 前完成迁移；全新诺度库使用独立的 `deploy/nuodu/init-postgres.sql`，已同步同一结构。平台飞书通知需配置 `PUBLIC_BASE_URL` 生成登录后 Portal 详情链接；缺失时告警与通知事件仍保存，但飞书投递记录为 `render_failure`，不会发送无链接消息。发布前在目标环境核对该地址，不输出任何 webhook 凭据。
 
 当前迁移工具按 `_db_update_applied.last_datetime` 执行，`file_hash` 仅为兼容旧结构保留的字段；不以文件 hash 变化触发全量重跑。
 
@@ -105,19 +109,19 @@ AGENT_RUNNER_API_URL=http://runner-api:8091
   `AGENT_RUNNER_LIMITS_REQUEST_BYTES` / `AGENT_RUNNER_LIMITS_CHECKPOINT_BYTES` /
   `AGENT_RUNNER_LIMITS_SNAPSHOT_BYTES`。
 
-### ③ 共库串环境检查（agent2/agent3）
+### ③ 数据库隔离检查（agent2/agent3）
 
-agent2（test）与 agent3（dev）共用业务库 `aid_work_agent2`（`deploy/服务器部署现状.md` §4；
-`docker-compose.dev.yml` 头部同类警告先例）。`agent_runners` 的 lease/认领是库级共享池：
-**同一数据库同一时刻只允许一个环境常驻 runner-worker**，
-否则两环境 worker 会在同一 lease 池上跨环境分摊任务。启动前也核查旧 KF 容器已完成收尾。
+`agent_runners` 的 lease/认领是库级共享池。当前 agent2 与 agent3 已拆库；发布前仍须核对
+实际 `DATABASE_URL` 指向不同业务库，并确认旧 KF 容器已完成收尾。若两个环境重新指向同一库，
+**同一数据库同一时刻只允许一个环境常驻 runner-worker**，否则会跨环境分摊任务。
 
 > **2026-10-15 起 agent3 环境曾停用**（共库 + lease 池跨环境抢任务，见 `服务器部署现状.md` §1.2）。
 > **2026-10-29 已拆库恢复启用**：agent3 改用独立库 `aid_work_agent3`/`aid_work_logs3`（自
 > agent2 库全量复制），`.env` 已切库，本条共库风险解除；两环境 runner 容器名已参数化隔离
 > （agent3 侧 `AGENT_RUNNER_*_CONTAINER` 加 `3` 后缀，见 overlay 头部说明）。测试数据经
 > `deploy/test2dev.sh` 单向同步（test → dev），**不得**反向同步；若未来任何环境重新指回
-> 对方库，必须先回到本条核查。
+> 对方库，必须先回到本条核查。Phase 2 的 worker 改为 Compose 自动命名副本，
+> agent3 只需保留 runner-api 的独立容器名；用 `docker compose ps runner-worker` 查看副本。
 
 ### ④ 令牌与 peer 检查（凭据不入文档/日志）
 
@@ -141,6 +145,19 @@ docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml con
 注意：若 `.env` 缺主 compose 要求的必填变量（如 prod 的 `REDIS_PASSWORD`），校验需临时
 `REDIS_PASSWORD=dummy` 前缀（仅命令行临时值，**不得写入任何文件**）。
 
+### ⑥ Phase 4 双槽与旧客户端验收准备（只读）
+
+- 默认 `AGENT_RUNNER_WORKER_SLOTS=1` 不能验证同步阻塞时另一槽继续工作。准备 agent2
+  双槽配置解析、每副本 CPU/内存额度和当前整机余量；`runner-monitor` 保持单实例。
+  `deploy.replicas` 由 Compose 配置解析确认，实际两个容器及各自 `worker_id` 须授权后核对。
+- 读取目标库 `max_connections` 与现有连接占用；预算纳入每槽 Worker 业务池上限、监督进程
+  1–2 连接、monitor 1–2 连接及 healthcheck 短连接、runner-api、主 API/background 和余量。
+  特别核对诺度的 40 连接上限；本地配置解析不能替代目标环境读数。
+- 正式服不沿用 agent3 的双槽数值：按[容量初评](../docs/plans/plan-runner-execution-slot-isolation-and-alerts.md#phase-4-正式服容量初评2026-11-06只读尚未部署)先验证 4 槽，再按排队与资源实测决定是否升到 6 槽；扩槽前同时核定 Worker 的 `DB_POOL_MAX`、每槽内存上限及同机余量。默认每槽 6 GiB 内存上限和业务池 15 连接不能直接乘以目标槽数使用。
+- 登记已交付 Runtime＋CLI 的实际版本/包及对应旧任务样本，用于“只升级服务端”的原工具、
+  恢复、回执/重投、结果上报和计费验收。旧包不可得时如实列为待验，不用模拟版本字段代替。
+  具体场景与采样指标见[Phase 4 方案](../docs/plans/plan-runner-execution-slot-isolation-and-alerts.md#phase-4-本地准备与真机验收方案2026-11-06)。
+
 ## 2. 授权后启动顺序
 
 按序执行，每步观察后再进行下一步（命令为生产形态，其他环境替换主 compose 文件与
@@ -150,15 +167,22 @@ docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml con
 # 0. 迁移（前置①已核，先备份：见 deploy/backup.md）
 # 1. 独立 API（等 healthcheck 转 healthy；日志确认 assert_schema 通过、无 AGENT_RUNNER_SCHEMA_REQUIRED）
 docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml up -d runner-api
-# 2. 执行 worker（pgrep 判活；观察认领日志）
+# 2. 执行 worker（AGENT_RUNNER_WORKER_SLOTS 控制副本数；每副本 1 个执行进程）
 docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml up -d runner-worker
-# 3. 主 API 容器 recreate 补 env（前置②；窗口期动作）
+# 3. 运行告警扫描器（确认迁移；平台飞书目标可后配，但旧事件不追发）
+docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml up -d runner-monitor
+# 4. 主 API 容器 recreate 补 env（前置②；窗口期动作）
 docker compose -f docker-compose.prod.yml up -d --force-recreate aid-agent-api
-# 4. 观察
+# 5. 观察
 docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml ps
-docker logs aid-runner-api --tail 100; docker logs aid-runner-worker --tail 100
+docker logs aid-runner-api --tail 100
+docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml logs --tail 100 runner-worker runner-monitor
 curl http://localhost:8000/health   # 主 API
 ```
+
+授权后的验收还需记录实际 Worker 副本数/各自 `worker_id`、每槽资源与数据库连接峰值、
+同步阻塞期间另一槽的领取和完成、旧 Runtime＋CLI 原能力、monitor 扫描时间与 Portal 告警。
+仅 `ps`、`health` 或默认单槽正常不能宣布容量与兼容验收通过。
 
 overlay 已给 runner-api 声明 `depends_on: aid-agent-api: condition: service_healthy`
 （2026-11-02 agent1 事故固化：db_update 迁移在主 API 启动过程应用，runner 启动即
@@ -168,36 +192,42 @@ assert_schema，compose 并发重建时先断言会撞上未迁移的表/列秒�
 
 ## 3. 回退步骤（授权后）
 
-- 停新增服务：`docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml stop runner-worker runner-api`。
+- 停新增服务：`docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml stop runner-monitor runner-worker runner-api`。
 - 已被接受的 runner 任务**不得**交旧 Agent 从头重跑：由 AgentRunner 排空、暂停或显式取消
   （计划红线，`docs/plans/plan-agent-runner-service.md` M7 节）。
 - 新表与已接单任务保留，不做破坏性降级；主 API 若已注入 env，回退同样需 recreate。
+- 先保留 Runner 告警、通知和扫描状态用于核对；关闭 monitor 不改变已接单任务或旧客户端
+  回执，不靠重放原外部工具补救未知结果。已投递/未投递的飞书状态按原记录处理。
 - gate 退役迁移后不能直接启动旧 KF native 制品；其依赖的列已移除。若确需恢复旧方案，另行准备恢复 gate 及原约束的新增兼容迁移或核对过的备份恢复方案，再启动旧服务并重新核对存量，不重写历史块，不重跑已完成任务。
 - 回退只影响新提交的路由，入口开关不能让同一请求同时进入两条路径。
 
 ## 4. healthcheck 局限（如实登记）
 
 - `runner-api`：`curl /health` 仅报告进程与 `enabled` 状态，不代表 DB/lease 健康。
-- `runner-worker`：**无 HTTP、无心跳文件端点**
-  （background_runner 的 `.bg_runner_alive` 机制不在这些进程），healthcheck 只能
-  `pgrep -f` 进程判活（镜像已装 procps）——只证明进程存活，不证明 lease/执行健康。
+- `runner-worker`：每副本的监督进程作为容器主进程，异常退出由 restart policy
+  重启整个槽容器并换新 `worker_id`。无 HTTP 健康端点，容器状态只证明
+  监督进程存活，不证明数据库租约或业务执行健康。
   业务健康验证留给 M7 综合验收（真实消息闭环、跨副本并发、慢/断线场景）。
+- `runner-monitor`：healthcheck 核对数据库中最近成功扫描时间，超过 3 分钟报告
+  `unhealthy`；该状态本身不会触发 Docker 自动重启。进程退出由 restart policy 拉起。
 
 ## 5. Browser owner 拓扑说明
 
 - **owner 不是独立进程**：Browser owner 是执行 worker 进程内的应用侧 owner
   （`src/services/agent_runner/browser_owner.py`），随 `runner-worker` 生命周期存在；
   `runner-api` 不参与 Browser。
-- **view 网关是同 worker 进程内的只读 sidecar**（`src/services/agent_runner/browser_sidecar.py`），
-  由 `browser_owner.view_enabled` 装配（`worker.py` RuntimeFactory.open）；观察请求经 owner
-  进程内转发，不落独立容器。
-- **每 worker 副本独占 8092 listener**：`bind_host/bind_port` 默认 `127.0.0.1:8092`
-  （`configs/config.yaml` `agent_runner.browser_owner` 注释），端口冲突会在认领前失败。
-  多 worker 副本必须各自配置不同 `bind_port` 与 `endpoint`/`allowed_endpoints`
-  （env：`AGENT_RUNNER_BROWSER_BIND_HOST/PORT`、`AGENT_RUNNER_BROWSER_OWNER_ENDPOINT`、
-  `AGENT_RUNNER_BROWSER_ALLOWED_ENDPOINTS`）。
-- 当前默认 `view_enabled: false`、单副本 worker：本 overlay 不发布 8092 端口、不注入
-  Browser env。开启 view 网关或扩 worker 副本属于后续授权变更，不在本清单默认路径内。
+- **view listener 是同 worker 进程内的 sidecar**（`src/services/agent_runner/browser_sidecar.py`），
+  由 `browser_owner.view_enabled` 装配（`worker.py` RuntimeFactory.open）；主 API 的
+  `browser_view_gateway.py` 才是跨容器观察请求的网关。sidecar 不另起容器。
+- `bind_host/bind_port` 默认 `127.0.0.1:8092`；各 worker 副本位于独立容器网络命名空间，
+  同用该 loopback 端口不会互相冲突，不要求按副本改 `bind_port`。同一容器内端口被占用时，
+  view listener 会在认领前启动失败。
+- 当前默认 `view_enabled: false`，本 overlay 不发布 8092 端口、不注入 Browser env；
+  扩 worker 副本无需为关闭的 view listener 配置端口。若未来启用 Browser view，主 API 的
+  `browser_view_gateway` 会按数据库记录的 `owner_endpoint` 跨容器连接 owner，并以
+  `allowed_endpoints` 校验；`127.0.0.1` 仅指向网关自身，届时须为各 owner 配置可达且可精确
+  区分的地址与允许列表，并核对 listener 的 `bind_host/bind_port`，不能仅靠 Compose 服务名
+  负载均衡来定位持有该 run 的副本。该功能另行验收，不作为默认扩槽门槛。
 
 ## 6. 相关文件
 

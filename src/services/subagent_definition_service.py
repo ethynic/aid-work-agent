@@ -124,7 +124,7 @@ class SubagentDefinitionService:
         commit_message: str = "初始版本",
     ) -> Optional[Dict[str, Any]]:
         """
-        创建子智能体定义 + 注册 Prompt + 提交 V1 + 标记 production。
+        创建子智能体定义 + 注册 Prompt + 提交 V1（保存即生效）。
         整体操作：定义和 system_prompt 同时创建。
         """
         # 1. 创建定义
@@ -182,14 +182,6 @@ class SubagentDefinitionService:
             PromptRegistryService.delete_prompt(prompt_id)
             return None
 
-        # 4. 标记 production
-        PromptRegistryService.set_label(
-            prompt_id=prompt_id,
-            label="production",
-            version=version_result["version"]["version"],
-            created_by=created_by,
-        )
-
         return {
             "definition": definition,
             "prompt_id": prompt_id,
@@ -198,7 +190,7 @@ class SubagentDefinitionService:
 
     @staticmethod
     def get_definition(agent_id: str) -> Optional[Dict[str, Any]]:
-        """获取子智能体定义 + 当前 production prompt"""
+        """获取子智能体定义 + prompt 版本信息"""
         definition = SubagentDefinitionDB.get_by_agent_id(agent_id)
         if not definition:
             return None
@@ -236,11 +228,11 @@ class SubagentDefinitionService:
         # 删除 prompt 分段
         SubagentPromptSectionDB.delete_sections(agent_id)
 
-        # 删除 prompt（包含版本、标签、草稿）
+        # 删除 prompt（含全部版本；labels/drafts 孤儿行由 DB 层原生 SQL 一并清理）
         prompt = PromptRegistryService.get_prompt_by_scope(None, "subagent", agent_id)
         if prompt:
             PromptRegistryService.delete_prompt(str(prompt["id"]))
-        # invalidate_prompt 只按 prompt_id 清 CONTENT/LABEL，registry 缓存键按
+        # invalidate_prompt 只按 prompt_id 清 CONTENT，registry 缓存键按
         # scope_id（agent_id）组织，必须单独失效，否则重建同 agent_id 后在
         # TTL 内 resolve 命中旧 prompt_id，load_from_db 会跳过该智能体
         from src.prompts.prompt_resolver import prompt_resolver
@@ -255,27 +247,19 @@ class SubagentDefinitionService:
         commit_message: Optional[str] = None,
         created_by: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """提交 system_prompt 新版本并标记 production"""
+        """提交 system_prompt 新版本（保存即生效；dedup 幂等由 commit_version 内建）"""
         prompt = PromptRegistryService.get_prompt_by_scope(None, "subagent", agent_id)
         if not prompt:
             logger.error(f"未找到子智能体 {agent_id} 的 Prompt 注册")
             return None
 
         prompt_id = str(prompt["id"])
-        result = PromptRegistryService.commit_version(
+        return PromptRegistryService.commit_version(
             prompt_id=prompt_id,
             content=content,
             commit_message=commit_message,
             created_by=created_by,
         )
-        if result.get("version") and not result.get("dedup"):
-            PromptRegistryService.set_label(
-                prompt_id=prompt_id,
-                label="production",
-                version=result["version"]["version"],
-                created_by=created_by,
-            )
-        return result
 
     # ========== Prompt 分段管理 ==========
 
@@ -303,13 +287,13 @@ class SubagentDefinitionService:
 
     @staticmethod
     def get_section_keys(agent_id: str) -> List[str]:
-        """从 production 版本的模板中解析出所有 {{section_key}} 变量名"""
+        """从最新版本（生效版本）的模板中解析出所有 {{section_key}} 变量名"""
         prompt_info = SubagentDefinitionService._get_prompt_info(agent_id)
         if not prompt_info:
             return []
         from src.prompts.prompt_registry_service import PromptRegistryService
         version_data = PromptRegistryService.get_version(
-            str(prompt_info["prompt_id"]), prompt_info["production_version"]
+            str(prompt_info["prompt_id"]), prompt_info["latest_version"]
         )
         if not version_data:
             return []
@@ -330,7 +314,13 @@ class SubagentDefinitionService:
 
     @staticmethod
     def _get_prompt_info(agent_id: str) -> Optional[Dict[str, Any]]:
-        """获取子智能体关联的 prompt 信息"""
+        """获取子智能体关联的 prompt 信息（最新版本即生效版本）
+
+        prompt_id 走 registry（可缓存）；版本号必须直查版本表——commit_version
+        只失效 content 缓存，registry 缓存里的 latest_version 在 TTL 内滞后，
+        会导致 get_section_keys 与配置导出读到旧版。
+        """
+        from src.db.prompt_db import PromptVersionDB
         from src.prompts.prompt_resolver import prompt_resolver
 
         registry = prompt_resolver._resolve_registry("subagent", agent_id, None)
@@ -338,14 +328,10 @@ class SubagentDefinitionService:
             return None
 
         prompt_id = str(registry["id"])
-
-        # 获取 production 标签
-        prod_label = PromptRegistryService.get_label(prompt_id, "production")
-
+        latest = PromptVersionDB.get_latest(prompt_id)
         return {
             "prompt_id": prompt_id,
-            "latest_version": registry.get("latest_version", 0),
-            "production_version": prod_label.get("version") if prod_label else None,
+            "latest_version": latest["version"] if latest else 0,
         }
 
 

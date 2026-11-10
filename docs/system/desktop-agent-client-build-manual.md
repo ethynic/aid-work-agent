@@ -1,6 +1,6 @@
 # Windows 桌面客户端编译与打包手册
 
-> **独立 Runtime + BOSS 插件请直接使用[当前完整打包手册](../ops/runtime-boss-release-guide.md)。** 本页第 1～11 节是完整桌面客户端 Shell 的构建流程，不是独立 Runtime 出包流程。
+> 独立 Runtime 安装器与 BOSS、WeCom 插件见[统一打包手册](../ops/runtime-boss-release-guide.md)。本页用于完整桌面客户端 Shell。
 
 > 新版产品设计与后续实施见[桌面客户端 v3](desktop-agent-client-design.md)和[开发计划](../plans/plan-desktop-agent-client.md)。本手册描述现有 Shell 的构建链路；构建成功不表示 Runner 对话或本地工具已接入。
 
@@ -320,12 +320,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 ## 12. 独立Runtime首期验收包
 
-本节原有 2026-10-09 首期资产、写死的 UI/BOSS 版本及构建命令已退出当前操作入口。原始签名摘要、测试和交付事实保留在[Runtime 计划](../plans/plan-runtime-plugin-host.md#10-最终交付与验证记录)及[组合包历史计划](../plans/plan-runtime-ui-boss-trial-bundle.md)，Git 历史可查旧正文。
-
-**新包统一按[Runtime 与 BOSS 插件构建及 ZIP 交付手册](../ops/runtime-boss-release-guide.md)执行。** 手册直接读取当前组件版本及实际 release manifest，保留完整历史公开根，补齐原生共享依赖和最终 ZIP 校验；最终交付位于 `clients/release/`。不再复制此处旧版本、一次性公钥文件或 `npm --prefix ... pack` 命令。
+现行流程见[统一打包手册](../ops/runtime-boss-release-guide.md)。首期签名摘要、测试和交付记录见[Runtime 计划](../plans/plan-runtime-plugin-host.md#10-最终交付与验证记录)及[组合包历史计划](../plans/plan-runtime-ui-boss-trial-bundle.md)。
 
 ### 12.1 BOSS完整人工验收：构建到招聘智能体调用
 
-此锚点保留用于旧链接跳转。构建、签名、验包和 ZIP 交付见[当前打包手册](../ops/runtime-boss-release-guide.md)；收件人步骤见[同批安装说明](../ops/runtime-boss-release-guide.md#8-复制交付文件说明和源码状态)。
+收件人步骤见[统一打包手册的安装和升级说明](../ops/runtime-boss-release-guide.md#8-安装和升级说明)。
 
 人工验收仍区分实际 NSIS 安装、Runtime 管理启动/退出、插件导入及版本升级、同租户同用户设备配对/选定，以及真实 BOSS 业务。验包不自动执行业务或部署服务器；真实外发先确认具体候选人和动作。以本批 `build-info.json` 和原始报告记录实际完成项，未执行不标为通过。视觉恢复使用 Runtime 配对身份及后台设备 API，按后台 20 倍规则计费，不要求用户另配 API token。
