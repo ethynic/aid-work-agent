@@ -543,7 +543,7 @@ agent_runner:
   lease_seconds: 30
   heartbeat_seconds: 10
   poll_seconds: 1.0
-  concurrency: 4
+  concurrency: 1
   # Byte ceilings: single request/control admission (413), checkpoint and public
   # snapshot serialization. Defaults stay wide until M7 real-workload sizing.
   limits:
@@ -555,8 +555,8 @@ agent_runner:
     enabled: false
     endpoint: "http://127.0.0.1:8092/internal/runner-browser"
     allowed_endpoints: ["http://127.0.0.1:8092/internal/runner-browser"]
-    # One listener per Worker process/container; a port conflict fails before
-    # Runner acquisition. Multiple workers need distinct configured endpoints.
+    # Each Worker container has its own network namespace; the same loopback
+    # port does not conflict across replicas. Browser view is disabled by default.
     view_enabled: false
     bind_host: "127.0.0.1"
     bind_port: 8092

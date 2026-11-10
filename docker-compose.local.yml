@@ -69,10 +69,22 @@ services:
       service: runner-worker
     user: "0"
     entrypoint: []
-    command: [python, -m, src.services.agent_runner.worker]
+    command: [python, -m, src.services.agent_runner.supervisor]
     volumes:
       - local-agent-storage:/app/storage
       - local-agent-uploads:/app/uploads
+      - local-agent-logs:/app/log
+    networks:
+      - local-agent-data
+
+  runner-monitor:
+    extends:
+      file: docker-compose.agent-runner.yml
+      service: runner-monitor
+    user: "0"
+    entrypoint: []
+    command: [python, -m, src.services.agent_runner.monitor]
+    volumes:
       - local-agent-logs:/app/log
     networks:
       - local-agent-data

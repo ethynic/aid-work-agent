@@ -14,10 +14,10 @@
 #   AGENT_RUNNER_UPLOADS_HOST_DIR   上传宿主目录（与目标环境主 compose 的 uploads 挂载同一路径）
 #   AGENT_RUNNER_STORAGE_HOST_DIR   产物宿主目录（与目标环境主 compose 的 storage 挂载同一路径）
 #   AGENT_RUNNER_API_CONTAINER      runner-api 容器名（默认 aid-runner-api）
-#   AGENT_RUNNER_WORKER_CONTAINER   runner-worker 容器名（默认 aid-runner-worker）
-# 同一宿主机多环境并存时（如 254 上 agent2/agent3 都启用 runner），必须在各环境 .env
-# 设置不同的容器名（如 *3 后缀），否则 container_name 冲突无法同时启动。网络是各环境
-# 独立 bridge，服务名（runner-api/runner-worker）不跨网络解析，无需差异化。
+#   AGENT_RUNNER_WORKER_SLOTS       独立 worker 副本数（deploy.replicas，默认 1）
+#   AGENT_RUNNER_WORKER_CPUS        每副本 CPU 限额（默认 1）
+#   AGENT_RUNNER_WORKER_MEMORY      每副本内存限额（各环境默认沿用原值）
+# worker 容器名由 Compose 按 project/service/副本序号生成；同机多环境以 project 隔离。
 # 这些变量仅参与 compose 插值，src/config/settings.py 不读取（应用读取的 AGENT_RUNNER_* 见
 # settings.py 的 env 覆盖段，二者命名不冲突）。
 
@@ -98,16 +98,18 @@ services:
         max-file: "3"
 
   # AgentRunner 执行 worker：认领/心跳/执行/恢复，全部经共享数据库，不监听 HTTP。
-  # 内存口径对齐 aid-agent-background（加载整套 Agent 运行时）。
-  # 6G：主要工具执行者，LibreOffice/Chromium/ffmpeg 并发时峰值高于 background。
+  # 每副本限额可配置；正式槽数与限额须按 Phase 4 实测定值。
   runner-worker:
     build:
       context: .
       dockerfile: Dockerfile
     image: aid-agent-api:latest
-    container_name: ${AGENT_RUNNER_WORKER_CONTAINER:-aid-runner-worker}
     restart: unless-stopped
-    mem_limit: 6g
+    stop_grace_period: 75s
+    deploy:
+      replicas: ${AGENT_RUNNER_WORKER_SLOTS:-1}
+    cpus: ${AGENT_RUNNER_WORKER_CPUS:-1}
+    mem_limit: ${AGENT_RUNNER_WORKER_MEMORY:-6g}
     shm_size: 512m
     # 先起独立 API（schema 断言/接单面就绪）再起 worker；worker 自身也会 assert_schema，
     # 该依赖只为启动顺序确定性，不构成运行时耦合（worker 只访问 DB，不调用 API）。
@@ -123,7 +125,7 @@ services:
       - AGENT_RUNNER_STORAGE_ROOT=/app/storage
       - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
     entrypoint: ["sh", "-c"]
-    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.services.agent_runner.worker"]
+    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.services.agent_runner.supervisor"]
     volumes:
       - .:/app
       - ./log:/app/log
@@ -155,6 +157,40 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 独立扫描进程：只读 Runner 状态，写告警/通知事件/扫描状态；异常退出由 restart policy 拉起。
+  runner-monitor:
+    image: aid-agent-api:latest
+    restart: unless-stopped
+    cpus: 0.25
+    mem_limit: 256m
+    depends_on:
+      runner-api:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - SERVER_MODE=agent-runner-monitor
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    entrypoint: ["sh", "-c"]
+    command: ["exec gosu appuser python -m src.services.agent_runner.monitor"]
+    volumes:
+      - .:/app
+      - ./log:/app/log
+      - ./configs:/app/configs
+    networks:
+      - ${AGENT_RUNNER_NETWORK:-aid-network}
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.services.agent_runner.monitor", "--healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 1
+      start_period: 4m
     logging:
       driver: "json-file"
       options:

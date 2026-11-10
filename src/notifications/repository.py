@@ -12,7 +12,8 @@ from src.db.database import get_db_connection
 from src.db.encryption import encryption_manager
 
 from .authorization import assert_subject_in_tx, resource_in_tx
-from .contracts import RULE_EVENT_POLICY_KEY, NotificationError, Subject
+from .contracts import (PLATFORM_RUNNER_INSTALLATION_REF, PLATFORM_RUNNER_POLICY_KEY,
+                        RULE_EVENT_POLICY_KEY, NotificationError, Subject)
 
 TABLE_COLUMNS = {
     'notification_messages': 'notification_id notification_ref schema_version producer event_type event_key scope_key tenant_id recipient_user_id resource_ref template_key template_version parameters_encrypted occurred_at accepted_at expires_at category priority policy_key expansion_state route_snapshot read_at created_at',
@@ -148,6 +149,99 @@ class NotificationRepository:
             raise NotificationError('NOTIFICATION_FORBIDDEN', 403)
         if not self.allowed(subject):
             raise NotificationError('NOTIFICATION_TENANT_DISABLED', 403)
+
+    @staticmethod
+    def guard_platform(cursor, subject):
+        if subject.tenant_id is not None:
+            raise NotificationError('NOTIFICATION_FORBIDDEN', 403)
+        user = assert_subject_in_tx(cursor, subject)
+        if user['role'] != 'platform_admin' or user['tenant_id'] is not None:
+            raise NotificationError('NOTIFICATION_FORBIDDEN', 403)
+
+    @staticmethod
+    def platform_runner_target(row):
+        return bool(row and row['scope_key'] == 'global' and row['tenant_id'] is None
+                    and row['recipient_user_id'] is None and row['channel'] == 'im_webhook'
+                    and row['provider'] == 'feishu_bot'
+                    and row['installation_ref'] == PLATFORM_RUNNER_INSTALLATION_REF
+                    and row['rule_id'] is None)
+
+    def get_platform_runner_target(self, subject):
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard_platform(cursor, subject)
+            cursor.execute('''SELECT * FROM notification_targets
+                WHERE provider='feishu_bot' AND installation_ref=%s AND state='active' ''',
+                (PLATFORM_RUNNER_INSTALLATION_REF,))
+            row = cursor.fetchone()
+            if row and not self.platform_runner_target(row):
+                raise NotificationError('NOTIFICATION_TARGET_SCOPE_MISMATCH', 409)
+            return public_target(row) if row else None
+
+    def register_platform_runner_target(self, subject, body):
+        adapter = self.registry.get('im_webhook', 'feishu_bot')
+        if not adapter or not adapter.available():
+            raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
+        configuration = {'webhook_url': body.webhook_url}
+        digest = adapter.validate_target(configuration)
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard_platform(cursor, subject)
+            cursor.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
+                           ('notification:platform:'+PLATFORM_RUNNER_INSTALLATION_REF,))
+            cursor.execute('''SELECT * FROM notification_targets WHERE provider='feishu_bot'
+                AND installation_ref=%s ORDER BY (state='active') DESC,updated_at DESC
+                LIMIT 1 FOR UPDATE''', (PLATFORM_RUNNER_INSTALLATION_REF,))
+            row = cursor.fetchone()
+            if row and not self.platform_runner_target(row):
+                raise NotificationError('NOTIFICATION_TARGET_SCOPE_MISMATCH', 409)
+            if row:
+                if (body.expected_binding_version is not None
+                        and body.expected_binding_version != row['binding_version']):
+                    raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
+                changed = (row['state'] != 'active'
+                           or unprotect(row['configuration_encrypted']) != configuration)
+                cursor.execute('''UPDATE notification_targets SET configuration_encrypted=%s,
+                    identity_digest=%s,state='active',binding_version=binding_version+%s,
+                    enabled_since=CASE WHEN state='active' THEN enabled_since ELSE clock_timestamp() END,
+                    verified_at=clock_timestamp(),updated_at=clock_timestamp()
+                    WHERE target_id=%s RETURNING *''',
+                    (protected(configuration),digest,int(changed),row['target_id']))
+            else:
+                if body.expected_binding_version is not None:
+                    raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
+                cursor.execute('''INSERT INTO notification_targets
+                    (target_id,scope_key,tenant_id,recipient_user_id,channel,provider,
+                     installation_ref,identity_digest,configuration_encrypted,rule_id)
+                    VALUES (%s,'global',NULL,NULL,'im_webhook','feishu_bot',%s,%s,%s,NULL)
+                    RETURNING *''', ('target_'+uuid.uuid4().hex,
+                    PLATFORM_RUNNER_INSTALLATION_REF,digest,protected(configuration)))
+            result = public_target(cursor.fetchone())
+            conn.commit()
+            return result
+
+    def revoke_platform_runner_target(self, subject, version):
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard_platform(cursor, subject)
+            cursor.execute('''SELECT * FROM notification_targets WHERE provider='feishu_bot'
+                AND installation_ref=%s AND state='active' FOR UPDATE''',
+                (PLATFORM_RUNNER_INSTALLATION_REF,))
+            row = cursor.fetchone()
+            if not row or not self.platform_runner_target(row):
+                raise NotificationError('NOTIFICATION_TARGET_NOT_FOUND', 404)
+            if row['binding_version'] != version:
+                raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
+            cursor.execute('''UPDATE notification_targets SET state='revoked',
+                binding_version=binding_version+1,updated_at=clock_timestamp()
+                WHERE target_id=%s RETURNING *''', (row['target_id'],))
+            result = public_target(cursor.fetchone())
+            cursor.execute('''UPDATE notification_deliveries SET state='skipped',
+                error_class='target_revoked',owner=NULL,lease_until=NULL,
+                updated_at=clock_timestamp() WHERE target_id=%s
+                AND state IN ('pending','sending')''', (row['target_id'],))
+            conn.commit()
+            return result
 
     @staticmethod
     def assert_schema_in_tx(cursor):
@@ -1049,10 +1143,54 @@ class NotificationRepository:
                           'recipients':recipient_ids,'targets':target_rows})
         return 'expanded', route
 
+    @staticmethod
+    def platform_runner_message(message, parameters):
+        resource = message.get('resource_ref') or {}
+        return bool(message.get('scope_key') == 'global'
+                    and message.get('tenant_id') is None
+                    and message.get('recipient_user_id') is None
+                    and message.get('producer') == 'runner-monitor'
+                    and message.get('event_type') == 'runner.long_running'
+                    and message.get('policy_key') == PLATFORM_RUNNER_POLICY_KEY
+                    and message.get('template_key') == 'runner_long_running'
+                    and message.get('schema_version') == 1
+                    and resource.get('type') == 'runner_alert'
+                    and isinstance(parameters, dict)
+                    and resource.get('id') == parameters.get('runner_id'))
+
+    def _expand_platform_runner_alert(self, cursor, message):
+        if message['expires_at'] <= message['database_now']:
+            return 'expired', []
+        try:
+            parameters = unprotect(message['parameters_encrypted'])
+        except Exception:
+            parameters = None
+        if not self.platform_runner_message(message, parameters):
+            return 'expanded', [{'skipped': 'platform_event_invalid'}]
+        message['parameters'] = parameters
+        cursor.execute('''SELECT * FROM notification_targets WHERE provider='feishu_bot'
+            AND installation_ref=%s AND state='active' ''',
+            (PLATFORM_RUNNER_INSTALLATION_REF,))
+        target = cursor.fetchone()
+        if not target:
+            return 'expanded', [{'skipped': 'platform_target_missing'}]
+        if not self.platform_runner_target(target):
+            return 'expanded', [{'skipped': 'platform_target_invalid'}]
+        adapter = self.registry.get('im_webhook', 'feishu_bot')
+        if not adapter or not adapter.available():
+            return 'expanded', [{'skipped': 'platform_provider_unavailable'}]
+        route = []
+        self._append_delivery(cursor, message, target, route)
+        return 'expanded', route
+
     def _append_delivery(self, cursor, message, target, route):
         """渲染并落一条外发投递行（payload 上限、ON CONFLICT DO NOTHING、
         route 留痕）；适配器不可用或渲染失败不抛错。偏好路由、任务级目标
         快照与任务级规则快照共用同一渲染与落库语义。"""
+        if (target.get('installation_ref') == PLATFORM_RUNNER_INSTALLATION_REF
+                and not (self.platform_runner_target(target)
+                         and self.platform_runner_message(message, message.get('parameters')))):
+            return
         adapter = self.registry.get(target['channel'],target['provider'])
         if not adapter or not adapter.available() or message['schema_version'] not in adapter.capabilities.notification_schema_versions:
             return
@@ -1105,6 +1243,12 @@ class NotificationRepository:
             messages = cursor.fetchall()
             for row in messages:
                 message = dict(row)
+                if message['policy_key'] == PLATFORM_RUNNER_POLICY_KEY:
+                    state, route = self._expand_platform_runner_alert(cursor, message)
+                    cursor.execute('''UPDATE notification_messages SET expansion_state=%s,
+                        route_snapshot=%s::jsonb WHERE notification_id=%s''',
+                        (state,json.dumps(route),message['notification_id']))
+                    continue
                 resource = message.get('resource_ref') or {}
                 if (message['event_type'] in ('task.completed', 'task.failed')
                         and isinstance(resource, dict) and resource.get('type') == 'runner_result'
@@ -1287,7 +1431,19 @@ class NotificationRepository:
             elif message['expires_at'] <= message['database_now']:
                 reason = 'ttl_expired'
             else:
-                if message['recipient_user_id'] is None:
+                if message['policy_key'] == PLATFORM_RUNNER_POLICY_KEY:
+                    try:
+                        parameters = unprotect(message['parameters_encrypted'])
+                    except Exception:
+                        parameters = None
+                    if (not self.platform_runner_target(target)
+                            or not self.platform_runner_message(message, parameters)):
+                        reason = 'resource_revoked'
+                elif target['installation_ref'] == PLATFORM_RUNNER_INSTALLATION_REF:
+                    # A task snapshot or tenant rule must never redirect to the
+                    # platform's dedicated Feishu target.
+                    reason = 'resource_revoked'
+                elif message['recipient_user_id'] is None:
                     # 事件级消息（规则引擎，recipient NULL）：无个人主体可 guard，
                     # 只校验 target 是租户级且与消息同租户（事件租户归属由 expand
                     # 阶段的路由查询保证）；不符 fail-closed 记 skipped。

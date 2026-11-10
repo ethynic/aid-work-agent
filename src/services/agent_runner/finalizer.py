@@ -188,6 +188,8 @@ class RunnerFinalizer:
             (status,json.dumps(result,ensure_ascii=False),capped_checkpoint_dumps(checkpoint),
              capped_snapshot_dumps(snapshot),runner['runner_id']))
         runner = decoded(cursor.fetchone())
+        from .runner_alerts import close_alert_in_tx
+        close_alert_in_tx(cursor, runner['runner_id'], runner['attempt'])
         # Event fan-out is not terminal authority: keep it from rolling back
         # the only exit this row will get.
         cursor.execute('SAVEPOINT finalize_abandon_event')

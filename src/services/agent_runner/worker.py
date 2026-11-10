@@ -247,9 +247,10 @@ def execution_result(state, status=None, error_code=None):
 class RunnerWorker:
     def __init__(self, config, *, worker_id=None, execution_repository=None, repository=None,
                  authorizer=None, usage_repository=None, finalizer=None, runtime_factory=None,
-                 tool_recovery=None):
+                 tool_recovery=None, slot_state=None):
         self.config = config
         self.worker_id = worker_id or 'worker_' + uuid.uuid4().hex
+        self.slot_state = slot_state
         self.boot_id=uuid.uuid4().hex
         self.executions = execution_repository or ExecutionRepository()
         self.repository = repository or RunnerRepository()
@@ -388,6 +389,8 @@ class RunnerWorker:
 
     async def execute(self, row):
         attempt = Attempt(row['runner_id'],self.worker_id,row['attempt'])
+        if self.slot_state is not None:
+            self.slot_state.busy(attempt)
         control = DurableControl(self.executions,attempt,row)
         scope = UsageScope(attempt,self.usage,row['runner_id'])
         started = time.monotonic()
@@ -653,17 +656,21 @@ class RunnerWorker:
                 pass
             logger.opt(exception=True).error('AgentRunner attempt stopped runner={}',row['runner_id'])
         finally:
-            heartbeat.cancel()
-            await asyncio.gather(heartbeat,return_exceptions=True)
-            self.jobs.pop(asyncio.current_task(),None)
-            if collector is not None:
-                await asyncio.to_thread(self._persist_trace,collector,row['runner_id'],control,
-                                        row['status']=='finalizing')
-            await asyncio.to_thread(self._cleanup_completed_resources,row['runner_id'])
             try:
-                await asyncio.to_thread(guard.unlink,missing_ok=True)
-            except OSError as error:
-                logger.opt(exception=True).warning('AgentRunner guard cleanup unavailable')
+                heartbeat.cancel()
+                await asyncio.gather(heartbeat,return_exceptions=True)
+                self.jobs.pop(asyncio.current_task(),None)
+                if collector is not None:
+                    await asyncio.to_thread(self._persist_trace,collector,row['runner_id'],control,
+                                            row['status']=='finalizing')
+                await asyncio.to_thread(self._cleanup_completed_resources,row['runner_id'])
+                try:
+                    await asyncio.to_thread(guard.unlink,missing_ok=True)
+                except OSError as error:
+                    logger.opt(exception=True).warning('AgentRunner guard cleanup unavailable')
+            finally:
+                if self.slot_state is not None:
+                    self.slot_state.idle(attempt)
 
     async def _preserve_duration(self, attempt, control):
         # Only add elapsed time to the last COMMITTED execution. The cancelled
@@ -979,6 +986,9 @@ async def run_worker(arguments):
     from src.config.settings import settings
     from src.db.database import init_postgres_pool, close_postgres_pool, init_logs_pool, close_logs_pool
     config = settings.agent_runner
+    slot_path = getattr(arguments, 'slot_state_file', None)
+    if slot_path is not None and (not arguments.worker_id or config.concurrency != 1):
+        raise RuntimeError('AGENT_RUNNER_SLOT_REQUIRES_SINGLE_CONCURRENCY')
     if not config.enabled:
         raise RuntimeError('AGENT_RUNNER_DISABLED')
     if not config.peers or not config.web_service_token:
@@ -987,7 +997,10 @@ async def run_worker(arguments):
     try:
         await asyncio.to_thread(init_logs_pool)
         await asyncio.to_thread(RunnerRepository().assert_schema)
-        worker = RunnerWorker(config,worker_id=arguments.worker_id)
+        if slot_path is not None:
+            from .supervisor import SlotState
+        worker = RunnerWorker(config,worker_id=arguments.worker_id,
+            slot_state=SlotState(slot_path) if slot_path is not None else None)
         loop = asyncio.get_running_loop()
         for signum in (signal.SIGTERM,signal.SIGINT):
             loop.add_signal_handler(signum,worker.stop)
@@ -1000,6 +1013,7 @@ async def run_worker(arguments):
 def main():
     parser = argparse.ArgumentParser(description='Run an independent AgentRunner durable worker')
     parser.add_argument('--worker-id',default=None)
+    parser.add_argument('--slot-state-file',default=None)
     parser.add_argument('--once',action='store_true')
     parser.add_argument('--max-tasks',type=int,default=None)
     arguments = parser.parse_args()

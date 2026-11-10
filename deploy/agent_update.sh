@@ -197,7 +197,7 @@ fi
 #    单独执行：docker compose -f docker-compose.prod.yml up -d --force-recreate --wait aid-redis
 echo "[5] 重启后端服务..."
 # runner overlay 副本存在则自动叠加：--remove-orphans 只认本次命令文件集内的服务，
-# 不叠加会把 aid-runner-api / aid-runner-worker 当孤儿容器删除（见变更记录 8）
+# 不叠加会把 runner-api / runner-worker 副本当孤儿容器删除（见变更记录 8）
 COMPOSE_ARGS=(-f docker-compose.prod.yml)
 if [ -f docker-compose.agent-runner.yml ]; then
     COMPOSE_ARGS+=(-f docker-compose.agent-runner.yml)
