@@ -741,6 +741,37 @@ class TestCheckTextForPlatformSourcePaths:
         )
         assert blocked is True
 
+    def test_python_var_assignment_src_not_blocked(self):
+        """python -c 里变量名 src=（赋值形态）不命中（2026-10-28
+        tr_runner_d458a80a… pptx-vi-gen 会话真实误拦：python -c shutil
+        拷贝代码的 src='/tmp/...' 变量名被当作源码目录引用）"""
+        blocked, _ = check_text_for_platform_source_paths(
+            "python -c \"\nimport shutil,os\n"
+            "src='/tmp/skill_executor/pptx-vi-gen_x/2026年9月渠道毛利分析.pptx'\n"
+            "dst='/app/storage/tenants/aaa/conversation/2026年9月渠道毛利分析.pptx'\n"
+            "shutil.copy(src, dst)\""
+        )
+        assert blocked is False
+
+    def test_kwarg_src_not_blocked(self):
+        """python 关键字参数 copy(src=a, dst=b) 的 kwarg 名不命中"""
+        blocked, _ = check_text_for_platform_source_paths(
+            "python -c \"import shutil; shutil.copy(src='/tmp/a.pptx', dst='/tmp/b.pptx')\""
+        )
+        assert blocked is False
+
+    def test_assignment_value_src_path_still_blocked(self):
+        """赋值值本身指向源码目录（src=src/core 形态）仍拦截——由 = 后的 src 命中"""
+        blocked, _ = check_text_for_platform_source_paths(
+            "python -c \"p=src/core/agent.py\""
+        )
+        assert blocked is True
+
+    def test_bare_src_without_equals_still_blocked(self):
+        """src 后不是 = 的独立词（cd src、$src 等）仍拦截"""
+        blocked, _ = check_text_for_platform_source_paths("cd src && grep -rn download .")
+        assert blocked is True
+
 
 class TestSkillExecutePlatformSourceGuard:
     @pytest.mark.asyncio
