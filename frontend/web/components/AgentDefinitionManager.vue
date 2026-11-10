@@ -63,8 +63,8 @@
                 </span>
               </div>
               <div class="text-xs text-gray-400 mt-0.5 truncate">{{ item.agent_id }}</div>
-              <div v-if="item.production_version" class="text-xs text-gray-400 mt-0.5">
-                Prompt V{{ item.production_version }}
+              <div v-if="item.latest_version" class="text-xs text-gray-400 mt-0.5">
+                Prompt V{{ item.latest_version }}
               </div>
             </div>
           </div>
@@ -361,22 +361,22 @@
                     <div class="flex gap-2">
                       <button @click="showVersionHistoryDialog = true"
                         class="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50">
-                        版本历史
+                        历史记录
                       </button>
-                      <button @click="savePromptDraft"
-                        class="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50"
-                        :disabled="promptSaving">
-                        {{ promptSaving ? '保存中...' : '保存草稿' }}
+                      <button @click="openRollbackDialog"
+                        class="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                        :disabled="!previousVersion || promptSaving">
+                        回退上一版
                       </button>
                       <button @click="commitPromptVersion"
                         class="px-3 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
                         :disabled="promptSaving">
-                        提交新版本
+                        {{ promptSaving ? '保存中...' : '保存' }}
                       </button>
                     </div>
                   </div>
-                  <div v-if="selectedAgent?.production_version" class="text-xs text-gray-400">
-                    当前 production: V{{ selectedAgent.production_version }}
+                  <div v-if="selectedAgent?.latest_version" class="text-xs text-gray-400">
+                    当前版本: V{{ selectedAgent.latest_version }}
                     <span class="text-info-600 ml-1">（模板含 {{ sectionKeys.length }} 个变量）</span>
                   </div>
                 </div>
@@ -485,27 +485,26 @@
       </div>
     </div>
 
-    <!-- Version History Dialog -->
+    <!-- Version History Dialog（只读） -->
     <div v-if="showVersionHistoryDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div class="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col p-6">
         <div class="flex items-center justify-between mb-4 flex-shrink-0">
-          <h3 class="text-base font-semibold">版本历史</h3>
+          <h3 class="text-base font-semibold">历史记录</h3>
           <button @click="showVersionHistoryDialog = false" class="p-1 text-gray-400 hover:text-gray-600">&times;</button>
         </div>
         <div v-if="versionsLoading" class="text-sm text-gray-400 py-4 text-center">加载中...</div>
         <div v-else-if="versions.length === 0" class="text-sm text-gray-400 py-4 text-center">暂无版本</div>
         <div v-else class="flex-1 overflow-y-auto space-y-1.5">
           <div v-for="v in versions" :key="v.version"
-            @click="loadVersionContent(v); showVersionHistoryDialog = false"
-            :class="['p-3 rounded-lg cursor-pointer border transition-colors',
-              isProduction(v.version) ? 'border-success-200 bg-success-50' : 'border-gray-100 hover:border-gray-200',
-              selectedVersionNum === v.version ? 'ring-1 ring-info-300' : '']">
+            :class="['p-3 rounded-lg border',
+              v.version === currentVersionNum ? 'border-primary-200 bg-primary-50' : 'border-gray-100']">
             <div class="flex items-center gap-2">
-              <span class="text-sm font-medium" :class="isProduction(v.version) ? 'text-success-700' : 'text-gray-700'">
+              <span class="text-sm font-medium"
+                :class="v.version === currentVersionNum ? 'text-primary-700' : 'text-gray-700'">
                 V{{ v.version }}
               </span>
-              <span v-if="isProduction(v.version)"
-                class="px-1.5 py-0.5 text-xs bg-success-100 text-success-700 rounded">production</span>
+              <span v-if="v.version === currentVersionNum"
+                class="px-1.5 py-0.5 text-xs bg-primary-100 text-primary-700 rounded">当前版本</span>
             </div>
             <div class="text-xs text-gray-400 mt-1">
               {{ formatTime(v.created_at) }}
@@ -516,15 +515,32 @@
             </div>
           </div>
         </div>
-        <div v-if="versions.length >= 2" class="mt-3 pt-3 border-t border-gray-100 flex gap-2">
+        <div v-if="versions.length >= 2" class="mt-3 pt-3 border-t border-gray-100">
           <button @click="showVersionHistoryDialog = false; showDiffDialog = true"
-            class="flex-1 px-3 py-2 text-sm text-info-600 bg-info-50 hover:bg-info-100 rounded-lg">
+            class="w-full px-3 py-2 text-sm text-info-600 bg-info-50 hover:bg-info-100 rounded-lg">
             版本对比
           </button>
-          <button v-if="selectedVersionNum && !isProduction(selectedVersionNum)"
-            @click="rollbackVersion(selectedVersionNum); showVersionHistoryDialog = false"
-            class="flex-1 px-3 py-2 text-sm text-warning-600 bg-warning-50 hover:bg-warning-100 rounded-lg">
-            回滚到 V{{ selectedVersionNum }}
+        </div>
+      </div>
+    </div>
+
+    <!-- Rollback Confirm Dialog -->
+    <div v-if="showRollbackDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col p-6">
+        <div class="flex items-center justify-between mb-4 flex-shrink-0">
+          <h3 class="text-base font-semibold">回退上一版</h3>
+          <button @click="showRollbackDialog = false" class="p-1 text-gray-400 hover:text-gray-600">&times;</button>
+        </div>
+        <p class="text-sm text-gray-600 mb-2 flex-shrink-0">
+          将回退到上一版 V{{ previousVersion?.version }}（{{ formatTime(previousVersion?.created_at || '') }}），回退后立即生效：
+        </p>
+        <pre class="flex-1 min-h-0 bg-gray-50 rounded-lg p-3 text-xs text-gray-700 overflow-auto whitespace-pre-wrap font-mono">{{ previousVersion?.content }}</pre>
+        <div class="flex justify-end gap-2 mt-4 flex-shrink-0">
+          <button @click="showRollbackDialog = false"
+            class="px-4 py-2 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50">取消</button>
+          <button @click="confirmRollback" :disabled="rollbackLoading"
+            class="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50">
+            {{ rollbackLoading ? '回退中...' : '确认回退' }}
           </button>
         </div>
       </div>
@@ -634,8 +650,7 @@ import BaseModal from './ui/BaseModal.vue'
 import {
   listDefinitions, getDefinition, createDefinition,
   updateDefinition, deleteDefinition, updateSystemPrompt,
-  listVersions, getVersion, diffVersions,
-  saveDraft, listLabels, setLabel,
+  listVersions, getVersion, diffVersions, rollbackSystemPrompt,
   listToolsMeta, listSkillsMeta, listReplyStylesMeta, listRecapTasksMeta,
   getSections, saveSection, optimizeSection as apiOptimizeSection,
   exportDefinition, importDefinition,
@@ -818,8 +833,12 @@ const promptContent = ref('')
 const promptSaving = ref(false)
 const versions = ref<PromptVersion[]>([])
 const versionsLoading = ref(false)
-const selectedVersionNum = ref<number | null>(null)
-const labels = ref<{ label: string; version: number | null }[]>([])
+
+// 回退上一版：弹框预览 versions[1] 全文，确认后调 rollback 接口
+const showRollbackDialog = ref(false)
+const rollbackLoading = ref(false)
+const previousVersion = computed(() => versions.value.length >= 2 ? versions.value[1] : null)
+const currentVersionNum = computed(() => selectedAgent.value?.latest_version || versions.value[0]?.version || null)
 
 // Create dialog
 const createDialogVisible = ref(false)
@@ -910,7 +929,7 @@ async function selectAgent(item: AgentDefinition) {
     if (res.success) {
       selectedAgent.value = res.data
       populateForm(res.data)
-      await loadVersionsAndLabels()
+      await loadVersions()
       await loadLatestPromptContent()
       await loadSections()
     }
@@ -975,16 +994,12 @@ async function loadSections() {
   } catch (e) { console.error('加载分段失败', e) }
 }
 
-async function loadVersionsAndLabels() {
+async function loadVersions() {
   if (!selectedAgentId.value) return
   versionsLoading.value = true
   try {
-    const [vRes, lRes] = await Promise.all([
-      listVersions(selectedAgentId.value, 1, 50),
-      listLabels(selectedAgentId.value),
-    ])
+    const vRes = await listVersions(selectedAgentId.value, 1, 50)
     if (vRes.success) versions.value = vRes.data.items
-    if (lRes.success) labels.value = lRes.data
     if (versions.value.length >= 2) {
       diffFrom.value = versions.value[1].version
       diffTo.value = versions.value[0].version
@@ -994,7 +1009,8 @@ async function loadVersionsAndLabels() {
 }
 
 async function loadLatestPromptContent() {
-  if (!selectedAgent.value?.production_version) {
+  const latest = selectedAgent.value?.latest_version
+  if (!latest) {
     if (versions.value.length > 0) {
       await loadVersionContent(versions.value[0])
     } else {
@@ -1003,19 +1019,13 @@ async function loadLatestPromptContent() {
     return
   }
   try {
-    const res = await getVersion(selectedAgentId.value!, selectedAgent.value.production_version)
+    const res = await getVersion(selectedAgentId.value!, latest)
     if (res.success) promptContent.value = res.data.content
   } catch (e) { console.error('加载 prompt 内容失败', e) }
 }
 
 async function loadVersionContent(v: PromptVersion) {
-  selectedVersionNum.value = v.version
   promptContent.value = v.content
-}
-
-function isProduction(version: number): boolean {
-  const label = labels.value.find(l => l.label === 'production')
-  return label?.version === version
 }
 
 function formatTime(ts: string): string {
@@ -1249,30 +1259,15 @@ function onPromptInput() {
   // Template content changed — section keys auto-update via watch
 }
 
-async function savePromptDraft() {
-  if (!selectedAgentId.value) return
-  promptSaving.value = true
-  try {
-    const res = await saveDraft(selectedAgentId.value, {
-      content: promptContent.value,
-      base_version: selectedAgent.value?.production_version || undefined,
-    })
-    if (res.success) {
-      showToast('草稿已保存')
-    }
-  } catch (e: any) {
-    showToast(e.message || '保存草稿失败', 'error')
-  } finally { promptSaving.value = false }
-}
-
 async function commitPromptVersion() {
   if (!selectedAgentId.value) return
-  // 发布新版本前先保存分段变量，避免未保存的内容被覆盖
+  // 发布前先保存分段变量，避免未保存的内容被覆盖
   if (hasUnsavedSections.value) {
     const ok = await flushUnsavedSections()
     if (!ok) return
   }
-  const msg = prompt('提交新版本，变更说明（可选）：')
+  if (!confirm('保存后提示词将立即生效，是否保存？')) return
+  const msg = prompt('变更说明（可选）：')
   if (msg === null) return
   promptSaving.value = true
   try {
@@ -1281,15 +1276,39 @@ async function commitPromptVersion() {
       commit_message: msg || undefined,
     })
     if (res.success) {
-      showToast('新版本已提交并标记为 production')
+      showToast('新提示词已生效')
       await loadList()
       await selectAgent(agents.value.find(a => a.agent_id === selectedAgentId.value)!)
     } else {
-      showToast('提交失败', 'error')
+      showToast('保存失败', 'error')
     }
   } catch (e: any) {
-    showToast(e.message || '提交失败', 'error')
+    showToast(e.message || '保存失败', 'error')
   } finally { promptSaving.value = false }
+}
+
+// ============== 回退上一版 ==============
+function openRollbackDialog() {
+  if (!previousVersion.value) return
+  showRollbackDialog.value = true
+}
+
+async function confirmRollback() {
+  if (!selectedAgentId.value || !previousVersion.value) return
+  rollbackLoading.value = true
+  try {
+    const res = await rollbackSystemPrompt(selectedAgentId.value)
+    if (res.success) {
+      showToast('已回退上一版')
+      showRollbackDialog.value = false
+      await loadList()
+      await selectAgent(agents.value.find(a => a.agent_id === selectedAgentId.value)!)
+    } else {
+      showToast('回退失败', 'error')
+    }
+  } catch (e: any) {
+    showToast(e.message || '回退失败', 'error')
+  } finally { rollbackLoading.value = false }
 }
 
 // ============== Sections Management ==============
@@ -1359,21 +1378,6 @@ async function optimizeSection(key: string) {
 }
 
 // ============== Version History ==============
-async function rollbackVersion(version: number) {
-  if (!selectedAgentId.value) return
-  if (!confirm(`确定要回滚到 V${version} 吗？`)) return
-  try {
-    const res = await setLabel(selectedAgentId.value, 'production', version)
-    if (res.success) {
-      showToast(`已回滚到 V${version}`)
-      await loadList()
-      await selectAgent(agents.value.find(a => a.agent_id === selectedAgentId.value)!)
-    }
-  } catch (e: any) {
-    showToast(e.message || '回滚失败', 'error')
-  }
-}
-
 async function loadDiff() {
   if (!selectedAgentId.value) return
   diffLoading.value = true

@@ -56,7 +56,19 @@
 
       <!-- 扩展提示词 -->
       <section>
-        <h4 class="text-sm font-semibold text-default mb-2">扩展提示词</h4>
+        <div class="flex items-center justify-between gap-3 mb-2">
+          <h4 class="text-sm font-semibold text-default">扩展提示词</h4>
+          <BaseButton
+            v-if="hasPreviousExtra"
+            intent="secondary"
+            size="sm"
+            class="flex-shrink-0"
+            :disabled="saving || rollbackLoading"
+            @click="handleRollback"
+          >
+            {{ rollbackLoading ? '回退中...' : '回退上一版' }}
+          </BaseButton>
+        </div>
         <!-- 帮助文案与《智能体后台操作指引》4.2 同步：定制能力变化时须同步更新 -->
         <p class="text-xs text-muted mb-2 leading-relaxed">
           相当于给智能体写一份「工作说明书」：写清它要做哪些事情、怎么做；追加到该数字员工系统提示词末尾，留空使用默认配置。
@@ -271,10 +283,36 @@
       </div>
     </template>
   </BaseModal>
+
+  <!-- 回退上一版确认：展示上一版全文预览 -->
+  <BaseModal v-model="showRollbackConfirm" title="回退上一版" size="lg" :show-fullscreen="false">
+    <div class="space-y-3">
+      <p class="text-sm text-muted">
+        将回退到上一版 V{{ previousExtra?.version }}，回退后立即生效，内容预览如下：
+      </p>
+      <pre class="max-h-[50vh] overflow-auto bg-canvas rounded-lg p-3 text-xs text-default whitespace-pre-wrap font-mono">{{ previousExtra?.content }}</pre>
+    </div>
+    <template #footer>
+      <div class="w-full flex items-center justify-end gap-2">
+        <BaseButton intent="secondary" :disabled="rollbackLoading" @click="showRollbackConfirm = false">取消</BaseButton>
+        <BaseButton :disabled="rollbackLoading" @click="confirmRollback">
+          {{ rollbackLoading ? '回退中...' : '确认回退' }}
+        </BaseButton>
+      </div>
+    </template>
+  </BaseModal>
+
+  <!-- 轻提示：弹框关闭后仍可见（保存/回退成功反馈，组件内无 toast 系统的最小实现） -->
+  <div
+    v-if="notice"
+    class="fixed top-[20%] left-1/2 -translate-x-1/2 z-[60] px-4 py-2 rounded-lg shadow-lg text-sm bg-success-500 text-white"
+  >
+    {{ notice }}
+  </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -300,6 +338,7 @@ import {
 } from '@/api/subagentTemplates'
 import { resolveApiUrl, saveDownloadUrl } from '@/platform/urlResolver'
 import { getAuthHeader } from '@/api/auth'
+import { getPreviousExtra, rollbackExtra } from '@/api/subagentExtra'
 import { triggerNativeDownload } from '@/utils/download'
 
 const props = defineProps<{
@@ -330,6 +369,26 @@ const saving = ref(false)
 const copying = ref(false)
 const deleting = ref(false)
 const errorMsg = ref('')
+
+// 回退上一版状态：打开弹框时预查是否有上一版（content=null 时隐藏回退入口）
+const hasPreviousExtra = ref(false)
+const previousExtra = ref<{ content: string; version: number } | null>(null)
+const showRollbackConfirm = ref(false)
+const rollbackLoading = ref(false)
+
+// 组件内轻提示（无 toast 系统的最小实现）
+const notice = ref('')
+let noticeTimer: ReturnType<typeof setTimeout> | undefined
+
+function showNotice(message: string) {
+  if (noticeTimer) clearTimeout(noticeTimer)
+  notice.value = message
+  noticeTimer = setTimeout(() => { notice.value = '' }, 2500)
+}
+
+onUnmounted(() => {
+  if (noticeTimer) clearTimeout(noticeTimer)
+})
 
 const form = ref({
   display_name: '',
@@ -540,6 +599,7 @@ async function handleDownloadTemplate(t: TemplateFile) {
 
 async function handleSave() {
   if (saving.value) return
+  if (!confirm('保存后提示词将立即生效，是否保存？')) return
   saving.value = true
   errorMsg.value = ''
   try {
@@ -571,11 +631,67 @@ async function handleSave() {
       ...llmFields,
     })
     emit('changed')
+    showNotice('新提示词已生效')
     visible.value = false
   } catch (e: any) {
     errorMsg.value = e.message || '保存失败'
   } finally {
     saving.value = false
+  }
+}
+
+// ============== 扩展提示词回退上一版 ==============
+async function loadPreviousExtra() {
+  hasPreviousExtra.value = false
+  previousExtra.value = null
+  try {
+    const res = await getPreviousExtra(props.agentId)
+    if (res.success && res.content) {
+      hasPreviousExtra.value = true
+      previousExtra.value = { content: res.content, version: res.version ?? 0 }
+    }
+  } catch {
+    // 预查失败按无可回退处理，不影响定制表单
+    hasPreviousExtra.value = false
+  }
+}
+
+async function handleRollback() {
+  if (rollbackLoading.value) return
+  errorMsg.value = ''
+  rollbackLoading.value = true
+  try {
+    // 点击时重新拉取上一版，确保预览内容是当前最新状态的上一版
+    const res = await getPreviousExtra(props.agentId)
+    if (res.success && res.content) {
+      previousExtra.value = { content: res.content, version: res.version ?? 0 }
+      showRollbackConfirm.value = true
+    } else {
+      hasPreviousExtra.value = false
+      errorMsg.value = '无可回退版本'
+    }
+  } catch (e: any) {
+    errorMsg.value = e.message || '读取上一版失败'
+  } finally {
+    rollbackLoading.value = false
+  }
+}
+
+async function confirmRollback() {
+  if (rollbackLoading.value) return
+  rollbackLoading.value = true
+  errorMsg.value = ''
+  try {
+    await rollbackExtra(props.agentId)
+    showRollbackConfirm.value = false
+    await loadInstance()
+    await loadPreviousExtra()
+    showNotice('已回退')
+    emit('changed')
+  } catch (e: any) {
+    errorMsg.value = e.message || '回退失败'
+  } finally {
+    rollbackLoading.value = false
   }
 }
 
@@ -632,6 +748,8 @@ function resetForm() {
     { label: '', message: '' },
   ]
   modelCodeErrors.value = {}
+  hasPreviousExtra.value = false
+  previousExtra.value = null
 }
 
 watch(visible, (v) => {
@@ -642,8 +760,10 @@ watch(visible, (v) => {
     newTemplateName.value = ''
     selectedFile.value = null
     templates.value = []
+    showRollbackConfirm.value = false
     loadLlmEditAllowed()
     loadInstance()
+    loadPreviousExtra()
     loadTemplates()
   } else {
     resetForm()

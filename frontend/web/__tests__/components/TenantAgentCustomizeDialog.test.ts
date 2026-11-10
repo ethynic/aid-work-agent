@@ -22,6 +22,12 @@ vi.mock('@/api/subagentTemplates', () => ({
   getTemplateDownloadUrl: (fileId: string) => `/api/files/${fileId}/download`,
 }))
 
+// 打开弹框时会预查上一版（回退入口显隐），默认无可回退
+vi.mock('@/api/subagentExtra', () => ({
+  getPreviousExtra: vi.fn().mockResolvedValue({ success: true, content: null, version: null }),
+  rollbackExtra: vi.fn(),
+}))
+
 vi.mock('vue-router', () => ({
   useRouter: () => ({ resolve: () => ({ href: '/t/t1/knowledge' }) }),
 }))
