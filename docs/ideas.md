@@ -30,7 +30,7 @@
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 20261110-2032 | 技能目录重复注入去重 | ✅ 已完成开发（commit 7081d03b，待合并） | use_skill 工具 schema 去名单只留使用规则，名单唯一保留系统提示；独立测试回归+CR 通过。模型选型行为待真机观察。master 专属子智能体目录重复不在本轮。 | — | [计划](plans/plan-skill-catalog-injection-dedup.md) |
-| 20261110-1524 | 管理后台系统健康监控页面 | 🔧 部分完成（后端采集/研判/API+前端页面/默认首页+25 单测绿，待部署真机验收） | 平台后台新增 /portal/system-health 健康监控页（登录默认页）：四组指标+AI 研判，无曲线无历史，手机端一等公民 | [设计](system/system-health-monitor-design.md) | — |
+| 20261110-1524 | 管理后台系统健康监控页面 | 🔧 部分完成（采集/研判/API+前端+25 单测绿；重试占比口径 bug 已修待部署，待真机验收） | 平台后台新增 /portal/system-health 健康监控页（登录默认页）：四组指标+AI 研判，无曲线无历史，手机端一等公民 | [设计](system/system-health-monitor-design.md) | — |
 | 20261106-1010 | 定时任务结果免登录链接 | 📋 设计完成，待开发 | 定时任务终态通知链接免登录化（复用回复分享的公开路由/ticket/只读渲染）：只读结果页+登录入口、无密码链接即凭证、实时读跟随任务生命周期、web push/站内信/IM webhook 三处全换、产物文件免登录可下载。10 项决策已与用户逐条定稿（2026-11-06）。 | [设计](system/design-task-result-share-link.md) | [计划](plans/plan-task-result-share-link.md) |
 | 20261105-1902 | Runner 执行槽隔离与运行告警 | 🔧 部分完成（agent3 初验） | 混合负载与 Excel 重负载专项已验：隔离性与告警达成，新发现取消挂死/心跳锁超时/假异步 3 个 P0 待整改。 | [设计](system/agent-application-architecture-design.md#10-runner-执行槽隔离与运行告警2026-11-05) | [计划](plans/plan-runner-execution-slot-isolation-and-alerts.md) |
 | 20261104-1639 | 知识库多轮检索新鲜度与结果去重 | 🔧 部分完成 | 工具说明对照无差异，待 Web 与正式微信 KF 复验。 | [设计](system/knowledge-base/knowledge-search-freshness-design.md) | [计划](plans/plan-knowledge-search-freshness.md) |
