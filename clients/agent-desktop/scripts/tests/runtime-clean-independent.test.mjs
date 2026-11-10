@@ -52,7 +52,7 @@ function fixture() {
   const supervisor = () => {
     if (!supervisors.has(home)) {
       const target = home
-      supervisors.set(target, { recoveryManagementRequest: async method => {
+      supervisors.set(target, { stopAndExit: async (_timeout, beforeStop) => { await beforeStop?.({ state }); state = 'stopped' }, suspend() {}, request: async ({ method }) => {
         if (method === 'getState') {
           let device = {}
           try { device = JSON.parse(fs.readFileSync(path.join(target, 'config.json'), 'utf8')) } catch {}
@@ -65,47 +65,39 @@ function fixture() {
     }
     return supervisors.get(home)
   }
-  const options = { metadataHome: metadata, hostEntry: host, legacyHome: legacy, previousHome: null, home: () => home, supervisor,
+  const options = { metadataHome: metadata, hostEntry: host, home: () => home, supervisor,
     beforeChange: async () => { stops++; state = 'stopped' },
-    replaceHome: async target => {
-      home = target ?? path.join(root, 'new-' + randomUUID()); fs.mkdirSync(home, { recursive: true }); return home
-    } }
+    restorePriorHome: async () => false,
+    stageHome: async () => { const staged = path.join(root, 'new-' + randomUUID()); fs.mkdirSync(staged); return staged },
+    validateHome() {},
+    commitHome: async target => { home = target },
+  }
   const instances = []
   return { root, metadata, legacy, get home() { return home }, get starts() { return starts }, get stops() { return stops },
     connection() { const c = new RuntimeCleanConnection(options); instances.push(c); return c },
     clean() { for (const c of instances) c.dispose(); assert.equal(path.dirname(root), path.resolve(os.tmpdir())); assert.match(path.basename(root), /^aid-independent-clean-/); fs.rmSync(root, { recursive: true, force: true }) } }
 }
 
-test('real loopback response loss resumes after restart without OTP and starts exactly once', { skip }, async () => {
-  const f = fixture(); let dropped = false, committed
-  const s = await service(async (req, res, body) => {
+test('real loopback response loss ends the submission without an active failure record', { skip }, async () => {
+  const f = fixture()
+  const s = await service(async (req, _res) => {
     if (req.url !== '/api/local-tools/runtime/pair') return false
-    if (!dropped) { dropped = true; committed = { ...body, id: randomUUID() }; req.socket.destroy(); return true }
-    assert.equal(body.code, undefined)
-    assert.equal(body.registration_id, committed.registration_id)
-    assert.equal(body.registration_token, committed.registration_token)
-    res.end(JSON.stringify({ success: true, pairing_protocol: 3, registration_completed: true, device_id: committed.id, device_token: body.registration_token })); return true
+    req.socket.destroy()
+    return true
   })
   try {
     fs.writeFileSync(path.join(f.metadata, 'registration-lock'), '{corrupt legacy lock bytes')
     for (const name of ['config.json','credentials.bin','management-secret.bin','host-running.json','journal','outbox','session-tasks','management-operations.json']) fs.writeFileSync(path.join(f.legacy, name), '{broken')
     const c = f.connection()
     const reply = await c.reconfigure({ mode: 'register_new', confirmed: true, server: s.url, device_name: 'Independent device', pairing_code: 'ISOLATED-OTP' })
-    assert.equal(reply.status, 'action_required'); assert.equal(reply.diagnosis.category, 'CONNECTING')
-    assert.notEqual(f.home, f.legacy); assert.deepEqual(fs.readdirSync(f.home), [])
-    const receipt = await registration.readCleanRegistration(f.metadata)
-    assert.equal(receipt.phase, 'requested'); assert.equal(receipt.request.previous_device_token, undefined)
-    assert.equal(JSON.stringify(receipt).includes('ISOLATED-OTP'), false)
-    assert.equal(fs.readFileSync(path.join(f.metadata, 'clean-registration.bin'), 'utf8').includes('registration_token'), false)
+    assert.equal(reply.status, 'action_required'); assert.equal(reply.diagnosis.category, 'REGISTRATION_UNCONFIRMED')
+    assert.equal(f.home, f.legacy)
+    assert.equal(await registration.readCleanRegistration(f.metadata), null)
     c.dispose()
     const resumed = f.connection(); await resumed.resume()
     assert.equal(await resumed.registrationBlocksExecution(), false); assert.equal(await resumed.registrationStatus(), null)
-    assert.equal(f.starts, 1)
-    assert.deepEqual(fs.readdirSync(f.home).sort(), ['config.json','credentials.bin'])
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, 'config.json'), 'utf8')).device_id, committed.id)
-    assert.equal(await dpapiUnprotect(fs.readFileSync(path.join(f.home, 'credentials.bin'), 'utf8')), committed.registration_token)
-    await resumed.resume(); assert.equal(f.starts, 1)
-    assert.equal(s.calls.length, 2)
+    assert.equal(f.starts, 0)
+    assert.equal(s.calls.length, 1)
   } finally { f.clean(); await s.close() }
 })
 
@@ -120,7 +112,7 @@ test('committed paired receipt survives exit before local installation and auto 
   } finally { f.clean(); await s.close() }
 })
 
-test('invalid code clears old execution state while a subsequent new code completes automatically', { skip }, async () => {
+test('invalid code preserves old execution state while a new explicit submission can succeed', { skip }, async () => {
   const f = fixture(); let reject = true
   const s = await service(async (req, res) => {
     if (req.url.endsWith('/pair') && reject) { res.statusCode = 400; res.end(JSON.stringify({ detail: 'invalid fixture code' })); return true }
@@ -130,8 +122,10 @@ test('invalid code clears old execution state while a subsequent new code comple
     fs.writeFileSync(path.join(f.legacy, 'host-running.json'), 'broken old state')
     const c = f.connection(), input = { mode: 'new_device', confirmed: true, server: s.url, device_name: 'New code fixture', pairing_code: 'ISOLATED-OTP' }
     const first = await c.reconfigure(input)
-    assert.equal(first.diagnosis.category, 'PAIRING_CODE_INVALID'); assert.notEqual(f.home, f.legacy)
-    assert.deepEqual(fs.readdirSync(f.home), []); assert.equal(f.starts, 0)
+    assert.equal(first.diagnosis.category, 'PAIRING_CODE_INVALID'); assert.equal(f.home, f.legacy)
+    assert.equal(fs.readFileSync(path.join(f.home, 'host-running.json'), 'utf8'), 'broken old state')
+    assert.equal(await registration.readCleanRegistration(f.metadata), null)
+    assert.equal(f.starts, 0)
     reject = false
     const second = await c.reconfigure({ ...input, pairing_code: 'NEW-ISOLATED-OTP' })
     assert.equal(second.status, 'complete'); assert.equal(f.starts, 1)
@@ -162,7 +156,7 @@ test('legacy activation resumes after a real HTTP outage and clears its previous
     fs.writeFileSync(path.join(f.legacy, 'credentials.bin'), await dpapiProtect('a'.repeat(64)))
     fs.writeFileSync(path.join(f.metadata, 'legacy-replacement-pending.json'), JSON.stringify({ version: 1, device_id: id, replacement_pending: false }))
     const c = f.connection(); await c.resume()
-    assert.equal((await c.registrationStatus()).category, 'CONNECTING'); assert.equal(f.starts, 0)
+    assert.equal((await c.registrationStatus()).category, 'NETWORK_FAILED'); assert.equal(f.starts, 0)
     unavailable = false; await c.resume()
     assert.equal(await c.registrationStatus(), null); assert.equal(f.starts, 1)
     assert.equal(s.calls.every(c => c.url.endsWith('/activate')), true)
@@ -172,7 +166,8 @@ test('legacy activation resumes after a real HTTP outage and clears its previous
 test('explicit server switch never contacts an unavailable old pending server', { skip }, async () => {
   const f = fixture(), old = await service(async (_req, res) => { res.statusCode = 503; res.end('{}'); return true }), current = await service()
   try {
-    await registration.beginCleanRegistration(f.metadata, { server: old.url, device_name: 'Old pending fixture' }, [f.legacy])
+    const legacy = await registration.beginCleanRegistration(f.metadata, { server: old.url, device_name: 'Old pending fixture' }, [f.legacy])
+    await registration.saveCleanRegistration(f.metadata, legacy)
     const c = f.connection()
     const reply = await c.reconfigure({ mode: 'new_device', confirmed: true, server: current.url, device_name: 'New service fixture', pairing_code: 'ISOLATED-OTP' })
     assert.equal(reply.status, 'complete', reply.diagnosis.summary)
@@ -182,7 +177,7 @@ test('explicit server switch never contacts an unavailable old pending server', 
   } finally { f.clean(); await old.close(); await current.close() }
 })
 
-test('a revoked paired receipt can be replaced with a new code instead of blocking forever', { skip }, async () => {
+test('a received paired receipt is installed first and a later explicit submission uses its own code', { skip }, async () => {
   const f = fixture(), s = await service(async (req, res) => {
     if (req.url === '/api/local-tools/runtime/heartbeat') { res.statusCode = 401; res.end('{}'); return true }
     return false
@@ -191,9 +186,11 @@ test('a revoked paired receipt can be replaced with a new code instead of blocki
     const r = await registration.beginCleanRegistration(f.metadata, { server: s.url, device_name: 'Revoked paired receipt' }, [f.legacy])
     await registration.pairCleanRegistration(f.metadata, r, 'FIRST-ISOLATED-OTP')
     const oldId = r.device_id, c = f.connection()
+    assert.equal(await c.resume(), true)
+    assert.equal(s.calls.filter(call => call.url.endsWith('/heartbeat')).length, 0, 'Local receipt installation requires no network confirmation')
     const reply = await c.reconfigure({ mode: 'new_device', confirmed: true, server: s.url, device_name: 'Fresh receipt fixture', pairing_code: 'NEW-ISOLATED-OTP' })
     assert.equal(reply.status, 'complete', reply.diagnosis.summary)
-    assert.equal(s.devices.size, 2); assert.equal(f.starts, 1)
+    assert.equal(s.devices.size, 2); assert.equal(f.starts, 2)
     assert.notEqual(JSON.parse(fs.readFileSync(path.join(f.home, 'config.json'), 'utf8')).device_id, oldId)
     assert.equal(await c.registrationBlocksExecution(), false)
   } finally { f.clean(); await s.close() }
@@ -216,18 +213,19 @@ test('migration uses real DPAPI and loopback identity check but isolates damaged
   } finally { f.clean(); await s.close() }
 })
 
-test('real owned Node Host is force replaced and the new paired Host starts through its actual IPC port', { skip }, async () => {
+test('real owned Node Host stops and the new paired Host starts through its actual IPC port', { skip }, async () => {
   const f = fixture(), s = await service(), children = []
   let home = f.legacy, supervisor
   const attach = () => supervisor = new RuntimeSupervisor({ nodeExecutable: process.env.AID_CLEAN_TEST_NODE ?? process.execPath,
     hostEntry: host, home, supervisor: 'runtime_app', takeSelectedPackage: async () => { throw new Error('unused fixture selection') },
     onEvent() {}, onDisconnect() {}, spawnChild(node, args, options) { const child = spawn(node, args, options); children.push(child); return child } })
   attach()
-  const c = new RuntimeCleanConnection({ metadataHome: f.metadata, hostEntry: host, legacyHome: f.legacy, previousHome: null,
-    home: () => home, supervisor: () => supervisor, beforeChange: async () => {}, replaceHome: async target => {
-      await supervisor.exitForReplacement()
-      home = target ?? path.join(f.root, 'owned-new-' + randomUUID()); fs.mkdirSync(home, { recursive: true }); attach(); return home
-    } })
+  const c = new RuntimeCleanConnection({ metadataHome: f.metadata, hostEntry: host,
+    home: () => home, supervisor: () => supervisor, beforeChange: async () => {}, restorePriorHome: async () => false,
+    stageHome: async () => { const staged = path.join(f.root, 'owned-new-' + randomUUID()); fs.mkdirSync(staged); return staged },
+    validateHome() {},
+    commitHome: async target => { home = target; attach() },
+  })
   try {
     const original = await supervisor.request({ request_id: randomUUID(), method: 'describe', params: {} })
     assert.equal(original.code, 0); assert.equal(children.length, 1)

@@ -60,13 +60,16 @@ async function previousToken(home: string, server: string): Promise<string | und
     return /^[0-9a-f]{64}$/.test(token) ? token : undefined
   } catch { return undefined }
 }
-export async function beginCleanRegistration(metadata: string, input: { server: string; device_name: string }, previousHomes: string[]): Promise<CleanRegistration> {
-  if (!validServer(input.server) || !input.device_name.trim() || input.device_name.length > 100) throw new ManagementError(3, '请填写有效的企业服务地址和设备名称')
+/** Remove legacy evidence from the active entry without reading it as a new submission. */
+export function retireCleanRegistration(metadata: string): void {
   if (existsSync(file(metadata))) {
     const stat = lstatSync(file(metadata))
     if (!stat.isFile() || stat.isSymbolicLink()) throw new ManagementError(11, '注册文件路径异常，请检查当前用户目录权限')
     renameSync(file(metadata), join(metadata, `previous-registration-${randomUUID()}.bin`))
   }
+}
+export async function beginCleanRegistration(metadata: string, input: { server: string; device_name: string }, previousHomes: string[]): Promise<CleanRegistration> {
+  if (!validServer(input.server) || !input.device_name.trim() || input.device_name.length > 100) throw new ManagementError(3, '请填写有效的企业服务地址和设备名称')
   let previous: string | undefined
   try {
     const proofFile = join(metadata, 'previous-identity.bin')
@@ -79,20 +82,15 @@ export async function beginCleanRegistration(metadata: string, input: { server: 
   } catch { /* Invalid legacy identity proof cannot block a clean registration. */ }
   // Prefer the current active identity over older installation proof.
   for (const home of previousHomes) { const token = await previousToken(home, input.server); if (token) { previous = token; break } }
-  const r: CleanRegistration = { version: 1, server: input.server.replace(/\/+$/, ''), phase: 'requested', device_id: null, home: null,
+  return { version: 1, server: input.server.replace(/\/+$/, ''), phase: 'requested', device_id: null, home: null,
     request: { pairing_protocol: 3, registration_id: randomUUID(), registration_token: randomBytes(32).toString('hex'), name: input.device_name,
       platform: PLATFORM, runtime_version: RUNTIME_VERSION, capabilities: { providers: [] }, machine_fingerprint: machineFingerprint(),
       ...(previous ? { previous_device_token: previous } : {}) } }
-  await saveCleanRegistration(metadata, r)
-  if ((await readCleanRegistration(metadata))?.request.registration_id !== r.request.registration_id) throw new ManagementError(11, '新连接凭据保存检查失败，请检查当前用户目录权限')
-  return r
 }
-export async function pairCleanRegistration(metadata: string, r: CleanRegistration, code?: string): Promise<void> {
-  if (r.phase !== 'requested') {
-    await new ApiClient(r.server, r.request.registration_token).checkConnection()
-    return
-  }
-  const response = await new ApiClient(r.server).pairClean({ ...r.request, ...(code ? { code } : {}) })
+export async function pairCleanRegistration(metadata: string, r: CleanRegistration, code: string): Promise<void> {
+  if (r.phase !== 'requested' || !code) throw new ManagementError(3, '请使用有效配对码明确发起配对')
+  const response = await new ApiClient(r.server).pairClean({ ...r.request, code })
+  // Only a validated server success becomes a protected local transaction.
   r.device_id = response.device_id; r.phase = 'paired'
   await saveCleanRegistration(metadata, r)
 }
@@ -105,6 +103,16 @@ export async function installCleanRegistration(metadata: string, r: CleanRegistr
   atomicWrite(join(home, 'config.json'), JSON.stringify({ server: r.server, device_id: r.device_id, name: r.request.name }, null, 2))
   r.phase = 'installed'
   await saveCleanRegistration(metadata, r)
+}
+export async function matchesInstalledCleanRegistration(r: CleanRegistration, home: string): Promise<boolean> {
+  if (r.phase === 'requested') return false
+  const configFile = join(home, 'config.json')
+  try {
+    const stat = lstatSync(configFile)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) return false
+    const config = JSON.parse(readFileSync(configFile, 'utf8').replace(/^\uFEFF/, ''))
+    return config.device_id === r.device_id && await previousToken(home, r.server) === r.request.registration_token
+  } catch { return false }
 }
 export function finishCleanRegistration(metadata: string): void {
   // Keep a protected recovery receipt, but do not make it an execution gate.

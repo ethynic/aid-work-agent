@@ -14,7 +14,7 @@ import { RuntimeSupervisor } from './runtimeSupervisor.js'
 import { RuntimeLogs } from './runtimeLogs.js'
 import { RuntimeConnectionRecovery } from './runtimeConnectionRecovery.js'
 import { RuntimeCleanConnection, readRuntimeConnectionInfo } from './runtimeCleanConnection.js'
-import { cleanupRuntimePreviousHome, prepareRuntimeInstallation, rotateRuntimeConnection, selectRuntimeConnection } from './runtimeInstallation.js'
+import { cleanupRuntimePreviousHome, prepareRuntimeInstallation, restoreRuntimePriorConnection, selectRuntimeConnection, stageRuntimeConnection, validateRuntimeConnectionTarget } from './runtimeInstallation.js'
 import { RuntimeSelections } from './runtimeSelection.js'
 import { RuntimeStartup, RuntimeStartupFailure, runtimeLoginLaunch, readRuntimeStartupState, resumeRuntimeAtLogin } from './runtimeStartup.js'
 import { RuntimeUpdateIntent, runtimeUpdateExit, RUNTIME_UPDATE_EXIT_ARGUMENT, shouldResumeRuntime } from './runtimeUpdate.js'
@@ -515,21 +515,28 @@ if (!hasSingleInstanceLock) {
           attachRuntimeSupervisor(cleanInstallation.home)
           const pendingCleanup = new Set<string>()
           runtimeConnectionRecovery = new RuntimeCleanConnection({ metadataHome: cleanInstallation.metadataHome,
-            hostEntry: product.hostEntry, legacyHome, previousHome: cleanInstallation.priorHome,
+            hostEntry: product.hostEntry,
             home: () => product.runtimeHome!, supervisor: () => runtimeSupervisor!,
+            restorePriorHome: async requested => {
+              const previous = runtimeSupervisor!
+              try {
+                const home = await restoreRuntimePriorConnection(installationOptions, product.runtimeHome!, requested, () => previous.stopAndExit())
+                if (home) { attachRuntimeSupervisor(home); return true }
+                return false
+              } catch (error) { previous.suspend(false); throw error }
+            },
+            stageHome: () => stageRuntimeConnection(installationOptions, product.runtimeHome!),
+            validateHome: target => validateRuntimeConnectionTarget(installationOptions, target, product.runtimeHome!),
+            commitHome: async target => {
+              const previous = product.runtimeHome!
+              const home = await selectRuntimeConnection(installationOptions, target, previous)
+              if (home !== previous) pendingCleanup.add(previous)
+              attachRuntimeSupervisor(home)
+            },
             beforeChange: async () => { await runtimeSelections?.invalidate(); await updateIntent?.clear() },
             afterChange: async () => {
               for (const home of pendingCleanup) await cleanupRuntimePreviousHome(installationOptions, home).catch(() => 'cleanup_failed')
               pendingCleanup.clear()
-            },
-            replaceHome: async target => {
-              await runtimeSupervisor!.exitForReplacement()
-              pendingCleanup.add(product.runtimeHome!)
-              const home = target
-                ? await selectRuntimeConnection(installationOptions, target).catch(async () => rotateRuntimeConnection(installationOptions, product.runtimeHome!))
-                : await rotateRuntimeConnection(installationOptions, product.runtimeHome!)
-              attachRuntimeSupervisor(home)
-              return home
             } })
           await runtimeConnectionRecovery.resume()
         } else attachRuntimeSupervisor(legacyHome)
@@ -563,7 +570,7 @@ if (!hasSingleInstanceLock) {
           const intent = await updateIntent?.read().catch(() => undefined)
           if (maintenanceRequested || runtimeConnectionRecovery?.busy || await runtimeConnectionRecovery?.registrationBlocksExecution()) return
           await readRuntimeStartupState(value => runtimeSupervisor!.request(value, 'startup'))
-          const recovered = runtimeSupervisor!.recoveredAfterInterruption
+          const recovered = runtimeSupervisor!.recoveredAfterInterruption || runtimeConnectionRecovery instanceof RuntimeCleanConnection && runtimeConnectionRecovery.restoredOriginal
           if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && (cleanInstallation?.fresh && cleanInstallation.migrated || shouldResumeRuntime({ intent, recovered, login: loginLaunch }))) await resumeRuntimeAtLogin(value => {
             if (maintenanceRequested || runtimeConnectionRecovery?.busy) throw new Error('RuntimeMaintenanceInProgress')
             return runtimeSupervisor!.request(value, 'startup')

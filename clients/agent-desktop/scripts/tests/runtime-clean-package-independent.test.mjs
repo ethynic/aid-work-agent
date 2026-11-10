@@ -131,18 +131,15 @@ test('final NSIS installer preserves a compatible home and only explicit Clean a
   } finally { f.clean() }
 })
 
-test('actual installed Electron EXE resumes a protected lost response after outage and refreshes its running UI', { skip }, async () => {
-  const f = fixture(); let child, debug, timer, committed, unavailable = true, pairCalls = 0, heartbeats = 0
+test('actual installed Electron EXE never resubmits a lost reply or legacy pending registration', { skip }, async () => {
+  const f = fixture(); let child, debug, timer, pairCalls = 0, heartbeats = 0
   const server = http.createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk
     const body = JSON.parse(raw || '{}')
     if (req.url === '/api/local-tools/runtime/pair') {
       pairCalls++
-      if (!committed) { committed = { ...body, id: randomUUID() }; req.socket.destroy(); return }
-      assert.equal(body.code, undefined); assert.equal(body.registration_id, committed.registration_id)
-      assert.equal(body.registration_token, committed.registration_token)
-      if (unavailable) { res.statusCode = 503; res.end('{}'); return }
-      res.end(JSON.stringify({ success: true, pairing_protocol: 3, registration_completed: true, device_id: committed.id, device_token: body.registration_token })); return
+      req.socket.destroy()
+      return
     }
     if (req.url === '/api/local-tools/runtime/heartbeat') heartbeats++
     res.end(JSON.stringify({ success: true, selected: true, invocation: null, tasks: [] }))
@@ -162,7 +159,8 @@ test('actual installed Electron EXE resumes a protected lost response after outa
     for (const name of ['config.json','credentials.bin','management-secret.bin','host-running.json','journal','outbox']) fs.writeFileSync(path.join(legacy, name), '{broken old bytes')
     const r = await registration.beginCleanRegistration(metadata, { server: url, device_name: 'Final installed EXE fixture' }, [legacy])
     await assert.rejects(registration.pairCleanRegistration(metadata, r, 'ISOLATED-OTP'))
-    assert.equal((await registration.readCleanRegistration(metadata)).phase, 'requested')
+    assert.equal(await registration.readCleanRegistration(metadata), null)
+    await registration.saveCleanRegistration(metadata, r) // Simulate a leftover from an older installation.
     const exe = process.env.AID_CLEAN_TEST_EXECUTABLE ?? path.join(f.install, 'AID Work Runtime 验收版.exe')
     let stdout = '', stderr = ''
     const port = await debugPort()
@@ -180,16 +178,12 @@ test('actual installed Electron EXE resumes a protected lost response after outa
     }
     const firstDom = projection.result.value
     assert.equal(firstDom.title, 'AGENT_DESKTOP_SMOKE_PASS', 'actual renderer management smoke failed')
-    assert.equal(/运行中/.test(firstDom.text), false, '503 pending transaction must not claim running')
-    unavailable = false
-    for (let attempt = 0; attempt < 180; attempt++) {
-      projection = await debug.send('Runtime.evaluate', { expression: "({title:globalThis.__independentSmokeTitle||'',text:document.body.innerText,forms:document.querySelectorAll('form.runtime-pair-form').length,fields:['runtime-server','runtime-device-name','runtime-pairing-code'].map(id=>!!document.getElementById(id))})", returnByValue: true }, session)
-      if (/运行中/.test(projection.result.value?.text ?? '')) break
-      await new Promise(resolve => setTimeout(resolve, 100))
-    }
+    assert.equal(/运行中/.test(firstDom.text), false, 'An unconfirmed request must not claim running')
+    await new Promise(resolve => setTimeout(resolve, 12_000)) // Beyond the previous automatic resubmission window.
+    projection = await debug.send('Runtime.evaluate', { expression: "({title:globalThis.__independentSmokeTitle||'',text:document.body.innerText,forms:document.querySelectorAll('form.runtime-pair-form').length,fields:['runtime-server','runtime-device-name','runtime-pairing-code'].map(id=>!!document.getElementById(id))})", returnByValue: true }, session)
     const dom = projection.result.value
     assert.equal(dom.title, 'AGENT_DESKTOP_SMOKE_PASS', 'actual renderer management smoke failed')
-    assert.match(dom.text, /本机执行环境/); assert.match(dom.text, /运行中/)
+    assert.match(dom.text, /本机执行环境/); assert.doesNotMatch(dom.text, /运行中/)
     assert.equal(dom.forms, 1); assert.ok(dom.fields.every(Boolean))
     assert.equal(/完成连接配置|登记重启恢复|REGISTRATION_PENDING/.test(dom.text), false)
     const layout = await debug.send('Runtime.evaluate', { expression: "({width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,forms:[...document.querySelectorAll('form.runtime-pair-form')].map(e=>({width:e.getBoundingClientRect().width,height:e.getBoundingClientRect().height}))})", returnByValue:true }, session)
@@ -202,11 +196,10 @@ test('actual installed Electron EXE resumes a protected lost response after outa
     debug.close(); debug = null
     assert.equal(code, 0, stdout + stderr)
     assert.match(stdout, /AGENT_DESKTOP_SMOKE_PASS/)
-    assert.equal(pairCalls, 3); assert.ok(heartbeats > 0, 'new packaged execution did not contact service')
+    assert.equal(pairCalls, 1); assert.equal(heartbeats, 0)
     assert.equal(await registration.readCleanRegistration(metadata), null)
     const pointer = JSON.parse(fs.readFileSync(path.join(metadata, 'current.json'), 'utf8'))
-    const config = JSON.parse(fs.readFileSync(path.join(pointer.home, 'config.json'), 'utf8'))
-    assert.equal(config.device_id, committed.id)
+    assert.equal(fs.existsSync(path.join(pointer.home, 'config.json')), false)
     let remaining = -1
     for (let attempt = 0; attempt < 10; attempt++) {
       remaining = Number(execFileSync(powershell, ['-NoProfile','-NonInteractive','-Command', `$p=@(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${child.pid}' | Where-Object {$_.ExecutablePath -eq '${path.join(executionRoot,'resources/runtime/node/win-x64/node.exe')}'});$p.Count`], {encoding:'utf8',windowsHide:true,env:f.env}).trim())
@@ -216,7 +209,7 @@ test('actual installed Electron EXE resumes a protected lost response after outa
     assert.equal(remaining,0,'owned packaged Host remained after native EXE exit')
     evidence('final-gui.json', { installer_sha256:createHash('sha256').update(fs.readFileSync(installer)).digest('hex'), execution_root:executionRoot, payload_hashes:payloadHashes(executionRoot), native_exit_code:code,
       owned_host_remaining:remaining, pair_requests:pairCalls, heartbeat_requests:heartbeats, initial_dom:firstDom, recovered_dom:dom, dimensions:layout.result.value, screenshot })
-    console.log('FINAL_ELECTRON_LOST_RESPONSE_AUTOSTART_SMOKE_PASS')
+    console.log('FINAL_ELECTRON_SINGLE_PAIR_SMOKE_PASS')
   } finally {
     clearTimeout(timer)
     debug?.close()

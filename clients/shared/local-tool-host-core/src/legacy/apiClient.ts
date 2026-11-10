@@ -204,7 +204,7 @@ export class ApiClient {
     this.token = token ?? null
   }
 
-  private async post(path: string, body: unknown, opts: { auth?: boolean; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<unknown> {
+  private async post(path: string, body: unknown, opts: { auth?: boolean; timeoutMs?: number; signal?: AbortSignal; classifyPairingRedirect?: boolean } = {}): Promise<unknown> {
     const headers: Record<string, string> = { ...JSON_HEADERS }
     if (opts.auth !== false) {
       if (!this.token) throw new Error('缺少设备 token')
@@ -216,7 +216,7 @@ export class ApiClient {
     try {
       response = await fetch(`${this.baseUrl}${path}`, {
         method: 'POST',
-        redirect: 'error',
+        redirect: opts.classifyPairingRedirect ? 'manual' : 'error',
         headers,
         body: JSON.stringify(body ?? {}),
         signal,
@@ -228,6 +228,10 @@ export class ApiClient {
       const kind = ['ENOTFOUND', 'EAI_AGAIN'].includes(String(cause)) ? 'dns'
         : /CERT|TLS|SSL/.test(String(cause)) || ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN'].includes(String(cause)) ? 'tls' : 'network'
       throw new NetworkError(`网络请求失败: ${detail}`, kind)
+    }
+    if (opts.classifyPairingRedirect && response.status >= 300 && response.status < 400) {
+      void response.body?.cancel().catch(() => {})
+      throw new ApiError(response.status, '配对地址重定向，请检查企业服务地址', undefined, 'PAIRING_REDIRECT')
     }
     let responseText: string
     try {
@@ -250,10 +254,10 @@ export class ApiClient {
       const errorBody = parsed && typeof parsed['detail'] === 'object' && parsed['detail'] !== null
         ? parsed['detail'] as Record<string, unknown>
         : parsed
-      const detail = typeof parsed['detail'] === 'string'
+      const detail = typeof parsed?.['detail'] === 'string'
         ? parsed['detail']
-        : typeof errorBody['error'] === 'string' ? errorBody['error'] : ''
-      const code = typeof errorBody['code'] === 'string' ? errorBody['code'] : undefined
+        : typeof errorBody?.['error'] === 'string' ? errorBody['error'] : ''
+      const code = typeof errorBody?.['code'] === 'string' ? errorBody['code'] : undefined
       throw new ApiError(response.status, `云端返回 HTTP ${response.status}${detail ? `: ${detail}` : ''}`, detail || undefined, code, retryAfterMs(response))
     }
     return parsed
@@ -312,8 +316,8 @@ export class ApiClient {
 
   /** Protocol 3 is explicit: never consume a code through an older server. */
   async pairClean(req: CleanPairRequest): Promise<PairResponse> {
-    const res = await this.post('/api/local-tools/runtime/pair', req, { auth: false }) as Record<string, unknown>
-    if (res.success !== true || res.pairing_protocol !== 3 || res.registration_completed !== true
+    const res = await this.post('/api/local-tools/runtime/pair', req, { auth: false, classifyPairingRedirect: true }) as Record<string, unknown>
+    if (!res || res.success !== true || res.pairing_protocol !== 3 || res.registration_completed !== true
       || typeof res.device_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(res.device_id)
       || res.device_token !== req.registration_token) throw new ApiError(502, '服务器未完成新版连接注册，请升级配套服务端', undefined, 'PAIRING_PROTOCOL_UNSUPPORTED')
     return { device_id: res.device_id, device_token: req.registration_token }

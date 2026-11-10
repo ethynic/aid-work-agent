@@ -57,7 +57,7 @@ async function validIdentity(config: MigratedConfiguration, token: string): Prom
   try {
     const response = await fetch(new URL('api/local-tools/runtime/heartbeat', config.server.replace(/\/?$/, '/')), {
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: '{}', signal: AbortSignal.timeout(8000),
+      body: '{}', redirect: 'error', signal: AbortSignal.timeout(8000),
     })
     return response.status !== 401 && response.status !== 403
   } catch { return true }
@@ -237,28 +237,67 @@ export async function prepareRuntimeInstallation(options: RuntimeInstallationOpt
   }
   return { home: current.home, metadataHome: root, metadataDirectory: root, installationId: current.id, priorHome: current.priorHome, migrated, fresh }
 }
-/** Called after the owned Host is stopped, under the Main registration lease. */
-export async function rotateRuntimeConnection(options: RuntimeInstallationOptions, currentHome: string): Promise<string> {
+/** Prepare a detached home without changing the active identity. */
+export async function stageRuntimeConnection(options: RuntimeInstallationOptions, currentHome: string): Promise<string> {
   const root = runtimeInstallationMetadata(options), current = readPointer(root)
   if (!current || !same(current.home, currentHome)) throw new Error('连接已被另一个客户端更新，请刷新连接状态')
   const home = path.join(path.dirname(root), 'connections', randomUUID()); assertDirectory(home)
   await migratePlugins(options, currentHome, home)
-  atomic(path.join(root, 'current.json'), JSON.stringify({ ...current, home, priorHome: currentHome, initialized: true }))
+  return home
+}
+/** Called after the owned Host is stopped, under the Main registration lease. */
+export async function rotateRuntimeConnection(options: RuntimeInstallationOptions, currentHome: string): Promise<string> {
+  const home = await stageRuntimeConnection(options, currentHome)
+  await selectRuntimeConnection(options, home, currentHome)
   // The current registration may still reference the former home; cleanup
   // recognizes that and defers. Main can call the same helper after activation.
   await cleanupRuntimePreviousHome(options, currentHome)
   return home
 }
-/** Resume only a previously allocated connection in the current installation. */
-export async function selectRuntimeConnection(options: RuntimeInstallationOptions, target: string): Promise<string> {
+function connectionTarget(options: RuntimeInstallationOptions, target: string, expectedHome?: string) {
   const root = runtimeInstallationMetadata(options), current = readPointer(root)
   if (!current) throw new Error('当前安装尚未登记')
+  if (expectedHome && !same(expectedHome, current.home)) throw new Error('连接已被另一个客户端更新，请刷新连接状态')
   if (current.priorHome && same(target, current.priorHome) && !same(target, current.home)) throw new Error('旧连接已被替换，请继续使用新的连接目录')
   assertHome(root, target, current.id)
   if (!existsSync(target)) throw new Error('已分配的新连接目录不存在')
   assertDirectory(target)
-  atomic(path.join(root, 'current.json'), JSON.stringify({ ...current, home: target, initialized: true }))
+  return { root, current }
+}
+/** Reject retired, missing and foreign paths before writing credentials. */
+export function validateRuntimeConnectionTarget(options: RuntimeInstallationOptions, target: string, expectedHome: string): void {
+  connectionTarget(options, target, expectedHome)
+}
+/** Select only a previously allocated connection in the current installation. */
+export async function selectRuntimeConnection(options: RuntimeInstallationOptions, target: string, expectedHome?: string): Promise<string> {
+  const { root, current } = connectionTarget(options, target, expectedHome)
+  atomic(path.join(root, 'current.json'), JSON.stringify({ ...current, home: target,
+    priorHome: expectedHome && !same(expectedHome, target) ? current.home : current.priorHome, initialized: true }))
   return target
+}
+/** Locally readable identity only. This never verifies cloud availability. */
+async function readLocalRuntimeIdentity(options: RuntimeInstallationOptions, home: string): Promise<MigratedConfiguration | null> {
+  try {
+    if (!same(realpathSync(home), home)) return null
+    const config = configuration(JSON.parse(safeRead(path.join(home, 'config.json'))))
+    if (!config) return null
+    const unprotect = options.unprotect ?? (await credentialModule(options)).dpapiUnprotect
+    return validToken(await unprotect(safeRead(path.join(home, 'credentials.bin')))) ? config : null
+  } catch { return null }
+}
+/** Undo only the exact empty-home switch made by a legacy requested transaction. */
+export async function restoreRuntimePriorConnection(options: RuntimeInstallationOptions, expectedHome: string, requestedHome: string, beforeSwitch?: () => Promise<void>): Promise<string | null> {
+  const root = runtimeInstallationMetadata(options), current = readPointer(root)
+  if (!current?.initialized || !current.priorHome || !same(current.home, expectedHome) || !same(current.home, requestedHome)
+    || same(current.home, current.priorHome) || !ownedHome(root, current.priorHome, options.legacyHome)
+    || !existsSync(current.home) || !same(realpathSync(current.home), current.home)
+    || ['config.json', 'credentials.bin', 'pairing.pending.json'].some(name => existsSync(path.join(current.home, name)))) return null
+  try { assertHome(root, current.priorHome, current.id) } catch { return null }
+  if (!await readLocalRuntimeIdentity(options, current.priorHome)) return null
+  await beforeSwitch?.()
+  if (JSON.stringify(readPointer(root)) !== JSON.stringify(current)) throw new Error('连接已被另一个客户端更新，请刷新连接状态')
+  atomic(path.join(root, 'current.json'), JSON.stringify({ ...current, home: current.priorHome, priorHome: null }))
+  return current.priorHome
 }
 /** Best effort only. Never deletes stable registration or follows old links. */
 export async function cleanupRuntimePreviousHome(options: RuntimeInstallationOptions, source: string): Promise<'removed' | 'retained' | 'cleanup_failed'> {
