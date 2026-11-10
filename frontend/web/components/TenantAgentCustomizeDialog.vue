@@ -4,15 +4,9 @@
       <!-- 基础信息 -->
       <section>
         <h4 class="text-sm font-semibold text-default mb-2">基础信息</h4>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label class="text-sm text-muted mb-1 block">显示名（留空继承父定义）</label>
-            <BaseInput v-model="form.display_name" placeholder="留空则使用默认名称" :disabled="saving" />
-          </div>
-          <div>
-            <label class="text-sm text-muted mb-1 block">简介描述（留空继承父定义）</label>
-            <BaseInput v-model="form.description" placeholder="留空则使用默认描述" :disabled="saving" />
-          </div>
+        <div>
+          <label class="text-xs text-muted mb-1 block">显示名（留空继承父定义）</label>
+          <BaseInput v-model="form.display_name" size="sm" placeholder="留空则使用默认名称" :disabled="saving" />
         </div>
       </section>
 
@@ -24,8 +18,8 @@
         </p>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-2">
           <div>
-            <label class="text-sm text-muted mb-1 block">LLM 提供者</label>
-            <BaseSelect v-model="form.llm_provider" :disabled="saving">
+            <label class="text-xs text-muted mb-1 block">LLM 提供者</label>
+            <BaseSelect v-model="form.llm_provider" size="sm" :disabled="saving">
               <option value="">留空（继承父定义）</option>
               <option value="deepseek">deepseek</option>
               <option value="qwen">qwen</option>
@@ -333,7 +327,6 @@ const errorMsg = ref('')
 
 const form = ref({
   display_name: '',
-  description: '',
   extra_prompt: '',
   greeting_summary: '',
   llm_provider: '',
@@ -429,7 +422,6 @@ async function loadInstance() {
   isCopy.value = inst ? inst.is_copy : !!props.isCopyInstance
   form.value = {
     display_name: inst?.display_name || '',
-    description: inst?.description || '',
     extra_prompt: inst?.extra_prompt || '',
     greeting_summary: inst?.greeting_summary || '',
     llm_provider: inst?.llm_provider || '',
@@ -564,7 +556,6 @@ async function handleSave() {
     await updateTenantAgentInstance(props.agentId, {
       // 空串=清除覆盖恢复继承；null=不改（后端契约）
       display_name: form.value.display_name.trim(),
-      description: form.value.description.trim(),
       extra_prompt: form.value.extra_prompt,
       greeting_summary: form.value.greeting_summary.trim(),
       greeting_prompts: prompts,
@@ -621,7 +612,6 @@ function handleClose() {
 function resetForm() {
   form.value = {
     display_name: '',
-    description: '',
     extra_prompt: '',
     greeting_summary: '',
     llm_provider: '',
