@@ -161,7 +161,8 @@ async def save_extra_md(subagent_name: str, body: ExtraMdRequest, request: Reque
 async def get_extra_previous(subagent_name: str, request: Request):
     """获取上一版内容（回退前预览）
 
-    无注册记录或无上一版时 content=None（前端据此隐藏回退入口）。
+    version=None 表示无可回退（前端据此隐藏回退入口）；上一版为空串时
+    content=""（回退后恢复默认配置），与"无可回退"区分。
     """
     tenant_id = _resolve_tenant_id(request)
     if not tenant_id:

@@ -159,8 +159,10 @@ async def update_instance(agent_id: str, body: UpdateInstanceRequest, admin: dic
         if body.description is not None:
             overrides["description"] = body.description.strip() or None
         extra_prompt_value: Optional[str] = None
+        extra_prompt_stripped: str = ""
         if body.extra_prompt is not None:
-            extra_prompt_value = body.extra_prompt.strip() or None
+            extra_prompt_stripped = body.extra_prompt.strip()
+            extra_prompt_value = extra_prompt_stripped or None
             overrides["extra_prompt"] = extra_prompt_value
         if body.greeting_summary is not None:
             cleaned = _sanitize_greeting_summary(body.greeting_summary)
@@ -185,11 +187,12 @@ async def update_instance(agent_id: str, body: UpdateInstanceRequest, admin: dic
 
         row = svc.update_overrides(admin["tenant_id"], agent_id, overrides)
 
-        # 补充双写：显式保存非空 extra_prompt 时同步租户定制版本链，链上「上一版」
-        # 才能与实例行一致（支撑回退上一版）；空值=清除定制，只清实例行不写空版本。
-        # 只由「用户保存」与「回退」两个用户动作写链，不放 service 层避免内部同步
-        # 路径反向二次写链。best-effort：链写失败不阻塞实例行保存（运行时实例行权威）。
-        if "extra_prompt" in body.model_fields_set and extra_prompt_value:
+        # 补充双写：显式保存 extra_prompt 时同步租户定制版本链（空串也写版本：
+        # 「清空用默认配置」是生效状态，不记录则回退上一版会跳过它），链上「上一版」
+        # 才能与实例行一致（支撑回退上一版）。只由「用户保存」与「回退」两个用户动作
+        # 写链，不放 service 层避免内部同步路径反向二次写链。best-effort：链写失败
+        # 不阻塞实例行保存（运行时实例行权威）。
+        if "extra_prompt" in body.model_fields_set:
             try:
                 from src.api.subagent_extra import _get_or_create_prompt
                 from src.prompts.prompt_registry_service import PromptRegistryService
@@ -198,7 +201,7 @@ async def update_instance(agent_id: str, body: UpdateInstanceRequest, admin: dic
                 if registry:
                     PromptRegistryService.commit_version(
                         prompt_id=str(registry["id"]),
-                        content=extra_prompt_value,
+                        content=extra_prompt_stripped,
                         commit_message="租户前台编辑",
                         created_by=admin["user_id"],
                     )

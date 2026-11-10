@@ -10,7 +10,7 @@ const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/v1/subagents`
 
 export interface PreviousExtraResult {
   success: boolean
-  /** null 表示无可回退版本（前端据此隐藏回退入口） */
+  /** null 表示无可回退版本；空串表示上一版为空（回退后使用默认配置）。回退入口显隐以 version 为准 */
   content: string | null
   version: number | null
   message?: string
@@ -22,7 +22,7 @@ export interface RollbackExtraResult {
   content: string
 }
 
-/** 获取上一版扩展提示词内容（回退前预览）；content 为 null 表示无可回退 */
+/** 获取上一版扩展提示词内容（回退前预览）；version 为 null 表示无可回退，content 空串表示上一版为空 */
 export async function getPreviousExtra(subagentName: string): Promise<PreviousExtraResult> {
   const response = await fetch(`${API_BASE}/${encodeURIComponent(subagentName)}/extra/previous`, {
     headers: getSaasAuthHeader(),

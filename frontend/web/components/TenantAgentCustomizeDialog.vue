@@ -284,13 +284,18 @@
     </template>
   </BaseModal>
 
-  <!-- 回退上一版确认：展示上一版全文预览 -->
+  <!-- 回退上一版确认：展示上一版全文预览（上一版为空 = 回退后使用默认配置） -->
   <BaseModal v-model="showRollbackConfirm" title="回退上一版" size="lg" :show-fullscreen="false">
     <div class="space-y-3">
-      <p class="text-sm text-muted">
-        将回退到上一版 V{{ previousExtra?.version }}，回退后立即生效，内容预览如下：
+      <template v-if="previousExtra?.content">
+        <p class="text-sm text-muted">
+          将回退到上一版 V{{ previousExtra?.version }}，回退后立即生效，内容预览如下：
+        </p>
+        <pre class="max-h-[50vh] overflow-auto bg-canvas rounded-lg p-3 text-xs text-default whitespace-pre-wrap font-mono">{{ previousExtra?.content }}</pre>
+      </template>
+      <p v-else class="text-sm text-muted">
+        上一版（V{{ previousExtra?.version }}）为空：回退后该数字员工将使用默认配置（清除扩展提示词），立即生效。
       </p>
-      <pre class="max-h-[50vh] overflow-auto bg-canvas rounded-lg p-3 text-xs text-default whitespace-pre-wrap font-mono">{{ previousExtra?.content }}</pre>
     </div>
     <template #footer>
       <div class="w-full flex items-center justify-end gap-2">
@@ -641,14 +646,15 @@ async function handleSave() {
 }
 
 // ============== 扩展提示词回退上一版 ==============
+// hasPreviousExtra 以 version 是否存在为准（content 可为空串=上一版为空，回退后用默认配置）
 async function loadPreviousExtra() {
   hasPreviousExtra.value = false
   previousExtra.value = null
   try {
     const res = await getPreviousExtra(props.agentId)
-    if (res.success && res.content) {
+    if (res.success && res.version != null) {
       hasPreviousExtra.value = true
-      previousExtra.value = { content: res.content, version: res.version ?? 0 }
+      previousExtra.value = { content: res.content ?? '', version: res.version }
     }
   } catch {
     // 预查失败按无可回退处理，不影响定制表单
@@ -663,8 +669,8 @@ async function handleRollback() {
   try {
     // 点击时重新拉取上一版，确保预览内容是当前最新状态的上一版
     const res = await getPreviousExtra(props.agentId)
-    if (res.success && res.content) {
-      previousExtra.value = { content: res.content, version: res.version ?? 0 }
+    if (res.success && res.version != null) {
+      previousExtra.value = { content: res.content ?? '', version: res.version }
       showRollbackConfirm.value = true
     } else {
       hasPreviousExtra.value = false
@@ -682,11 +688,11 @@ async function confirmRollback() {
   rollbackLoading.value = true
   errorMsg.value = ''
   try {
-    await rollbackExtra(props.agentId)
+    const res = await rollbackExtra(props.agentId)
     showRollbackConfirm.value = false
     await loadInstance()
     await loadPreviousExtra()
-    showNotice('已回退')
+    showNotice(res.content ? '已回退' : '已回退，将使用默认配置')
     emit('changed')
   } catch (e: any) {
     errorMsg.value = e.message || '回退失败'

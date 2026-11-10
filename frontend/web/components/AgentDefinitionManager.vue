@@ -1261,14 +1261,16 @@ function onPromptInput() {
 
 async function commitPromptVersion() {
   if (!selectedAgentId.value) return
-  // 发布前先保存分段变量，避免未保存的内容被覆盖
+  // 确认与变更说明都放在第一个写请求之前：任一弹窗取消时不产生任何保存
+  //（分段若先落库，取消也会影响运行时提示词装配）
+  if (!confirm('保存后提示词将立即生效，是否保存？')) return
+  const msg = prompt('变更说明（可选）：')
+  if (msg === null) return
+  // 用户已确认保存，此时再保存分段变量，避免未保存的内容被覆盖
   if (hasUnsavedSections.value) {
     const ok = await flushUnsavedSections()
     if (!ok) return
   }
-  if (!confirm('保存后提示词将立即生效，是否保存？')) return
-  const msg = prompt('变更说明（可选）：')
-  if (msg === null) return
   promptSaving.value = true
   try {
     const res = await updateSystemPrompt(selectedAgentId.value, {
