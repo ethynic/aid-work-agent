@@ -5,9 +5,9 @@
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
 | Phase 1 | use_skill 工具定义去名单 + 单测 | ✅ 完成（2026-11-10） | 新增 2 用例置于 `tests/unit/test_skill_registry_tool_definition.py`（integration 层宿主机模式因 DB 守卫整模块 skip，unit 层真实执行）：`./scripts/dev_test.sh tests/unit/test_skill_registry_tool_definition.py tests/unit/tools/test_tool_control_set.py tests/unit/tools/test_tool_assembly.py -p no:cacheprovider -q` 20 通过 / 0 跳过；既有 integration/test_skill_flow.py 保持原样 |
-| Phase 2 | 独立验证（测试 + CR） | 📋 待开发 | — |
+| Phase 2 | 独立验证（测试 + CR） | ✅ 完成（2026-11-10） | 测试智能体：新功能 2/2、unit 全量 10742 通过（86 失败经 stash 基线比对均为宿主机/平台既有）、compileall+import 检查通过；CR 智能体：通过，无 P0/P1/P2（2 条 nit 记录），提交 7081d03b 并推送 origin/dev/skill-catalog-dedup |
 
-> 日期：2026-11-10；状态：Phase 1 开发+自测完成，待独立验证。改动小，设计与计划合并本文档，无独立设计文档。
+> 日期：2026-11-10；状态：✅ 已完成开发（commit 7081d03b，待用户审核合并；模型侧技能选型行为需真机观察）。改动小，设计与计划合并本文档，无独立设计文档。
 
 ## 背景与问题
 
