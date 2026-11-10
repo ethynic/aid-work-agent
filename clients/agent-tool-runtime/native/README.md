@@ -16,15 +16,32 @@ RuntimeProcessSupervisor.exe probe --job-name AidWorkRuntime.<UUID>
 RuntimeProcessSupervisor.exe terminate --job-name AidWorkRuntime.<UUID>
 ```
 
+New managed Provider launches use `Global\AidWorkRuntime.<UUID>` with the same
+commands. The `run` command rejects `--preserve-chrome` for this namespace.
+Creation binds the owner to the current Windows user, grants access to that
+user and LocalSystem, and enables kill-on-close. `probe` and `terminate`
+verify the owner, protected ACL and containment flags on the opened Job before
+reporting or changing its state. Cross-session inspection opens the old Job
+without moving a process into it. The Runtime v3 execution marker binds its
+DPAPI v2 ledger `global-<generation>.bin` to the same home and generation.
+Receipt filenames omit the namespace prefix and protected receipt contents
+preserve the complete Job name. The older Local form uses the original writer's
+default Windows token owner and the same ACL and containment checks before
+reporting or stopping a Job. A visible Local Job with kill-on-close cleared
+cannot prove stop or authorize termination by the recovery helper.
+When an old Local Job is absent, its bound receipt can still record preserved
+Chrome, which keeps its resources unconfirmed.
+
 The adapter owns a fresh UUID/job/receipt for each MCP process. `owner-start-time`
 is `Process.StartTime.ToUniversalTime().Ticks` for the Host (decimal string, not
 Unix time). The supervisor opens the exact process handle, verifies creation
 time, and rechecks liveness before resuming the child. `boot-id` uses Windows
 `SystemBootEnvironmentInformation` and emits `{ "bootId": "<GUID>" }`; failure
 does not invent a boot identity.
-`session-id` returns only the current Windows session number. Same-boot recovery
-must match the protected launcher session before opening a named Job; an absent
-name in another login session does not prove the original tree stopped.
+`session-id` returns only the current Windows session number. Legacy Local Job
+inspection must match the protected launcher session. Across sessions an old
+Local Job requires a bound exit receipt. Global Job verification uses the
+named object directly.
 
 `run` creates a job with an ACL limited to the current user and LocalSystem,
 sets `KILL_ON_JOB_CLOSE`, creates Node suspended, assigns it, then resumes it.

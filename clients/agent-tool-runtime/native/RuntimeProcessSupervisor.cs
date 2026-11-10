@@ -15,13 +15,15 @@ using System.Threading;
 
 internal static class RuntimeProcessSupervisor
 {
-    const uint JOB_QUERY = 4, JOB_TERMINATE = 8, SYNCHRONIZE = 0x100000;
+    const uint JOB_QUERY = 4, JOB_TERMINATE = 8, READ_CONTROL = 0x20000, SYNCHRONIZE = 0x100000;
     const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
     const uint KILL_ON_CLOSE = 0x2000, WAIT_OBJECT_0 = 0, WAIT_TIMEOUT = 258;
     const int JobBasicAccounting = 1, JobBasicProcessIds = 3, JobExtendedLimits = 9;
     const uint CREATE_SUSPENDED = 4, CREATE_NO_WINDOW = 0x08000000, EXTENDED_STARTUPINFO_PRESENT = 0x80000;
     const uint STARTF_USESTDHANDLES = 0x100, DUPLICATE_SAME_ACCESS = 2;
-    static readonly Regex JobPattern = new Regex(@"\AAidWorkRuntime\.[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z", RegexOptions.CultureInvariant);
+    const string GlobalPrefix = @"Global\";
+    static readonly Regex JobPattern = new Regex(@"\A(?:Global\\)?AidWorkRuntime\.[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z", RegexOptions.CultureInvariant);
+    static bool GlobalJob(string name) { return name.StartsWith(GlobalPrefix, StringComparison.Ordinal); }
 
     sealed class Failure : Exception { public readonly string Code; public Failure(string code) { Code = code; } }
     static void Need(bool valid, string code) { if (!valid) throw new Failure(code); }
@@ -63,6 +65,7 @@ internal static class RuntimeProcessSupervisor
                 return Inspect(name, args[0] == "terminate");
             }
             Need(args[0] == "run" && options.Count == 6, "INVALID_ARGUMENTS");
+            Need(!preserve || !GlobalJob(name), "GLOBAL_JOB_PRESERVE_FORBIDDEN");
             string node = null, entry = null, receipt = null, ownerText = null, ownerStartText = null;
             Need(options.TryGetValue("--node", out node) && options.TryGetValue("--entry", out entry)
                 && options.TryGetValue("--receipt", out receipt) && options.TryGetValue("--owner-pid", out ownerText)
@@ -106,18 +109,56 @@ internal static class RuntimeProcessSupervisor
     }
     static int Inspect(string name, bool terminate)
     {
-        IntPtr job = OpenJobObject(JOB_QUERY | (terminate ? JOB_TERMINATE : 0), false, name);
+        IntPtr job = OpenJobObject(JOB_QUERY | READ_CONTROL | (terminate ? JOB_TERMINATE : 0), false, name);
         if (job == IntPtr.Zero)
         {
-            Need(Marshal.GetLastWin32Error() == 2, "JOB_OPEN_FAILED");
+            int error = Marshal.GetLastWin32Error();
+            Need(error == 2, error == 5 ? "JOB_OPEN_DENIED" : "JOB_OPEN_FAILED");
             Console.WriteLine("{\"exists\":false,\"activeProcesses\":0}"); return 0;
         }
         try
         {
-            if (terminate) Stop(job);
+            // The legacy writer supplied the DACL only, so Windows chose the token owner.
+            using (var identity = WindowsIdentity.GetCurrent())
+                VerifyJob(job, identity.User, GlobalJob(name) ? identity.User : identity.Owner);
+            if (terminate && Active(job) != 0) Stop(job);
             Console.WriteLine("{\"exists\":true,\"activeProcesses\":" + Active(job) + "}"); return 0;
         }
         finally { CloseHandle(job); }
+    }
+    static void VerifyJob(IntPtr job, SecurityIdentifier user, SecurityIdentifier expectedOwner)
+    {
+        // Query the already-open object before any destructive operation.
+        const int kernelObject = 6;
+        const uint ownerAndDacl = 5;
+        IntPtr owner, group, dacl, sacl, security;
+        Need(GetSecurityInfo(job, kernelObject, ownerAndDacl, out owner, out group, out dacl, out sacl, out security) == 0
+            && security != IntPtr.Zero, "JOB_SECURITY_UNAVAILABLE");
+        try
+        {
+            int size = checked((int)GetSecurityDescriptorLength(security));
+            Need(size >= 20 && size <= 65536, "JOB_SECURITY_INVALID");
+            var bytes = new byte[size]; Marshal.Copy(security, bytes, 0, size);
+            var descriptor = new RawSecurityDescriptor(bytes, 0);
+            var access = descriptor.DiscretionaryAcl;
+            Need(expectedOwner != null && expectedOwner.Equals(descriptor.Owner) && (descriptor.ControlFlags & ControlFlags.DiscretionaryAclProtected) != 0
+                && access != null && access.Count == 2, "JOB_OWNER_OR_ACL_MISMATCH");
+            var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+            bool userAllowed = false, systemAllowed = false;
+            for (int i = 0; i < access.Count; i++)
+            {
+                var ace = access[i] as CommonAce;
+                Need(ace != null && ace.AceQualifier == AceQualifier.AccessAllowed && ace.AceFlags == AceFlags.None
+                    && (ace.AccessMask == 0x1F003F || ace.AccessMask == 0x10000000), "JOB_OWNER_OR_ACL_MISMATCH");
+                if (user.Equals(ace.SecurityIdentifier)) userAllowed = true;
+                if (system.Equals(ace.SecurityIdentifier)) systemAllowed = true;
+            }
+            Need(userAllowed && systemAllowed, "JOB_OWNER_OR_ACL_MISMATCH");
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+            Need(QueryLimits(job, JobExtendedLimits, out limits, (uint)Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION)), IntPtr.Zero)
+                && limits.BasicLimitInformation.LimitFlags == KILL_ON_CLOSE, "JOB_CONTAINMENT_MISMATCH");
+        }
+        finally { LocalFree(security); }
     }
     static uint Active(IntPtr job)
     {
@@ -151,8 +192,10 @@ internal static class RuntimeProcessSupervisor
             long created, exited, kernel, user;
             Need(GetProcessTimes(owner, out created, out exited, out kernel, out user)
                 && DateTime.FromFileTimeUtc(created).Ticks == ownerStart, "OWNER_IDENTITY_MISMATCH");
-            string sid = WindowsIdentity.GetCurrent().User.Value;
-            Need(ConvertStringSecurityDescriptorToSecurityDescriptor("D:P(A;;GA;;;SY)(A;;GA;;;" + sid + ")", 1, out security, IntPtr.Zero), "JOB_SECURITY_FAILED");
+            SecurityIdentifier userSid = WindowsIdentity.GetCurrent().User;
+            string sid = userSid.Value;
+            string sddl = (GlobalJob(name) ? "O:" + sid : "") + "D:P(A;;GA;;;SY)(A;;GA;;;" + sid + ")";
+            Need(ConvertStringSecurityDescriptorToSecurityDescriptor(sddl, 1, out security, IntPtr.Zero), "JOB_SECURITY_FAILED");
             var attributes = new SECURITY_ATTRIBUTES { nLength = Marshal.SizeOf(typeof(SECURITY_ATTRIBUTES)), lpSecurityDescriptor = security, bInheritHandle = false };
             job = CreateJobObject(ref attributes, name);
             int createError = Marshal.GetLastWin32Error();
@@ -160,6 +203,7 @@ internal static class RuntimeProcessSupervisor
             // Never commandeer an existing job, even if its name matches exactly.
             Need(createError != 183, "JOB_ALREADY_EXISTS");
             Limits(job, KILL_ON_CLOSE);
+            if (GlobalJob(name)) VerifyJob(job, userSid, userSid);
             child = Launch(node, entry);
             if (!AssignProcessToJobObject(job, child.hProcess))
             {
@@ -301,7 +345,7 @@ internal static class RuntimeProcessSupervisor
     }
     static void WriteReceipt(string path, string name, int owner, uint node, int remaining, string reason, string sid)
     {
-        string payload = "{\"schemaVersion\":1,\"jobName\":\"" + name + "\",\"ownerPid\":" + owner
+        string payload = "{\"schemaVersion\":1,\"jobName\":\"" + name.Replace("\\", "\\\\") + "\",\"ownerPid\":" + owner
             + ",\"nodePid\":" + node + ",\"processStopped\":true,\"remainingBusinessApps\":" + remaining + ",\"exitReason\":\"" + reason + "\"}";
         byte[] protectedBytes = ProtectedData.Protect(Encoding.UTF8.GetBytes(payload), null, DataProtectionScope.CurrentUser);
         byte[] data = Encoding.UTF8.GetBytes("{\"schemaVersion\":1,\"protectedData\":\"" + Convert.ToBase64String(protectedBytes) + "\"}");
@@ -333,6 +377,7 @@ internal static class RuntimeProcessSupervisor
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr OpenJobObject(uint access, bool inherit, string name);
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetInformationJobObject(IntPtr job, int type, ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION data, uint size);
     [DllImport("kernel32.dll", EntryPoint = "QueryInformationJobObject", SetLastError = true)] static extern bool QueryAccounting(IntPtr job, int type, out JOBOBJECT_BASIC_ACCOUNTING_INFORMATION data, uint size, IntPtr returned);
+    [DllImport("kernel32.dll", EntryPoint = "QueryInformationJobObject", SetLastError = true)] static extern bool QueryLimits(IntPtr job, int type, out JOBOBJECT_EXTENDED_LIMIT_INFORMATION data, uint size, IntPtr returned);
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool QueryInformationJobObject(IntPtr job, int type, IntPtr data, uint size, out uint returned);
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateJobObject(IntPtr job, uint exitCode);
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
@@ -355,6 +400,8 @@ internal static class RuntimeProcessSupervisor
     [DllImport("kernel32.dll")] static extern void DeleteProcThreadAttributeList(IntPtr list);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool CreateProcess(string app, StringBuilder command, IntPtr processSecurity, IntPtr threadSecurity, bool inherit, uint flags, IntPtr environment, string directory, ref STARTUPINFOEX startup, out PROCESS_INFORMATION process);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string sddl, uint revision, out IntPtr descriptor, IntPtr size);
+    [DllImport("advapi32.dll")] static extern uint GetSecurityInfo(IntPtr handle, int objectType, uint information, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+    [DllImport("advapi32.dll")] static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
     [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr pointer);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool MoveFileEx(string from, string to, uint flags);
 }

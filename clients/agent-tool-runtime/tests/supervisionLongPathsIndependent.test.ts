@@ -12,7 +12,8 @@ const testDirectory = dirname(fileURLToPath(import.meta.url))
 const runtime = resolve(testDirectory, basename(dirname(testDirectory)) === 'dist' ? '../..' : '..')
 const repo = resolve(runtime, '../..')
 const built = (name: string) => pathToFileURL(join(runtime, 'dist/src', name + '.js')).href
-const { dpapiUnprotect, trustedSystemPowerShell } = await import(built('dpapi'))
+const { dpapiProtect, dpapiUnprotect, trustedSystemPowerShell } = await import(built('dpapi'))
+const { checkConnectionRecoveryResources } = await import(built('connectionRecoveryResources'))
 const { configureRuntimeHome } = await import(built('config'))
 const { ProviderManager } = await import(built('providerManager'))
 const helper = join(runtime, 'dist/src/native/RuntimeProcessSupervisor.exe')
@@ -122,6 +123,189 @@ async function receiptProof(receipt: string, job: string, owner: number, reason:
   assert.ok(!readdirSync(dirname(receipt)).some(file => file.endsWith('.tmp')))
   return proof
 }
+
+test('global Runtime job stops only its own descendants and publishes a valid receipt', { skip: process.platform !== 'win32', timeout: 45_000 }, async t => {
+  const f = fixture(t)
+  const job = 'Global\\AidWorkRuntime.' + randomUUID()
+  f.jobs.push(job)
+  writeFileSync(f.entry, `const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});child.unref();
+process.stdout.write(JSON.stringify({node:process.pid,child:child.pid})+'\\n'); setInterval(()=>{},1000);`)
+  const unrelated = spawn(installedNode, ['-e', 'setInterval(()=>{},1000)'], { windowsHide: true, stdio: 'pipe' })
+  f.owned.push(unrelated)
+  const launch = spawn(helper, args(f.entry, f.receipt, process.pid, job), { windowsHide: true, stdio: 'pipe' })
+  f.owned.push(launch)
+  const done = exited(launch)
+  const ready = await firstLine(launch)
+  const running = probe(job)
+  assert.equal(running.exists, true)
+  assert.ok(running.activeProcesses >= 2, 'The Provider and its descendant must both belong to the Job')
+  assert.deepEqual(probe(job.slice('Global\\'.length)), { exists: false, activeProcesses: 0 }, 'The legacy local namespace must not see the global object')
+  const stopped = spawnSync(helper, ['terminate', '--job-name', job], { encoding: 'utf8', windowsHide: true, timeout: 20_000 })
+  assert.equal(stopped.status, 0)
+  assert.deepEqual(JSON.parse(stopped.stdout), { exists: true, activeProcesses: 0 })
+  assert.equal(await done, 0)
+  assert.equal(alive(ready.node), false)
+  assert.equal(alive(ready.child), false)
+  assert.equal(alive(unrelated.pid!), true, 'A process outside the recorded job is unaffected')
+  await receiptProof(f.receipt, job, process.pid, 'node-exited')
+  assert.deepEqual(probe(job), { exists: false, activeProcesses: 0 })
+  const preserve = spawnSync(helper, [...args(f.entry, f.receipt, process.pid, job), '--preserve-chrome'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 })
+  assert.equal(preserve.status, 1)
+  assert.deepEqual(JSON.parse(preserve.stderr), { error: 'GLOBAL_JOB_PRESERVE_FORBIDDEN' })
+})
+
+test('foreign-ACL and uncontained Local jobs must survive Runtime termination', { skip: process.platform !== 'win32', timeout: 30_000 }, async t => {
+  const f = fixture(t)
+  const foreign = 'AidWorkRuntime.' + randomUUID(), uncontained = 'AidWorkRuntime.' + randomUUID()
+  const script = `
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class LocalFixtureJob {
+  [StructLayout(LayoutKind.Sequential)] struct Attributes { public int length; public IntPtr descriptor; public bool inheritable; }
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string text, int revision, out IntPtr descriptor, IntPtr size);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateJobObject(ref Attributes attributes, string name);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+  public static void Assign(string name, string text, IntPtr process) {
+    IntPtr descriptor;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptor(text,1,out descriptor,IntPtr.Zero)) throw new Exception();
+    var attributes = new Attributes { length=Marshal.SizeOf(typeof(Attributes)), descriptor=descriptor };
+    IntPtr job = CreateJobObject(ref attributes,name);
+    if (job == IntPtr.Zero || !AssignProcessToJobObject(job, process)) throw new Exception();
+  }
+}
+'@
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$outside = [Diagnostics.Process]::Start('${installedNode.replaceAll("'", "''")}', '-e setInterval(()=>{},1000)')
+$loose = [Diagnostics.Process]::Start('${installedNode.replaceAll("'", "''")}', '-e setInterval(()=>{},1000)')
+try {
+  [LocalFixtureJob]::Assign('${foreign}', ('D:P(A;;GA;;;' + $sid + ')'), $outside.Handle)
+  [LocalFixtureJob]::Assign('${uncontained}', ('D:P(A;;GA;;;SY)(A;;GA;;;' + $sid + ')'), $loose.Handle)
+  [Console]::Out.WriteLine(('{"node":' + $outside.Id + ',"child":' + $loose.Id + '}'))
+  [Console]::In.ReadLine() | Out-Null
+} finally {
+  foreach ($process in @($outside, $loose)) {
+    if (!$process.HasExited) { $process.Kill(); $process.WaitForExit() }
+    $process.Dispose()
+  }
+}
+`
+  const shell = trustedSystemPowerShell()
+  const child = spawn(shell.executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    { cwd: shell.cwd, env: shell.env, windowsHide: true, stdio: 'pipe' })
+  f.owned.push(child)
+  const done = exited(child)
+  try {
+    const ready = await firstLine(child)
+    for (const [job, pid, error] of [[foreign, ready.node, 'JOB_OWNER_OR_ACL_MISMATCH'], [uncontained, ready.child, 'JOB_CONTAINMENT_MISMATCH']] as const) {
+      await t.test(error, () => {
+        for (const action of ['terminate', 'probe']) {
+          assert.equal(alive(pid), true, 'The owned canary is running before the attempted stop')
+          const result = spawnSync(helper, [action, '--job-name', job], { encoding: 'utf8', windowsHide: true, timeout: 10_000 })
+          assert.equal(result.status, 1, `${action} must reject an unverified Local job`)
+          assert.equal(result.stdout, '')
+          assert.deepEqual(JSON.parse(result.stderr), { error })
+          assert.equal(alive(pid), true, 'A Local job name alone cannot authorize termination')
+        }
+      })
+    }
+  } finally { child.stdin.end('\n'); assert.equal(await done, 0) }
+})
+
+test('the old Runtime Local writer can still be stopped and confirmed', { skip: process.platform !== 'win32', timeout: 30_000 }, async t => {
+  const f = fixture(t)
+  const job = 'AidWorkRuntime.' + randomUUID()
+  f.jobs.push(job)
+  writeFileSync(f.entry, `process.stdout.write(JSON.stringify({node:process.pid})+'\\n');setInterval(()=>{},1000);`)
+  const launch = spawn(helper, args(f.entry, f.receipt, process.pid, job), { windowsHide: true, stdio: 'pipe' })
+  f.owned.push(launch)
+  const done = exited(launch)
+  const ready = await firstLine(launch)
+  const running = probe(job)
+  assert.equal(running.exists, true)
+  assert.ok(running.activeProcesses >= 1)
+  const stopped = spawnSync(helper, ['terminate', '--job-name', job], { encoding: 'utf8', windowsHide: true, timeout: 20_000 })
+  assert.equal(stopped.status, 0)
+  assert.deepEqual(JSON.parse(stopped.stdout), { exists: true, activeProcesses: 0 })
+  assert.equal(await done, 0)
+  assert.equal(alive(ready.node), false)
+  await receiptProof(f.receipt, job, process.pid, 'node-exited')
+})
+
+test('a historical reboot witness is retained but does not block or release a Global Job', { skip: process.platform !== 'win32', timeout: 30_000 }, async t => {
+  const f = fixture(t)
+  const supervision = join(f.root, 'process-supervision')
+  mkdirSync(supervision)
+  const generation = randomUUID(), job = 'Global\\AidWorkRuntime.' + randomUUID()
+  f.jobs.push(job)
+  const digest = createHash('sha256').update('historical marker').digest('hex')
+  const witness = join(supervision, `legacy-${digest}.bin`)
+  const protectedWitness = await dpapiProtect(JSON.stringify({ home: f.root, digest, bootId: randomUUID() }))
+  writeFileSync(witness, protectedWitness)
+  writeFileSync(join(supervision, `global-${generation}.bin`), await dpapiProtect(JSON.stringify({
+    schemaVersion: 2, generation, home: f.root, externalPython: false, ownerPid: process.pid, jobs: [job],
+  })))
+  writeFileSync(join(f.root, 'host-running.json'), JSON.stringify({ instance_id: generation, schemaVersion: 3,
+    supervision: await dpapiProtect(JSON.stringify({ generation, home: f.root, externalPython: false })) }))
+  writeFileSync(f.entry, `process.stdout.write(JSON.stringify({node:process.pid})+'\\n');setInterval(()=>{},1000);`)
+  const launch = spawn(helper, args(f.entry, f.receipt, process.pid, job), { windowsHide: true, stdio: 'pipe' })
+  f.owned.push(launch)
+  const done = exited(launch)
+  const ready = await firstLine(launch)
+  assert.deepEqual(await checkConnectionRecoveryResources(f.root, installedNode, { prepareReboot: false }),
+    { safe: false, needs_reboot: false, category: 'CONNECTION_RESOURCE_STOP_UNCONFIRMED' })
+  assert.equal(alive(ready.node), true)
+  assert.deepEqual(await checkConnectionRecoveryResources(f.root, installedNode, { prepareReboot: true }),
+    { safe: true, needs_reboot: false, category: 'CONNECTION_RESOURCE_SUPERVISED_STOPPED' })
+  assert.equal(await done, 0)
+  assert.equal(alive(ready.node), false)
+  assert.equal(readFileSync(witness, 'utf8'), protectedWitness)
+})
+
+test('an inaccessible or foreign-ACL global object is not mistaken for an absent Job', { skip: process.platform !== 'win32', timeout: 30_000 }, async t => {
+  const f = fixture(t)
+  const inaccessible = 'Global\\AidWorkRuntime.' + randomUUID(), foreignAcl = 'Global\\AidWorkRuntime.' + randomUUID()
+  const script = `
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class DiagnosticFixtureJob {
+  [StructLayout(LayoutKind.Sequential)] struct Attributes { public int length; public IntPtr descriptor; public bool inheritable; }
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string text, int revision, out IntPtr descriptor, IntPtr size);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateJobObject(ref Attributes attributes, string name);
+  public static IntPtr Create(string name, string text) {
+    IntPtr descriptor;
+    if(!ConvertStringSecurityDescriptorToSecurityDescriptor(text,1,out descriptor,IntPtr.Zero)) throw new Exception();
+    var attributes = new Attributes { length=Marshal.SizeOf(typeof(Attributes)), descriptor=descriptor, inheritable=false };
+    return CreateJobObject(ref attributes,name);
+  }
+}
+'@
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$denied = [DiagnosticFixtureJob]::Create('${inaccessible}', ('O:' + $sid + 'D:P(A;;GA;;;SY)'))
+$foreign = [DiagnosticFixtureJob]::Create('${foreignAcl}', ('O:' + $sid + 'D:P(A;;GA;;;' + $sid + ')'))
+if ($denied -eq [IntPtr]::Zero -or $foreign -eq [IntPtr]::Zero) { throw 'fixture creation failed' }
+[Console]::Out.WriteLine('{}')
+[Console]::In.ReadLine() | Out-Null
+`
+  const shell = trustedSystemPowerShell()
+  const child = spawn(shell.executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    { cwd: shell.cwd, env: shell.env, windowsHide: true, stdio: 'pipe' })
+  f.owned.push(child)
+  const done = exited(child)
+  await firstLine(child)
+  for (const [name, failure] of [[inaccessible, 'JOB_OPEN_DENIED'], [foreignAcl, 'JOB_OWNER_OR_ACL_MISMATCH']]) {
+    const checked = spawnSync(helper, ['terminate', '--job-name', name!], { encoding: 'utf8', windowsHide: true, timeout: 10_000 })
+    assert.equal(checked.status, 1)
+    assert.equal(checked.stdout, '')
+    assert.deepEqual(JSON.parse(checked.stderr), { error: failure })
+  }
+  child.stdin.end('\n')
+  assert.equal(await done, 0)
+  assert.deepEqual(probe(inaccessible), { exists: false, activeProcesses: 0 })
+})
 function receiptAcl(receipt: string) {
   const io = '\\\\?\\' + receipt
   const script = `$ErrorActionPreference='Stop'; [AppContext]::SetSwitch('Switch.System.IO.UseLegacyPathHandling',$false); [AppContext]::SetSwitch('Switch.System.IO.BlockLongPaths',$false); $acl=[IO.File]::GetAccessControl('${io.replaceAll("'", "''")}'); $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; @{protected=$acl.AreAccessRulesProtected;currentSid=$sid;aces=@($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | ForEach-Object { @{sid=$_.IdentityReference.Value;rights=[int]$_.FileSystemRights;type=[string]$_.AccessControlType;inherited=$_.IsInherited} })} | ConvertTo-Json -Depth 4 -Compress`

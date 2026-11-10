@@ -9,11 +9,39 @@ import { assertNoLegacyRuntimeProcess } from './legacyProcessCheck.js'
 import { atomicWrite } from './pairingStore.js'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-interface Ledger { schemaVersion: 1; generation: string; home: string; bootId: string; sessionId: number; ownerPid: number; jobs: string[]; business_started?: boolean }
+const globalPrefix = 'Global\\'
+const localPrefix = 'AidWorkRuntime.'
+interface LedgerFields { generation: string; home: string; ownerPid: number; jobs: string[]; business_started?: boolean }
+export type SupervisionLedger = LedgerFields & ({ schemaVersion: 1; bootId: string; sessionId: number } | { schemaVersion: 2; externalPython: boolean })
+type GlobalLedger = Extract<SupervisionLedger, { schemaVersion: 2 }>
+const isSession = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+export function supervisionLedgerFile(name: string): { schemaVersion: 1 | 2; generation: string } | null {
+  if (!name.toLowerCase().endsWith('.bin')) return null
+  const base = name.slice(0, -4), global = base.toLowerCase().startsWith('global-'), generation = global ? base.slice('global-'.length) : base
+  return uuid.test(generation) ? { schemaVersion: global ? 2 : 1, generation } : null
+}
+export function readSupervisionLedger(value: unknown, home: string, generation: string): SupervisionLedger {
+  const ledger = value as SupervisionLedger | null
+  const prefix = ledger?.schemaVersion === 2 ? globalPrefix + localPrefix : localPrefix
+  if (!ledger || !uuid.test(generation) || ledger.home !== home
+    || typeof ledger.generation !== 'string' || ledger.generation.toLowerCase() !== generation.toLowerCase()
+    || !Number.isSafeInteger(ledger.ownerPid) || ledger.ownerPid <= 0
+    || (ledger.business_started !== undefined && typeof ledger.business_started !== 'boolean')
+    || !Array.isArray(ledger.jobs) || ledger.jobs.length > 10_000 || new Set(ledger.jobs).size !== ledger.jobs.length
+    || ledger.jobs.some(job => typeof job !== 'string' || !job.startsWith(prefix) || !uuid.test(job.slice(prefix.length)))
+    || (ledger.schemaVersion === 2 ? typeof ledger.externalPython !== 'boolean'
+      : ledger.schemaVersion !== 1 || typeof ledger.bootId !== 'string' || !uuid.test(ledger.bootId) || !isSession(ledger.sessionId))) {
+    throw new Error('LOCAL_RECOVERY_EVIDENCE_INVALID')
+  }
+  return ledger
+}
+function receiptName(job: string): string {
+  return (job.startsWith(globalPrefix) ? job.slice(globalPrefix.length) : job) + '.receipt.json'
+}
 /** Fixed local launcher; no renderer, Device or model controls command arguments. */
 export class ProcessSupervision {
   readonly executable = resolve(dirname(fileURLToPath(import.meta.url)), 'native/RuntimeProcessSupervisor.exe')
-  private ledger?: Ledger
+  private ledger?: GlobalLedger
   private queue: Promise<void> = Promise.resolve()
   private recoveringResources = false
   constructor(private home: string, private node: string) {}
@@ -22,40 +50,35 @@ export class ProcessSupervision {
     if (existsSync(directory) && lstatSync(directory).isSymbolicLink()) throw new Error('supervision directory invalid')
     mkdirSync(directory, { recursive: true }); return directory
   }
-  private async command(args: string[]): Promise<Record<string, unknown>> {
+  private async command(args: string[], timeout = 20_000): Promise<Record<string, unknown>> {
     if (!existsSync(this.executable)) throw new Error('process supervisor missing')
-    return new Promise((accept, reject) => execFile(this.executable, args, { windowsHide: true, timeout: 20_000, maxBuffer: 65536 }, (error, stdout) => {
+    return new Promise((accept, reject) => execFile(this.executable, args, { windowsHide: true, timeout, maxBuffer: 65536 }, (error, stdout) => {
       if (error) { reject(new Error('process supervision unavailable')); return }
       try { accept(JSON.parse(stdout)) } catch { reject(new Error('process supervision invalid')) }
     }))
   }
-  private async bootId(): Promise<string> {
-    const result = await this.command(['boot-id'])
-    if (typeof result.bootId !== 'string' || !uuid.test(result.bootId)) throw new Error('boot identity invalid')
-    return result.bootId
-  }
-  private async write(ledger: Ledger) {
-    atomicWrite(join(this.directory(), `${ledger.generation}.bin`), await dpapiProtect(JSON.stringify(ledger)))
+  private async write(ledger: GlobalLedger) {
+    atomicWrite(join(this.directory(), `global-${ledger.generation}.bin`), await dpapiProtect(JSON.stringify(ledger)))
   }
   private async sessionId(): Promise<number> {
     const result = await this.command(['session-id'])
-    if (!Number.isSafeInteger(result.sessionId) || Number(result.sessionId) < 0) throw new Error('session identity invalid')
-    return result.sessionId as number
+    if (!isSession(result.sessionId)) throw new Error('session identity invalid')
+    return result.sessionId
   }
   async marker(instanceId: string): Promise<Record<string, unknown>> {
     if (process.platform !== 'win32') return {}
     if (!this.enabled) throw new Error('required process supervisor missing')
     const config = JSON.parse(readFileSync(join(this.home, 'config.json'), 'utf8').replace(/^\uFEFF/, ''))
     // External Python skill executors have not joined the Provider Job boundary.
-    const rebootOnly = Boolean(config.skills?.python)
-    this.ledger = { schemaVersion: 1, generation: instanceId, home: resolve(this.home), bootId: await this.bootId(), sessionId: await this.sessionId(), ownerPid: process.pid, jobs: [], business_started: false }
+    const externalPython = Boolean(config.skills?.python)
+    this.ledger = { schemaVersion: 2, generation: instanceId, home: resolve(this.home), externalPython, ownerPid: process.pid, jobs: [], business_started: false }
     await this.write(this.ledger)
-    return { schemaVersion: 2, supervision: await dpapiProtect(JSON.stringify({ generation: instanceId, home: resolve(this.home), bootId: this.ledger.bootId, sessionId: this.ledger.sessionId, rebootOnly })) }
+    return { schemaVersion: 3, supervision: await dpapiProtect(JSON.stringify({ generation: instanceId, home: resolve(this.home), externalPython })) }
   }
   async prepareLaunch(entry: string): Promise<{ command: string; args: string[] }> {
     if (!this.ledger) throw new Error('execution supervision not initialized')
     if (this.recoveringResources) throw new Error('LOCAL_RECOVERY_BUSY')
-    const jobName = `AidWorkRuntime.${randomUUID()}`
+    const jobName = `${globalPrefix}${localPrefix}${randomUUID()}`
     const work = this.queue.then(async () => { this.ledger!.jobs.push(jobName); await this.write(this.ledger!) })
     this.queue = work.catch(() => {}); await work
     const powershell = trustedSystemPowerShell()
@@ -63,45 +86,25 @@ export class ProcessSupervision {
     if (this.recoveringResources) throw new Error('LOCAL_RECOVERY_BUSY')
     if (!/^\d{17,19}$/.test(ownerStart)) throw new Error('owner identity invalid')
     return { command: this.executable, args: ['run', '--job-name', jobName, '--node', this.node, '--entry', entry,
-      '--owner-pid', String(process.pid), '--owner-start-time', ownerStart, '--receipt', join(this.directory(), `${jobName}.receipt.json`)] }
+      '--owner-pid', String(process.pid), '--owner-start-time', ownerStart, '--receipt', join(this.directory(), receiptName(jobName))] }
   }
   async recover(marker: string): Promise<boolean> {
     if (!this.enabled) return false
-    const parsed = JSON.parse(marker)
-    if (!uuid.test(parsed.instance_id)) throw new Error('marker invalid')
-    const digest = createHash('sha256').update(marker).digest('hex')
-    const currentBoot = await this.bootId()
-    let stopped = false
-    if (parsed.schemaVersion === 2 && typeof parsed.supervision === 'string') {
+    try {
+      const parsed = JSON.parse(marker.replace(/^\uFEFF/, ''))
+      if (!uuid.test(parsed?.instance_id) || ![2, 3].includes(parsed.schemaVersion) || typeof parsed.supervision !== 'string') return false
       const proof = JSON.parse(await dpapiUnprotect(parsed.supervision))
-      if (proof.generation !== parsed.instance_id || proof.home !== resolve(this.home) || !uuid.test(proof.bootId) || typeof proof.rebootOnly !== 'boolean') throw new Error('marker binding invalid')
-      if (proof.bootId !== currentBoot) stopped = true
-      // Named Jobs are session-scoped. Absence in another login session cannot
-      // prove the old session's tree stopped; a real reboot remains sufficient.
-      else if (proof.rebootOnly === false && proof.sessionId === await this.sessionId()) {
-        const ledger: Ledger = JSON.parse(await dpapiUnprotect(readFileSync(join(this.directory(), `${proof.generation}.bin`), 'utf8')))
-        if (ledger.schemaVersion !== 1 || ledger.home !== proof.home || ledger.generation !== proof.generation || ledger.bootId !== proof.bootId || ledger.sessionId !== proof.sessionId
-          || (ledger.business_started !== undefined && typeof ledger.business_started !== 'boolean')
-          || !Number.isSafeInteger(ledger.ownerPid) || !Array.isArray(ledger.jobs) || ledger.jobs.length > 10000
-          || ledger.jobs.some(job => typeof job !== 'string' || !job.startsWith('AidWorkRuntime.') || !uuid.test(job.slice(15)))) throw new Error('ledger binding invalid')
-        // Caller holds the home lease: old Host is gone. Kill only its protected,
-        // registered jobs. The launcher never enables breakaway or Chrome retention.
-        for (const job of ledger.jobs) {
-          const result = await this.command(['terminate', '--job-name', job])
-          if (result.activeProcesses !== 0) throw new Error('job stop unconfirmed')
-        }
-        stopped = true
-      }
-    } else if (Object.keys(parsed).join(',') === 'instance_id') {
-      const witnessFile = join(this.directory(), `legacy-${digest}.bin`)
-      if (existsSync(witnessFile)) {
-        const witness = JSON.parse(await dpapiUnprotect(readFileSync(witnessFile, 'utf8')))
-        if (witness.home !== resolve(this.home) || witness.digest !== digest || !uuid.test(witness.bootId)) throw new Error('legacy witness invalid')
-        stopped = witness.bootId !== currentBoot
-      } else atomicWrite(witnessFile, await dpapiProtect(JSON.stringify({ home: resolve(this.home), digest, bootId: currentBoot })))
-    } else throw new Error('unsupported execution marker')
-    if (stopped) atomicWrite(join(this.home, 'identity-reconciliation.bin'), await dpapiProtect(JSON.stringify({ markerDigest: digest, instanceId: parsed.instance_id })))
-    return stopped
+      if (!proof || proof.generation !== parsed.instance_id || proof.home !== resolve(this.home)) return false
+      const ledger = await this.readLedger(parsed.schemaVersion === 3 ? `global-${parsed.instance_id}.bin` : `${parsed.instance_id}.bin`)
+      if (parsed.schemaVersion === 3) {
+        if (ledger.schemaVersion !== 2 || ledger.externalPython !== proof.externalPython) return false
+      } else if (ledger.schemaVersion !== 1 || ledger.bootId !== proof.bootId || ledger.sessionId !== proof.sessionId || typeof proof.rebootOnly !== 'boolean') return false
+      // The caller holds the home lease. Only names bound by DPAPI can reach native termination.
+      if (!await this.stopLedgerJobs(ledger) || (ledger.schemaVersion === 2 ? ledger.externalPython : proof.rebootOnly)) return false
+      const digest = createHash('sha256').update(marker).digest('hex')
+      atomicWrite(join(this.home, 'identity-reconciliation.bin'), await dpapiProtect(JSON.stringify({ markerDigest: digest, instanceId: parsed.instance_id })))
+      return true
+    } catch { return false }
   }
   /** Trusted ordinary Provider dispatch only; observation never establishes business coverage. */
   async noteBusinessExecution(): Promise<void> {
@@ -123,27 +126,51 @@ export class ProcessSupervision {
     }
   }
 
-  private async sessionHasProcesses(sessionId: number): Promise<boolean> {
-    const shell = trustedSystemPowerShell()
-    return new Promise((accept, reject) => execFile(shell.executable, ['-NoProfile', '-NonInteractive', '-Command',
-      `$ErrorActionPreference='Stop'; [Console]::Out.Write(@(Get-CimInstance Win32_Process -Filter "SessionId=${sessionId}").Count)`],
-    { cwd: shell.cwd, env: shell.env, windowsHide: true, timeout: 15000, maxBuffer: 4096 }, (error, out) => {
-      if (error || !/^\d+$/.test(out.trim())) reject(new Error('LOCAL_RECOVERY_PROCESS_CHECK_UNAVAILABLE'))
-      else accept(Number(out.trim()) > 0)
-    }))
+  private async readLedger(name: string): Promise<SupervisionLedger> {
+    const expected = supervisionLedgerFile(name)
+    if (!expected) throw new Error('LOCAL_RECOVERY_EVIDENCE_INVALID')
+    const directory = join(this.home, 'process-supervision')
+    const file = join(directory, name)
+    const stat = lstatSync(file)
+    if (lstatSync(directory).isSymbolicLink() || !stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error('LOCAL_RECOVERY_EVIDENCE_INVALID')
+    const ledger = readSupervisionLedger(JSON.parse(await dpapiUnprotect(readFileSync(file, 'utf8'))), resolve(this.home), expected.generation)
+    if (ledger.schemaVersion !== expected.schemaVersion) throw new Error('LOCAL_RECOVERY_EVIDENCE_INVALID')
+    return ledger
   }
-
-  private async stoppedReceipt(job: string, ownerPid: number): Promise<boolean> {
-    const path = join(this.directory(), `${job}.receipt.json`)
-    if (!existsSync(path)) return false
+  private async receiptRemainingBusinessApps(job: string, ownerPid: number): Promise<number | undefined> {
+    const directory = join(this.home, 'process-supervision')
+    const file = join(directory, receiptName(job))
     try {
-      const wrapper = JSON.parse(readFileSync(path, 'utf8'))
-      if (wrapper.schemaVersion !== 1 || typeof wrapper.protectedData !== 'string' || lstatSync(path).isSymbolicLink()) return false
+      const stat = lstatSync(file)
+      if (lstatSync(directory).isSymbolicLink() || !stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) return
+      const wrapper = JSON.parse(readFileSync(file, 'utf8'))
+      if (wrapper.schemaVersion !== 1 || typeof wrapper.protectedData !== 'string') return
       const receipt = JSON.parse(await dpapiUnprotect(wrapper.protectedData))
-      return receipt.schemaVersion === 1 && receipt.jobName === job && receipt.ownerPid === ownerPid
-        && receipt.processStopped === true && receipt.remainingBusinessApps === 0
-        && Number.isSafeInteger(receipt.nodePid) && receipt.nodePid > 0
-    } catch { return false }
+      if (receipt.schemaVersion === 1 && receipt.jobName === job && receipt.ownerPid === ownerPid
+        && receipt.processStopped === true && Number.isSafeInteger(receipt.remainingBusinessApps) && receipt.remainingBusinessApps >= 0
+        && Number.isSafeInteger(receipt.nodePid) && receipt.nodePid > 0) return receipt.remainingBusinessApps
+    } catch { return }
+  }
+  async hasPreservedLegacyProcesses(job: string, ownerPid: number): Promise<boolean> {
+    return (await this.receiptRemainingBusinessApps(job, ownerPid) ?? 0) > 0
+  }
+  async stopLedgerJobs(ledger: SupervisionLedger, terminate = true, deadline = Date.now() + 20_000): Promise<boolean> {
+    if (ledger.jobs.length === 0) return true
+    // A Local name has no meaning outside its original session. There, only a
+    // direct exit receipt may release it. Global names require no session probe.
+    if (ledger.schemaVersion === 1 && ledger.sessionId !== await this.sessionId()) {
+      for (const job of ledger.jobs) if (Date.now() >= deadline || await this.receiptRemainingBusinessApps(job, ledger.ownerPid) !== 0) return false
+      return true
+    }
+    for (const job of ledger.jobs) {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) return false
+      const result = await this.command([terminate ? 'terminate' : 'probe', '--job-name', job], Math.min(20_000, remaining))
+      if (typeof result.exists !== 'boolean' || result.activeProcesses !== 0) return false
+      // Older helpers could deliberately leave Chrome behind after the name disappeared.
+      if (ledger.schemaVersion === 1 && !result.exists && await this.hasPreservedLegacyProcesses(job, ledger.ownerPid)) return false
+    }
+    return true
   }
 
   /** Caller owns this paired home's lease and the desktop lock; Provider admission
@@ -156,44 +183,15 @@ export class ProcessSupervision {
     try {
       await this.queue
       await this.checkLegacyProcesses()
-      const boot = await this.bootId(), session = await this.sessionId()
-      const files = readdirSync(this.directory()).filter(file => /^[0-9a-f-]{36}\.bin$/i.test(file)).sort()
-      const ledgers: Ledger[] = []
-      for (const file of files) {
-        const path = join(this.directory(), file)
-        if (lstatSync(path).isSymbolicLink() || lstatSync(path).size > 2 * 1024 * 1024) throw new Error('LOCAL_RECOVERY_EVIDENCE_INVALID')
-        let value: Ledger
-        try { value = JSON.parse(await dpapiUnprotect(readFileSync(path, 'utf8'))) } catch { throw new Error('LOCAL_RECOVERY_EVIDENCE_INVALID') }
-        if (value.schemaVersion !== 1 || value.home !== resolve(this.home) || !uuid.test(value.generation)
-          || file.toLowerCase() !== `${value.generation}.bin`.toLowerCase() || !uuid.test(value.bootId)
-          || !Number.isSafeInteger(value.sessionId) || value.sessionId < 0 || !Number.isSafeInteger(value.ownerPid) || value.ownerPid <= 0
-          || (value.business_started !== undefined && typeof value.business_started !== 'boolean')
-          || !Array.isArray(value.jobs) || value.jobs.length > 10000 || new Set(value.jobs).size !== value.jobs.length
-          || value.jobs.some(job => typeof job !== 'string' || !job.startsWith('AidWorkRuntime.') || !uuid.test(job.slice(15)))) throw new Error('LOCAL_RECOVERY_EVIDENCE_INVALID')
-        ledgers.push(value)
-      }
+      const ledgerFiles = () => readdirSync(this.directory()).filter(file => supervisionLedgerFile(file) || file.toLowerCase().startsWith('global-')).sort()
+      const files = ledgerFiles()
+      const ledgers: SupervisionLedger[] = []
+      for (const file of files) ledgers.push(await this.readLedger(file))
       // New homes and probe-only generations cannot manufacture coverage for a
       // historical cloud hold. Legacy ledgers predate the unreleased probe.
       if (!ledgers.some(value => value.jobs.length > 0 && value.business_started !== false)) throw new Error('LOCAL_RECOVERY_NO_EXECUTION_EVIDENCE')
-      for (const value of ledgers) {
-        if (value.bootId.toLowerCase() !== boot.toLowerCase() || value.jobs.length === 0) continue
-        if (value.sessionId !== session) {
-          let receipts = true
-          for (const job of value.jobs) {
-            const local = await this.command(['probe', '--job-name', job])
-            if (local.activeProcesses !== 0) throw new Error('LOCAL_RECOVERY_OTHER_SESSION')
-            if (!await this.stoppedReceipt(job, value.ownerPid)) receipts = false
-          }
-          if (!receipts && await this.sessionHasProcesses(value.sessionId)) throw new Error('LOCAL_RECOVERY_OTHER_SESSION')
-          continue
-        }
-        for (const job of value.jobs) {
-          const terminated = await this.command(['terminate', '--job-name', job])
-          const observed = await this.command(['probe', '--job-name', job])
-          if (terminated.activeProcesses !== 0 || observed.activeProcesses !== 0) throw new Error('LOCAL_RECOVERY_STOP_UNPROVED')
-        }
-      }
-      if (JSON.stringify(readdirSync(this.directory()).filter(file => /^[0-9a-f-]{36}\.bin$/i.test(file)).sort()) !== JSON.stringify(files)) throw new Error('LOCAL_RECOVERY_EVIDENCE_CHANGED')
+      for (const ledger of ledgers) if (!await this.stopLedgerJobs(ledger)) throw new Error('LOCAL_RECOVERY_STOP_UNPROVED')
+      if (JSON.stringify(ledgerFiles()) !== JSON.stringify(files)) throw new Error('LOCAL_RECOVERY_EVIDENCE_CHANGED')
       await this.checkLegacyProcesses()
       return { runtime_generation: this.ledger.generation, stop_evidence: 'supervised_device_boundary', resource_scope: 'managed_provider_pool' }
     } finally { this.recoveringResources = false }

@@ -12,6 +12,7 @@ import type { RuntimeHost } from '@aid/local-tool-host-core'
 import { inspectConnectionRecovery } from '../src/connectionRecoveryInspection.js'
 import { checkConnectionRecoveryResources as check, registerConnectionRecoveryReboot as register,
   recordFreshConnectionEpoch as fresh } from '../src/connectionRecoveryResources.js'
+import { ProcessSupervision } from '../src/processSupervision.js'
 
 const windows = { skip: process.platform !== 'win32' }
 const seal = (text: string) => Buffer.from(`fixture-seal:${text}`).toString('base64')
@@ -39,7 +40,7 @@ function fixture(t: TestContext) {
         else {
           const name = args[2]!
           if (args[0] === 'terminate' && state.failStop) { callback(new Error('fixture native failure'), '', ''); return }
-          if (args[0] === 'terminate') state.jobs.set(name, 0)
+          if (args[0] === 'terminate' && state.jobs.has(name)) state.jobs.set(name, 0)
           callback(null, JSON.stringify({ exists: state.jobs.has(name), activeProcesses: state.jobs.get(name) ?? 0 }), '')
         }
       })
@@ -76,8 +77,78 @@ function fixture(t: TestContext) {
     return { job, generation }
   }
   const run = (prepareReboot = false) => check(home, process.execPath, { prepareReboot })
-  return { home, state, file, metadata, ledger, run }
+  const global = (externalPython = false) => {
+    const generation = randomUUID(), job = `Global\\AidWorkRuntime.${randomUUID()}`
+    mkdirSync(join(home, 'process-supervision'), { recursive: true })
+    file(`process-supervision/global-${generation}.bin`, seal(JSON.stringify({ schemaVersion: 2, home, generation, externalPython, ownerPid: 12345, jobs: [job] })))
+    file('host-running.json', JSON.stringify({ instance_id: generation, schemaVersion: 3,
+      supervision: seal(JSON.stringify({ generation, home, externalPython })) }))
+    return { job, generation }
+  }
+  return { home, state, file, metadata, ledger, global, run }
 }
+
+test('global execution evidence queries and stops owned Jobs independently of boot and session', windows, async t => {
+  const f = fixture(t); f.metadata()
+  const { job } = f.global()
+  mkdirSync(join(f.home, 'result-outbox'))
+  f.file('result-outbox/original.json', 'persisted original receipt')
+  f.state.jobs.set(job, 2)
+  assert.deepEqual(await f.run(), { safe: false, needs_reboot: false, category: 'CONNECTION_RESOURCE_STOP_UNCONFIRMED' })
+  assert.deepEqual(f.state.commands, [['probe', '--job-name', job]])
+  f.state.boot = randomUUID(); f.state.session++
+  f.state.commands.length = 0
+  const supervision = new ProcessSupervision(f.home, process.execPath)
+  assert.equal(await supervision.recover(readFileSync(join(f.home, 'host-running.json'), 'utf8')), true)
+  assert.deepEqual(f.state.commands, [['terminate', '--job-name', job]])
+  assert.equal(f.state.jobs.get(job), 0)
+  assert.equal(readFileSync(join(f.home, 'credentials.bin'), 'utf8'), 'unchanged-fixture-credential')
+  assert.equal(readFileSync(join(f.home, 'result-outbox/original.json'), 'utf8'), 'persisted original receipt')
+})
+
+test('legacy Local Job in a different session requires its own protected exit receipt', windows, async t => {
+  const f = fixture(t); f.metadata()
+  const { job } = f.ledger({ boot: randomUUID(), session: f.state.session + 1 })
+  const supervision = new ProcessSupervision(f.home, process.execPath)
+  const marker = readFileSync(join(f.home, 'host-running.json'), 'utf8')
+  assert.equal(await supervision.recover(marker), false, 'A different boot GUID and a missing Local Job do not release the old process')
+  assert.deepEqual(f.state.commands, [['session-id']])
+  const receipt = (ownerPid: number) => JSON.stringify({ schemaVersion: 1, protectedData: seal(JSON.stringify({ schemaVersion: 1,
+    jobName: job, ownerPid, nodePid: 54321, processStopped: true, remainingBusinessApps: 0 })) })
+  f.file(`process-supervision/${job}.receipt.json`, receipt(22222))
+  assert.equal(await supervision.recover(marker), false, 'Another owner cannot release the recorded Job')
+  f.file(`process-supervision/${job}.receipt.json`, receipt(12345))
+  assert.equal(await supervision.recover(marker), true)
+  assert.ok(f.state.commands.every(command => command[0] === 'session-id'))
+  const local = f.ledger({ boot: randomUUID() }).job
+  f.state.commands.length = 0
+  f.state.jobs.set(local, 1)
+  assert.equal(await supervision.recover(readFileSync(join(f.home, 'host-running.json'), 'utf8')), true)
+  assert.deepEqual(f.state.commands, [['session-id'], ['terminate', '--job-name', local]])
+})
+
+test('an absent Local Job cannot override a protected receipt recording preserved Chrome', windows, async t => {
+  const f = fixture(t); f.metadata()
+  const { job } = f.ledger()
+  f.file(`process-supervision/${job}.receipt.json`, JSON.stringify({ schemaVersion: 1, protectedData: seal(JSON.stringify({ schemaVersion: 1,
+    jobName: job, ownerPid: 12345, nodePid: 54321, processStopped: true, remainingBusinessApps: 1 })) }))
+  const supervision = new ProcessSupervision(f.home, process.execPath)
+  assert.equal(await supervision.recover(readFileSync(join(f.home, 'host-running.json'), 'utf8')), false)
+  assert.deepEqual(await f.run(), { safe: false, needs_reboot: true, category: 'CONNECTION_RESOURCE_STOP_UNCONFIRMED' })
+})
+
+test('uncontained external Python does not prevent stopping its unrelated owned Provider Job', windows, async t => {
+  const f = fixture(t); f.metadata()
+  const { job } = f.global(true)
+  f.state.jobs.set(job, 2)
+  assert.deepEqual(await f.run(true), { safe: false, needs_reboot: false, category: 'CONNECTION_RESOURCE_STOP_UNCONFIRMED' })
+  assert.deepEqual(f.state.commands, [['terminate', '--job-name', job]])
+  assert.equal(f.state.jobs.get(job), 0)
+  f.state.commands.length = 0
+  assert.deepEqual(await register(f.home, process.execPath), { safe: false, needs_reboot: false, category: 'CONNECTION_RESOURCE_STOP_UNCONFIRMED' })
+  assert.deepEqual(f.state.commands, [], 'New global evidence does not register a boot witness')
+  assert.equal(fs.existsSync(join(f.home, 'connection-recovery-witness.bin')), false)
+})
 
 function readonlyHost(ownsExecution = false): RuntimeHost {
   return { getState: () => ({ state: 'blocked', blocked_reason: '管理密钥缺失，当前只读管理' }),

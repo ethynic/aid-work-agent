@@ -9,11 +9,12 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { dpapiProtect, dpapiUnprotect } from './dpapi.js'
 import { assertNoLegacyRuntimeProcess } from './legacyProcessCheck.js'
 import { atomicWrite } from './pairingStore.js'
-import { ProcessSupervision } from './processSupervision.js'
+import { ProcessSupervision, readSupervisionLedger, supervisionLedgerFile, type SupervisionLedger } from './processSupervision.js'
 
 export interface ConnectionRecoveryResourceResult { safe: boolean; needs_reboot: boolean; category: string }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const DIGEST = /^[0-9a-f]{64}$/
+const LEGACY_MARKER_WITNESS = /^legacy-[0-9a-f]{64}\.bin$/
 const WITNESS = 'connection-recovery-witness.bin'
 const EPOCH = 'connection-recovery-epoch.bin'
 const MAX_FILE = 2 * 1024 * 1024
@@ -30,6 +31,11 @@ interface Witness extends Kernel { schemaVersion: 1; home: string; resourcesDige
 interface Epoch extends Kernel { schemaVersion: 1; home: string }
 interface Ledger extends Kernel { schemaVersion: 1; home: string; generation: string; ownerPid: number; jobs: string[]; business_started?: boolean }
 interface Snapshot { digest: string; entries: string[]; marker?: string; markerUnreadable: boolean; files: Map<string, string | null>; supervisionEntries: string[] }
+function hasGlobalSupervision(resources: Snapshot): boolean {
+  if ([...resources.files.keys()].some(name => name.toLowerCase().startsWith('global-'))) return true
+  try { return resources.marker !== undefined && JSON.parse(resources.marker.replace(/^\uFEFF/, '')).schemaVersion === 3 }
+  catch { return false }
+}
 class ResourceFailure extends Error { constructor(readonly category: string) { super(category) } }
 const inspectionDeadline = new AsyncLocalStorage<number>()
 function remaining(): number {
@@ -231,8 +237,10 @@ export async function registerConnectionRecoveryReboot(home: string, nodeExecuta
   try {
     requireResource(process.platform === 'win32', 'CONNECTION_RESOURCE_PLATFORM_UNSUPPORTED')
     validateHome(home, nodeExecutable); await protectionAvailable()
+    const resources = snapshot(home)
+    if (hasGlobalSupervision(resources)) return result(false, false, 'CONNECTION_RESOURCE_STOP_UNCONFIRMED')
     const now = await kernel(new ProcessSupervision(home, nodeExecutable).executable)
-    await writeWitness(home, now, snapshot(home))
+    await writeWitness(home, now, resources)
     return result(false, true, 'CONNECTION_RESOURCE_REBOOT_PREPARED')
   } catch (error) { return result(false, error instanceof ResourceFailure && error.category === 'CONNECTION_RESOURCE_EVIDENCE_CHANGED', error instanceof ResourceFailure ? error.category : 'CONNECTION_RESOURCE_EVIDENCE_UNREADABLE') }
 }
@@ -270,6 +278,43 @@ export async function checkConnectionRecoveryResources(home: string, nodeExecuta
   // once the whole inspection expires, before Main's 120s IPC deadline.
   return inspectionDeadline.run(Date.now() + 55_000, () => checkResources(home, nodeExecutable, options))
 }
+async function checkGlobalResources(home: string, supervision: ProcessSupervision, resources: Snapshot, terminate: boolean): Promise<ConnectionRecoveryResourceResult> {
+  try {
+    // Keep historical reboot witnesses in the snapshot, but only Jobs prove stop here.
+    const ledgerFiles = [...resources.files].filter(([name]) => !LEGACY_MARKER_WITNESS.test(name))
+    requireResource(!resources.markerUnreadable && ledgerFiles.length <= MAX_LEDGERS)
+    const ledgers = new Map<string, SupervisionLedger>(), jobs = new Set<string>()
+    for (const [name, raw] of ledgerFiles) {
+      const expected = supervisionLedgerFile(name)
+      requireResource(expected && raw !== null)
+      const ledger = readSupervisionLedger(await protectedRecord(raw), home, expected.generation)
+      requireResource(ledger.schemaVersion === expected.schemaVersion && !ledgers.has(ledger.generation))
+      ledgers.set(ledger.generation, ledger)
+      for (const job of ledger.jobs) { requireResource(!jobs.has(job)); jobs.add(job) }
+      requireResource(jobs.size <= MAX_JOBS)
+    }
+    let unknownExternal = [...ledgers.values()].some(ledger => ledger.schemaVersion === 2 && ledger.externalPython)
+    if (resources.marker !== undefined) {
+      const marker: unknown = JSON.parse(resources.marker.replace(/^\uFEFF/, ''))
+      requireResource(record(marker) && exact(marker, ['instance_id', 'schemaVersion', 'supervision']) && uuid(marker.instance_id) && typeof marker.supervision === 'string')
+      const proof = await protectedRecord(marker.supervision), ledger = ledgers.get(marker.instance_id)
+      requireResource(ledger && proof.generation === marker.instance_id && proof.home === home)
+      if (marker.schemaVersion === 3) {
+        requireResource(ledger.schemaVersion === 2 && proof.externalPython === ledger.externalPython)
+      } else {
+        requireResource(marker.schemaVersion === 2 && ledger.schemaVersion === 1 && proof.bootId === ledger.bootId && proof.sessionId === ledger.sessionId && typeof proof.rebootOnly === 'boolean')
+        unknownExternal ||= proof.rebootOnly
+      }
+    }
+    if (snapshot(home).digest !== resources.digest) return result(false, false, 'CONNECTION_RESOURCE_EVIDENCE_CHANGED')
+    for (const ledger of ledgers.values()) {
+      if (!await supervision.stopLedgerJobs(ledger, terminate, Date.now() + remaining())) return result(false, false, 'CONNECTION_RESOURCE_STOP_UNCONFIRMED')
+    }
+    if (snapshot(home).digest !== resources.digest) return result(false, false, 'CONNECTION_RESOURCE_EVIDENCE_CHANGED')
+    if (unknownExternal) return result(false, false, 'CONNECTION_RESOURCE_STOP_UNCONFIRMED')
+    return result(true, false, 'CONNECTION_RESOURCE_SUPERVISED_STOPPED')
+  } catch { return result(false, false, 'CONNECTION_RESOURCE_EVIDENCE_UNREADABLE') }
+}
 async function checkResources(home: string, nodeExecutable: string,
   options: { prepareReboot: boolean }): Promise<ConnectionRecoveryResourceResult> {
   try {
@@ -281,9 +326,14 @@ async function checkResources(home: string, nodeExecutable: string,
       if (record(error) && error.code === 4) legacy = true
       else throw new ResourceFailure('CONNECTION_RESOURCE_LEGACY_CHECK_UNAVAILABLE')
     }
-    const executable = new ProcessSupervision(home, nodeExecutable).executable
-    const now = await kernel(executable)
+    const supervision = new ProcessSupervision(home, nodeExecutable)
     const resources = snapshot(home)
+    if (hasGlobalSupervision(resources)) {
+      if (legacy) return result(false, false, 'CONNECTION_RESOURCE_LEGACY_ACTIVE')
+      return checkGlobalResources(home, supervision, resources, options.prepareReboot)
+    }
+    const executable = supervision.executable
+    const now = await kernel(executable)
     const blocked = async (category: string) => {
       if (options.prepareReboot) {
         await writeWitness(home, now, snapshot(home))
@@ -338,7 +388,7 @@ async function checkResources(home: string, nodeExecutable: string,
       try {
         requireResource(raw !== null && ledgers.length < MAX_LEDGERS)
         const value = await protectedRecord(raw)
-        if (/^legacy-[0-9a-f]{64}\.bin$/.test(name)) {
+        if (LEGACY_MARKER_WITNESS.test(name)) {
           requireResource(exact(value, ['home', 'digest', 'bootId']) && value.home === home && value.digest === name.slice(7, -4) && uuid(value.bootId))
           if (legacyMarker && resources.marker !== undefined && value.digest === createHash('sha256').update(resources.marker.replace(/^\uFEFF/, '')).digest('hex') && !sameBoot(value.bootId, now.bootId)) legacyBootProof = true
           else if (sameBoot(value.bootId, now.bootId)) { incomplete = 'CONNECTION_RESOURCE_REBOOT_REQUIRED'; currentBootUnproved = true }
@@ -372,6 +422,7 @@ async function checkResources(home: string, nodeExecutable: string,
           const state = await command(executable, [options.prepareReboot ? 'terminate' : 'probe', '--job-name', job])
           requireResource(typeof state.exists === 'boolean' && Number.isSafeInteger(state.activeProcesses) && Number(state.activeProcesses) >= 0)
           if (state.activeProcesses !== 0) return blocked('CONNECTION_RESOURCE_ACTIVE')
+          if (!state.exists && await supervision.hasPreservedLegacyProcesses(job, ledger.ownerPid)) return blocked('CONNECTION_RESOURCE_STOP_UNCONFIRMED')
         } catch { remaining(); return blocked('CONNECTION_RESOURCE_STOP_UNCONFIRMED') }
       }
     }

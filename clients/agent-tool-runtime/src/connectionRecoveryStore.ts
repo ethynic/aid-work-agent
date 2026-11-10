@@ -193,19 +193,6 @@ export async function resumeConnectionRecovery(home: string, node: string): Prom
   intent.stage = 'complete'; await save(home, intent)
 }
 
-/** Same marker and ledger stay authoritative throughout management-only repair.
- * Core archives the marker only after this independently verified resource gate.
- */
-export async function recoverManagementRepairExecution(home: string, node: string): Promise<boolean> {
-  const intent = await load(home)
-  if (!intent || intent.stage !== 'complete' || intent.mode !== 'preserve' || identityDigest(home) !== intent.identity_digest) return false
-  const anchor = join(home, '.connection-recovery-anchor.bin')
-  if (!existsSync(anchor) || lstatSync(anchor).isSymbolicLink() || !lstatSync(anchor).isFile() || hash(readFileSync(anchor)) !== intent.anchor_sha256) return false
-  if (!(await checkConnectionRecoveryResources(home, node, { prepareReboot: false })).safe) return false
-  if (!existsSync(join(home, 'identity-reconciliation.bin'))) atomicWrite(join(home, 'identity-reconciliation.bin'), await dpapiProtect(JSON.stringify({ version: 1, recovery_epoch: intent.epoch, resources_stopped: true })))
-  return true
-}
-
 /** Main error projection only; protected intent + original archive anchor. */
 export async function hasArchivedConnectionRecovery(home: string): Promise<boolean> {
   const intent = await load(home)

@@ -100,8 +100,8 @@ function markerEvidence(home: string | null, status: RuntimeEvidenceStatus) {
   if (fileState.status !== 'read') return { ...fileState, schemaVersion: null }
   try {
     const marker = readJson(file)
-    if (typeof marker?.instance_id !== 'string' || (marker.schemaVersion !== undefined && (marker.schemaVersion !== 2 || typeof marker.supervision !== 'string'))) throw new Error()
-    return { ...fileState, schemaVersion: marker.schemaVersion === 2 ? 2 : 1 }
+    if (typeof marker?.instance_id !== 'string' || (marker.schemaVersion !== undefined && (![2, 3].includes(marker.schemaVersion) || typeof marker.supervision !== 'string'))) throw new Error()
+    return { ...fileState, schemaVersion: marker.schemaVersion === 3 ? 3 : marker.schemaVersion === 2 ? 2 : 1 }
   } catch { return { ...fileState, status: 'unreadable' as const, schemaVersion: null } }
 }
 function lastStopEvidence(home: string | null, status: RuntimeEvidenceStatus) {

@@ -44,7 +44,7 @@ import { loadPackagedTrust } from './productTrust.js'
 import { hasJournalCompletionProof } from '@aid/local-tool-host-core/legacy/completionProof'
 import { hasSessionCompletion } from './sessionTasks/completionProof.js'
 import { ProcessSupervision } from './processSupervision.js'
-import { resumeConnectionRecovery, recoverManagementRepairExecution } from './connectionRecoveryStore.js'
+import { resumeConnectionRecovery } from './connectionRecoveryStore.js'
 import { connectionFailure } from './connectionDiagnosis.js'
 import { recordFreshConnectionEpoch } from './connectionRecoveryResources.js'
 
@@ -170,7 +170,7 @@ export class LegacyExecution implements HostAdapter {
   protect = dpapiProtect
   unprotect = dpapiUnprotect
   executionMarker = (instanceId: string) => this.supervision.marker(instanceId)
-  recoverPreviousExecution = async (marker: string) => await this.supervision.recover(marker) || await recoverManagementRepairExecution(this.home, this.nodeExecutable)
+  recoverPreviousExecution = (marker: string) => this.supervision.recover(marker)
   device() {
     const config = loadConfig()
     return config ? { device_id: config.device_id, ...(typeof config.name === 'string' && config.name ? { name: config.name } : {}) } : undefined
