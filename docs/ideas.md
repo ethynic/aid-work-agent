@@ -44,6 +44,8 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261110-1003 | BOSS 简历读取链路提速（一期） | 📋 待开发 | 生产实测单份 46.6s（P90 58.2s），固定 sleep 占 ~12s。一期：段间/回顶/卡片间隔改随机 500-600ms、轮询 400/250ms、到底确认 1000ms、后续段快照减半，目标 ~38s/份；拼接算法升级与评分并行化列二期。10 项决策已逐条确认。 | [设计](system/boss-resume-read-speedup-design.md) | [计划](plans/plan-boss-resume-read-speedup.md) |
+| 20261110-0916 | 提示词直达生效与一键回退 | 📋 待开发 | 运行时删除标签解析层、直读最新版，保存即生效（9/30 宏陶事故根因）；新增回退上一版（带预览）；子智能体常驻裁决声明压制历史上下文惯性；下线标签/staging/草稿与死代码。 | [设计](system/prompt-direct-delivery-rollback-design.md) | [计划](plans/plan-prompt-direct-delivery-rollback.md) |
 | 20261109-1603 | 租户数字员工 LLM 提供者定制（移植管理后台配置+租户级开关） | 🔧 开发中（开发+单测完成，待提交部署） | 定制弹框支持指定 LLM 提供者与各 Provider Model 覆盖（与父定义同构 JSONB）；平台管理后台租户编辑弹框新增「允许修改LLM提供者」开关，默认关，关闭立即失效（fail-closed，行数据保留）。帮助文字已按操作指引规范内嵌弹框说明。 | — | — |
 | 20261107-0930 | AI合同助手（contract-generator 技能移植） | 🔧 部分完成（开发+单测完成，待提交部署） | 移植 workbuddy contract-generator 技能（四步合同生成工作流）并新建 ai-contract-assistant 子智能体；模板四渠道、取价走 knowledge_base_search。6 单测绿 + 容器加载验证通过，待真机对话验收。 | [设计](subagent/ai-contract-assistant/ai-contract-assistant-design.md) | — |
 | 20261027-2100 | 引擎 Loop 内同步压缩（长任务上下文膨胀根治） | 📋 待设计 | 背景：trace tr_runner_fa9f94ae 单次 run 50 迭代，prompt 25.7k→181k 全程无压缩（见 20261027-1800 条目 D 项核查结论）。现有同步压缩仅在 ContextAssembler.prepare（用户消息入口）触发，引擎 Loop 内无钩子；`context_token_count` 缓存与阈值配置均正常。方向：引擎 Loop 迭代间检查最后一次 model fact 的 prompt_tokens，超阈值（复用 min(0.7×模型上限,60000)）时同步执行压缩（DB 层 compress_now + memory reload + state.messages 重建），需保证 tool_call/tool_result 配对完整（reorder_history 已有此逻辑）与 checkpoint 协议一致性。属共享引擎核心高风险改动，须走独立设计 + 三智能体流程。 | — | — |
