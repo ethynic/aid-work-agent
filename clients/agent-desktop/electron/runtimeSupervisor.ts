@@ -3,6 +3,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { RuntimePlatformRequest, RuntimePlatformResponse, SelectedPackageSnapshot } from '@aid/local-tool-host-core'
 import { validRecoveryInspection, type RecoveryInspection } from './runtimeConnectionRecovery.js'
+import { RuntimeStartupFailure } from './runtimeStartup.js'
 
 interface Request { request_id: string; method: string; params: Record<string, string> }
 interface Reply { request_id: string; method: string; code: number; error: string; result: unknown }
@@ -134,12 +135,19 @@ export class RuntimeSupervisor {
     })
   }
 
-  async request(value: unknown): Promise<Reply> {
+  async request(value: unknown, context?: 'startup'): Promise<Reply> {
     const request = parseRuntimeRequest(value)
     if (!this.accepting) throw new Error('Runtime正在退出，请等待执行收尾')
-    const startup = await this.ensure()
+    let startup: Reply
+    try { startup = await this.ensure() } catch (error) {
+      if (context === 'startup') throw new RuntimeStartupFailure('runtime-login-handshake-failed', 'RuntimeStartupHandshakeFailed')
+      throw error
+    }
     if (!this.accepting) throw new Error('Runtime正在退出，请等待执行收尾')
-    if (startup.code !== 0) return { ...startup, request_id: request.request_id, method: request.method }
+    if (startup.code !== 0) {
+      if (context === 'startup') throw new RuntimeStartupFailure('runtime-login-handshake-failed', 'RuntimeStartupHandshakeRejected')
+      return { ...startup, request_id: request.request_id, method: request.method }
+    }
     const reply = await this.send(request.method, request.params)
     if (request.method === 'start' && reply.code === 0) this.stopOperation = undefined
     return { ...reply, request_id: request.request_id }

@@ -3,8 +3,12 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import test from 'node:test'
 import { RuntimeLogs, readLogHours, writeLogArchive } from '../electron/runtimeLogs.js'
+import { RuntimeStartupFailure, readRuntimeStartupState, resumeRuntimeAtLogin } from '../electron/runtimeStartup.js'
+import { RuntimeSupervisor } from '../electron/runtimeSupervisor.js'
 import { collectRuntimeLogs, recordDesktopDiagnostic } from '@aid/local-tool-host-core/legacy/logDiagnostics'
 import { readSafeZip } from '@aid/local-tool-host-core/plugins/package'
 
@@ -72,5 +76,67 @@ test('the production adapter reads its packaged Core collector without starting 
     assert.equal(snapshot.entries[0]?.event, 'runtime-host-initialization-failed')
     assert.deepEqual(snapshot.versions, { app: '0.0.33', host: '0.2.25', core: JSON.parse(readFileSync(path.join(core, 'package.json'), 'utf8')).version })
     assert.ok(snapshot.sources.every(source => source.name !== 'diagnostic-collector'))
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('a single export distinguishes handshake, state read, pending stop and start failures', async () => {
+  const root = rootFixture(), selected = path.join(root, 'startup-diagnostics.zip')
+  try {
+    const log = new RuntimeLogs({ ...options(root), chooseSave: async () => selected })
+    const scenarios = [
+      { failure: 'describe', event: 'runtime-login-handshake-failed' },
+      { failure: 'getState', event: 'runtime-login-state-read-failed' },
+      { failure: 'reconciling', event: 'runtime-login-stop-proof-pending' },
+      { failure: 'start', event: 'runtime-login-start-request-failed' },
+      { failure: 'operations.get', event: 'runtime-login-start-confirmation-failed' },
+    ]
+    for (const scenario of scenarios) {
+      const entry = path.join(root, 'fixture.cjs')
+      writeFileSync(entry, `
+const failure = ${JSON.stringify(scenario.failure)};
+process.on('message', request => {
+  const response = { request_id: request.request_id, method: request.method };
+  if (request.method === failure) {
+    process.send({ ...response, code: 4, error: 'fixture-private-host-error', result: null });
+    return;
+  }
+  const result = {
+    describe: { api_major: 1, instance_id: 'fixture-private-instance' },
+    getState: failure === 'reconciling' ? { state: 'reconciling' } : { state: 'stopped', device: { device_id: 'fixture-private-device' } },
+    start: { operation_id: 'fixture-private-operation' },
+  }[request.method];
+  if (!result || (failure === 'reconciling' && request.method === 'start')) process.exit(2);
+  process.send({ ...response, code: 0, error: '', result });
+});
+process.on('disconnect', () => process.exit(0));
+`)
+      let child: ReturnType<typeof spawn> | undefined
+      let exited: Promise<unknown[]> | undefined
+      const supervisor = new RuntimeSupervisor({
+        nodeExecutable: process.execPath, hostEntry: entry, home: root, supervisor: 'runtime_app',
+        requestTimeoutMs: 5_000, takeSelectedPackage: async () => { throw new Error('unused selection') },
+        onEvent() {}, onDisconnect() {},
+        spawnChild: (...args) => { child = spawn(...args); exited = once(child, 'exit'); return child },
+      })
+      const request = (value: unknown) => supervisor.request(value, 'startup')
+      try {
+        await assert.rejects(async () => {
+          await readRuntimeStartupState(request)
+          await resumeRuntimeAtLogin(request)
+        }, (error: unknown) => {
+          assert.ok(error instanceof RuntimeStartupFailure)
+          log.record(error.diagnosticEvent)
+          return true
+        })
+      } finally {
+        if (child?.connected) child.disconnect()
+        assert.deepEqual(await exited, [0, null], 'The Host must not attempt another operation after the startup failure')
+      }
+    }
+    assert.equal((await log.export()).canceled, false)
+    const contents = await readSafeZip(readFileSync(selected))
+    const events = contents.get('events.jsonl')!.toString()
+    assert.deepEqual(events.trim().split('\n').map(line => JSON.parse(line).event), scenarios.map(scenario => scenario.event))
+    assert.doesNotMatch(events, /fixture-private/)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

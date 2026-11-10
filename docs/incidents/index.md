@@ -20,6 +20,7 @@
 | 数字员工定制弹框扩展提示词不回显：迁移块原地改写致错键数据残留 | [tenant-agent-instance-migration-drift-incident.md](tenant-agent-instance-migration-drift-incident.md) | 2026-10-16 测试环境：10-14 迁移块草稿版落库后原地改写但 datetime 未变，水位已过的库永久漏跑，直用实例行 agent_id 错用 tenant_id 致弹框/列表覆盖项命不中（运行时靠 registry 回退掩盖）；补偿块纠偏结构与数据 + 运行时收敛为实例行权威（空即清空） |
 | Web 会话 subagent_id 为空显示「主智能体」 | [web-session-subagent-display-mislabel-incident.md](web-session-subagent-display-mislabel-incident.md) | 2026-09-07 生产：隐式建会话不写 subagent_id 致显示错标，实际执行/计费均正确（after-sales）；2026-10-16 复核问题已不存在，残余风险=隐式建会话路径仍不回写，新增聊天入口需检查 |
 | 微信客服读取异常宽表导致 Runner 中断 | [wecom-kf-excel-read-runner-interrupted-20261015.md](wecom-kf-excel-read-runner-interrupted-20261015.md) | 2026-10-15生产：Excel重复维度扫描阻塞222秒，旧KB数据未迁metadata；补迁与修复见关联计划。 |
+| 国腾 Runtime 断联与重复配对 | [guoteng-runtime-disconnect-20261110.md](guoteng-runtime-disconnect-20261110.md) | 隔离旧配对事务并核验旧执行后，原设备已恢复连续心跳。 |
 | Runtime协议3配对持续500：存量迁移水位跳过注册字段 | [runtime-registration-migration-watermark-incident.md](runtime-registration-migration-watermark-incident.md) | 2026-10-14：agent2水位18:00高于新增17:00迁移，字段未建；追加22:45幂等补偿。 |
 | Runtime安装向导点击安装后直接退出 | [runtime-installer-missing-fixture-env-incident.md](runtime-installer-missing-fixture-env-incident.md) | 2026-10-14：可选测试变量缺失留下NSIS错误标志，正常安装误判失败；隔离测试环境掩盖问题。 |
 | qwen3.7-flash 工具结果缓存数组化回显故障复盘 | [qwen-tool-message-cache-echo-incident.md](qwen-tool-message-cache-echo-incident.md) | 2026-08-19 线上故障：显式缓存"末尾标记"把 tool 消息 content 数组化（违反 OpenAI 兼容规范），qwen3.7-flash 概率性(~7%)… |

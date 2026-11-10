@@ -16,7 +16,7 @@ import { RuntimeConnectionRecovery } from './runtimeConnectionRecovery.js'
 import { RuntimeCleanConnection, readRuntimeConnectionInfo } from './runtimeCleanConnection.js'
 import { cleanupRuntimePreviousHome, prepareRuntimeInstallation, rotateRuntimeConnection, selectRuntimeConnection } from './runtimeInstallation.js'
 import { RuntimeSelections } from './runtimeSelection.js'
-import { RuntimeStartup, runtimeLoginLaunch, resumeRuntimeAtLogin } from './runtimeStartup.js'
+import { RuntimeStartup, RuntimeStartupFailure, runtimeLoginLaunch, readRuntimeStartupState, resumeRuntimeAtLogin } from './runtimeStartup.js'
 import { RuntimeUpdateIntent, runtimeUpdateExit, RUNTIME_UPDATE_EXIT_ARGUMENT, shouldResumeRuntime } from './runtimeUpdate.js'
 import { applicationMenuTemplate, resolvePlatformWindowOptions, shouldQuitWhenAllWindowsClosed } from './platform.js'
 import { normalizeDownloadUrl, normalizeExternalUrl, readDownloadBody, safeSuggestedName } from './systemCapabilities.js'
@@ -562,16 +562,15 @@ if (!hasSingleInstanceLock) {
           // Old installation resume records are not new-generation startup prerequisites.
           const intent = await updateIntent?.read().catch(() => undefined)
           if (maintenanceRequested || runtimeConnectionRecovery?.busy || await runtimeConnectionRecovery?.registrationBlocksExecution()) return
-          const reply = await runtimeSupervisor!.request({ request_id: randomUUID(), method: 'getState', params: {} })
-          if (reply.code !== 0) throw new Error('RuntimeStartupStateRejected')
+          await readRuntimeStartupState(value => runtimeSupervisor!.request(value, 'startup'))
           const recovered = runtimeSupervisor!.recoveredAfterInterruption
           if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && (cleanInstallation?.fresh && cleanInstallation.migrated || shouldResumeRuntime({ intent, recovered, login: loginLaunch }))) await resumeRuntimeAtLogin(value => {
             if (maintenanceRequested || runtimeConnectionRecovery?.busy) throw new Error('RuntimeMaintenanceInProgress')
-            return runtimeSupervisor!.request(value)
+            return runtimeSupervisor!.request(value, 'startup')
           })
           if (intent !== undefined && !maintenanceRequested && !runtimeConnectionRecovery?.busy) await updateIntent?.clear()
-        })().catch(() => {
-          logLifecycle('runtime-login-resume-failed')
+        })().catch(error => {
+          logLifecycle(error instanceof RuntimeStartupFailure ? error.diagnosticEvent : 'runtime-login-resume-failed')
           if (mainWindow) revealWindow(mainWindow)
         })
       }

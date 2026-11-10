@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import type { RuntimeLoginDiagnosticEvent } from '@aid/local-tool-host-core/legacy/logDiagnostics'
 
 export const RUNTIME_LOGIN_ARGUMENT = '--aidwork-runtime-login'
 
@@ -35,25 +36,46 @@ export class RuntimeStartup {
   }
 }
 
+export class RuntimeStartupFailure extends Error {
+  constructor(readonly diagnosticEvent: RuntimeLoginDiagnosticEvent, message: string) { super(message) }
+}
+
+type StartupRequest = (value: unknown) => Promise<{ code: number; result: unknown }>
+
+async function requestStartupStage(request: StartupRequest, method: 'getState' | 'start' | 'operations.get',
+  params: Record<string, string>, event: RuntimeLoginDiagnosticEvent, message: string) {
+  let reply: Awaited<ReturnType<StartupRequest>>
+  try { reply = await request({ request_id: randomUUID(), method, params }) } catch (error) {
+    if (error instanceof RuntimeStartupFailure) throw error
+    throw new RuntimeStartupFailure(event, message)
+  }
+  if (reply.code !== 0) throw new RuntimeStartupFailure(event, message)
+  return reply
+}
+
+export function readRuntimeStartupState(request: StartupRequest) {
+  return requestStartupStage(request, 'getState', {}, 'runtime-login-state-read-failed', 'RuntimeLoginStateRejected')
+}
+
 /** A single login intent uses the normal Host port; never retries uncertain starts. */
-export async function resumeRuntimeAtLogin(request: (value: unknown) => Promise<{ code: number; result: unknown }>, wait: () => Promise<void> = () => new Promise(resolve => setTimeout(resolve, 500))): Promise<void> {
-  const state = await request({ request_id: randomUUID(), method: 'getState', params: {} })
-  if (state.code !== 0) throw new Error('RuntimeLoginStateRejected')
-  if (!state.result || typeof state.result !== 'object') throw new Error('RuntimeLoginStateInvalid')
+export async function resumeRuntimeAtLogin(request: StartupRequest, wait: () => Promise<void> = () => new Promise(resolve => setTimeout(resolve, 500))): Promise<void> {
+  const state = await readRuntimeStartupState(request)
+  if (!state.result || typeof state.result !== 'object') throw new RuntimeStartupFailure('runtime-login-state-read-failed', 'RuntimeLoginStateInvalid')
   const snapshot = state.result as { state?: string; device?: { device_id?: string }; connection?: string }
-  if (['reconciling', 'blocked'].includes(snapshot.state ?? '') || snapshot.connection === 'revoked') throw new Error('RuntimeLoginNeedsAttention')
-  if (snapshot.state !== 'stopped' || !snapshot.device?.device_id || ['unpaired', 'revoked'].includes(snapshot.connection ?? '')) return
-  const started = await request({ request_id: randomUUID(), method: 'start', params: { request_key: randomUUID() } })
-  if (started.code !== 0) throw new Error('RuntimeLoginStartRejected')
+  if (snapshot.state === 'reconciling') throw new RuntimeStartupFailure('runtime-login-stop-proof-pending', 'RuntimeLoginNeedsAttention')
+  if (snapshot.state === 'blocked') throw new RuntimeStartupFailure('runtime-login-host-blocked', 'RuntimeLoginNeedsAttention')
+  if (snapshot.connection === 'revoked') throw new RuntimeStartupFailure('runtime-login-device-revoked', 'RuntimeLoginNeedsAttention')
+  if (snapshot.state !== 'stopped' || !snapshot.device?.device_id || snapshot.connection === 'unpaired') return
+  const started = await requestStartupStage(request, 'start', { request_key: randomUUID() }, 'runtime-login-start-request-failed', 'RuntimeLoginStartRejected')
   const operation = started.result as { operation_id?: string; status?: string } | null
-  if (!operation?.operation_id) throw new Error('RuntimeLoginOperationInvalid')
+  if (!operation?.operation_id) throw new RuntimeStartupFailure('runtime-login-start-confirmation-failed', 'RuntimeLoginOperationInvalid')
   for (let attempt = 0; attempt < 60; attempt++) {
-    const reply = await request({ request_id: randomUUID(), method: 'operations.get', params: { operation_id: operation.operation_id } })
+    const reply = await requestStartupStage(request, 'operations.get', { operation_id: operation.operation_id }, 'runtime-login-start-confirmation-failed', 'RuntimeLoginStartFailed')
     const result = reply.result as { status?: string; code?: number } | null
-    if (reply.code !== 0 || !result || ['failed', 'reconciling'].includes(result.status ?? '')) throw new Error('RuntimeLoginStartFailed')
+    if (!result || ['failed', 'reconciling'].includes(result.status ?? '')) throw new RuntimeStartupFailure('runtime-login-start-confirmation-failed', 'RuntimeLoginStartFailed')
     if (result.status === 'succeeded' && result.code === 0) return
-    if (result.status !== 'running') throw new Error('RuntimeLoginOperationInvalid')
+    if (result.status !== 'running') throw new RuntimeStartupFailure('runtime-login-start-confirmation-failed', 'RuntimeLoginOperationInvalid')
     await wait()
   }
-  throw new Error('RuntimeLoginStartUnconfirmed')
+  throw new RuntimeStartupFailure('runtime-login-start-unconfirmed', 'RuntimeLoginStartUnconfirmed')
 }

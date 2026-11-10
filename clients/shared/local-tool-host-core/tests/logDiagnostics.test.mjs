@@ -7,6 +7,21 @@ import test from 'node:test'
 import { collectRuntimeLogs, projectRuntimeLog, recordDesktopDiagnostic } from '../dist/legacy/logDiagnostics.js'
 import { resolveRuntimeHome } from '../dist/legacy/diagnostics.js'
 
+test('exports fixed startup failure stages alongside historical generic failures without adding details', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'aid-log-startup-stages-'))
+  try {
+    const now = Date.now()
+    const events = ['runtime-login-resume-failed', 'runtime-login-handshake-failed', 'runtime-login-state-read-failed',
+      'runtime-login-stop-proof-pending', 'runtime-login-host-blocked', 'runtime-login-device-revoked',
+      'runtime-login-start-request-failed', 'runtime-login-start-confirmation-failed', 'runtime-login-start-unconfirmed']
+    events.forEach((event, index) => assert.equal(recordDesktopDiagnostic(root, event, now - events.length + index), true, event))
+    assert.equal(recordDesktopDiagnostic(root, 'runtime-login-state-read-failed:fixture-private-value', now), false)
+    const snapshot = collectRuntimeLogs({ desktopDirectory: root, now })
+    assert.deepEqual(snapshot.entries.map(entry => entry.event), events)
+    assert.ok(snapshot.entries.every(entry => entry.level === 'error'))
+    assert.doesNotMatch(JSON.stringify(snapshot), /fixture-private-value/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
 const now = Date.parse('2026-11-02T08:00:00.000Z'), at = '2026-11-02T07:00:00.000Z', invocation = '02ecfd46-75ae-452d-b239-c6b69f9ee7eb'
 const fixture = () => mkdtempSync(path.join(tmpdir(), 'aid-log-view-'))
 const profile = { profile: 'acceptance', userDataDir: 'runtime-app', legacyHomeDir: 'legacy-runtime' }

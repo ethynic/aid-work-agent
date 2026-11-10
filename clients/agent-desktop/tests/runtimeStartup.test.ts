@@ -84,3 +84,30 @@ test('accepted start failure or timeout surfaces without resubmitting start', as
     assert.equal(methods.filter(method => method === 'start').length, 1)
   }
 })
+
+test('startup diagnostics distinguish state read, old execution and accepted start failures without keeping the request error', async () => {
+  const stopped = { state: 'stopped', device: { device_id: 'diagnostic-test-device' } }
+  const scenarios = [
+    { replies: [new Error('fixture-sensitive-transport-detail')], expected: 'runtime-login-state-read-failed', methods: ['getState'] },
+    { replies: [{ code: 4, result: null }], expected: 'runtime-login-state-read-failed', methods: ['getState'] },
+    { replies: [{ code: 0, result: { state: 'reconciling' } }], expected: 'runtime-login-stop-proof-pending', methods: ['getState'] },
+    { replies: [{ code: 0, result: { state: 'blocked' } }], expected: 'runtime-login-host-blocked', methods: ['getState'] },
+    { replies: [{ code: 0, result: { state: 'stopped', connection: 'revoked' } }], expected: 'runtime-login-device-revoked', methods: ['getState'] },
+    { replies: [{ code: 0, result: stopped }, { code: 11, result: null }], expected: 'runtime-login-start-request-failed', methods: ['getState', 'start'] },
+    { replies: [{ code: 0, result: stopped }, { code: 0, result: { operation_id: 'op' } }, { code: 0, result: { status: 'reconciling' } }], expected: 'runtime-login-start-confirmation-failed', methods: ['getState', 'start', 'operations.get'] },
+  ]
+  for (const scenario of scenarios) {
+    const calls: string[] = []
+    await assert.rejects(resumeRuntimeAtLogin(async value => {
+      const reply = scenario.replies[calls.length]!
+      calls.push((value as { method: string }).method)
+      if (reply instanceof Error) throw reply
+      return reply
+    }), (error: Error & { diagnosticEvent?: string }) => {
+      assert.equal(error.diagnosticEvent, scenario.expected)
+      assert.doesNotMatch(String(error), /fixture-sensitive/)
+      return true
+    })
+    assert.deepEqual(calls, scenario.methods)
+  }
+})

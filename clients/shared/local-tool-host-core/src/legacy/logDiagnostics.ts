@@ -20,11 +20,24 @@ export interface RuntimeLogSnapshot {
   range: { from: string; to: string; observedFrom: string | null; observedTo: string | null }
   entries: RuntimeLogEntry[]; sources: RuntimeLogSource[]; health: RuntimeLogHealth | null; truncated: boolean
 }
+const RUNTIME_LOGIN_FAILURES = {
+  'runtime-login-resume-failed': 'Runtime 自动启动失败',
+  'runtime-login-handshake-failed': 'Runtime 管理握手失败',
+  'runtime-login-state-read-failed': 'Runtime 自动启动时无法读取状态',
+  'runtime-login-stop-proof-pending': 'Runtime 自动启动前执行停稳待核对',
+  'runtime-login-host-blocked': 'Runtime 管理状态阻止自动启动',
+  'runtime-login-device-revoked': '设备授权已失效，Runtime 未自动启动',
+  'runtime-login-start-request-failed': 'Runtime 自动启动请求未获确认',
+  'runtime-login-start-confirmation-failed': 'Runtime 自动启动操作失败或无法读取结果',
+  'runtime-login-start-unconfirmed': 'Runtime 自动启动结果未确认',
+} as const
+export type RuntimeLoginDiagnosticEvent = keyof typeof RUNTIME_LOGIN_FAILURES
 export const DESKTOP_DIAGNOSTIC_EVENTS: Readonly<Record<string, string>> = Object.freeze({
   'startup-failed': '客户端启动失败', 'startup-configuration-failed': '客户端配置读取失败',
   'api-configuration-loaded': '客户端配置已加载', 'runtime-host-initialization-failed': 'Runtime 初始化失败',
   'renderer-gone': '客户端页面进程退出', 'load-failed': '客户端页面加载失败',
-  'runtime-login-resume-failed': 'Runtime 自动启动失败', 'runtime-login-registration-failed': '自动启动设置失败',
+  ...RUNTIME_LOGIN_FAILURES,
+  'runtime-login-registration-failed': '自动启动设置失败',
   'runtime-update-intent-clear-failed': '更新启动状态清理失败', 'updater-disabled': '自动更新未启用',
   'window-state-save-failed': '窗口状态保存失败', 'activate-failed': '客户端窗口打开失败',
   'deep-link-rejected': '客户端链接未被接受', 'smoke-timeout': '客户端启动检查超时', 'smoke-failed': '客户端启动检查失败',
@@ -92,7 +105,7 @@ function projectDesktop(line: string): RuntimeLogEntry | null {
   try { record = JSON.parse(line) } catch { return null }
   if (!record || typeof record !== 'object' || typeof record.at !== 'string' || !Number.isFinite(Date.parse(record.at))
     || typeof record.event !== 'string' || !Object.hasOwn(DESKTOP_DIAGNOSTIC_EVENTS, record.event)) return null
-  return { at: new Date(record.at).toISOString(), source: 'desktop', level: record.event.includes('failed') || record.event === 'renderer-gone' ? 'error' : 'info', event: record.event, summary: DESKTOP_DIAGNOSTIC_EVENTS[record.event]! }
+  return { at: new Date(record.at).toISOString(), source: 'desktop', level: record.event.includes('failed') || record.event === 'renderer-gone' || Object.hasOwn(RUNTIME_LOGIN_FAILURES, record.event) ? 'error' : 'info', event: record.event, summary: DESKTOP_DIAGNOSTIC_EVENTS[record.event]! }
 }
 
 function readSource(file: string, name: string, project: (line: string) => RuntimeLogEntry | null, from: number, to: number): { source: RuntimeLogSource; entries: RuntimeLogEntry[] } {
