@@ -39,6 +39,32 @@ python.exe clients/runtime-plugin-packaging/prepare-localdb.py --output (Join-Pa
 
 验收 BOSS 和 WeCom 共用已登记的 `aidwork-acceptance-cli-v1`。本机构建配置在 `%LOCALAPPDATA%\AidWorkBuild\signers\acceptance-cli-v1\signer.json`，可用 `-Signer` 显式覆盖。换机构建由构建机管理员配置已登记的签名者。该配置指向的私钥只供签名进程使用。交付包保存公开根和签名报告。
 
+### Windows 换会话找不到验收签名者
+
+Windows 安装版 Codex 可能将 `%LOCALAPPDATA%\AidWorkBuild` 重定向到自己的 `LocalCache\Local`。资源管理器或另一个 agent 看不到默认目录时，先检查本机已验证的 Codex 实际配置路径。在执行打包的同一个 PowerShell 会话运行：
+
+```powershell
+$local = [Environment]::GetFolderPath('LocalApplicationData')
+$relative = 'AidWorkBuild\signers\acceptance-cli-v1\signer.json'
+$signer = Join-Path $local $relative
+if (-not (Test-Path -LiteralPath $signer -PathType Leaf)) {
+    $signer = Join-Path $local "Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\Local\$relative"
+}
+if (-not (Test-Path -LiteralPath $signer -PathType Leaf)) {
+    throw "验收签名配置在当前会话不可访问：$signer。请切回原构建会话或由构建机管理员恢复。"
+}
+$meta = Get-Content -LiteralPath $signer -Raw -Encoding UTF8 | ConvertFrom-Json
+$keyFile = $meta.private_key_path
+if ($meta.key_id -ne 'aidwork-acceptance-cli-v1' -or -not $keyFile) { throw '验收签名配置与预期发布者不符' }
+if (-not [IO.Path]::IsPathRooted($keyFile)) { $keyFile = Join-Path (Split-Path -Parent $signer) $keyFile }
+if (-not (Test-Path -LiteralPath $keyFile -PathType Leaf)) { throw '配置引用的密钥文件在当前会话不可访问' }
+Write-Output "可用签名配置：$signer"
+```
+
+从仓库根目录用 `-Signer $signer` 显式出包。例如 `powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Boss -SourceRef HEAD -Signer $signer`。`HEAD` 应替换为已核对的源码提交，WeCom 同理使用 `-Component Wecom`。`-Plan` 不读取签名配置，能运行 `-Plan` 只代表参数和构建计划可用。检查时仅输出配置文件路径和必要的通过状态，密钥内容、配置正文和密钥路径留在构建机。
+
+两个位置都不可访问时，先找原构建会话或由管理员恢复既有签名者。确认确实无法恢复时再安排发布者轮换与 Runtime 配套验证。第 6 节的随机测试根只用于隔离试验，现有客户 Runtime 需要信任发布者才能导入。
+
 验收公开根默认用仓库的 `clients/runtime-plugin-packaging/trust/acceptance-roots.json`。普通补丁复用稳定发布者和现有公开根。新增或轮换发布者按[公开根登记工具](../../clients/runtime-plugin-packaging/register-publisher-trust.mjs)单独处理。历史公钥、范围和已交付兼容性需要保留。
 
 `-ReleaseId` 缺省前缀分别为 `boss-<版本>`、`wecom-<版本>`，封装会追加对应 Provider 后缀。显式提供时作为本批所选插件的公共前缀，后缀仍分别绑定各自 Provider。
@@ -89,7 +115,7 @@ powershell.exe -NoProfile -File $release -Component Wecom -SourceRef HEAD -Targe
 
 | 表现 | 处理 |
 |---|---|
-| 找不到 Signer | 看预检输出的实际路径，使用已登记的本机配置或显式传 `-Signer` |
+| 找不到 Signer 或看不到 AidWorkBuild | 按第 4 节检查默认位置和 Codex 重定向位置，在当前会话核对后显式传 `-Signer` |
 | 找不到 WeCom 便携 Python | 按第 2 节准备资产或指定现有资产目录 |
 | 版本对了但功能没进包 | 对照 `build-info.json` 的 `baseCommit`，检查该功能是否在 `-SourceRef` 中 |
 | 插件验签通过，目标机仍拒绝 | 传该目标的 `-TargetRuntimeResources` 做兼容预检，必要时重新配套出包 |
