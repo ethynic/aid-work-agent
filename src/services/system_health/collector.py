@@ -179,6 +179,13 @@ def _collect_runner_section() -> "tuple[Dict[str, Any], List[str]]":
         cur.execute("SELECT COUNT(*) AS cnt FROM agent_runner_alerts WHERE ended_at IS NULL")
         section["active_alerts"] = int(cur.fetchone()["cnt"])
 
+    # 总槽位 = runner-worker 副本数（与 worker 容器共用同一 .env 的部署配置口径，默认 1）；
+    # 配置值非容器实况（副本崩溃不扣减），仅作容量对照展示
+    try:
+        section["worker_slots"] = max(1, int(os.environ.get("AGENT_RUNNER_WORKER_SLOTS", "1")))
+    except ValueError:
+        section["worker_slots"] = 1
+
     return section, fingerprint
 
 
