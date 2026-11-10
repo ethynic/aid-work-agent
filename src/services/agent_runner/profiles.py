@@ -24,16 +24,18 @@ class ProfileCatalog:
 
     def resolve(self, profile_id, tenant_id=None):
         registry = self.registry()
-        # Custom DB-defined profiles use the same configuration parser as existing
-        # callers, without obtaining their shared Agent/resource objects.
-        config = registry.get(profile_id)
-        if config is None and tenant_id:
-            # 租户数字员工副本实例不进全局 registry（无租户上下文），按实例行
-            # 与父定义合并解析；未命中实例的标准 id 仍保持原 404 口径。
+        # 有租户上下文时先解析租户数字员工实例（直用实例与副本实例），与
+        # factory.get_runtime_config 的顺序一致——父定义（内置/DB 定义）常驻
+        # registry，若先 registry.get 命中，实例行的 LLM/展示覆盖永远不生效；
+        # 未命中实例（普通 DB 定义/内置 agent）回退 registry.get，行为不变。
+        config = None
+        if tenant_id:
             from src.subagents.tenant_resolver import resolve_tenant_config
-            merged = resolve_tenant_config(registry, tenant_id, profile_id)
-            if merged is not None and merged.dir_name == profile_id:
-                config = merged
+            config = resolve_tenant_config(registry, tenant_id, profile_id)
+        if config is None:
+            # Custom DB-defined profiles use the same configuration parser as existing
+            # callers, without obtaining their shared Agent/resource objects.
+            config = registry.get(profile_id)
         if not config or config.dir_name != profile_id:
             raise RunnerError("PROFILE_NOT_FOUND", 404)
         fingerprint = hashlib.sha256(canonical_json(config.model_dump(mode="json")).encode()).hexdigest()
