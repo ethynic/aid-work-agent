@@ -60,7 +60,6 @@ THRESHOLDS: Dict[str, Dict[str, Any]] = {
     "business.error_rate_today": {"watch": 0.05, "critical": 0.15},
     "business.errors_last_hour": {"watch": 20, "critical": 100},
     "business.duration_p95_ms": {"watch": 60000, "critical": 120000},
-    "model_error_rate_today": {"watch": 0.05, "critical": 0.2},
 }
 
 _STATE_ORDER = {"normal": 0, "watch": 1, "critical": 2, "error": 3}
@@ -176,12 +175,6 @@ def discretize(snapshot: Dict[str, Any]) -> Dict[str, str]:
             st = _discretize_one(biz.get(key), THRESHOLDS[f"business.{key}"], derived)
             if st:
                 states[f"business.{key}"] = st
-
-    # 模型面：复用 chat_records 口径（status failed 与 duration 分位）
-    if biz.get("error_rate_today") is not None:
-        st = _discretize_one(biz["error_rate_today"], THRESHOLDS["model_error_rate_today"], derived)
-        if st:
-            states["model_error_rate_today"] = st
 
     return states
 

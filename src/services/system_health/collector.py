@@ -262,7 +262,7 @@ def _collect_system_section(prev_snapshot: Optional[Dict[str, Any]]) -> Dict[str
 
 
 def _collect_business_section() -> Dict[str, Any]:
-    """业务面：在线用户/今日请求量/今日错误率/错误日志增量。"""
+    """业务面：在线用户/今日请求量/今日对话失败率/错误日志增量。"""
     from src.db.database import get_db_connection
 
     section: Dict[str, Any] = {}
