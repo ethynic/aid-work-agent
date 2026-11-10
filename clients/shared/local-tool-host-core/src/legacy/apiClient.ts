@@ -72,6 +72,14 @@ export interface CleanPairRequest {
   name: string; platform: string; runtime_version: string; capabilities: Record<string, unknown>
   machine_fingerprint: string; previous_device_token?: string
 }
+export interface PairingPreparation {
+  preparation_id: string; preparation_token: string
+}
+export interface PairingProof extends PairingPreparation {
+  registration_id: string; registration_token: string
+}
+export type PairingStatus = { state: 'committed'; device_id: string } | { state: 'prepared' | 'expired' | 'rejected' }
+const pairingId = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 
 export interface HeartbeatResponse {
   selected: boolean
@@ -321,6 +329,37 @@ export class ApiClient {
       || typeof res.device_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(res.device_id)
       || res.device_token !== req.registration_token) throw new ApiError(502, '服务器未完成新版连接注册，请升级配套服务端', undefined, 'PAIRING_PROTOCOL_UNSUPPORTED')
     return { device_id: res.device_id, device_token: req.registration_token }
+  }
+
+  private async pairingPhase<T extends { registration_id: string }>(action: 'prepare' | 'confirm' | 'status', body: T): Promise<Record<string, unknown>> {
+    const result = await this.post(`/api/local-tools/runtime/pair/${action}`, body, { auth: false, classifyPairingRedirect: true }) as Record<string, unknown> | null
+    if (!result || result.success !== true || result.pairing_protocol !== 4 || result.registration_id !== body.registration_id) {
+      throw new ApiError(502, '无法核验配对协议回执', undefined, 'PAIRING_RECEIPT_INVALID')
+    }
+    return result
+  }
+
+  async preparePairing(req: CleanPairRequest, code: string): Promise<PairingPreparation> {
+    const result = await this.pairingPhase('prepare', { ...req, pairing_protocol: 4, code })
+    if (!pairingId(result.preparation_id) || typeof result.preparation_token !== 'string' || !/^[0-9a-f]{64}$/.test(result.preparation_token)) {
+      throw new ApiError(502, '无法核验配对准备回执', undefined, 'PAIRING_RECEIPT_INVALID')
+    }
+    return { preparation_id: result.preparation_id, preparation_token: result.preparation_token }
+  }
+
+  async confirmPairing(proof: PairingProof): Promise<string> {
+    const result = await this.pairingPhase('confirm', proof)
+    if (result.registration_completed !== true || !pairingId(result.device_id)) {
+      throw new ApiError(502, '无法核验配对确认回执', undefined, 'PAIRING_RECEIPT_INVALID')
+    }
+    return result.device_id
+  }
+
+  async readPairingStatus(proof: PairingProof): Promise<PairingStatus> {
+    const result = await this.pairingPhase('status', proof)
+    if (result.state === 'committed' && pairingId(result.device_id)) return { state: 'committed', device_id: result.device_id }
+    if (result.state === 'prepared' || result.state === 'expired' || result.state === 'rejected') return { state: result.state }
+    throw new ApiError(502, '无法核验配对状态', undefined, 'PAIRING_RECEIPT_INVALID')
   }
 
   async activateDevice(): Promise<void> {

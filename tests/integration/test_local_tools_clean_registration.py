@@ -306,14 +306,15 @@ def test_new_ticket_cannot_replace_target_with_existing_winner():
     assert len(repository.list_devices(tenant, user)) == 2
 
 
-def test_api_retry_and_activation_are_authenticated_and_target_free():
+def test_old_pair_route_cannot_repeat_pairing_and_old_token_still_activates():
     tenant, user = scope()
     app = FastAPI()
     app.include_router(api.router)
     values = request(ticket(tenant, user))
+    assert pairing.pair(**values)
     with TestClient(app) as client:
         paired = client.post("/api/local-tools/runtime/pair", json=values)
-        assert paired.status_code == 200
+        assert paired.status_code == 426
         values.pop("code")
         assert client.post("/api/local-tools/runtime/pair", json=values).json() == paired.json()
         assert client.post("/api/local-tools/runtime/activate", json={}).status_code == 401

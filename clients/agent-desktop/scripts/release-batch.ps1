@@ -450,8 +450,8 @@ $readme = @"
 $(if ($includeRuntime -and ($Unsigned -or $ReleaseProfile -eq 'acceptance')) { 'Windows 安装器未做代码签名；插件仍沿用独立的 Ed25519 发布者签名。' } elseif ($includeRuntime) { 'Windows 安装器按正式配置签名。' })
 $($instructions -join "`n")
 
-已有客户的旧 Runtime 和 BOSS 满足原需求即可继续使用，无需随服务端升级。本包不会安装软件、部署后台或执行聊天/招聘业务。
-首次使用在 Web 获取配对码；已配对用户保留原服务器和身份。业务工具仍需在使用时登录对应软件。
+已配对用户可继续使用原服务器、设备身份和 BOSS 插件。本包不会安装软件、部署后台或执行聊天/招聘业务。
+服务端启用准备与确认配对后，请从 Web 获取配对码，在新版 Windows Runtime 界面提交。配对成功后自动选定设备。业务工具仍需在使用时登录对应软件。
 $ReleaseProfile-roots.json 是公开验签资料，不含私钥。新发布者必须被目标 Runtime 信任；本包不承诺旧客户端认识未曾交付的新根。
 本批实际验证范围见 build-info.json，not_selected / not_run 均不表示已通过。
 "@

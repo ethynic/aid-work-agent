@@ -215,10 +215,15 @@ function registerDesktopIpc(): void {
     assertTrustedSender(event)
     if (!runtimeSupervisor) throw new Error('当前产品没有本机Runtime管理能力')
     if (runtimeConnectionRecovery?.busy) throw new Error('连接恢复正在进行，请等待处理完成')
-    if (product.kind === 'runtime' && (request as { method?: string })?.method === 'pair') throw new Error('请使用一次配对连接入口')
-    if (['start', 'pair'].includes((request as { method?: string })?.method ?? '') && await runtimeConnectionRecovery?.registrationBlocksExecution()) throw new Error('正在自动完成设备连接，请等待网络恢复；可停止执行或退出')
+    const method = (request as { method?: string })?.method
+    if (product.kind === 'runtime' && method === 'pair') throw new Error('请使用一次配对连接入口')
+    if (method === 'start' || method === 'pair') {
+      if (await runtimeConnectionRecovery?.registrationBlocksExecution()) throw new Error('设备连接尚未确认，请检查配对结果；可停止执行或退出')
+      if (runtimeConnectionRecovery?.busy) throw new Error('连接恢复正在进行，请等待处理完成')
+    }
+    if (method === 'stop' && runtimeConnectionRecovery instanceof RuntimeCleanConnection) runtimeConnectionRecovery.cancelOriginalResume()
     const reply = await runtimeSupervisor.request(request)
-    if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && reply.code === 0 && ['start', 'stop'].includes((request as { method: string }).method)) {
+    if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && reply.code === 0 && (method === 'start' || method === 'stop')) {
       // A new explicit user intent supersedes a cancelled upgrade's resume intent.
       try { await updateIntent?.clear() } catch { logLifecycle('runtime-update-intent-clear-failed') }
     }
@@ -571,7 +576,8 @@ if (!hasSingleInstanceLock) {
           if (maintenanceRequested || runtimeConnectionRecovery?.busy || await runtimeConnectionRecovery?.registrationBlocksExecution()) return
           await readRuntimeStartupState(value => runtimeSupervisor!.request(value, 'startup'))
           const recovered = runtimeSupervisor!.recoveredAfterInterruption || runtimeConnectionRecovery instanceof RuntimeCleanConnection && runtimeConnectionRecovery.restoredOriginal
-          if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && (cleanInstallation?.fresh && cleanInstallation.migrated || shouldResumeRuntime({ intent, recovered, login: loginLaunch }))) await resumeRuntimeAtLogin(value => {
+          if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && (cleanInstallation?.fresh && cleanInstallation.migrated || shouldResumeRuntime({ intent, recovered, login: loginLaunch }))) await resumeRuntimeAtLogin(async value => {
+            if ((value as { method?: string }).method === 'start' && await runtimeConnectionRecovery?.registrationBlocksExecution()) throw new Error('RuntimeRegistrationPending')
             if (maintenanceRequested || runtimeConnectionRecovery?.busy) throw new Error('RuntimeMaintenanceInProgress')
             return runtimeSupervisor!.request(value, 'startup')
           })

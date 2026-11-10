@@ -111,6 +111,8 @@ powershell.exe -NoProfile -File $release -Component Wecom -SourceRef HEAD -Targe
 
 以每批 ZIP 内的“先读我.md”为准。组合包先安装或升级 Runtime，再导入本批选择的插件。只更新插件时，直接在已验证兼容的 Runtime 中导入对应 `.aidplugin.zip`。Runtime 安装器与插件分别升级，客户已有配对和配置按安装器的既有迁移规则处理。
 
+服务端启用准备与确认配对后，新设备在新版独立 Windows Runtime 界面填写网页生成的配对码。确认成功后自动选定。旧版 Runtime、旧 CLI 的单步配对会提示升级，已经配对的设备可沿用原凭据继续运行。
+
 ## 9. 排查入口
 
 | 表现 | 处理 |

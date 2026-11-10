@@ -17,20 +17,10 @@
         <!-- 使用引导卡 -->
         <BaseCard title="使用引导">
           <ol class="list-decimal list-inside space-y-2 text-sm text-default">
-            <li>下载并在你的电脑上启动本地工具 Runtime（仅支持 Windows，需保持电脑未锁屏）。</li>
+            <li>在 Windows 电脑上安装并打开新版 AID Work Runtime。</li>
             <li>点击下方「生成配对码」按钮获取配对码。</li>
-            <li>在 Runtime 中输入配对码完成绑定，然后在设备列表中「选定」该设备。</li>
+            <li>在 Runtime 界面输入配对码。配对成功后，新设备会自动选定。</li>
           </ol>
-          <div v-if="!replacementTarget" class="mt-4 space-y-2">
-            <div class="flex items-center gap-2">
-              <code class="flex-1 px-3 py-2 bg-gray-100 rounded-lg text-xs font-mono text-default truncate">agent-tool-runtime pair --code {{ pairCommandCode }}</code>
-              <BaseButton intent="secondary" size="sm" @click="copyText(`agent-tool-runtime pair --code ${pairCommandCode}`)">复制</BaseButton>
-            </div>
-            <div class="flex items-center gap-2">
-              <code class="flex-1 px-3 py-2 bg-gray-100 rounded-lg text-xs font-mono text-default truncate">agent-tool-runtime start</code>
-              <BaseButton intent="secondary" size="sm" @click="copyText('agent-tool-runtime start')">复制</BaseButton>
-            </div>
-          </div>
         </BaseCard>
 
         <!-- 配对码区 -->
@@ -38,7 +28,7 @@
           <div v-if="replacementTarget" class="mb-4 text-sm space-y-2">
             <p class="font-semibold text-default">更换设备：{{ replacementTarget.name || '未命名设备' }}</p>
             <p class="text-muted break-all">旧设备编号：{{ replacementTarget.device_id }}</p>
-            <p class="text-muted">此码仅供支持设备替换的新版 Runtime 使用。新设备安全保存配对并验证连接、完成旧执行资源交接后，才撤销这台旧设备；其他电脑和旧任务记录保留。完成后请在网页选定新设备。</p>
+            <p class="text-muted">请在新版 Runtime 界面使用此码。新设备保存配对凭据并通过服务端确认后，系统会撤销这台旧设备并自动选定新设备。旧任务记录保留。</p>
             <BaseButton intent="ghost" size="sm" :disabled="generatingTicket" @click="resetReplacement">改为添加普通设备</BaseButton>
           </div>
           <div v-if="!ticket" class="flex items-center gap-4">
@@ -253,7 +243,6 @@ const nowTs = ref(Date.now())
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 
 // 引导命令中的配对码占位：已生成则带真实码，否则用占位符
-const pairCommandCode = computed(() => ticket.value && !ticketExpired.value ? ticket.value.code : '<配对码>')
 
 const ticketExpireTs = computed(() => {
   if (!ticket.value?.expires_at) return 0
@@ -289,7 +278,7 @@ async function handleGenerateTicket() {
 async function handleReplace(row: Record<string, any>) {
   if (generatingTicket.value) return
   const device = row as LocalToolDevice
-  if (!confirm(`确认更换「${device.name || '未命名设备'}」？\n旧设备编号：${device.device_id}\n只更换这台设备。新设备配对、连接验证和旧执行资源交接完成后才撤销旧设备；旧任务不会转移，其他电脑不受影响。请使用支持替换的新版 Runtime。`)) return
+  if (!confirm(`确认更换「${device.name || '未命名设备'}」？\n旧设备编号：${device.device_id}\n新设备保存凭据并通过服务端确认后，系统会撤销这台旧设备。旧任务不会转移。请在新版 Runtime 界面配对。`)) return
   replacementTarget.value = { ...device }
   await handleGenerateTicket()
 }

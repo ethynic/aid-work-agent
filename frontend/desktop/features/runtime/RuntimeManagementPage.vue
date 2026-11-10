@@ -21,9 +21,10 @@
         </div>
         <div class="runtime-actions runtime-connection-actions">
           <span class="runtime-connection-badge" role="status" :class="{ ready: online }">{{ online ? '已连接' : connectionStatus }}</span>
-          <button v-if="connectionFault" type="button" class="runtime-secondary" :disabled="view.connecting || view.busy || recovery.busy" @click="retryConnection">{{ recovery.busy || view.connecting ? '正在检查…' : '重试连接' }}</button>
-          <button v-if="connectionFault" type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy" @click="togglePairing">{{ pairExpanded ? '取消重新配对' : '重新配对' }}</button>
-          <button v-if="view.state?.device && view.state.state === 'stopped'" type="button" class="primary-button runtime-primary" :disabled="cannotAct" @click="controller.mutate('start')">启动执行</button>
+          <button v-if="checkingPairing" type="button" class="runtime-secondary" :disabled="view.busy || recovery.busy" @click="controller.reconfigureConnection({ mode: 'continue_registration', confirmed: true })">{{ recovery.busy ? '正在检查…' : '检查配对结果' }}</button>
+          <button v-else-if="connectionFault" type="button" class="runtime-secondary" :disabled="view.connecting || view.busy || recovery.busy" @click="retryConnection">{{ recovery.busy || view.connecting ? '正在检查…' : '重试连接' }}</button>
+          <button v-if="connectionFault && !checkingPairing" type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy" @click="togglePairing">{{ pairExpanded ? '取消重新配对' : '重新配对' }}</button>
+          <button v-if="view.state?.device && view.state.state === 'stopped'" type="button" class="primary-button runtime-primary" :disabled="cannotAct || checkingPairing" @click="controller.mutate('start')">启动执行</button>
           <button v-if="view.state?.device && ['starting', 'running', 'reconciling'].includes(view.state.state)" type="button" class="runtime-secondary" :disabled="cannotStop" @click="controller.mutate('stop')">停止执行</button>
         </div>
       </div>
@@ -40,7 +41,7 @@
         <p v-if="view.state.blocked_reason" class="runtime-muted">{{ view.state.blocked_reason }}</p>
         <div class="runtime-connection-footer">
           <p class="runtime-muted">关闭窗口后仍在后台运行；需要退出时，请使用托盘菜单。</p>
-          <button type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy || view.connecting" @click="togglePairing">{{ pairExpanded ? '收起配对设置' : '更换服务器 / 重新配对' }}</button>
+          <button v-if="!checkingPairing" type="button" class="runtime-secondary" :disabled="recovery.busy || view.busy || view.connecting" @click="togglePairing">{{ pairExpanded ? '收起配对设置' : '更换服务器 / 重新配对' }}</button>
         </div>
       </details>
     </section>
@@ -176,13 +177,15 @@ async function togglePairing() {
 }
 const logs = computed(() => props.logs)
 const online = computed(() => view.state?.connection === 'online' && !['blocked', 'reconciling'].includes(view.state.state))
+const checkingPairing = computed(() => controller.automaticConnection && recovery.diagnosis?.category === 'REGISTRATION_PENDING')
 const pendingConnection = computed(() => ['CONNECTING', 'REGISTRATION_PENDING', 'REGISTRATION_CLEANUP_PENDING'].includes(recovery.diagnosis?.category || ''))
 const connectionFault = computed(() => !!recovery.error || !!view.error || ['offline', 'revoked'].includes(view.state?.connection || '') || ['blocked', 'reconciling'].includes(view.state?.state || '') || (!!recovery.diagnosis && !recovery.diagnosis.service_verified && !pendingConnection.value))
 const firstPairing = computed(() => !!view.state && !view.state.device && view.state.connection === 'unpaired' && !connectionFault.value && !pendingConnection.value)
-const showPairForm = computed(() => controller.automaticConnection ? pairExpanded.value || (!!view.state && !view.state.device && view.state.connection === 'unpaired' && !pendingConnection.value) : !controller.supportsRecovery || view.state?.state === 'stopped')
+const showPairForm = computed(() => controller.automaticConnection ? !checkingPairing.value && (pairExpanded.value || (!!view.state && !view.state.device && view.state.connection === 'unpaired' && !pendingConnection.value)) : !controller.supportsRecovery || view.state?.state === 'stopped')
 const connectionStatus = computed(() => connectionFault.value ? '需要处理' : view.connecting || pendingConnection.value || view.state?.connection === 'connecting' ? '连接中' : view.state?.device ? '已暂停' : '未连接')
 const connectionTitle = computed(() => online.value ? '已连接企业服务' : connectionFault.value ? '连接需要检查' : view.state?.device ? '设备已配对' : '连接企业服务')
 const connectionHint = computed(() => {
+  if (checkingPairing.value) return '配对确认结果待核对。请点击「检查配对结果」。'
   if (online.value) return '保持客户端运行，即可从网页使用这台电脑。'
   if (view.state?.state === 'blocked') return '本机运行状态需要检查，可以查看连接详情或导出日志。'
   if (view.state?.state === 'reconciling') return '上次执行结果需要核对，原记录保留，不会自动重复执行。'

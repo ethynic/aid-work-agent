@@ -33,6 +33,41 @@ def create_pairing_ticket(tenant_id: str, user_id: str, replacement_device_id: O
     return {"code": code, "expires_at": expires_at, **({"replacement_device_id": replacement_device_id} if replacement_device_id else {})}
 
 
+def prepare_pairing(
+    code: str, registration_id: str, registration_token: str, pairing_protocol: int,
+    previous_device_token: Optional[str] = None, name: Optional[str] = None,
+    platform: Optional[str] = None, runtime_version: Optional[str] = None,
+    capabilities: Optional[Dict[str, Any]] = None, machine_fingerprint: Optional[str] = None,
+) -> Dict[str, Any]:
+    proof = generate_device_token()
+    attributes = dict(name=name, platform=platform, runtime_version=runtime_version, capabilities=capabilities,
+                      machine_fingerprint_hash=sha256_hex(machine_fingerprint) if machine_fingerprint else None)
+    try:
+        json.dumps(attributes, allow_nan=False)
+    except (ValueError, TypeError):
+        raise repository.DeviceReplacementError("PAIRING_INPUT_INVALID") from None
+    preparation_id = repository.prepare_device_registration(
+        sha256_hex(code.strip().upper()), registration_id, sha256_hex(registration_token), sha256_hex(proof),
+        sha256_hex(previous_device_token) if previous_device_token else None, attributes,
+    )
+    return {"pairing_protocol": pairing_protocol, "registration_id": registration_id,
+            "preparation_id": preparation_id, "preparation_token": proof}
+
+
+def confirm_pairing(preparation_id: str, registration_id: str, registration_token: str, preparation_token: str) -> Dict[str, Any]:
+    device_id = repository.confirm_device_registration(
+        preparation_id, registration_id, sha256_hex(registration_token), sha256_hex(preparation_token),
+    )
+    return {"pairing_protocol": 4, "registration_id": registration_id, "registration_completed": True, "device_id": device_id}
+
+
+def pairing_status(preparation_id: str, registration_id: str, registration_token: str, preparation_token: str) -> Dict[str, Any]:
+    state = repository.get_device_registration_status(
+        preparation_id, registration_id, sha256_hex(registration_token), sha256_hex(preparation_token),
+    )
+    return {"pairing_protocol": 4, "registration_id": registration_id, **state}
+
+
 def pair(
     code: Optional[str],
     name: Optional[str] = None,

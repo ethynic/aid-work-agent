@@ -351,6 +351,20 @@ Provider 的 Node executable、进程监管、凭证后端由平台 adapter注�
 
 ## 8. 实现前共同检查点
 
+2026-11-10，Runtime 配对协议 4 实施检查点。服务端 Local Tools 负责唯一写入票据准备绑定和设备授权，Runtime Main 持安装级租约编排，Runtime 注册存储唯一写入受保护本地候选。H1/H3、原设备鉴权与任务接口不改。协议 4 仅用于新配对，旧单步 `/runtime/pair` 固定 426 升级提示，不再写设备；已配对旧客户端仍用原 token。服务端迁移使用票据行可空 `preparation JSONB`，无旧数据回填。
+
+| Device API 端点 | 请求 | 成功及状态 |
+|---|---|---|
+| `POST /runtime/pair/prepare` | `pairing_protocol=4`、一次性 `code`、注册 UUID、256-bit 候选 token、设备属性、可选原 token | 返回协议号、注册 UUID、票据 UUID `preparation_id`、随机 256-bit `preparation_token`。同一票据只有一个准备绑定，不消费码、不创建候选设备、不撤旧。 |
+| `POST /runtime/pair/confirm` | `preparation_id`、`preparation_token`、注册 UUID 与候选 token，无配对码 | 返回协议号、匹配注册 UUID、已提交设备 UUID。票据仍有效、证明匹配且目标替换仍可授权时，原子消费码、创建设备、选定并撤销绑定的旧设备。 |
+| `POST /runtime/pair/status` | 同 confirm，无配对码。POST 仅承载敏感请求，查询无写入。 | 固定状态 `prepared`、`committed`、`expired`、`rejected`；仅 `committed` 返回绑定设备 UUID。 |
+
+准备凭据和候选 token 只存哈希于服务端，票据有效期同时约束准备及确认。准备绑定的目标来自登录用户票据，或同租户、同用户且活跃的原设备 token。确认、只读查询按注册 ID → 用户 → 票据顺序加锁，在锁后核实有效期，并复核替换胜者和原 token 的推断授权。请求错误使用固定原因码，敏感字段不入错误响应或日志。
+
+Main 接收准备回执后先持久候选与证明，保留原目录指针。DPAPI v2 的 `prepared` 表示尚未发送确认，停稳失败或此时退出会清理本机候选。即将发送确认前先持久化 `confirming`，再发一次 confirm。确认结果未知时只读查 status，暂停原身份的自动和手动执行启动，重开客户端仍按同一记录判断。status 返回 `prepared` 时继续暂停，返回 `expired` 或 `rejected` 时清理候选、解除暂停。在同一 Main 进程中，若旧 Host 原来运行且用户未要求停止，解除暂停后尝试按现有启动流程恢复。`paired` 和 `installed` 表示服务端已确认并可继续本机切换。新版读取历史 DPAPI v1 已配对记录及废弃 `requested`，回退前先处理新版候选。
+
+发布时先应用可空列迁移并完成所有 API worker 的版本切换，再开放新版客户端配对。过渡期旧 worker 仍能按单步协议写入，不能和协议 4 并行接收新配对流量。旧设备已登记的凭据继续使用原业务入口。开发验收与发布边界见[Runtime 开发计划](../plans/plan-runtime-plugin-host.md#164-服务端配对确认后续检查点)。
+
 两份计划共用同一登记项；仅完成本文不代表下列项已完成。
 
 每项实施记录以主导工作流的计划为唯一进度来源，另一计划引用；共同契约记录语义和兼容决议，不复制双方开发日志。

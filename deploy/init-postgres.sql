@@ -1233,6 +1233,7 @@ CREATE TABLE IF NOT EXISTS local_tool_pairing_tickets (
     expires_at TIMESTAMP NOT NULL,
     used_at TIMESTAMP,
     replacement_device_id UUID,
+    preparation JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (code_hash),
     PRIMARY KEY (id)

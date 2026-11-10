@@ -25,7 +25,7 @@ it('explicit replacement confirms old id, issues bound ticket and never revokes 
   expect(createReplacementPairingTicket).toHaveBeenCalledExactlyOnceWith('old-one')
   expect(wrapper!.text()).toContain('旧设备编号：old-one')
   expect(wrapper!.text()).toContain('新版 Runtime')
-  expect(wrapper!.text()).toContain('旧执行资源交接')
+  expect(wrapper!.text()).toContain('通过服务端确认后')
   expect(wrapper!.text()).not.toContain('agent-tool-runtime pair')
   expect(wrapper!.text()).toContain('已撤销')
   expect(button('选定', 1).attributes()).toHaveProperty('disabled')
@@ -37,6 +37,8 @@ it('regeneration keeps same explicit old target; normal mode is an explicit sepa
   expect(createPairingTicket).not.toHaveBeenCalled()
   await button('改为添加普通设备').trigger('click'); await button('生成配对码').trigger('click'); await flushPromises()
   expect(createPairingTicket).toHaveBeenCalledOnce(); expect(wrapper!.text()).not.toContain('旧设备编号：')
+  expect(wrapper!.text()).toContain('新设备会自动选定')
+  expect(wrapper!.text()).not.toContain('agent-tool-runtime pair')
 })
 it('cancelled confirmation sends nothing', async () => {
   confirm.mockReturnValue(false); await render(); await button('更换此设备').trigger('click'); await flushPromises()

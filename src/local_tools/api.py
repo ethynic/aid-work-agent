@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from loguru import logger
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from src.api.auth import get_current_user
 from src.db.client_binding_db import ClientUsageLogDB
@@ -29,7 +29,8 @@ from src.local_tools import catalog, operation_result, pairing, permits, reposit
 from src.local_tools.models import (
     HeartbeatRequest,
     OperationResultRequest,
-    PairRequest,
+    PairPreparationRequest,
+    PairPreparationProof,
     ReplacementCompleteRequest,
     ProgressRequest,
     ResultRequest,
@@ -186,6 +187,12 @@ def _replacement_error(error: repository.DeviceReplacementError) -> HTTPExceptio
         "PREVIOUS_DEVICE_INVALID": (401, "原设备凭据无效，请重新配对"),
         "PREVIOUS_DEVICE_SCOPE_MISMATCH": (403, "原设备与配对码不属于同一账号或租户"),
         "PAIRING_CODE_REQUIRED": (400, "首次注册需要有效配对码"),
+        "PAIRING_CODE_INVALID": (400, "配对码无效、已过期或已被使用"),
+        "PAIRING_INPUT_INVALID": (422, "配对请求格式无效"),
+        "PAIRING_UPGRADE_REQUIRED": (426, "请升级 Runtime 后重新配对，已配对设备可继续使用"),
+        "PAIRING_PREPARATION_INVALID": (403, "无法核验本次配对准备凭证"),
+        "PAIRING_PREPARATION_CONFLICT": (409, "本次配对准备已作废或提交，请核对设备状态"),
+        "PAIRING_PREPARATION_EXPIRED": (409, "本次配对准备已过期，请生成新配对码"),
     }
     status, message = messages[error.code]
     return HTTPException(status_code=status, detail={"error": message, "code": error.code, "debug": ""})
@@ -250,32 +257,40 @@ async def revoke_device(device_id: str, request: Request):
 
 
 @router.post("/runtime/pair")
-async def runtime_pair(body: PairRequest):
-    """票据注册；协议3受保护请求身份支持丢响应后的幂等恢复。"""
+async def runtime_pair():
+    """Old pairing must not be able to bypass the confirmation step."""
+    raise _replacement_error(repository.DeviceReplacementError("PAIRING_UPGRADE_REQUIRED"))
+
+
+async def _pairing_phase(body, model, action):
     try:
-        result = await asyncio.to_thread(
-            pairing.pair,
-            body.code,
-            body.name,
-            body.platform,
-            body.runtime_version,
-            body.capabilities,
-            body.machine_fingerprint,
-            body.pairing_protocol,
-            body.registration_id,
-            body.registration_token,
-            body.previous_device_token,
-        )
-        if not result:
-            raise _http_error(400, "配对码无效、已过期或已被使用")
+        # FastAPI's ordinary 422 can include credential values as input.
+        values = model.model_validate(body).model_dump(mode="json")
+    except ValidationError:
+        raise _replacement_error(repository.DeviceReplacementError("PAIRING_INPUT_INVALID")) from None
+    try:
+        result = await asyncio.to_thread(action, **values)
         return {"success": True, **result}
     except repository.DeviceReplacementError as error:
-        raise _replacement_error(error)
-    except HTTPException:
-        raise
+        raise _replacement_error(error) from None
     except Exception:
-        logger.opt(exception=RuntimeError("PAIRING_TRANSACTION_FAILED")).error("后端日志：设备配对失败，事务未提交")
-        raise HTTPException(status_code=500, detail={"error": "设备配对失败，请稍后重试", "debug": ""})
+        logger.opt(exception=RuntimeError("PAIRING_PHASE_FAILED")).error("后端日志：设备配对处理失败")
+        raise HTTPException(status_code=500, detail={"error": "配对处理失败，请核对设备状态", "debug": ""}) from None
+
+
+@router.post("/runtime/pair/prepare")
+async def runtime_pair_prepare(body: Any = Body(default=None)):
+    return await _pairing_phase(body, PairPreparationRequest, pairing.prepare_pairing)
+
+
+@router.post("/runtime/pair/confirm")
+async def runtime_pair_confirm(body: Any = Body(default=None)):
+    return await _pairing_phase(body, PairPreparationProof, pairing.confirm_pairing)
+
+
+@router.post("/runtime/pair/status")
+async def runtime_pair_status(body: Any = Body(default=None)):
+    return await _pairing_phase(body, PairPreparationProof, pairing.pairing_status)
 
 
 @router.post("/runtime/activate")

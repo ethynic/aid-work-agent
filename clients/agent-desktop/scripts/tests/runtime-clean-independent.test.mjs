@@ -28,7 +28,15 @@ async function service(handler) {
     const body = JSON.parse(raw || '{}')
     calls.push({ url: req.url, body })
     if (handler && await handler(req, res, body, calls)) return
-    if (req.url === '/api/local-tools/runtime/pair') {
+    res.setHeader('Content-Type', 'application/json')
+    const receipt = { success: true, pairing_protocol: 4, registration_id: body.registration_id }
+    if (req.url.endsWith('/pair/prepare')) {
+      res.end(JSON.stringify({ ...receipt, preparation_id: randomUUID(), preparation_token: 'b'.repeat(64) }))
+    } else if (req.url.endsWith('/pair/confirm')) {
+      const id = randomUUID()
+      devices.set(body.registration_id, id)
+      res.end(JSON.stringify({ ...receipt, registration_completed: true, device_id: id }))
+    } else if (req.url === '/api/local-tools/runtime/pair') {
       let id = devices.get(body.registration_id)
       if (!id) { id = randomUUID(); devices.set(body.registration_id, id) }
       res.setHeader('Content-Type', 'application/json')
@@ -81,7 +89,7 @@ function fixture() {
 test('real loopback response loss ends the submission without an active failure record', { skip }, async () => {
   const f = fixture()
   const s = await service(async (req, _res) => {
-    if (req.url !== '/api/local-tools/runtime/pair') return false
+    if (!req.url.endsWith('/pair/prepare')) return false
     req.socket.destroy()
     return true
   })
@@ -115,7 +123,7 @@ test('committed paired receipt survives exit before local installation and auto 
 test('invalid code preserves old execution state while a new explicit submission can succeed', { skip }, async () => {
   const f = fixture(); let reject = true
   const s = await service(async (req, res) => {
-    if (req.url.endsWith('/pair') && reject) { res.statusCode = 400; res.end(JSON.stringify({ detail: 'invalid fixture code' })); return true }
+    if (req.url.endsWith('/pair/prepare') && reject) { res.statusCode = 400; res.end(JSON.stringify({ detail: 'invalid fixture code' })); return true }
     return false
   })
   try {

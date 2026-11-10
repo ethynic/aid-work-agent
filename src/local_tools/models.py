@@ -1,23 +1,31 @@
 """本地工具协议模型（Pydantic）"""
 
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field, ConfigDict
 
 
-class PairRequest(BaseModel):
-    """Runtime 配对请求：用一次性配对码换设备 token"""
+class PairPreparationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pairing_protocol: int = Field(strict=True, ge=4, le=4)
+    code: str = Field(min_length=1, max_length=64, repr=False)
+    name: Optional[str] = Field(None, max_length=100)
+    platform: Optional[str] = Field(None, max_length=100)
+    runtime_version: Optional[str] = Field(None, max_length=100)
+    capabilities: Optional[Dict[str, Any]] = None
+    machine_fingerprint: Optional[str] = Field(None, max_length=128)
+    registration_id: UUID
+    registration_token: str = Field(pattern=r"^[0-9a-f]{64}$", repr=False)
+    previous_device_token: Optional[str] = Field(None, pattern=r"^[0-9a-f]{64}$", repr=False)
 
-    code: Optional[str] = Field(None, description="首次注册需配对码；协议3恢复请求可省略")
-    name: Optional[str] = Field(None, description="设备名称")
-    platform: Optional[str] = Field(None, description="平台，如 windows")
-    runtime_version: Optional[str] = Field(None, description="Runtime 版本")
-    capabilities: Optional[Dict[str, Any]] = Field(None, description="设备能力（含 provider_id）")
-    machine_fingerprint: Optional[str] = Field(None, description="机器指纹（服务端只存哈希）")
-    pairing_protocol: Optional[int] = Field(None, strict=True, ge=1, le=3, description="协议3自动替换与幂等注册；旧配对兼容省略")
-    registration_id: Optional[str] = None
-    registration_token: Optional[str] = Field(None, repr=False)
-    previous_device_token: Optional[str] = Field(None, repr=False)
+
+class PairPreparationProof(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    preparation_id: UUID
+    registration_id: UUID
+    preparation_token: str = Field(pattern=r"^[0-9a-f]{64}$", repr=False)
+    registration_token: str = Field(pattern=r"^[0-9a-f]{64}$", repr=False)
 
 
 class ReplacementCompleteRequest(BaseModel):

@@ -141,17 +141,19 @@ def test_complete_accepts_empty_body_and_rejects_forged_target(client):
 
 
 def test_old_protocol_http_error_is_explicit_without_consumption(client):
-    with patch("src.local_tools.pairing.pair", side_effect=repository.DeviceReplacementError("PAIRING_PROTOCOL_REQUIRED")):
-        response = client.post("/api/local-tools/runtime/pair", json={"code": "ABCD2345"})
-    assert response.status_code == 400
-    assert response.json()["detail"]["code"] == "PAIRING_PROTOCOL_REQUIRED"
-    assert "新版" in response.json()["detail"]["error"]
-
-
-@pytest.mark.parametrize("protocol", [True, "2", 2.0, 4])
-def test_protocol_schema_is_strict(client, protocol):
     with patch("src.local_tools.pairing.pair") as pair:
-        assert client.post("/api/local-tools/runtime/pair", json={"code": "ABCD2345", "pairing_protocol": protocol}).status_code == 422
+        response = client.post("/api/local-tools/runtime/pair", json={"code": "ABCD2345"})
+        pair.assert_not_called()
+    assert response.status_code == 426
+    assert response.json()["detail"]["code"] == "PAIRING_UPGRADE_REQUIRED"
+    assert "升级" in response.json()["detail"]["error"]
+
+
+@pytest.mark.parametrize("protocol", [True, "4", 4.0, 3])
+def test_protocol_schema_is_strict(client, protocol):
+    with patch("src.local_tools.pairing.prepare_pairing") as pair:
+        payload = {"code": "ABCD2345", "pairing_protocol": protocol, "registration_token": "a" * 64, "registration_id": NEW}
+        assert client.post("/api/local-tools/runtime/pair/prepare", json=payload).status_code == 422
         pair.assert_not_called()
 
 

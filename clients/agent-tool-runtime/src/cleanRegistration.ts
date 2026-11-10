@@ -1,17 +1,18 @@
-/** Protocol 3 transaction. OTP is never persisted; all private state uses existing DPAPI. */
+/** Durable Runtime pairing state. OTP is never persisted; private state uses DPAPI. */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, readFileSync, renameSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, renameSync, unlinkSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { acquireHostLease, ManagementError } from '@aid/local-tool-host-core'
-import { ApiClient, type CleanPairRequest } from './apiClient.js'
+import { ApiClient, type CleanPairRequest, type PairingPreparation, type PairingProof, type PairingStatus } from './apiClient.js'
 import { dpapiProtect, dpapiUnprotect } from './dpapi.js'
 import { atomicWrite } from './pairingStore.js'
 import { PLATFORM, RUNTIME_VERSION, machineFingerprint } from './config.js'
 import { validServer } from './connectionDiagnosis.js'
 
 export interface CleanRegistration {
-  version: 1; server: string; request: Omit<CleanPairRequest, 'code'>
-  phase: 'requested' | 'paired' | 'installed'; device_id: string | null; home: string | null
+  version: 1 | 2; server: string; request: Omit<CleanPairRequest, 'code'>
+  phase: 'requested' | 'prepared' | 'confirming' | 'paired' | 'installed'; device_id: string | null; home: string | null
+  preparation?: PairingPreparation
 }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const file = (metadata: string) => join(metadata, 'clean-registration.bin')
@@ -21,8 +22,13 @@ export async function readCleanRegistration(metadata: string): Promise<CleanRegi
     const stat = lstatSync(file(metadata))
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) throw new Error()
     const r = JSON.parse(await dpapiUnprotect(readFileSync(file(metadata), 'utf8'))) as CleanRegistration
-    if (!r || Object.keys(r).sort().join(',') !== 'device_id,home,phase,request,server,version' || r.version !== 1
-      || !validServer(r.server) || !['requested', 'paired', 'installed'].includes(r.phase)
+    const keys = Object.keys(r ?? {}).sort().join(',')
+    if (!r || (r.version === 1
+      ? keys !== 'device_id,home,phase,request,server,version' || ['prepared', 'confirming'].includes(r.phase)
+      : r.version !== 2 || keys !== 'device_id,home,phase,preparation,request,server,version' || r.phase === 'requested'
+        || !r.preparation || Object.keys(r.preparation).sort().join(',') !== 'preparation_id,preparation_token'
+        || !uuid.test(r.preparation.preparation_id) || !/^[0-9a-f]{64}$/.test(r.preparation.preparation_token))
+      || !validServer(r.server) || !['requested', 'prepared', 'confirming', 'paired', 'installed'].includes(r.phase)
       || !r.request || r.request.pairing_protocol !== 3 || !uuid.test(r.request.registration_id)
       || !/^[0-9a-f]{64}$/.test(r.request.registration_token) || typeof r.request.name !== 'string' || !r.request.name
       || r.request.name.length > 100 || typeof r.request.platform !== 'string' || typeof r.request.runtime_version !== 'string'
@@ -32,8 +38,9 @@ export async function readCleanRegistration(metadata: string): Promise<CleanRegi
       || Object.keys(r.request).some(key => !['pairing_protocol', 'registration_id', 'registration_token', 'name', 'platform', 'runtime_version', 'capabilities', 'machine_fingerprint', 'previous_device_token'].includes(key))
       || Object.hasOwn(r.request, 'code') || ![null, 'string'].includes(r.home === null ? null : typeof r.home)
       || r.home !== null && resolve(r.home) !== r.home
-      || r.phase === 'requested' && r.device_id !== null || r.phase === 'installed' && r.home === null
-      || r.phase !== 'requested' && (!r.device_id || !uuid.test(r.device_id))) throw new Error()
+      || ['requested', 'prepared', 'confirming'].includes(r.phase) && r.device_id !== null || r.phase === 'installed' && r.home === null
+      || ['prepared', 'confirming'].includes(r.phase) && r.home !== null
+      || ['paired', 'installed'].includes(r.phase) && (!r.device_id || !uuid.test(r.device_id))) throw new Error()
     return r
   } catch { throw new ManagementError(11, '本次连接注册记录损坏或无法解密，请使用新配对码重新连接') }
 }
@@ -94,8 +101,44 @@ export async function pairCleanRegistration(metadata: string, r: CleanRegistrati
   r.device_id = response.device_id; r.phase = 'paired'
   await saveCleanRegistration(metadata, r)
 }
+export async function prepareCleanRegistration(metadata: string, r: CleanRegistration, code: string): Promise<void> {
+  if (r.phase !== 'requested' || !code) throw new ManagementError(3, '请使用有效配对码明确发起配对')
+  const preparation = await new ApiClient(r.server).preparePairing(r.request, code)
+  const request = { ...r.request }
+  delete request.previous_device_token // The old identity proof is only used for prepare.
+  const prepared: CleanRegistration = { ...r, request, version: 2, phase: 'prepared', preparation }
+  await saveCleanRegistration(metadata, prepared)
+  Object.assign(r, prepared)
+}
+function pairingProof(r: CleanRegistration): PairingProof {
+  if (!['prepared', 'confirming'].includes(r.phase) || !r.preparation) throw new ManagementError(11, '本机没有可核对的配对候选')
+  return { ...r.preparation, registration_id: r.request.registration_id, registration_token: r.request.registration_token }
+}
+async function saveConfirmedRegistration(metadata: string, r: CleanRegistration, deviceId: string): Promise<void> {
+  r.device_id = deviceId; r.phase = 'paired'
+  await saveCleanRegistration(metadata, r)
+}
+export async function confirmCleanRegistration(metadata: string, r: CleanRegistration): Promise<void> {
+  const proof = pairingProof(r)
+  const saved = await readCleanRegistration(metadata)
+  if (saved?.phase !== 'prepared' || saved.server !== r.server || JSON.stringify(pairingProof(saved)) !== JSON.stringify(proof)) {
+    throw new ManagementError(11, '配对候选未安全保存，本次未发送确认请求')
+  }
+  await saveCleanRegistration(metadata, { ...r, phase: 'confirming' })
+  r.phase = 'confirming'
+  const deviceId = await new ApiClient(saved.server).confirmPairing(proof)
+  await saveConfirmedRegistration(metadata, r, deviceId)
+}
+export async function checkCleanRegistration(metadata: string, r: CleanRegistration): Promise<PairingStatus['state']> {
+  const status = await new ApiClient(r.server).readPairingStatus(pairingProof(r))
+  if (status.state === 'committed') await saveConfirmedRegistration(metadata, r, status.device_id)
+  return status.state
+}
+export function discardPreparedCleanRegistration(metadata: string): void {
+  unlinkSync(file(metadata))
+}
 export async function installCleanRegistration(metadata: string, r: CleanRegistration, home: string): Promise<void> {
-  if (!r.device_id || r.phase === 'requested') throw new ManagementError(11, '服务器尚未确认连接注册')
+  if (!r.device_id || !['paired', 'installed'].includes(r.phase)) throw new ManagementError(11, '服务器尚未确认连接注册')
   r.home = resolve(home)
   await saveCleanRegistration(metadata, r)
   // Target is a new generation allocated by Main, never the old execution home.
@@ -105,7 +148,7 @@ export async function installCleanRegistration(metadata: string, r: CleanRegistr
   await saveCleanRegistration(metadata, r)
 }
 export async function matchesInstalledCleanRegistration(r: CleanRegistration, home: string): Promise<boolean> {
-  if (r.phase === 'requested') return false
+  if (!['paired', 'installed'].includes(r.phase)) return false
   const configFile = join(home, 'config.json')
   try {
     const stat = lstatSync(configFile)

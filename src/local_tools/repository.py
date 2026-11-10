@@ -432,54 +432,198 @@ def register_device_from_ticket(
         ticket = cursor.fetchone()
         if not ticket:
             return None
-        target = ticket.get("replacement_device_id")
-        if previous_token_hash:
-            # Token itself is an ownership proof. Unknown/malformed or revoked
-            # legacy credentials never block a clean registration.
-            cursor.execute("SELECT id, tenant_id, user_id, status FROM local_tool_devices WHERE token_hash = %s", (previous_token_hash,))
-            previous = cursor.fetchone()
-            if (previous and previous["tenant_id"] == tenant and previous["user_id"] == user
-                    and target is None and previous["status"] == "active"):
-                target = previous["id"]
-            # Changing account on the same computer is a valid clean pair. A
-            # credential from the former account is ignored, never revoked.
-        if target is not None:
-            cursor.execute(
-                """SELECT id, status, replaced_by_device_id FROM local_tool_devices
-                   WHERE id = %s AND tenant_id = %s AND user_id = %s FOR UPDATE""", (target, tenant, user),
-            )
-            old = cursor.fetchone()
-            if not old or old["status"] not in ("active", "revoked"):
-                raise DeviceReplacementError("REPLACEMENT_TARGET_NOT_FOUND")
-            if old.get("replaced_by_device_id") is not None:
-                raise DeviceReplacementError("REPLACEMENT_ALREADY_COMPLETED")
-        cursor.execute(
-            """INSERT INTO local_tool_devices
-               (tenant_id, user_id, name, platform, runtime_version, token_hash,
-                machine_fingerprint_hash, capabilities_json, last_seen_at,
-                replacement_device_id, replacement_completed_at,
-                registration_id, registration_request_hash, registration_code_hash)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s,
-                       CASE WHEN %s IS NOT NULL THEN NOW() END, %s, %s, %s)
-               RETURNING *""",
-            (tenant, user, name, platform, runtime_version, token_hash,
-             machine_fingerprint_hash, Json(capabilities) if capabilities is not None else None,
-             target, str(target) if target is not None else None, registration_id, request_hash, code_hash),
-        )
-        device = dict(cursor.fetchone())
-        if target is not None:
-            cursor.execute(
-                """UPDATE local_tool_devices SET status = 'revoked', selected = FALSE,
-                   replaced_by_device_id = %s, updated_at = NOW()
-                   WHERE id = %s AND tenant_id = %s AND user_id = %s""",
-                (device["id"], target, tenant, user),
-            )
-        cursor.execute("UPDATE local_tool_devices SET selected = FALSE WHERE tenant_id = %s AND user_id = %s", (tenant, user))
-        cursor.execute("UPDATE local_tool_devices SET selected = TRUE, updated_at = NOW() WHERE id = %s AND tenant_id = %s AND user_id = %s", (device["id"], tenant, user))
-        cursor.execute("UPDATE local_tool_pairing_tickets SET used_at = NOW() WHERE id = %s AND tenant_id = %s AND user_id = %s", (ticket["id"], tenant, user))
+        target = _registration_target(cursor, tenant, user, ticket.get("replacement_device_id"), previous_token_hash)
+        _check_registration_target(cursor, tenant, user, target)
+        device = _commit_registration(cursor, tenant, user, ticket["id"], target, code_hash, token_hash,
+                                      registration_id, request_hash, name, platform, runtime_version,
+                                      capabilities, machine_fingerprint_hash)
         conn.commit()
-        device["selected"] = True
         return device
+
+
+def _registration_target(cursor, tenant, user, target, previous_token_hash):
+    if previous_token_hash:
+        # Token itself is an ownership proof. Unknown/malformed or revoked
+        # legacy credentials never block a clean registration.
+        cursor.execute("SELECT id, tenant_id, user_id, status FROM local_tool_devices WHERE token_hash = %s", (previous_token_hash,))
+        previous = cursor.fetchone()
+        if (previous and previous["tenant_id"] == tenant and previous["user_id"] == user
+                and target is None and previous["status"] == "active"):
+            target = previous["id"]
+        # Changing account on the same computer is a valid clean pair. A
+        # credential from the former account is ignored, never revoked.
+    return target
+
+
+def _check_registration_target(cursor, tenant, user, target, previous_token_hash=None, *, confirming=True):
+    if target is not None:
+        lock = "FOR UPDATE" if confirming else "FOR SHARE"
+        cursor.execute(
+            """SELECT status, replaced_by_device_id, token_hash FROM local_tool_devices
+               WHERE id = %s AND tenant_id = %s AND user_id = %s """ + lock, (target, tenant, user),
+        )
+        old = cursor.fetchone()
+        if not old or old["status"] not in ("active", "revoked"):
+            raise DeviceReplacementError("REPLACEMENT_TARGET_NOT_FOUND")
+        if old.get("replaced_by_device_id") is not None:
+            raise DeviceReplacementError("REPLACEMENT_ALREADY_COMPLETED")
+        if previous_token_hash is not None and (old["status"] != "active" or old["token_hash"] != previous_token_hash):
+            raise DeviceReplacementError("REPLACEMENT_TARGET_NOT_FOUND")
+
+
+def _commit_registration(cursor, tenant, user, ticket_id, target, code_hash, token_hash,
+                         registration_id, request_hash, name, platform, runtime_version,
+                         capabilities, machine_fingerprint_hash):
+    cursor.execute(
+        """INSERT INTO local_tool_devices
+           (tenant_id, user_id, name, platform, runtime_version, token_hash,
+            machine_fingerprint_hash, capabilities_json, last_seen_at,
+            replacement_device_id, replacement_completed_at,
+            registration_id, registration_request_hash, registration_code_hash)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s,
+                   CASE WHEN %s IS NOT NULL THEN NOW() END, %s, %s, %s)
+           RETURNING *""",
+        (tenant, user, name, platform, runtime_version, token_hash,
+         machine_fingerprint_hash, Json(capabilities) if capabilities is not None else None,
+         target, str(target) if target is not None else None, registration_id, request_hash, code_hash),
+    )
+    device = dict(cursor.fetchone())
+    if target is not None:
+        cursor.execute(
+            """UPDATE local_tool_devices SET status = 'revoked', selected = FALSE,
+               replaced_by_device_id = %s, updated_at = NOW()
+               WHERE id = %s AND tenant_id = %s AND user_id = %s""",
+            (device["id"], target, tenant, user),
+        )
+    cursor.execute("UPDATE local_tool_devices SET selected = FALSE WHERE tenant_id = %s AND user_id = %s", (tenant, user))
+    cursor.execute("UPDATE local_tool_devices SET selected = TRUE, updated_at = NOW() WHERE id = %s AND tenant_id = %s AND user_id = %s", (device["id"], tenant, user))
+    cursor.execute("UPDATE local_tool_pairing_tickets SET used_at = NOW() WHERE id = %s AND tenant_id = %s AND user_id = %s", (ticket_id, tenant, user))
+    device["selected"] = True
+    return device
+
+
+def prepare_device_registration(
+    code_hash: str, registration_id: str, token_hash: str, proof_hash: str,
+    previous_token_hash: Optional[str], attributes: Dict[str, Any],
+) -> str:
+    """Bind a candidate to an existing ticket without creating a device."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, tenant_id, user_id FROM local_tool_pairing_tickets WHERE code_hash = %s", (code_hash,))
+        owner = cursor.fetchone()
+        if not owner:
+            raise DeviceReplacementError("PAIRING_CODE_INVALID")
+        tenant, user = owner["tenant_id"], owner["user_id"]
+        _lock_pairing_user(cursor, tenant, user)
+        cursor.execute(
+            """SELECT id, replacement_device_id, preparation, used_at FROM local_tool_pairing_tickets
+               WHERE id = %s AND tenant_id = %s AND user_id = %s FOR UPDATE""",
+            (owner["id"], tenant, user),
+        )
+        ticket = cursor.fetchone()
+        if not ticket or ticket["used_at"]:
+            raise DeviceReplacementError("PAIRING_CODE_INVALID")
+        target = _registration_target(cursor, tenant, user, ticket["replacement_device_id"], previous_token_hash)
+        previous_authority = previous_token_hash if target is not None and ticket["replacement_device_id"] is None else None
+        _check_registration_target(cursor, tenant, user, target, previous_authority, confirming=False)
+        if not _live_preparation_ticket(cursor, ticket["id"], tenant, user):
+            raise DeviceReplacementError("PAIRING_CODE_INVALID")
+        if ticket["preparation"] is not None:
+            raise DeviceReplacementError("PAIRING_PREPARATION_CONFLICT")
+        preparation = {
+            "registration_id": registration_id, "token_hash": token_hash, "proof_hash": proof_hash,
+            "target": str(target) if target is not None else None, "attributes": attributes,
+            "previous_token_hash": previous_authority,
+        }
+        cursor.execute(
+            "UPDATE local_tool_pairing_tickets SET preparation = %s WHERE id = %s AND tenant_id = %s AND user_id = %s",
+            (Json(preparation), ticket["id"], tenant, user),
+        )
+        conn.commit()
+        return str(ticket["id"])
+
+
+def _live_preparation_ticket(cursor, preparation_id, tenant, user) -> bool:
+    # Check wall time after acquiring the ticket lock, even if the transaction waited.
+    cursor.execute(
+        """SELECT expires_at > clock_timestamp() AS live FROM local_tool_pairing_tickets
+           WHERE id = %s AND tenant_id = %s AND user_id = %s""", (preparation_id, tenant, user),
+    )
+    return bool(cursor.fetchone()["live"])
+
+
+def _locked_preparation(cursor, preparation_id, registration_id, token_hash, proof_hash, *, confirming):
+    _lock_pairing_user(cursor, "registration-v3", registration_id)
+    cursor.execute("SELECT tenant_id, user_id FROM local_tool_pairing_tickets WHERE id = %s", (preparation_id,))
+    owner = cursor.fetchone()
+    if not owner:
+        raise DeviceReplacementError("PAIRING_PREPARATION_INVALID")
+    tenant, user = owner["tenant_id"], owner["user_id"]
+    _lock_pairing_user(cursor, tenant, user)
+    lock = "FOR UPDATE" if confirming else "FOR SHARE"
+    cursor.execute(
+        """SELECT id, code_hash, preparation, used_at FROM local_tool_pairing_tickets
+           WHERE id = %s AND tenant_id = %s AND user_id = %s """ + lock,
+        (preparation_id, tenant, user),
+    )
+    ticket = cursor.fetchone()
+    candidate = ticket["preparation"] if ticket else None
+    if not candidate or candidate["registration_id"] != registration_id or not (
+        hmac.compare_digest(candidate["token_hash"], token_hash) and hmac.compare_digest(candidate["proof_hash"], proof_hash)
+    ):
+        raise DeviceReplacementError("PAIRING_PREPARATION_INVALID")
+    return tenant, user, ticket, candidate
+
+
+def confirm_device_registration(preparation_id: str, registration_id: str, token_hash: str, proof_hash: str) -> str:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        tenant, user, ticket, candidate = _locked_preparation(
+            cursor, preparation_id, registration_id, token_hash, proof_hash, confirming=True,
+        )
+        if ticket["used_at"]:
+            raise DeviceReplacementError("PAIRING_PREPARATION_CONFLICT")
+        _check_registration_target(cursor, tenant, user, candidate["target"], candidate["previous_token_hash"])
+        if not _live_preparation_ticket(cursor, preparation_id, tenant, user):
+            raise DeviceReplacementError("PAIRING_PREPARATION_EXPIRED")
+        cursor.execute("SELECT id FROM local_tool_devices WHERE registration_id = %s OR token_hash = %s",
+                       (registration_id, token_hash))
+        if cursor.fetchone():
+            raise DeviceReplacementError("REGISTRATION_CONFLICT")
+        request_hash = sha256_hex(json.dumps(candidate, sort_keys=True, separators=(",", ":"), allow_nan=False))
+        device = _commit_registration(
+            cursor, tenant, user, ticket["id"], candidate["target"], ticket["code_hash"], token_hash,
+            registration_id, request_hash, **candidate["attributes"],
+        )
+        conn.commit()
+        return str(device["id"])
+
+
+def get_device_registration_status(preparation_id: str, registration_id: str, token_hash: str, proof_hash: str) -> Dict[str, str]:
+    """Read under the confirmation lock order so pending and expiry cannot race commit."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        tenant, user, ticket, candidate = _locked_preparation(
+            cursor, preparation_id, registration_id, token_hash, proof_hash, confirming=False,
+        )
+        cursor.execute(
+            """SELECT id, status FROM local_tool_devices
+               WHERE tenant_id = %s AND user_id = %s AND registration_id = %s AND token_hash = %s
+                 AND registration_code_hash = %s""",
+            (tenant, user, registration_id, token_hash, ticket["code_hash"]),
+        )
+        device = cursor.fetchone()
+        if device and device["status"] == "active":
+            return {"state": "committed", "device_id": str(device["id"])}
+        if device or ticket["used_at"]:
+            return {"state": "rejected"}
+        try:
+            _check_registration_target(cursor, tenant, user, candidate["target"], candidate["previous_token_hash"], confirming=False)
+        except DeviceReplacementError:
+            return {"state": "rejected"}
+        if not _live_preparation_ticket(cursor, preparation_id, tenant, user):
+            return {"state": "expired"}
+        return {"state": "prepared"}
 
 
 def complete_device_replacement(tenant_id: str, user_id: str, device_id: str) -> bool:

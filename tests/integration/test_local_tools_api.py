@@ -93,20 +93,35 @@ def _pair_device(client, user, name="测试设备"):
     assert resp.status_code == 200, resp.text
     code = resp.json()["code"]
 
-    resp = client.post(
-        "/api/local-tools/runtime/pair",
-        json={
-            "code": code,
-            "name": name,
-            "platform": "windows",
-            "runtime_version": "1.0.0",
-            "capabilities": {"provider_id": PROVIDER_ID},
-            "machine_fingerprint": "fp-" + uuid.uuid4().hex[:8],
-        },
-    )
+    request = _pair_request(code, name)
+    proof = _prepare(client, request)
+    resp = client.post("/api/local-tools/runtime/pair/confirm", json=proof)
+    assert resp.status_code == 200, resp.text
+    return resp.json()["device_id"], request["registration_token"]
+
+
+def _pair_request(code, name="测试设备"):
+    from src.local_tools.security import generate_device_token
+
+    return {
+        "code": code,
+        "pairing_protocol": 4,
+        "registration_id": str(uuid.uuid4()),
+        "registration_token": generate_device_token(),
+        "name": name,
+        "platform": "windows",
+        "runtime_version": "1.0.0",
+        "capabilities": {"provider_id": PROVIDER_ID},
+        "machine_fingerprint": "fp-" + uuid.uuid4().hex[:8],
+    }
+
+
+def _prepare(client, request):
+    resp = client.post("/api/local-tools/runtime/pair/prepare", json=request)
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    return body["device_id"], body["device_token"]
+    return {"preparation_id": body["preparation_id"], "preparation_token": body["preparation_token"],
+            "registration_id": request["registration_id"], "registration_token": request["registration_token"]}
 
 
 class TestFullFlow:
@@ -116,13 +131,13 @@ class TestFullFlow:
         device_id, device_token = _pair_device(client, user)
         runtime = {"Authorization": f"Bearer {device_token}"}
 
-        # 心跳：未选定时 selected=False
+        # 确认成功的设备自动选定，旧业务心跳仍用原请求格式。
         resp = client.post("/api/local-tools/runtime/heartbeat",
                            json={"runtime_version": "1.0.0"}, headers=runtime)
         assert resp.status_code == 200, resp.text
-        assert resp.json()["selected"] is False
+        assert resp.json()["selected"] is True
 
-        # Web 设备列表：在线、未选定
+        # Web 设备列表：在线、选定
         resp = client.get("/api/local-tools/devices", headers=_auth(user))
         assert resp.status_code == 200
         devices = resp.json()["devices"]
@@ -229,16 +244,15 @@ class TestFullFlow:
 
 class TestPairingSecurity:
     def test_code_single_use(self, client, users):
-        """配对码单次使用：第二次 pair 返回 400"""
+        """确认后配对码不能再次准备，确认本身也只会提交一次。"""
         user = users[0]
         resp = client.post("/api/local-tools/pairing-tickets", headers=_auth(user))
         code = resp.json()["code"]
 
-        payload = {"code": code, "capabilities": {"provider_id": PROVIDER_ID}}
-        resp = client.post("/api/local-tools/runtime/pair", json=payload)
-        assert resp.status_code == 200
-        resp = client.post("/api/local-tools/runtime/pair", json=payload)
-        assert resp.status_code == 400
+        proof = _prepare(client, _pair_request(code))
+        assert client.post("/api/local-tools/runtime/pair/confirm", json=proof).status_code == 200
+        assert client.post("/api/local-tools/runtime/pair/confirm", json=proof).status_code == 409
+        assert client.post("/api/local-tools/runtime/pair/prepare", json=_pair_request(code)).status_code == 400
 
     def test_expired_code_rejected(self, client, users):
         """过期配对码不可消费"""
@@ -256,8 +270,7 @@ class TestPairingSecurity:
             )
             conn.commit()
 
-        resp = client.post("/api/local-tools/runtime/pair",
-                           json={"code": code, "capabilities": {"provider_id": PROVIDER_ID}})
+        resp = client.post("/api/local-tools/runtime/pair/prepare", json=_pair_request(code))
         assert resp.status_code == 400
 
     def test_revoked_device_token_invalid(self, client, users):

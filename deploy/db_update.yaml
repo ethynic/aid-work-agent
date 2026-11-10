@@ -4746,3 +4746,8 @@
         last_successful_scan_at TIMESTAMPTZ
     );
     INSERT INTO agent_runner_monitor_status (monitor_key) VALUES ('runner-long-running') ON CONFLICT DO NOTHING;
+
+- datetime: "2026-11-10 20:07:38"
+  remark: "本地 Runtime 票据登记协议 4 的短期准备绑定，确认前不创建设备或消费票据"
+  statements: |
+    ALTER TABLE local_tool_pairing_tickets ADD COLUMN IF NOT EXISTS preparation JSONB;

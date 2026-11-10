@@ -16,6 +16,7 @@ pytestmark = pytest.mark.integration
 ROOT = Path(__file__).resolve().parents[2]
 UPDATE = ROOT / "deploy/db_update.yaml"
 REPAIR_TIME = "2026-10-14 22:45:00"
+CONFIRMATION_TIME = "2026-11-10 20:07:38"
 OLD_WATERMARK = "2026-10-14 18:00:00"
 ORIGINAL_TIME = "2026-10-14 17:00:00"
 FIELDS = {"registration_id": "uuid", "registration_request_hash": "text", "registration_code_hash": "text"}
@@ -210,3 +211,76 @@ def test_protocol3_pair_and_lost_response_retry_work_after_real_repair(legacy_sc
     assert next(row for row in devices if str(row["id"]) == identifiers[0])["selected"]
     assert not next(row for row in devices if str(row["id"]) == first["device_id"])["selected"]
     assert snapshots(conn)[1] == before[1]
+
+
+def test_legacy_runtime_keeps_heartbeat_claim_and_result_across_confirmation_migration(
+    legacy_schema, registration_updates, monkeypatch, tmp_path,
+):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src.local_tools import api, pairing, repository
+    from src.local_tools.security import generate_device_token
+
+    conn, schema, tenant, user, identifiers, target = legacy_schema
+    apply_repair(conn, registration_updates)
+    cur = conn.cursor()
+    cur.execute("ALTER TABLE local_tool_pairing_tickets DROP COLUMN preparation")
+    cur.execute("CREATE TABLE local_tool_events (LIKE public.local_tool_events INCLUDING ALL)")
+    conn.commit()
+
+    @contextmanager
+    def scoped_connection():
+        scoped = psycopg2.connect(target, cursor_factory=extras.RealDictCursor,
+                                  options="-c search_path=" + schema + ",public")
+        try:
+            yield scoped
+        finally:
+            scoped.close()
+
+    monkeypatch.setattr(repository, "get_db_connection", scoped_connection)
+    old = pairing.pair(code=pairing.create_pairing_ticket(tenant, user)["code"],
+                       capabilities={"provider_id": "ai.aidwork.boss-recruiting"})
+    device_id = old["device_id"]
+    assert repository.select_device(tenant, user, device_id)
+    headers = {"Authorization": "Bearer " + old["device_token"]}
+    app = FastAPI()
+    app.include_router(api.router)
+    base = "/api/local-tools/runtime"
+
+    def run_legacy_task(client):
+        heartbeat = client.post(base + "/heartbeat", json={"runtime_version": "0.2.23"}, headers=headers)
+        assert heartbeat.status_code == 200 and heartbeat.json()["selected"] is True
+        invocation = repository.create_invocation(tenant, user, device_id, "boss_goto", {})
+        claim = client.post(base + "/claim?wait=0", headers=headers)
+        assert claim.status_code == 200 and claim.json()["invocation_id"] == invocation
+        proof = {"claim_token": claim.json()["claim_token"]}
+        assert client.post(base + f"/invocations/{invocation}/started", json=proof, headers=headers).status_code == 200
+        result = client.post(base + f"/invocations/{invocation}/result", headers=headers,
+                             json={**proof, "success": True, "effect": "applied"})
+        assert result.status_code == 200 and result.json()["state"] == "succeeded"
+
+    with TestClient(app) as client:
+        run_legacy_task(client)
+        before = snapshots(conn)
+        conn.commit()
+        blocks = [block for block in _load_db_update_blocks(UPDATE) if block["datetime"] == CONFIRMATION_TIME]
+        assert len(blocks) == 1
+        update = tmp_path / "pair-confirmation-migration.yaml"
+        update.write_text(yaml.safe_dump(blocks), encoding="utf-8")
+        _apply_db_updates(conn, update_file=update)
+        assert snapshots(conn) == before
+        conn.commit()
+
+        body = {"code": pairing.create_pairing_ticket(tenant, user, identifiers[0])["code"], "pairing_protocol": 4,
+                "registration_id": str(uuid.uuid4()), "registration_token": generate_device_token()}
+        prepared = client.post(base + "/pair/prepare", json=body)
+        assert prepared.status_code == 200
+        run_legacy_task(client)
+        proof = {key: prepared.json()[key] for key in ("preparation_id", "preparation_token", "registration_id")}
+        confirmed = client.post(base + "/pair/confirm", json={**proof, "registration_token": body["registration_token"]})
+        assert confirmed.status_code == 200
+        # Only the unrelated explicit replacement target was revoked. The old
+        # Runtime still authenticates and can claim and report after reselecting.
+        assert client.post(base + "/heartbeat", json={}, headers=headers).json()["selected"] is False
+        assert repository.select_device(tenant, user, device_id)
+        run_legacy_task(client)

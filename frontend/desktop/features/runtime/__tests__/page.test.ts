@@ -34,6 +34,18 @@ function mountPage(options: { features?: string[]; state?: string; ready?: boole
 function button(wrapper: VueWrapper, text: string) { const found = wrapper.findAll('button').find((element) => element.text() === text); if (!found) throw new Error(`Missing button ${text}`); return found }
 
 describe('Runtime management page', () => {
+  it('offers a read-only confirmation check without asking for a code again', async () => {
+    const registration: ConnectionDiagnosis = { version: 1, category: 'REGISTRATION_PENDING', summary: '配对确认结果待核对', steps: [],
+      service_verified: false, can_preserve: false, can_reconfigure: true, requires_reboot: false }
+    const { wrapper, port, requests } = mountPage({ automatic: true, recovery: true, registration, connection: 'offline', state: 'stopped' })
+    await flushPromises()
+    expect(wrapper.find('#runtime-pairing-code').exists()).toBe(false)
+    expect(wrapper.findAll('button').some(b => b.text().includes('重新配对'))).toBe(false)
+    expect(button(wrapper, '启动执行').attributes()).toHaveProperty('disabled')
+    await button(wrapper, '检查配对结果').trigger('click'); await flushPromises()
+    expect(port.reconfigureConnection).toHaveBeenCalledExactlyOnceWith({ mode: 'continue_registration', confirmed: true })
+    expect(requests.some(r => r.method === 'pair' || r.method === 'stop')).toBe(false)
+  })
   it('automatic connection offers one pair action even when legacy state was blocked', async () => {
     const { wrapper, port } = mountPage({ state: 'blocked', recovery: true, registration: null })
     // Re-mount with the trusted new-preload capability; old-preload tests retain their legacy flow.
