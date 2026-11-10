@@ -101,6 +101,9 @@ const runtimeLogs = product.runtimeEnabled ? new RuntimeLogs({
   appVersion: app.getVersion(),
   hostEntry: product.hostEntry, desktopDirectory: path.join(app.getPath('userData'), 'logs'),
   home: () => runtimeSupervisor ? product.runtimeHome : null, appDataPath: productAppData,
+  ...(product.kind === 'runtime' && product.runtimeHome && product.hostEntry ? { installation: {
+    userDataPath: app.getPath('userData'), legacyHome: product.runtimeHome, hostEntry: product.hostEntry,
+  } } : {}),
   profile: { profile: product.profile, userDataDir: path.basename(app.getPath('userData')), legacyHomeDir: path.basename(product.runtimeHome!) },
   chooseSave: async defaultPath => {
     const selection = await dialog.showSaveDialog({ title: '导出客户端诊断', defaultPath, filters: [{ name: '诊断包', extensions: ['zip'] }] })
@@ -521,6 +524,7 @@ if (!hasSingleInstanceLock) {
           const pendingCleanup = new Set<string>()
           runtimeConnectionRecovery = new RuntimeCleanConnection({ metadataHome: cleanInstallation.metadataHome,
             hostEntry: product.hostEntry,
+            recordDiagnostic: (event, details) => runtimeLogs?.record(event, details),
             home: () => product.runtimeHome!, supervisor: () => runtimeSupervisor!,
             restorePriorHome: async requested => {
               const previous = runtimeSupervisor!

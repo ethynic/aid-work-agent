@@ -30,6 +30,7 @@ const success = call => ({ body: call.path === pairPath ? prepared(call.body) : 
 async function fixture(t, respond) {
   const root = await mkdtemp(path.join(tmpdir(), 'aid-recovery-pair-'))
   const calls = []
+  const diagnostics = []
   const server = createServer(async (req, res) => {
     const bytes = []
     for await (const chunk of req) bytes.push(chunk)
@@ -82,6 +83,7 @@ async function fixture(t, respond) {
         home = await selectRuntimeConnection(installOptions, target, home)
       },
       beforeChange: async () => {},
+      recordDiagnostic: (event, details) => diagnostics.push({ event, ...details }),
     })
     return connection
   }
@@ -91,7 +93,7 @@ async function fixture(t, respond) {
     server.close()
     await rm(root, { recursive: true, force: true })
   })
-  return { origin, original, originalId, open, metadata, calls,
+  return { origin, original, originalId, open, metadata, calls, diagnostics,
     get home() { return home }, get stages() { return stageCount }, get stops() { return stopCount }, get starts() { return starts },
     failStart() { startFails = true },
     failStop() { stopFails = true },
@@ -159,6 +161,12 @@ test('HTTP 301 never follows a redirect, changes the pointer, or resends across 
   assert.equal(f.stops, 0, 'A rejected prepare does not interrupt the already running original Host')
   assert.equal(f.stages, 0)
   assert.equal(redirectTarget.calls.length, 0)
+  assert.deepEqual(f.diagnostics, [
+    { event: 'runtime-pair-prepare-started', protocol: 'http' },
+    { event: 'runtime-pair-prepare-failed', protocol: 'http', reason: 'redirect', httpStatus: 301 },
+    { event: 'runtime-diagnostic-heartbeat-started', protocol: 'http' },
+    { event: 'runtime-diagnostic-heartbeat-succeeded', protocol: 'http' },
+  ])
 })
 
 test('a lost prepare response leaves the original identity intact and is never resubmitted', windows, async t => {
@@ -330,6 +338,10 @@ test('lost confirmation is only queried, retains candidate while pending, and in
   assert.equal((await reopened.reconfigure({ mode: 'continue_registration', confirmed: true })).status, 'complete')
   assert.equal(JSON.parse(await readFile(path.join(f.home, 'config.json'), 'utf8')).device_id, device)
   assert.deepEqual(f.calls.map(c => c.path), [pairPath, confirmPath, statusPath, statusPath])
+  assert.deepEqual(f.diagnostics.map(event => event.event), [
+    'runtime-pair-prepare-started', 'runtime-pair-prepare-succeeded', 'runtime-pair-confirm-started', 'runtime-pair-confirm-failed',
+    'runtime-pair-status-started', 'runtime-pair-status-prepared', 'runtime-pair-status-started', 'runtime-pair-status-committed',
+  ])
 })
 
 test('confirm may still commit after its reply breaks, so old execution remains gated', windows, async t => {

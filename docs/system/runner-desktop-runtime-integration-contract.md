@@ -365,6 +365,10 @@ Main 接收准备回执后先持久候选与证明，保留原目录指针。DPA
 
 发布时先应用可空列迁移并完成所有 API worker 的版本切换，再开放新版客户端配对。过渡期旧 worker 仍能按单步协议写入，不能和协议 4 并行接收新配对流量。旧设备已登记的凭据继续使用原业务入口。开发验收与发布边界见[Runtime 开发计划](../plans/plan-runtime-plugin-host.md#164-服务端配对确认后续检查点)。
 
+恢复 3A 保留 ZIP v1、文件名及旧事件字段。Core 日志投影可增量输出固定 `active`、`prior`、`desktop` 来源和分文件覆盖。Main 只从当前安装登记校验的活动及上一连接目录取证，禁止按输入路径或扫描历史目录。Core 的运行循环唯一记录 heartbeat 与 claim 的状态转折。Main 记录显式配对阶段及诊断心跳，字段仅允许固定事件、协议、原因和 HTTP 状态。ZIP manifest 的可选 `evidence` 由 Main 只读采集并标采样时间，字段限固定状态、布尔值、版本和时间。Windows 电源事件投影固定类型、时间及 Kernel-Boot 27 的已知 `bootType` 值 0、1、2。旧记录和旧投影消费方可忽略增量字段。Host H1/H3、Device API、配对和执行停稳判定保持原契约。
+
+`bootMatchesMarker` 比较旧执行标记和当前交付 `boot-id` 取得的 Windows `BootIdentifier`，国腾现场对照到相同的 BCD 启动项 GUID。它无法标识每次开机实例。`sessionMatchesHost` 只表示标记与当前客户端所在 Windows 会话是否一致。这些布尔值供人工排查，独立于 Windows 电源事件的 `bootType`，均不放行执行。
+
 两份计划共用同一登记项；仅完成本文不代表下列项已完成。
 
 每项实施记录以主导工作流的计划为唯一进度来源，另一计划引用；共同契约记录语义和兼容决议，不复制双方开发日志。

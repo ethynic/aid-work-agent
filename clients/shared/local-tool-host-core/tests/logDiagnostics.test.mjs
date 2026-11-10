@@ -27,6 +27,25 @@ const fixture = () => mkdtempSync(path.join(tmpdir(), 'aid-log-view-'))
 const profile = { profile: 'acceptance', userDataDir: 'runtime-app', legacyHomeDir: 'legacy-runtime' }
 const line = message => `${at} [runtime][INFO] ${message}\n`
 
+test('an empty active home preserves coverage and safe connection events from the trusted prior home', () => {
+  const root = fixture(), home = path.join(root, 'active'), priorHome = path.join(root, 'prior')
+  try {
+    mkdirSync(path.join(priorHome, 'logs'), { recursive: true })
+    writeFileSync(path.join(priorHome, 'logs/runtime.log'), line('[runtime-connection] heartbeat-disconnected')
+      + line('心跳失败（fixture-private-connection-error），1000ms 后重试') + line('[runtime-connection] heartbeat-recovered'))
+    const previous = '2026-11-01T06:00:00.000Z'
+    writeFileSync(path.join(priorHome, 'logs/runtime.log.old.log'), `${previous} [runtime][INFO] [runtime-connection] claim-ready\n`)
+    const snapshot = collectRuntimeLogs({ home, priorHome, desktopDirectory: root, now, hours: 24 })
+    assert.deepEqual(snapshot.entries.map(event => [event.location, event.event]), [
+      ['prior', 'heartbeat-disconnected'], ['prior', 'heartbeat-recovered'],
+    ])
+    assert.equal(snapshot.sources.find(source => source.location === 'active' && source.name === 'runtime.log').status, 'missing')
+    const rolled = snapshot.sources.find(source => source.location === 'prior' && source.name === 'runtime.log.old.log')
+    assert.equal(rolled.status, 'read'); assert.equal(rolled.observedTo, previous); assert.equal(rolled.stale, true)
+    assert.doesNotMatch(JSON.stringify(snapshot), /fixture-private-connection-error/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
 test('legacy log projection preserves correlation but never exports arbitrary stderr, business text, paths or credentials', () => {
   const root = fixture(), home = path.join(root, 'home'), desktop = path.join(root, 'desktop')
   try {

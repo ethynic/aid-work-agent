@@ -46,6 +46,13 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   })
 }
 
+function disconnected(lane: 'heartbeat' | 'claim', error: unknown): string {
+  const event = `[runtime-connection] ${lane}-disconnected`
+  if (error instanceof ApiError && Number.isInteger(error.status) && error.status >= 300 && error.status <= 599) return `${event} http=${error.status}`
+  if (error instanceof NetworkError) return `${event} reason=${error.failureKind}`
+  return event
+}
+
 export class PollLoop {
   private readonly opts: Required<Pick<PollLoopOptions, 'heartbeatIntervalMs' | 'claimWaitSeconds' | 'backoffBaseMs' | 'backoffMaxMs'>> & PollLoopOptions
   private readonly controller = new AbortController()
@@ -143,6 +150,7 @@ export class PollLoop {
   private async heartbeatLoop(): Promise<void> {
     const { api, heartbeatIntervalMs, backoffBaseMs, backoffMaxMs } = this.opts
     let backoff = backoffBaseMs
+    let connected: boolean | undefined
     while (!this.stopped) {
       this.opts.onHeartbeatAttempt?.(Date.now())
       try {
@@ -151,6 +159,8 @@ export class PollLoop {
           capabilities: this.opts.capabilities?.() ?? deviceCapabilities(),
           manifest_digest: manifestDigest(),
         }, this.controller.signal)
+        if (connected !== true) this.emit(`[runtime-connection] ${connected === false ? 'heartbeat-recovered' : 'heartbeat-online'}`)
+        connected = true
         backoff = backoffBaseMs
         this.opts.onConnection?.('online')
         this.replayResults()
@@ -165,9 +175,9 @@ export class PollLoop {
           this.shutdown()
           break
         }
-        const detail = err instanceof Error ? err.message : String(err)
         this.opts.onConnection?.('offline')
-        this.emit(`心跳失败（${detail}），${backoff}ms 后重试`)
+        if (connected !== false) this.emit(disconnected('heartbeat', err))
+        connected = false
         await sleep(backoff, this.controller.signal)
         backoff = Math.min(backoff * 2, backoffMaxMs)
         continue
@@ -179,6 +189,7 @@ export class PollLoop {
   private async claimLoop(): Promise<void> {
     const { api, claimWaitSeconds, backoffBaseMs, backoffMaxMs } = this.opts
     let backoff = backoffBaseMs
+    let connected: boolean | undefined
     while (!this.stopped && this.accepting) {
       if (this.opts.canClaim && !this.opts.canClaim()) {
         await sleep(this.opts.heartbeatIntervalMs, this.claimController.signal)
@@ -187,6 +198,8 @@ export class PollLoop {
       let inv: ClaimedInvocation | null = null
       try {
         inv = await api.claim(claimWaitSeconds, this.claimController.signal)
+        if (connected !== true) this.emit(`[runtime-connection] ${connected === false ? 'claim-recovered' : 'claim-ready'}`)
+        connected = true
         backoff = backoffBaseMs
       } catch (err) {
         if (err instanceof AbortLoopError || this.stopped || !this.accepting) break
@@ -197,8 +210,8 @@ export class PollLoop {
           break
         }
         if (err instanceof ApiError || err instanceof NetworkError) {
-          const detail = err.message
-          this.emit(`领取任务失败（${detail}），${backoff}ms 后重试`)
+          if (connected !== false) this.emit(disconnected('claim', err))
+          connected = false
           await sleep(backoff, this.claimController.signal)
           backoff = Math.min(backoff * 2, backoffMaxMs)
           continue

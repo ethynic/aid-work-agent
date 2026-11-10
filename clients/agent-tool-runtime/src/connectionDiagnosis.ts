@@ -38,7 +38,7 @@ function readIdentity(home: string): { config: RuntimeConfig; cipher: string; di
 }
 export function identityDigest(home: string): string | null { try { return readIdentity(home)?.digest ?? null } catch { return null } }
 /** Fixed existing identity only. No caller-supplied token, URL or business claim. */
-export async function diagnoseConnection(home: string): Promise<ConnectionDiagnosis> {
+export async function diagnoseConnection(home: string, observe?: (outcome: 'started' | 'succeeded' | 'failed', server: string, error?: unknown) => void): Promise<ConnectionDiagnosis> {
   try {
     const sentinel = randomUUID(); if (await dpapiUnprotect(await dpapiProtect(sentinel)) !== sentinel) throw new Error('protection')
   } catch { return diagnosis('WINDOWS_PROTECTION', 'Windows当前用户的凭据保护不可用', ['使用原配对的Windows用户正常登录后重新打开客户端。', '请管理员修复Windows系统PowerShell与用户凭据保护组件，再检查连接。']) }
@@ -60,9 +60,11 @@ export async function diagnoseConnection(home: string): Promise<ConnectionDiagno
   try { token = await dpapiUnprotect(identity.cipher); if (!token) throw new Error('empty') }
   catch { return diagnosis('CREDENTIALS_UNREADABLE', '原设备凭据无法解密', ['先确认使用原配对的Windows用户。', '仍无法恢复时选择重新配置连接，使用新的配对码。'], { can_reconfigure }) }
   let selected: boolean
+  observe?.('started', identity.config.server)
   try {
     selected = (await new ApiClient(identity.config.server, token).checkConnection()).selected
-  } catch (error) { return { ...connectionFailure(error), can_reconfigure } }
+  } catch (error) { observe?.('failed', identity.config.server, error); return { ...connectionFailure(error), can_reconfigure } }
+  observe?.('succeeded', identity.config.server)
   if (existsSync(join(home, 'pairing.pending.json'))) return diagnosis('PAIRING_TRANSACTION', '服务器可访问，但本机存在未完成的配对事务', ['重新打开客户端完成原事务。', '事务仍无法恢复时选择重新配置；原资料会归档保留。'], { service_verified: true, can_reconfigure })
   return diagnosis(selected ? 'VERIFIED' : 'DEVICE_NOT_SELECTED', selected ? '原配置中的凭据已通过服务器心跳验证' : '服务器心跳已通过，但网页尚未选定此设备', [...(!selected ? ['在网页本地工具中选定本次配对的设备；名称相同的新旧设备编号不同。'] : []), '可以保留原配置与配对凭据；心跳接口不返回设备编号，编号以原配对记录为准。', '若管理资料异常，选择修复管理资料；业务记录和插件留在原位置。', '验证连接不启动业务执行，需要执行任务时点击启动执行。'], { service_verified: true, can_preserve: true, can_reconfigure })
 }

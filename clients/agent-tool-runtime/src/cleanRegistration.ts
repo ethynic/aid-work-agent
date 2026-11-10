@@ -101,9 +101,19 @@ export async function pairCleanRegistration(metadata: string, r: CleanRegistrati
   r.device_id = response.device_id; r.phase = 'paired'
   await saveCleanRegistration(metadata, r)
 }
-export async function prepareCleanRegistration(metadata: string, r: CleanRegistration, code: string): Promise<void> {
+type PairingOutcome = 'started' | 'succeeded' | 'failed' | PairingStatus['state']
+type ObservePairing = (outcome: PairingOutcome, error?: unknown) => void
+async function observeRequest<T>(observe: ObservePairing | undefined, request: () => Promise<T>, outcome?: (value: T) => PairingOutcome): Promise<T> {
+  observe?.('started')
+  try {
+    const result = await request()
+    observe?.(outcome?.(result) ?? 'succeeded')
+    return result
+  } catch (error) { observe?.('failed', error); throw error }
+}
+export async function prepareCleanRegistration(metadata: string, r: CleanRegistration, code: string, observe?: ObservePairing): Promise<void> {
   if (r.phase !== 'requested' || !code) throw new ManagementError(3, '请使用有效配对码明确发起配对')
-  const preparation = await new ApiClient(r.server).preparePairing(r.request, code)
+  const preparation = await observeRequest(observe, () => new ApiClient(r.server).preparePairing(r.request, code))
   const request = { ...r.request }
   delete request.previous_device_token // The old identity proof is only used for prepare.
   const prepared: CleanRegistration = { ...r, request, version: 2, phase: 'prepared', preparation }
@@ -118,7 +128,7 @@ async function saveConfirmedRegistration(metadata: string, r: CleanRegistration,
   r.device_id = deviceId; r.phase = 'paired'
   await saveCleanRegistration(metadata, r)
 }
-export async function confirmCleanRegistration(metadata: string, r: CleanRegistration): Promise<void> {
+export async function confirmCleanRegistration(metadata: string, r: CleanRegistration, observe?: ObservePairing): Promise<void> {
   const proof = pairingProof(r)
   const saved = await readCleanRegistration(metadata)
   if (saved?.phase !== 'prepared' || saved.server !== r.server || JSON.stringify(pairingProof(saved)) !== JSON.stringify(proof)) {
@@ -126,11 +136,12 @@ export async function confirmCleanRegistration(metadata: string, r: CleanRegistr
   }
   await saveCleanRegistration(metadata, { ...r, phase: 'confirming' })
   r.phase = 'confirming'
-  const deviceId = await new ApiClient(saved.server).confirmPairing(proof)
+  const deviceId = await observeRequest(observe, () => new ApiClient(saved.server).confirmPairing(proof))
   await saveConfirmedRegistration(metadata, r, deviceId)
 }
-export async function checkCleanRegistration(metadata: string, r: CleanRegistration): Promise<PairingStatus['state']> {
-  const status = await new ApiClient(r.server).readPairingStatus(pairingProof(r))
+export async function checkCleanRegistration(metadata: string, r: CleanRegistration, observe?: ObservePairing): Promise<PairingStatus['state']> {
+  const proof = pairingProof(r)
+  const status = await observeRequest(observe, () => new ApiClient(r.server).readPairingStatus(proof), result => result.state)
   if (status.state === 'committed') await saveConfirmedRegistration(metadata, r, status.device_id)
   return status.state
 }

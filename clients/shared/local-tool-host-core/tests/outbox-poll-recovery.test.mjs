@@ -23,6 +23,33 @@ async function until(predicate) {
   }
 }
 
+test('real heartbeat and claim each log one disconnected transition and one recovery across repeated failures', async t => {
+  const counts = { heartbeat: 0, claim: 0 }, seen = []
+  const service = createServer((request, response) => {
+    const lane = request.url.includes('/heartbeat') ? 'heartbeat' : 'claim'
+    const count = ++counts[lane]
+    response.setHeader('Content-Type', 'application/json')
+    if (count === 2 || count === 3) { response.writeHead(503).end(JSON.stringify({ detail: 'fixture-private-http-body' })); return }
+    response.end(JSON.stringify(lane === 'heartbeat' ? { selected: true } : { invocation: null }))
+  })
+  service.listen(0, '127.0.0.1')
+  await once(service, 'listening')
+  t.after(() => { service.closeAllConnections(); service.close() })
+  const api = new ApiClient(`http://127.0.0.1:${service.address().port}`, 'fixture-credential')
+  const loop = new PollLoop({ api, runnerDeps: {}, heartbeatIntervalMs: 5, backoffBaseMs: 5, claimWaitSeconds: 0,
+    onEvent: event => seen.push(event) })
+  const running = loop.run()
+  try { await until(() => counts.heartbeat >= 5 && counts.claim >= 5) }
+  finally { loop.shutdown(); await running }
+  assert.deepEqual(seen.filter(event => event.includes('heartbeat-')), [
+    '[runtime-connection] heartbeat-online', '[runtime-connection] heartbeat-disconnected http=503', '[runtime-connection] heartbeat-recovered',
+  ])
+  assert.deepEqual(seen.filter(event => event.includes('claim-')), [
+    '[runtime-connection] claim-ready', '[runtime-connection] claim-disconnected http=503', '[runtime-connection] claim-recovered',
+  ])
+  assert.doesNotMatch(JSON.stringify(seen), /fixture-private|fixture-credential/)
+})
+
 test('pending result delivery cannot delay initial heartbeats/claim and shutdown aborts it without deleting evidence', async t => {
   const outbox = fixture(t)
   const payload = { claim_token: 'fixture-original', success: false, effect: 'unknown' }

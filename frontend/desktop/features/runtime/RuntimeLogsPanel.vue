@@ -22,10 +22,10 @@
         <ol v-if="snapshot.entries.length" class="logs-entries" aria-label="运行日志">
           <li v-for="(entry, index) in entries" :key="`${entry.at}-${index}`">
             <time :datetime="entry.at">{{ time(entry.at) }}</time><span :class="{ 'logs-error': entry.level === 'error' }">{{ entry.summary }}</span>
-            <span v-if="entry.tool || entry.durationMs !== undefined" class="logs-meta">{{ entry.tool }}{{ entry.durationMs !== undefined ? ` · ${entry.durationMs} ms` : '' }}</span>
+            <span v-if="entry.location || entry.tool || entry.durationMs !== undefined" class="logs-meta">{{ [entry.location && locationLabels[entry.location], entry.protocol?.toUpperCase(), entry.httpStatus, entry.tool, entry.durationMs !== undefined && `${entry.durationMs} ms`].filter(Boolean).join(' · ') }}</span>
           </li>
         </ol>
-        <details class="logs-sources"><summary>采集详情</summary><ul><li v-for="source in snapshot.sources" :key="source.name">{{ source.name }}：{{ sourceLabels[source.status] }}<template v-if="source.skippedLines">，{{ source.skippedLines }} 行未展示</template><template v-if="source.partialLines">，{{ source.partialLines }} 行尚未写完</template><template v-if="source.truncated">，读取范围已截断</template></li></ul></details>
+        <details class="logs-sources"><summary>采集详情</summary><ul><li v-for="source in snapshot.sources" :key="`${source.location ?? ''}-${source.name}`"><template v-if="source.location">{{ locationLabels[source.location] }} · </template>{{ source.name }}：{{ sourceLabels[source.status] }}<template v-if="source.observedFrom">，可识别记录 {{ time(source.observedFrom) }} 至 {{ time(source.observedTo) }}</template><template v-if="source.stale">，早于所选范围</template><template v-if="source.skippedLines">，{{ source.skippedLines }} 行未展示</template><template v-if="source.partialLines">，{{ source.partialLines }} 行尚未写完</template><template v-if="source.truncated">，读取范围已截断</template></li></ul></details>
       </template>
     </template>
   </section>
@@ -45,6 +45,7 @@ let disposed = false
 const entries = computed(() => [...(snapshot.value?.entries ?? [])].reverse())
 const partial = computed(() => snapshot.value?.sources.some(source => ['unreadable', 'linked'].includes(source.status) || source.skippedLines > 0 || source.partialLines > 0))
 const sourceLabels = { read: '已读取', missing: '暂无记录', unreadable: '暂不可读取', linked: '来源不可读取' }
+const locationLabels = { active: '当前连接', prior: '上一连接', desktop: '客户端' }
 function time(value?: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—' }
 async function readLogs() {
   if (!props.logs || loading.value) return

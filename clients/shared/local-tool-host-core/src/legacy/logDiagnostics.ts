@@ -1,15 +1,23 @@
-import { appendFileSync, closeSync, lstatSync, mkdirSync, openSync, readSync, renameSync, rmSync } from 'node:fs'
+import { appendFileSync, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { readLogFileHealth, resolveRuntimeHome, type RuntimeHomeProfile } from './diagnostics.js'
 
 export type LogHours = 1 | 24 | 168
+export type RuntimeLogLocation = 'active' | 'prior' | 'desktop'
+export interface RuntimeDiagnosticFields {
+  protocol?: 'http' | 'https'
+  reason?: 'redirect' | 'dns' | 'tls' | 'network' | 'authorization' | 'server' | 'refused' | 'local'
+  httpStatus?: number
+}
 export interface RuntimeLogEntry {
   at: string; source: 'runtime' | 'desktop'; level: 'info' | 'error'; event: string; summary: string
   invocationId?: string; provider?: string; tool?: string; durationMs?: number
+  location?: RuntimeLogLocation; protocol?: RuntimeDiagnosticFields['protocol']; reason?: RuntimeDiagnosticFields['reason']; httpStatus?: number
 }
 export interface RuntimeLogSource {
   name: string; status: 'read' | 'missing' | 'unreadable' | 'linked'; bytesRead: number; totalBytes: number
   skippedLines: number; partialLines: number; truncated: boolean
+  location?: RuntimeLogLocation; observedFrom?: string | null; observedTo?: string | null; lastWriteAt?: string | null; stale?: boolean
 }
 export interface RuntimeLogHealth {
   fileWriteFailures: number; lastFileWriteErrorAt: string | null; degraded: boolean; source: string | null; error: string | null
@@ -38,6 +46,14 @@ export const DESKTOP_DIAGNOSTIC_EVENTS: Readonly<Record<string, string>> = Objec
   'renderer-gone': '客户端页面进程退出', 'load-failed': '客户端页面加载失败',
   ...RUNTIME_LOGIN_FAILURES,
   'runtime-login-registration-failed': '自动启动设置失败',
+  'runtime-pair-prepare-started': '正在提交配对准备', 'runtime-pair-prepare-succeeded': '服务端已接受配对准备', 'runtime-pair-prepare-failed': '配对准备失败',
+  'runtime-pair-confirm-started': '正在确认配对', 'runtime-pair-confirm-succeeded': '配对已确认', 'runtime-pair-confirm-failed': '配对确认未完成',
+  'runtime-pair-status-started': '正在只读检查配对结果', 'runtime-pair-status-failed': '配对状态检查失败',
+  'runtime-pair-status-prepared': '配对仍在准备状态', 'runtime-pair-status-committed': '配对已提交',
+  'runtime-pair-status-expired': '配对准备已过期', 'runtime-pair-status-rejected': '配对确认已拒绝',
+  'runtime-pair-legacy-request-retired': '旧配对请求已移出活动入口',
+  'runtime-diagnostic-heartbeat-started': '正在发送一次诊断心跳', 'runtime-diagnostic-heartbeat-succeeded': '诊断心跳成功',
+  'runtime-diagnostic-heartbeat-failed': '诊断心跳失败',
   'runtime-update-intent-clear-failed': '更新启动状态清理失败', 'updater-disabled': '自动更新未启用',
   'window-state-save-failed': '窗口状态保存失败', 'activate-failed': '客户端窗口打开失败',
   'deep-link-rejected': '客户端链接未被接受', 'smoke-timeout': '客户端启动检查超时', 'smoke-failed': '客户端启动检查失败',
@@ -58,6 +74,18 @@ const simpleRuntime: Readonly<Record<string, string>> = {
   '云端连接中断（进度暂无法回传，本地继续执行）': '云端连接暂时中断，本地执行继续',
   '设备 token 已失效或被撤销，主循环停止。请重新 pair。': '设备授权已失效，需要重新连接',
 }
+const loopEvents: Readonly<Record<string, string>> = {
+  'heartbeat-online': '运行心跳已建立', 'heartbeat-disconnected': '运行心跳失败，进入退避', 'heartbeat-recovered': '运行心跳已恢复',
+  'claim-ready': '任务领取通道已建立', 'claim-disconnected': '任务领取请求失败，进入退避', 'claim-recovered': '任务领取通道已恢复',
+}
+const structuredDesktop = (event: string) => event.startsWith('runtime-pair-') || event.startsWith('runtime-diagnostic-heartbeat-')
+function diagnosticFields(value: RuntimeDiagnosticFields): RuntimeDiagnosticFields {
+  return {
+    ...(value.protocol === 'http' || value.protocol === 'https' ? { protocol: value.protocol } : {}),
+    ...(value.reason && ['redirect', 'dns', 'tls', 'network', 'authorization', 'server', 'refused', 'local'].includes(value.reason) ? { reason: value.reason } : {}),
+    ...(Number.isInteger(value.httpStatus) && value.httpStatus! >= 300 && value.httpStatus! <= 599 ? { httpStatus: value.httpStatus } : {}),
+  }
+}
 
 /** Fixed source files only; never follow a junction to another user's or connection's material. */
 export function diagnosticPathLinked(file: string): boolean {
@@ -68,7 +96,7 @@ export function diagnosticPathLinked(file: string): boolean {
 }
 
 /** Shell metadata only. Logging failure must never become a business or startup gate. */
-export function recordDesktopDiagnostic(directory: string, event: string, now = Date.now()): boolean {
+export function recordDesktopDiagnostic(directory: string, event: string, now = Date.now(), details: RuntimeDiagnosticFields = {}): boolean {
   if (!Object.hasOwn(DESKTOP_DIAGNOSTIC_EVENTS, event) || diagnosticPathLinked(directory)) return false
   try {
     mkdirSync(directory, { recursive: true })
@@ -79,7 +107,7 @@ export function recordDesktopDiagnostic(directory: string, event: string, now = 
         rmSync(old, { force: true }); renameSync(current, old)
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    appendFileSync(current, JSON.stringify({ at: new Date(now).toISOString(), event }) + '\n')
+    appendFileSync(current, JSON.stringify({ at: new Date(now).toISOString(), event, ...(structuredDesktop(event) ? diagnosticFields(details) : {}) }) + '\n')
     return true
   } catch { return false }
 }
@@ -89,6 +117,14 @@ export function projectRuntimeLog(line: string): RuntimeLogEntry | null {
   if (!header || !Number.isFinite(Date.parse(header[1]!))) return null
   const base = { at: header[1]!, source: 'runtime' as const, level: header[2] === 'ERROR' ? 'error' as const : 'info' as const }
   const message = header[3]!, begin = started.exec(message), timing = perf.exec(message)
+  const legacyFailure = /^(心跳|领取任务)失败（(.*)），\d+ms 后重试$/.exec(message)
+  const transition = /^\[runtime-connection\] ([a-z-]+)(?: http=([345]\d\d)| reason=(dns|tls|network))?$/.exec(message)
+  const loop = transition?.[1] ?? (legacyFailure?.[1] === '心跳' ? 'heartbeat-disconnected' : legacyFailure ? 'claim-disconnected' : null)
+  if (loop && Object.hasOwn(loopEvents, loop)) {
+    const status = transition?.[2] ?? /^云端返回 HTTP ([345]\d\d)(?:$|: )/.exec(legacyFailure?.[2] ?? '')?.[1]
+    return { ...base, level: loop.endsWith('-disconnected') ? 'error' : 'info', event: loop, summary: loopEvents[loop]!,
+      ...(status ? { httpStatus: Number(status) } : {}), ...(transition?.[3] ? { reason: transition[3] as RuntimeDiagnosticFields['reason'] } : {}) }
+  }
   if (begin) return { ...base, event: 'invocation-started', summary: '本地工具调用开始', invocationId: begin[1], tool: begin[2] }
   if (timing) return { ...base, event: 'invocation-timing', summary: '本地工具调用阶段耗时', invocationId: timing[1], tool: timing[2], provider: timing[3], durationMs: Number(timing[7]) }
   const failure = invocationFailure.exec(message), missing = providerMissing.exec(message), rejected = toolRejected.exec(message)
@@ -105,47 +141,72 @@ function projectDesktop(line: string): RuntimeLogEntry | null {
   try { record = JSON.parse(line) } catch { return null }
   if (!record || typeof record !== 'object' || typeof record.at !== 'string' || !Number.isFinite(Date.parse(record.at))
     || typeof record.event !== 'string' || !Object.hasOwn(DESKTOP_DIAGNOSTIC_EVENTS, record.event)) return null
-  return { at: new Date(record.at).toISOString(), source: 'desktop', level: record.event.includes('failed') || record.event === 'renderer-gone' || Object.hasOwn(RUNTIME_LOGIN_FAILURES, record.event) ? 'error' : 'info', event: record.event, summary: DESKTOP_DIAGNOSTIC_EVENTS[record.event]! }
+  return { at: new Date(record.at).toISOString(), source: 'desktop', level: record.event.includes('failed') || record.event === 'renderer-gone' || Object.hasOwn(RUNTIME_LOGIN_FAILURES, record.event) ? 'error' : 'info', event: record.event, summary: DESKTOP_DIAGNOSTIC_EVENTS[record.event]!,
+    ...(structuredDesktop(record.event) ? diagnosticFields(record as RuntimeDiagnosticFields) : {}) }
 }
 
-function readSource(file: string, name: string, project: (line: string) => RuntimeLogEntry | null, from: number, to: number): { source: RuntimeLogSource; entries: RuntimeLogEntry[] } {
-  const source: RuntimeLogSource = { name, status: 'missing', bytesRead: 0, totalBytes: 0, skippedLines: 0, partialLines: 0, truncated: false }
+function emptySource(name: string, location: RuntimeLogLocation, status: RuntimeLogSource['status'] = 'missing'): RuntimeLogSource {
+  return { name, location, status, bytesRead: 0, totalBytes: 0, skippedLines: 0, partialLines: 0, truncated: false,
+    observedFrom: null, observedTo: null, lastWriteAt: null, stale: false }
+}
+function readSource(file: string, name: string, location: RuntimeLogLocation, project: (line: string) => RuntimeLogEntry | null, from: number, to: number): { source: RuntimeLogSource; entries: RuntimeLogEntry[] } {
+  const source = emptySource(name, location)
   const entries: RuntimeLogEntry[] = []
   if (diagnosticPathLinked(file)) return { source: { ...source, status: 'linked' }, entries }
   let fd: number | undefined
   try {
     const stat = lstatSync(file)
     if (!stat.isFile()) return { source: { ...source, status: 'unreadable' }, entries }
-    source.totalBytes = stat.size
-    const length = Math.min(stat.size, MAX_FILE_BYTES), start = stat.size - length
-    source.truncated = start > 0
     fd = openSync(file, 'r')
+    if (diagnosticPathLinked(file)) return { source: { ...source, status: 'linked' }, entries }
+    const opened = fstatSync(fd)
+    if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino) return { source: { ...source, status: 'unreadable' }, entries }
+    source.totalBytes = opened.size
+    source.lastWriteAt = opened.mtime.toISOString()
+    const length = Math.min(opened.size, MAX_FILE_BYTES), start = opened.size - length
+    source.truncated = start > 0
     const buffer = Buffer.alloc(length)
     source.bytesRead = readSync(fd, buffer, 0, length, start)
     source.status = 'read'
     let text = buffer.subarray(0, source.bytesRead).toString('utf8')
     if (start > 0) { const newline = text.indexOf('\n'); text = newline < 0 ? '' : text.slice(newline + 1); source.partialLines++ }
     if (text && !text.endsWith('\n')) { text = text.slice(0, text.lastIndexOf('\n') + 1); source.partialLines++ }
+    const lastLoop = new Map<string, string>()
     for (const line of text.split('\n')) {
       if (!line.trim()) continue
       const entry = project(line.replace(/\r$/, ''))
       if (!entry) { source.skippedLines++; continue }
+      if (source.observedFrom == null || entry.at < source.observedFrom) source.observedFrom = entry.at
+      if (source.observedTo == null || entry.at > source.observedTo) source.observedTo = entry.at
       const at = Date.parse(entry.at)
-      if (at >= from && at <= to) entries.push(entry)
+      if (at < from || at > to) continue
+      if (Object.hasOwn(loopEvents, entry.event)) {
+        const lane = entry.event.split('-')[0]!
+        if (entry.event.endsWith('-disconnected') && lastLoop.get(lane) === entry.event) continue
+        lastLoop.set(lane, entry.event)
+      }
+      entries.push({ ...entry, location })
     }
+    source.stale = Date.parse(source.observedTo ?? source.lastWriteAt) < from
   } catch (error) { source.status = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable' }
   finally { if (fd !== undefined) closeSync(fd) }
   return { source, entries }
 }
 
-export function collectRuntimeLogs(options: { home?: string | null; desktopDirectory: string; appDataPath?: string; profile?: RuntimeHomeProfile; hours?: LogHours; now?: number }): RuntimeLogSnapshot {
+export interface RuntimeLogCollectionOptions {
+  home?: string | null; activeStatus?: RuntimeLogSource['status']; priorHome?: string | null; priorStatus?: RuntimeLogSource['status']; desktopDirectory: string
+  appDataPath?: string; profile?: RuntimeHomeProfile; hours?: LogHours; now?: number
+}
+export function collectRuntimeLogs(options: RuntimeLogCollectionOptions): RuntimeLogSnapshot {
   const hours = options.hours ?? 24, now = options.now ?? Date.now(), from = now - hours * 3600_000
   const home = options.home ?? (options.appDataPath && options.profile ? resolveRuntimeHome(options.appDataPath, options.profile).home : null)
-  const collected = [
-    ...(['runtime.log.old.log', 'runtime.old.log', 'runtime.log'].map(name => home
-      ? readSource(path.join(home, 'logs', name), name, projectRuntimeLog, from, now)
-      : { source: { name, status: 'missing' as const, bytesRead: 0, totalBytes: 0, skippedLines: 0, partialLines: 0, truncated: false }, entries: [] })),
-    ...(['desktop-diagnostics.old.jsonl', 'desktop-diagnostics.jsonl'].map(name => readSource(path.join(options.desktopDirectory, name), name, projectDesktop, from, now))),
+  const runtimeSources = (directory: string | null, location: 'active' | 'prior', status?: RuntimeLogSource['status']) =>
+    ['runtime.log.old.log', 'runtime.old.log', 'runtime.log'].map(name => directory
+      ? readSource(path.join(directory, 'logs', name), name, location, projectRuntimeLog, from, now)
+      : { source: emptySource(name, location, status), entries: [] })
+  const collected = [...runtimeSources(home, 'active', options.activeStatus),
+    ...(options.priorHome !== undefined || options.priorStatus ? runtimeSources(options.priorHome ?? null, 'prior', options.priorStatus) : []),
+    ...['desktop-diagnostics.old.jsonl', 'desktop-diagnostics.jsonl'].map(name => readSource(path.join(options.desktopDirectory, name), name, 'desktop', projectDesktop, from, now)),
   ]
   const all = collected.flatMap(item => item.entries).sort((a, b) => a.at.localeCompare(b.at))
   const entries = all.slice(-MAX_ENTRIES), sources = collected.map(item => item.source)

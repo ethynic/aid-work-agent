@@ -1,11 +1,14 @@
 export type RuntimeLogHours = 1 | 24 | 168
+export type RuntimeLogLocation = 'active' | 'prior' | 'desktop'
 export interface RuntimeLogEntry {
   at: string; source: 'runtime' | 'desktop'; level: 'info' | 'error'; event: string; summary: string
   invocationId?: string; provider?: string; tool?: string; durationMs?: number
+  location?: RuntimeLogLocation; protocol?: 'http' | 'https'; httpStatus?: number
 }
 export interface RuntimeLogSource {
   name: string; status: 'read' | 'missing' | 'unreadable' | 'linked'; bytesRead: number; totalBytes: number
   skippedLines: number; partialLines: number; truncated: boolean
+  location?: RuntimeLogLocation; observedFrom?: string | null; observedTo?: string | null; lastWriteAt?: string | null; stale?: boolean
 }
 export interface RuntimeLogSnapshot {
   version: 1; generatedAt: string; hours: RuntimeLogHours

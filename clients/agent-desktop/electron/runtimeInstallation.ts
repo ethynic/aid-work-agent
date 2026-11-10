@@ -48,7 +48,7 @@ function configuration(value: unknown): MigratedConfiguration | null {
   try { const url = new URL(raw.server); if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return null } catch { return null }
   return { server: raw.server, device_id: raw.device_id, ...(typeof raw.name === 'string' ? { name: raw.name } : {}) }
 }
-async function credentialModule(options: RuntimeInstallationOptions): Promise<{ dpapiProtect(v: string): Promise<string>; dpapiUnprotect(v: string): Promise<string> }> {
+async function credentialModule(options: Pick<RuntimeInstallationOptions, 'hostEntry'>): Promise<{ dpapiProtect(v: string): Promise<string>; dpapiUnprotect(v: string): Promise<string> }> {
   return import(pathToFileURL(path.join(path.dirname(options.hostEntry), 'dpapi.js')).href)
 }
 async function validIdentity(config: MigratedConfiguration, token: string): Promise<boolean> {
@@ -70,6 +70,31 @@ function readPointer(root: string): Pointer | null {
       || !(record.priorHome === null || typeof record.priorHome === 'string')) throw new Error('当前安装登记损坏，请重新安装客户端')
   assertHome(root, record.home, record.id)
   return record
+}
+export type RuntimeEvidenceStatus = 'read' | 'missing' | 'unreadable' | 'linked'
+interface DiagnosticHome { home: string | null; status: RuntimeEvidenceStatus }
+export interface RuntimeDiagnosticHomes { metadataHome: string | null; pointer: RuntimeEvidenceStatus; active: DiagnosticHome; prior: DiagnosticHome }
+export type RuntimeDiagnosticInstallation = Pick<RuntimeInstallationOptions, 'userDataPath' | 'legacyHome' | 'hostEntry' | 'unprotect'>
+export function readRuntimeDiagnosticHomes(options: RuntimeDiagnosticInstallation): RuntimeDiagnosticHomes {
+  // Diagnostics never create an installation directory or repair a pointer.
+  const root = path.join(options.userDataPath, 'installation-v2')
+  const absent = (status: RuntimeEvidenceStatus): DiagnosticHome => ({ home: null, status })
+  const readHome = (home: string): DiagnosticHome => {
+    try {
+      const metadata = lstatSync(home)
+      if (metadata.isSymbolicLink() || !same(realpathSync(home), home)) return absent('linked')
+      return metadata.isDirectory() ? { home, status: 'read' } : absent('unreadable')
+    } catch (error) { return absent((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable') }
+  }
+  const metadata = readHome(root)
+  try {
+    if (metadata.status !== 'read' && metadata.status !== 'missing') return { metadataHome: null, pointer: metadata.status, active: absent(metadata.status), prior: absent(metadata.status) }
+    const pointer = readPointer(root)
+    if (!pointer) return { metadataHome: metadata.home, pointer: 'missing', active: readHome(options.legacyHome), prior: absent('missing') }
+    const prior = !pointer.priorHome || same(pointer.home, pointer.priorHome) ? absent('missing')
+      : ownedHome(root, pointer.priorHome, options.legacyHome) ? readHome(pointer.priorHome) : absent('unreadable')
+    return { metadataHome: metadata.home, pointer: 'read', active: readHome(pointer.home), prior }
+  } catch { return { metadataHome: metadata.home, pointer: 'unreadable', active: absent('unreadable'), prior: absent('unreadable') } }
 }
 function assertHome(root: string, home: string, id: string) {
   if (!path.isAbsolute(home)) throw new Error('Runtime安装目录登记无效')
@@ -276,7 +301,7 @@ export async function selectRuntimeConnection(options: RuntimeInstallationOption
   return target
 }
 /** Locally readable identity only. This never verifies cloud availability. */
-async function readLocalRuntimeIdentity(options: RuntimeInstallationOptions, home: string): Promise<MigratedConfiguration | null> {
+export async function readLocalRuntimeIdentity(options: Pick<RuntimeInstallationOptions, 'hostEntry' | 'unprotect'>, home: string): Promise<MigratedConfiguration | null> {
   try {
     if (!same(realpathSync(home), home)) return null
     const config = configuration(JSON.parse(safeRead(path.join(home, 'config.json'))))

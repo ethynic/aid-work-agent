@@ -4,6 +4,7 @@ import type { RuntimeSupervisor } from './runtimeSupervisor.js'
 import type { ConnectionDiagnosis, ConnectionRecoveryResult } from './runtimeConnectionRecovery.js'
 import { resumeRuntimeAtLogin } from './runtimeStartup.js'
 import { lstatSync, readFileSync } from 'node:fs'
+import type { RuntimeDiagnosticFields } from '@aid/local-tool-host-core/legacy/logDiagnostics'
 
 /** Read only the active server's public origin; never return credentials or other configuration. */
 export function readRuntimeConnectionInfo(home: string | null): { server: string | null } {
@@ -24,7 +25,7 @@ const issue = (category: string, summary: string, service_verified = false): Con
 const sameHome = (a: string, b: string) => resolve(a).toLowerCase() === resolve(b).toLowerCase()
 interface Registration {
   phase: 'requested' | 'prepared' | 'confirming' | 'paired' | 'installed'; home: string | null
-  device_id: string | null; request: { registration_id: string }
+  device_id: string | null; request: { registration_id: string }; server: string
 }
 const confirmed = (r: Registration | null): boolean => r?.phase === 'paired' || r?.phase === 'installed'
 function preparationEnded(error: unknown): boolean {
@@ -51,8 +52,28 @@ export class RuntimeCleanConnection {
     commitHome(target: string): Promise<void>
     beforeChange(): Promise<void>
     afterChange?(): Promise<void>
+    recordDiagnostic?(event: string, details: RuntimeDiagnosticFields): void
   }) {}
   private module(name: string): Promise<Record<string, any>> { return import(pathToFileURL(join(dirname(this.options.hostEntry), name)).href) }
+  private record(event: string, server: string, error?: unknown): void {
+    try {
+      const protocol = new URL(server).protocol
+      const details: RuntimeDiagnosticFields = protocol === 'https:' ? { protocol: 'https' } : protocol === 'http:' ? { protocol: 'http' } : {}
+      if (error) {
+        const e = error as { code?: string; status?: number; failureKind?: string; name?: string }
+        const status = e.status ?? 0
+        if (Number.isInteger(status) && status >= 300 && status <= 599) details.httpStatus = status
+        details.reason = e.code === 'PAIRING_REDIRECT' || (status >= 300 && status < 400) ? 'redirect'
+          : e.failureKind === 'dns' || e.failureKind === 'tls' ? e.failureKind : e.name === 'NetworkError' ? 'network'
+            : status === 401 || status === 403 || e.name === 'DeviceRevokedError' ? 'authorization'
+              : status >= 500 ? 'server' : status >= 400 ? 'refused' : 'local'
+      }
+      this.options.recordDiagnostic?.(event, details)
+    } catch { /* Diagnostics cannot change connection recovery. */ }
+  }
+  private pairingObserver(stage: 'prepare' | 'confirm' | 'status', server: string) {
+    return (outcome: string, error?: unknown) => this.record(`runtime-pair-${stage}-${outcome}`, server, error)
+  }
   async registrationBlocksExecution(): Promise<boolean> {
     if (this.confirmedBeforeSave) return true
     try {
@@ -82,6 +103,7 @@ export class RuntimeCleanConnection {
   private async retireRequested(store: Record<string, any>, r: Registration) {
     if (r.home && sameHome(r.home, this.options.home()) && await this.options.restorePriorHome(r.home)) this.restoredOriginal = true
     store.retireCleanRegistration(this.options.metadataHome)
+    this.record('runtime-pair-legacy-request-retired', r.server)
   }
   private async readPendingRegistration(store: Record<string, any>): Promise<Registration | null> {
     const saved: Registration | null = await store.readCleanRegistration(this.options.metadataHome)
@@ -147,7 +169,7 @@ export class RuntimeCleanConnection {
   }
   private async checkPrepared(store: Record<string, any>, r: Registration): Promise<boolean> {
     let state: string
-    try { state = await store.checkCleanRegistration(this.options.metadataHome, r) }
+    try { state = await store.checkCleanRegistration(this.options.metadataHome, r, this.pairingObserver('status', r.server)) }
     catch (error) {
       if (confirmed(r)) this.confirmedBeforeSave = r
       throw error
@@ -197,7 +219,8 @@ export class RuntimeCleanConnection {
     catch { this.error = issue('EXECUTION_START_FAILED', '设备连接已保存，Runtime执行未启动，请检查本机执行状态', true) }
   }
   private async probe(): Promise<ConnectionDiagnosis> {
-    const result = await (await this.module('connectionDiagnosis.js')).diagnoseConnection(this.options.home())
+    const result = await (await this.module('connectionDiagnosis.js')).diagnoseConnection(this.options.home(),
+      (outcome: string, server: string, error?: unknown) => this.record(`runtime-diagnostic-heartbeat-${outcome}`, server, error))
     return { ...result, can_preserve: false, requires_reboot: false,
       steps: result.service_verified ? [] : ['请检查当前服务地址和网络；需要更换身份时直接输入新配对码。'] }
   }
@@ -234,7 +257,7 @@ export class RuntimeCleanConnection {
         else if (r) throw new Error('prior registration requires status verification or local installation')
         current = this.options.supervisor()
         r = await store.beginCleanRegistration(this.options.metadataHome, input, [this.options.home()]) as Registration
-        await store.prepareCleanRegistration(this.options.metadataHome, r, input.pairing_code)
+        await store.prepareCleanRegistration(this.options.metadataHome, r, input.pairing_code, this.pairingObserver('prepare', r.server))
         try { wasRunning = await this.stopActive(); stopped = true }
         catch {
           store.discardPreparedCleanRegistration(this.options.metadataHome)
@@ -242,7 +265,7 @@ export class RuntimeCleanConnection {
           this.error = issue('PAIRING_STOP_FAILED', '旧执行未确认停止，本次未发送配对确认。请处理执行状态后重新发起配对')
           return
         }
-        try { await store.confirmCleanRegistration(this.options.metadataHome, r) }
+        try { await store.confirmCleanRegistration(this.options.metadataHome, r, this.pairingObserver('confirm', r.server)) }
         catch (error) {
           // The store sets paired only after validating the cloud reply. Keep
           // that receipt until its first durable write succeeds.

@@ -157,6 +157,31 @@ async function protectedRecord(raw: string): Promise<Record<string, unknown>> {
   try { const value: unknown = JSON.parse(await dpapiUnprotect(raw)); requireResource(record(value)); return value }
   catch { throw new ResourceFailure('CONNECTION_RESOURCE_EVIDENCE_UNREADABLE') }
 }
+/** Export-only evidence. The native IDs and protected proof never leave this module. */
+export async function readRuntimeMarkerMatch(home: string) {
+  if (process.platform !== 'win32') return { status: 'unsupported' as const }
+  return inspectionDeadline.run(Date.now() + 5000, async () => {
+    let proof: Record<string, unknown>
+    try {
+      requireResource(isAbsolute(home) && resolve(home) === home)
+      for (let directory = home; ; directory = dirname(directory)) {
+        requireResource(stat(directory)?.isDirectory())
+        if (dirname(directory) === directory) break
+      }
+      const marker = JSON.parse(text(join(home, 'host-running.json')).replace(/^\uFEFF/, ''))
+      requireResource(record(marker) && exact(marker, ['instance_id', 'schemaVersion', 'supervision'])
+        && uuid(marker.instance_id) && marker.schemaVersion === 2 && typeof marker.supervision === 'string')
+      proof = await protectedRecord(marker.supervision)
+      requireResource(exact(proof, ['generation', 'home', 'bootId', 'sessionId', 'rebootOnly']) && proof.generation === marker.instance_id
+        && proof.home === home && uuid(proof.bootId) && session(proof.sessionId) && typeof proof.rebootOnly === 'boolean')
+    } catch { return { status: 'unreadable' as const } }
+    try {
+      const now = await kernel(new ProcessSupervision(home, process.execPath).executable)
+      return { status: 'read' as const, bootMatchesMarker: sameBoot(proof.bootId as string, now.bootId),
+        sessionMatchesHost: proof.sessionId === now.sessionId, rebootOnly: proof.rebootOnly as boolean }
+    } catch { return { status: 'unavailable' as const } }
+  })
+}
 async function witness(home: string): Promise<Witness | undefined> {
   if (!stat(join(home, WITNESS))) return undefined
   try {
