@@ -1,7 +1,7 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from 'node:crypto'
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import canonicalize from 'canonicalize'
@@ -13,7 +13,7 @@ const clients = resolve(root, '..')
 export const definitions = {
   boss: { directory: 'boss-resume-assistant', display_name: 'BOSS 招聘', assets: ['scripts'], ocr: false },
   weixin: { directory: 'weixin-cli', display_name: '微信', assets: ['drivers'], ocr: true },
-  wecom: { directory: 'wecom-cli', display_name: '企业微信', assets: ['drivers'], ocr: true },
+  wecom: { directory: 'wecom-cli', display_name: '企业微信', assets: ['drivers'], localdbPython: true },
 }
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
 
@@ -75,6 +75,17 @@ export function copyProviderDriverAssets(source, target) {
     filter: file => basename(file) !== '__pycache__' && !/\.(?:pyc|pyo)$/i.test(file) })
 }
 
+/** TypeScript leaves removed modules in dist; stage only files backed by current source. */
+export function copyCurrentProviderDist(source, target) {
+  const compiled = join(source, 'dist/src')
+  cpSync(compiled, target, { recursive: true, filter: file => {
+    if (lstatSync(file).isDirectory()) return true
+    const path = relative(compiled, file).replace(/\\/g, '/')
+    if (path.endsWith('.js')) return existsSync(join(source, 'src', path.replace(/\.js$/, '.ts')))
+    return existsSync(join(source, 'src', path))
+  } })
+}
+
 const NATIVE_INPUT_SPEC = 'file:../shared/win32-native-input'
 
 /**
@@ -119,7 +130,8 @@ async function buildProvider(name, options, signer) {
   if (!existsSync(join(source, 'dist/src/cli/index.js'))) throw new Error('Build Provider before packaging')
   const stage = mkdtempSync(join(tmpdir(), 'aid-provider-package-'))
   try {
-    cpSync(join(source, 'dist/src'), join(stage, 'dist/src'), { recursive: true })
+    if (name === 'wecom') copyCurrentProviderDist(source, join(stage, 'dist/src'))
+    else cpSync(join(source, 'dist/src'), join(stage, 'dist/src'), { recursive: true })
     for (const assets of definition.assets) {
       // BOSS needs approved PowerShell drivers, not developer live probes.
       if (assets === 'scripts') {
@@ -133,23 +145,26 @@ async function buildProvider(name, options, signer) {
       copyProviderDriverAssets(ocr, join(stage, 'ocr-python'))
       const env = { ...process.env }; delete env.PYTHONHOME; delete env.PYTHONPATH
       execFileSync(join(stage, 'ocr-python/python.exe'), ['-I', '-B', '-c', 'from rapidocr_onnxruntime import RapidOCR; from PIL import Image; RapidOCR(); print("OCR_BUNDLE_OK")'], { cwd: stage, env, timeout: 90000 })
-      if (name === 'wecom') {
-        // Native DB decryption imports Crypto lazily; plain SQLite/OCR checks
-        // cannot prove a reused embedded distribution can decrypt a snapshot.
-        execFileSync(join(stage, 'ocr-python/python.exe'), ['-I', '-B', '-c',
-          'from Crypto.Cipher import AES; import sqlite3; encrypted=AES.new(bytes(16),AES.MODE_CBC,bytes(16)).encrypt(bytes(16)); assert encrypted.hex()=="66e94bd4ef8a2c3b884cfa59ca342b2e"; assert AES.new(bytes(16),AES.MODE_CBC,bytes(16)).decrypt(encrypted)==bytes(16); print("WECOM_SQLITE_AES_BUNDLE_OK")'],
-        { cwd: stage, env, timeout: 30000 })
-        // wecom 日期模式（评审三 P1-5）：发行入口必须验证日期/IANA 能力——
-        // 复用旧 ocr-python-final（无 tzdata）时在此明确失败并指向 prepare 刷新，
-        // 不把旧资产打成"验证通过"的新 WeCom 插件，不新增客户机版本门禁。
-        execFileSync(join(stage, 'ocr-python/python.exe'), ['-I', '-B', '-c',
-          'from zoneinfo import ZoneInfo; from datetime import datetime, timedelta; '
-          + 'tz=ZoneInfo("Asia/Shanghai"); '
-          + 'start=datetime(2026,11,4,tzinfo=tz); '
-          + 'end=(datetime(2026,11,4)+timedelta(days=1)).replace(tzinfo=tz); '
-          + 'assert int(end.timestamp())-int(start.timestamp())==86400; print("WECOM_DAYMODE_BUNDLE_OK")'],
-        { cwd: stage, env, timeout: 30000 })
-      }
+    }
+    if (definition.localdbPython) {
+      const localdb = resolve(options.localdb_python ?? join(root, 'assets/localdb-python-final'))
+      if (!existsSync(join(localdb, 'python.exe')) || existsSync(join(localdb, 'pyvenv.cfg')) || !existsSync(join(localdb, 'asset-provenance.json')) || !existsSync(join(localdb, 'msvcp140.dll')) || !existsSync(join(localdb, 'msvcp140_1.dll'))) throw new Error('Verified embedded local database Python with app-local CRT required')
+      const provenance = JSON.parse(readFileSync(join(localdb, 'asset-provenance.json'), 'utf8'))
+      const approved = JSON.parse(readFileSync(join(root, 'localdb-assets.lock.json'), 'utf8'))
+      if (JSON.stringify(provenance) !== JSON.stringify(approved)) throw new Error('Local database Python provenance mismatch')
+      const paths = filesUnder(localdb).map(file => file.path)
+      if (paths.some(path => /(?:^|\/)(?:rapidocr|onnxruntime|PIL|pillow|opencv|cv2)(?:[\/._-]|$)/i.test(path))) throw new Error('Local database Python contains OCR dependencies')
+      copyProviderDriverAssets(localdb, join(stage, 'localdb-python'))
+      const env = { ...process.env }; delete env.PYTHONHOME; delete env.PYTHONPATH
+      execFileSync(join(stage, 'localdb-python/python.exe'), ['-I', '-B', '-c',
+        'from Crypto.Cipher import AES; import sqlite3; from zoneinfo import ZoneInfo; from datetime import datetime, timedelta; '
+        + 'encrypted=AES.new(bytes(16),AES.MODE_CBC,bytes(16)).encrypt(bytes(16)); '
+        + 'assert encrypted.hex()=="66e94bd4ef8a2c3b884cfa59ca342b2e"; '
+        + 'assert AES.new(bytes(16),AES.MODE_CBC,bytes(16)).decrypt(encrypted)==bytes(16); '
+        + 'tz=ZoneInfo("Asia/Shanghai"); start=datetime(2026,11,4,tzinfo=tz); '
+        + 'end=(datetime(2026,11,4)+timedelta(days=1)).replace(tzinfo=tz); '
+        + 'assert int(end.timestamp())-int(start.timestamp())==86400; print("WECOM_LOCALDB_BUNDLE_OK")'],
+      { cwd: stage, env, timeout: 30000 })
     }
     cpSync(join(source, 'package.json'), join(stage, 'package.json'))
     cpSync(join(source, 'package-lock.json'), join(stage, 'package-lock.json'))
@@ -203,7 +218,7 @@ export async function main(argv) {
   for (let index = 0; index < argv.length; index++) {
     const key = argv[index]
     if (key === '--test') { options.test = true; continue }
-    const allowed = { '--provider': 'provider', '--node': 'node', '--npm-cli': 'npm_cli', '--ocr': 'ocr', '--output': 'output', '--signer': 'signer', '--release-id': 'release_id', '--created-at': 'created_at', '--test-key-id': 'test_key_id' }
+    const allowed = { '--provider': 'provider', '--node': 'node', '--npm-cli': 'npm_cli', '--ocr': 'ocr', '--localdb-python': 'localdb_python', '--output': 'output', '--signer': 'signer', '--release-id': 'release_id', '--created-at': 'created_at', '--test-key-id': 'test_key_id' }
     if (!Object.hasOwn(allowed, key) || !argv[index + 1]) throw new Error('Invalid packaging arguments')
     options[allowed[key]] = argv[++index]
   }

@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { z } from 'zod'
 import {
   buildManifest,
   canonicalSerialize,
@@ -14,8 +15,9 @@ import {
   manifestTools,
   staticManifestFields,
 } from '../src/mcp/manifest.js'
-import { TOOL_NAMES } from '../src/mcp/toolDefs.js'
+import { TOOL_DEFS, TOOL_NAMES } from '../src/mcp/toolDefs.js'
 import { getOperationEntry, OPERATION_NAMES } from '../src/operations/registry.js'
+import { createWecomSessionDirectoryOperation } from '../src/operations/sessionDirectory.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -58,9 +60,11 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源', () => {
   // M3：wecom_unread_list + wecom_watch_poll；M5：wecom_chat_select（半写：清角标/切视图）；
   // M7：wecom_send_image（写：发图片）；M8：wecom_send_file（写：发文件）；
   // M11b：wecom_read_session 进 MCP（撤销 M3 决策——runtime 模式调用方是 agent，
-  // 低频理性，模型通道已把长滚动抓取变快）
-  assert.deepEqual(TOOL_NAMES, ['wecom_probe', 'wecom_add_customer', 'wecom_chat_search', 'wecom_chat_select', 'wecom_message_send', 'wecom_send_status', 'wecom_send_image', 'wecom_send_file', 'wecom_unread_list', 'wecom_read_session', 'wecom_session_directory', 'wecom_read_sessions', 'wecom_watch_poll', 'wecom_group_list', 'wecom_group_read', 'wecom_group_poll'])
-  assert.equal(m.tools.length, 16)
+  // 低频理性，模型通道已把长滚动抓取变快）；
+  // 代理任务 P2：wecom_config_doctor / wecom_config_calibrate（受信配置流程专用，
+  // 不加入 Agent 模型工具集，沿 wecom_session_directory 页面专用先例）
+  assert.deepEqual(TOOL_NAMES, ['wecom_probe', 'wecom_chat_search', 'wecom_chat_select', 'wecom_message_send', 'wecom_send_status', 'wecom_send_image', 'wecom_send_file', 'wecom_unread_list', 'wecom_read_session', 'wecom_session_directory', 'wecom_read_sessions', 'wecom_watch_poll', 'wecom_group_list', 'wecom_group_read', 'wecom_group_poll', 'wecom_config_doctor', 'wecom_config_calibrate'])
+  assert.equal(m.tools.length, 17)
   const probe = m.tools[0]!
   assert.equal(probe.name, 'wecom_probe')
   assert.ok(probe.title.length > 0 && probe.description.length > 0)
@@ -69,7 +73,7 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源', () => {
 
   // 注解语义：add_customer / message_send / send_image / send_file 是写动作（readOnly=false 且非幂等），search 只读幂等
   const byName = new Map(m.tools.map((t) => [t.name, t]))
-  for (const n of ['wecom_add_customer', 'wecom_message_send', 'wecom_send_image', 'wecom_send_file']) {
+  for (const n of ['wecom_message_send', 'wecom_send_image', 'wecom_send_file']) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, false, `${n} 应为写动作`)
     assert.equal(byName.get(n)!.annotations.idempotentHint, false, `${n} 应非幂等`)
   }
@@ -98,12 +102,12 @@ test('tool schema 单一来源：manifestTools 的 inputSchema 由 toolDefs 推�
   const tools = manifestTools()
   const probeProps = tools[0]!.inputSchema.properties as Record<string, { type?: string }>
   assert.equal(probeProps.verbose!.type, 'boolean')
-  const addSchema = tools[1]!.inputSchema
-  assert.deepEqual(addSchema.required, ['phone', 'confirm'])
-  const selectSchema = tools[3]!.inputSchema
+  const searchSchema = tools[1]!.inputSchema
+  assert.deepEqual(searchSchema.required, ['query'])
+  const selectSchema = tools[2]!.inputSchema
   assert.deepEqual(selectSchema.required, ['target_ref'])
   // M11a：send 三工具的 target_ref 转可选（target_name 二选一，XOR 在 operation 层校验）
-  const sendSchema = tools[4]!.inputSchema
+  const sendSchema = tools[3]!.inputSchema
   assert.deepEqual(sendSchema.required, ['text'])
   const sendProps = sendSchema.properties as Record<string, { type?: string }>
   assert.equal(sendProps.target_name!.type, 'string')
@@ -133,16 +137,51 @@ test('tool schema 单一来源：manifestTools 的 inputSchema 由 toolDefs 推�
   assert.equal(readProps.since_days!.type, 'integer')
 })
 
+test('directory MCP input accepts name search while preserving page modes', () => {
+  const definition = TOOL_DEFS.find(tool => tool.name === 'wecom_session_directory')!
+  const input = z.object(definition.zodShape)
+  for (const args of [
+    { mode: 'list' }, { mode: 'preview', session: 'ws1.x' },
+    { mode: 'resolve', sessions: ['ws1.x'] },
+    { mode: 'search', query: '孙程' },
+    { mode: 'search', query: '沟通', type: 'group', limit: 50 },
+  ]) assert.equal(input.safeParse(args).success, true, JSON.stringify(args))
+  for (const args of [
+    { mode: 'search', query: '沟通', type: 'unknown' },
+    { mode: 'search', query: '沟通', limit: 51 },
+  ]) assert.equal(input.safeParse(args).success, false, JSON.stringify(args))
+  const props = manifestTools().find(tool => tool.name === 'wecom_session_directory')!.inputSchema.properties as
+    Record<string, { type?: string; enum?: string[] }>
+  assert.ok(props.mode!.enum!.includes('search'))
+  assert.deepEqual(props.type!.enum, ['contact', 'group', 'any'])
+  assert.equal(props.query!.type, 'string')
+  assert.equal(props.limit!.type, 'integer')
+})
+
+test('directory operation rejects incomplete search before opening local data', async () => {
+  const op = createWecomSessionDirectoryOperation()
+  const context = { signal: new AbortController().signal, progress() {} }
+  for (const args of [
+    { mode: 'search', query: '  ' },
+    { mode: 'search', query: '沟通', cursor: 'wdir1.old' },
+    { mode: 'search', query: '沟通', type: 'unknown' },
+    { mode: 'search', query: '沟通', limit: 51 },
+  ]) {
+    const result = await op.execute(args as never, context)
+    assert.equal(result.code, 'INVALID_ARGUMENT', JSON.stringify(args))
+  }
+})
+
 test('toolDefs ↔ registry 一致性守卫：每个 toolDef 可取到 operation，未注册名 fail-loud', () => {
   // 意图：toolDefs 与 OPERATIONS 是两个手工列表，漂移时必须启动期就失败；
   // 若守卫失效，MCP 运行期会以 TypeError 裸错回 Host（无结构化 code）
   for (const name of TOOL_NAMES) {
     assert.equal(getOperationEntry(name).operation.name, name)
   }
-  // registry ⊇ toolDefs：M11b 起 registry 10 个 operation 且全部进 MCP toolDefs
-  // （read_session 由仅 CLI 改为同时暴露 MCP，watch_poll 留 CLI——runtime 受信清单
-  // 不含 watch_poll/add_customer，见 agent-tool-runtime providers.ts）
-  assert.equal(OPERATION_NAMES.length, 16)
+  // registry ⊇ toolDefs：registry 与 MCP toolDefs 同长（代理任务 P2 起含受信配置
+  // 工具 doctor/calibrate；watch_poll 留 CLI——runtime 受信清单不含
+  // watch_poll/add_customer，见 agent-tool-runtime providers.ts）
+  assert.equal(OPERATION_NAMES.length, 17)
   assert.ok(OPERATION_NAMES.includes('wecom_read_session'))
   for (const name of TOOL_NAMES) {
     assert.ok(OPERATION_NAMES.includes(name), `MCP tool「${name}」必须在 OPERATIONS 注册`)

@@ -7,6 +7,7 @@
 | 调研主题 | 文档 | 关联功能 |
 |---------|------|---------|
 | agent3 Runner 端到端混合负载实验 | [实测报告](research/agent3-runner-end-to-end-load-test-20261106.md) | Runner 执行槽隔离 Phase 4：三档 8/8 任务完成结算，双槽并行已验；同步阻塞、告警与旧客户端仍待验。 |
+| WeCom CLI OCR 使用点清单 | [调研](research/wecom-cli-ocr-inventory-20261106.md) | 2026-11-06：9 组原使用场景，区分仍运行的入口、退役脚本与发行包 OCR 依赖。 |
 | 「社会治理智能体」技术要求评估 | [评估](research/social-governance-agent-requirement-assessment.md) | 2026-11-03：高校采购标书 vs 本项目能力对照；约 60% 吻合可投，缺口为工作流编排与知识空间，投标前需定应对策略。 |
 | Runtime 与 CLI 安装升级简化评估 | [评估](research/runtime-cli-install-upgrade-simplicity-review.md) | 2026-10-30：审查安装、任务恢复、验包与信任耦合，建议覆盖升级优先、重装白名单保留配置。 |
 | 企业微信群接入自研 Agent 自动问答 | [调研](research/wecom-group-agent-bot-research.md) | 2026-10-22：内部群 @智能机器人可走官方 API；外部客户群不能按同一路线承诺，现有应用渠道需另做适配。 |
@@ -44,8 +45,6 @@
 | 招聘客户端部署封装（npm install 一键装机） | [设计](design/recruiting/recruiting-client-deployment-design.md) / [部署手册 clients/README.md](../clients/README.md) / [同事装机手册](../clients/release/安装手册.md) | 🔧 部分完成（2026-08-24 分发包 v0.2.3，send-to 沟通搜索链路全面通用化重写）：**send-to 通用化**（另一台机器分辨率不同点错搜索按钮暴露：… |
 | 招聘面试邀约企微通知（两点式） | [设计](design/recruiting/recruiting-interview-notify-design.md) | 🔧 部分完成（Phase 1 核心闭环已开发，2026-08-19 三智能体全过——测试修 2 真 bug + CR 修 1 个 P1（executor 强转 Pydantic 模型实例致生产路径通知… |
 | 浏览器 RPA（纯键鼠路线）深度调查报告 | [browser-rpa-vs-anti-bot-deep-research.md](research/browser-rpa-vs-anti-bot-deep-research.md) | BOSS 简历筛选助手、微信搜一搜 RPA、通用 RPA 底座。 |
-| LLM 调用计费缺失审计与修复计划 | [开发计划](plans/llm-billing-gap-audit.md) | 📋 待开发（2026-08-14 审计 + 当日逐点复核 + 与上次计划交叉核对）：原 13 处缺口与 2 处风险全部核实真实，… |
-| LLM 计费审计 2026-09-12（季度复审） | [审计报告](plans/llm-billing-audit-20260912.md) | ✅ 已修复（2026-09-12 按 billing_audit.md §3 全量复审：LLM 21+20 处 / Embedding 12 处 / ASR 3 处 / 视频 1 处逐点读上下文核对「… |
 | 上传文件存储合规审计 | [审计报告](plans/upload-storage-compliance-audit.md) | ✅ 已修复并发生产、已验证（2026-08-14 审计 + 当日修复 + 当日发生产验证）：主体合规（Phase 1~8 改造有效，持久化入口均走 storage.py 工具函数）。 |
 | deepseek-v4-flash 平替模型调研 | [deepseek-v4-flash-replacement-research.md](research/deepseek-v4-flash-replacement-research.md) | LLM 模型选型、计费降本（2026-08-16 调研完成：选定 qwen3.7-flash 0.2/0.8 + enable_thinking:false + 显式缓存，… |
 | 小米 MiMo-v2.5 平替可行性调研（扩展） | [mimo-v2.5-replacement-research.md](research/mimo-v2.5-replacement-research.md) | 评估小米 MiMo-v2.5 平替 deepseek-v4-flash（2026-08-16 调研+实测完成）。 |
@@ -59,9 +58,6 @@
 | 邮箱服务器自动发现（Autoconfig）调研与配置体验优化方案 | [调研](research/email-server-autoconfig-research.md) | 邮箱设置体验优化：内置表+MX/ISPDB/Autoconfig 探测链，用户只填地址+授权码；含前端两步式表单与分期建议。 |
 | 文生图/图生图能力缺失核查与生图模型选型调研 | [调研](research/image-generation-model-research.md) | 生图工具选型（2026-10-26）：确认项目无 AI 生图能力；建议一期智谱 CogView-4（文生图）+ 百炼 qwen-image-edit（图生图）复用现有账号，二期可选火山 Seedream。 |
 | PPT 生成质量课题调研：从「能生成」到「能交付」 | [调研](research/ppt-generation-quality-research.md) | PPT 工具重构方向（2026-09-29）：三轮 trace 实证+业界调研（Codex/Anthropic skill/Presenton/Gamma 系）；结论=LLM 只选布局填槽、样式由主题库+规则排版保底、模板改一次性转译、QA 变门禁、python-pptx 回退废弃；分 P0-P3 落地路线。 |
-| 三环境 ERROR/WARNING 日志收集与处理清单（2026-10-01~10-12） | [报告](plans/log-error-review-20261012.md) | 📋 逐项处理中（2026-10-12 收集生产/仿真/测试三环境）：P0=生产 LLM failover 链故障（Kimi 401 + 智谱余额不足/429，10-11 爆发 500+ 条）、wecom_kf 45009 修复待部署验证；P1=测试 weixin_marketing 凭证解密失败（持续中）、两租户 external_push 缺 APP_ID、cp_tool 跨租户探测；防滥用表缺失已自愈。 |
 | 企业微信本地库解密读取（local-db 通道）技术调研 | [调研](research/wecom-local-db-decrypt-research.md) | wecom-cli 本地库主数据通道（读历史/待回复检测/发送校验三能力主通道，UI/OCR 转兜底）：本机 5.0.11.6029 全链路验证通过（wxSQLite3 aes128cbc + 只读内存提取密钥 + 副本解密）；8 步流水线按版本矩阵分派，失效显式化不静默降级（2026-10-14）；集成设计见 design/wecom/wecom-cli-localdb-design.md。 |
-| 双环境 ERROR/WARNING 日志收集与处理清单（2026-10-19~10-26） | [报告](plans/log-error-review-20261026.md) | 📋 待逐项处理（2026-10-26 收集生产/测试，含上期闭环核对）：P1=生产 ERP module_listing_view 500 拖垮 external_push、APP_ID 缺配置扩大到 6 租户、计费 model 为空漏计费（42 条持续）；P1=测试一次性提醒任务 missed 永不送达；智谱余额已恢复，Kimi key 仍未换。 |
-| 双环境 tool_error 失败收集与处理清单（最近5天） | [报告](plans/tool-error-review-20261030.md) | 🔧 逐项处理中（2026-10-30 收集生产/测试 obs_spans 失败 span）：4 个最终失败 trace 全部撞执行上限（合计约 169 积分/1300 万+ token），确认 7385c1bb 部署优先级；T2 skill_execute workdir 缺陷已修（单测+独立验证通过，待部署含 5a329a49）；web-search 风控、http_api 缺环境变量为观察项；数据分析迭代失败与 RPA 恢复型失败判自愈忽略。 |
 | 无源码交付私有云——代码保护方案调研 | [调研](research/private-cloud-no-source-code-delivery.md) | 私有云交付不含源码（2026-10-22 调研完成，待实施）：核心逻辑 Cython 编译 + 其余 PyArmor + 技能/提示词加密；废弃 git pull 改离线镜像交付；Docker 无加密机制、载体更换不解决保密。 |
 | AI 获客「联系人手机号交付」合规调研 | [调研](research/lead-gen-contact-phone-compliance-research.md) | AI获客线索交付边界（2026-10-28 调研完成）：个人手机号属 PIPL 个人信息，聚合交付租户=向第三方提供，5000 条即刑事入罪门槛（扬州 9 人爬企业注册信息获刑案同场景）；建议分层交付——企业信息/公开商务联系方式（座机、企业邮箱）可给，个人手机号不抓不存不交付，确需走持牌数据商采购通道；判例原文待外部律师复核。 |

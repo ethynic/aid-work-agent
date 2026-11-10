@@ -106,6 +106,7 @@ def fetch_table_metadata_from_db(
             WHERE id = %s
               AND (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
               AND {scope_sql}
+              AND disabled IS NOT TRUE
             """,
             (numeric_id, *tenant_params, *moved_params, *scope_params),
         )
@@ -198,6 +199,7 @@ def query_data_tables_list(
                 FROM documents
                 WHERE (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
                   AND {scope_sql}
+                  AND disabled IS NOT TRUE
                   AND (title ILIKE %s OR summary ILIKE %s)
                 ORDER BY created_at DESC
                 """,
@@ -210,6 +212,7 @@ def query_data_tables_list(
                 FROM documents
                 WHERE (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
                   AND {scope_sql}
+                  AND disabled IS NOT TRUE
                 ORDER BY created_at DESC
                 """,
                 (*tenant_params, *moved_params, *scope_params),
@@ -308,6 +311,7 @@ def filter_available_table_ids(
             WHERE id = ANY(%s)
               AND (source_type = 'data-analysis-metadata'{tenant_sql}{moved_sql})
               AND {scope_sql}
+              AND disabled IS NOT TRUE
             """,
             (numeric_ids, *tenant_params, *moved_params, *scope_params),
         )
@@ -1709,6 +1713,7 @@ class AnalysisAgent:
                 WHERE id IN ({placeholders})
                   AND (source_type = 'data-analysis-metadata'{tenant_sql})
                   AND {scope_sql}
+                  AND disabled IS NOT TRUE
                 """,
                 (*doc_ids, *tenant_params, *scope_params),
             )

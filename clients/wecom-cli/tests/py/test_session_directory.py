@@ -36,6 +36,15 @@ class SessionDirectoryTest(unittest.TestCase):
         self.assertEqual(len([row for row in rows if row['name'] == 'Alex' and row['same_name']]), 2)
         self.assertEqual(len([row for row in rows if row['name'] == 'Team' and row['same_name']]), 2)
 
+    def test_search_resolves_user_without_conversation_before_any_ui_navigation(self):
+        person = self.directory(mode='search', query='Alex', type='contact', limit=20)
+        self.assertTrue(person['ok'], person)
+        self.assertEqual(person['match_count'], 2, '两名联系人同名，不能选默认搜索结果')
+        self.assertTrue(person['same_name'])
+        group = self.directory(mode='search', query='Team', type='group', limit=20)
+        self.assertEqual(group['match_count'], 2, '两个不同群身份同名也不能直接 Enter')
+        self.assertTrue(group['same_name'])
+
     def test_preview_of_empty_target_is_empty_and_resolve_is_all_or_nothing(self):
         preview = self.directory(mode='preview', conversation_id=self.empty_group, limit=3)
         self.assertTrue(preview['ok'], preview)

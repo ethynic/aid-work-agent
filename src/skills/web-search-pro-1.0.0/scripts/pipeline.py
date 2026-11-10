@@ -46,7 +46,7 @@ python pipeline.py search "爱定义（上海）科技有限公司" --top 3 \
 
 # 直接给 URL（跳过检索），做摘要或抽字段
 python pipeline.py urls "https://a.com,https://b.com" --extract
-python pipeline.py urls-file urls.txt --prompt "总结这些页面的核心信息"
+python pipeline.py urls --urls-file urls.txt --prompt "总结这些页面的核心信息"
 ```
 
 退出码：0 有结果；2 全部失败；3 参数错误。
@@ -58,6 +58,7 @@ import os
 import re
 import sys
 import time
+from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -68,6 +69,7 @@ except ImportError:
 
 import web_search
 import render as render_mod
+import efficiency
 
 # 正文过薄阈值：低于此长度视为「疑似 SPA 空壳 / 抓取被拦」，转渲染重试
 THIN_TEXT = 200
@@ -80,7 +82,7 @@ MAX_TOTAL_CHARS = 40000
 # 必须从 SERP 里剔除。实测 360 引擎常把「百度搜索」「360地图」混进结果。
 SEARCH_PORTAL_DOMAINS = (
     "baidu.com", "sogou.com", "so.com", "360.cn", "bing.com", "google.com",
-    "duckduckgo.com", "yandex.", "naver.com", "seznam.cz", "qwant.com",
+    "duckduckgo.com", "yandex.com", "yandex.ru", "naver.com", "seznam.cz", "qwant.com",
     "swisscows.com", "startpage.com", "brave.com", "goo.ne.jp", "yahoo.co.jp",
     "daum.net", "coccoc.com", "parsijoo.com", "map.baidu.com", "ditu.amap.com",
 )
@@ -98,10 +100,18 @@ def _clean_serp(results, query):
     （宁可明确报「无结果」，也不把整批噪音放行——v1 的「全滤空就回退」在这里
     反而会放行百度首页这类垃圾）。
     """
+    def _portal(r):
+        # 按 hostname 精确匹配，不能对整条 URL 做子串判断：
+        # "https://also.com/about" 含 "so.com" 会被旧逻辑误杀。
+        host = (urlsplit(r.get("url", "") or "").hostname or "").lower()
+        return bool(host) and any(
+            host == d or host.endswith("." + d) for d in SEARCH_PORTAL_DOMAINS)
+
     words = [w.lower() for w in
              re.findall(r"[A-Za-z]{3,}|[\u4e00-\u9fa5]{2,}", query)]
     if not words:
-        return list(_dedup(results))
+        # 纯数字/符号 query 算不出相关度，但门户页仍必须剔除
+        return [r for r in _dedup(results) if not _portal(r)]
     weights = {w: (2 if len(w) >= 4 else 1) for w in words}
     total = sum(weights.values())
 
@@ -110,10 +120,6 @@ def _clean_serp(results, query):
         blob = f"{r.get('title', '')} {r.get('snippet', '')} {url}".lower()
         hit = sum(wt for w, wt in weights.items() if w in blob)
         return bool(total) and hit / total >= threshold
-
-    def _portal(r):
-        low = r.get("url", "").lower()
-        return any(d in low for d in SEARCH_PORTAL_DOMAINS)
 
     def _pick(threshold):
         out = []
@@ -190,6 +196,11 @@ def _fetch_page(url, use_render=True, timeout=30, delay=1.5):
     if not use_render:
         return html or "", text, None, "; ".join(errors)
 
+    # 渲染走 Playwright 的 page.goto，不经过 fetch_raw 的限速；
+    # 开了按域名限速时这里补一次，避免同站「HTTP 抓取 + 渲染」连打。
+    if efficiency.DOMAIN_MIN_INTERVAL > 0:
+        efficiency.throttle.wait(efficiency.group_key(url),
+                                 efficiency.DOMAIN_MIN_INTERVAL)
     try:
         r = render_mod.render_html(url, timeout=timeout, delay=delay)
         return r["html"], r["text"], "render", "; ".join(errors)
@@ -199,10 +210,17 @@ def _fetch_page(url, use_render=True, timeout=30, delay=1.5):
 
 
 def _collect(urls, use_render=True, timeout=30, delay=1.5, extract=False,
-             per_page_delay=1.0):
-    """逐个抓取 URL，返回页面记录列表。"""
+             per_page_delay=1.0, domain_interval=0.0):
+    """逐个抓取 URL，返回页面记录列表。
+
+    per_page_delay  按「第几个 URL」限速（原有行为，默认 1.0s）
+    domain_interval 按「目标域名」限速（可选，默认 0=关闭）。top-N 里同一站点
+                    的多个 tab 页不再被 1s 连打，用于会触发验证/禁用的站点。
+    """
     pages = []
     for i, u in enumerate(urls, 1):
+        if domain_interval > 0:
+            efficiency.throttle.wait(efficiency.group_key(u), domain_interval)
         print(f"[抓取 {i}/{len(urls)}] {u}", file=sys.stderr)
         html, text, method, err = _fetch_page(u, use_render=use_render,
                                               timeout=timeout, delay=delay)
@@ -221,6 +239,9 @@ def _collect(urls, use_render=True, timeout=30, delay=1.5, extract=False,
                 rec["phones"] = c["phones"]
                 rec["persons"] = c["persons"]
                 rec["meta"] = c["meta"]
+                # 必须带上掩码号码：merge_masked_phones() 只读 pages[].masked_phones，
+                # 漏掉它会让「跨 tab 掩码还原」对实际抓取的页面完全失效。
+                rec["masked_phones"] = c.get("masked_phones", [])
             except Exception as e:
                 rec["extract_error"] = f"{type(e).__name__}: {str(e)[:100]}"
         pages.append(rec)
@@ -240,8 +261,13 @@ def _llm_config(args):
     return {"base": base.rstrip("/"), "key": key or "", "model": model}, None
 
 
-def _llm_summarize(cfg, prompt, pages):
-    """调用 OpenAI 兼容 chat/completions 生成内容级摘要。失败抛异常。"""
+def _llm_summarize(cfg, prompt, pages, use_cache=True):
+    """调用 OpenAI 兼容 chat/completions 生成内容级摘要。失败抛异常。
+
+    返回 (answer, cached)。整条管线只有这一处 LLM 请求，且所有页面拼成
+    **一个** context 一次问完（不做「每页一次」的分块调用）。
+    缓存键绑定 接口+模型+指令+正文：迭代调试时反复跑同一批内容不会再调模型。
+    """
     chunks = []
     total = 0
     for p in pages:
@@ -258,6 +284,12 @@ def _llm_summarize(cfg, prompt, pages):
         raise RuntimeError("没有可用于摘要的正文内容")
 
     context = "\n\n---\n\n".join(chunks)
+    cache_key = efficiency.llm_cache_key(cfg, prompt, context)
+    if use_cache:
+        hit = efficiency.llm_cache_get(cache_key)
+        if hit is not None:
+            return hit, True
+
     sys_prompt = (
         "你是网页信息提炼助手。基于给定的多个网页正文回答用户问题。\n"
         "原则：1) 优先给出可直接使用的具体信息（公司全称、人名+职务、电话、邮箱、地址、"
@@ -288,9 +320,16 @@ def _llm_summarize(cfg, prompt, pages):
             raise RuntimeError(f"LLM HTTP {r.status_code}: {r.text[:200]}")
         data = r.json()
     try:
-        return data["choices"][0]["message"]["content"]
+        answer = data["choices"][0]["message"]["content"]
     except Exception:
         raise RuntimeError(f"LLM 返回结构异常: {str(data)[:200]}")
+    # content 为 None 时不能落缓存（null 会被 cache_get 判为 miss），
+    # 更不能让调用方拿到 mode=llm + answer=None 的「假成功」。
+    if not isinstance(answer, str) or not answer.strip():
+        raise RuntimeError("LLM 返回内容为空或非文本")
+    if use_cache:
+        efficiency.llm_cache_put(cache_key, answer)
+    return answer, False
 
 
 # ---------------------------------------------------------------- 命令
@@ -340,6 +379,12 @@ def merge_masked_phones(pages):
                     "merged_from": [s["raw"] for s in it["sources"]],
                     "sources": [s["url"] for s in it["sources"]],
                     "confidence": "high" if len(it["sources"]) > 1 else "medium",
+                    # 掩码按位合并是「推断」而非页面原文：两个不同号码只要掩码窗口
+                    # 互补、已知位不冲突（例如 139****7580 + 1391234****），
+                    # 也会被拼成一个看似完整的号码。保留 number 兼容既有下游，
+                    # 但明确标注来源与人工核对要求，避免被当作已确认事实使用。
+                    "basis": "mask_merge_inference",
+                    "verification": "需人工核对：不同号码的互补掩码可能被误拼",
                 })
     return out
 
@@ -440,7 +485,23 @@ def cmd_search(a):
         early_stop = True
     else:
         pages = _collect(urls, use_render=render_ok, timeout=a.timeout,
-                         delay=a.delay, extract=a.extract)
+                         delay=a.delay, extract=a.extract,
+                         per_page_delay=a.page_delay,
+                         domain_interval=a.min_domain_interval)
+
+    # early_stop 时 pages 为空（快照已确认，不再抓网）。此时若用户还给了 --prompt，
+    # 旧实现会把空 pages 交给 LLM，必然抛「没有可用于摘要的正文内容」，
+    # 白白走一次失败分支并输出误导性的 llm_error。改为用已确认的快照信息
+    # 作为轻量上下文——仍然只有一次 LLM 调用，且不需要任何额外网络请求。
+    llm_pages = pages
+    if early_stop:
+        llm_pages = [{
+            "url": f.get("url", ""),
+            "text": "搜索引擎摘要中已确认的信息：" + json.dumps(
+                {k: f.get(k) for k in ("emails", "phones", "masked_phones",
+                                       "persons", "meta")},
+                ensure_ascii=False),
+        } for f in snippet_findings]
 
     out = {
         "query": a.query,
@@ -480,12 +541,17 @@ def cmd_search(a):
         if cfg:
             try:
                 out["mode"] = "llm"
-                out["answer"] = _llm_summarize(cfg, a.prompt, pages)
+                answer, cached = _llm_summarize(
+                    cfg, a.prompt, llm_pages, use_cache=not a.no_llm_cache)
+                out["answer"] = answer
+                out["llm_cached"] = cached
             except Exception as e:
                 out["mode"] = "collect"
                 out["llm_error"] = f"{type(e).__name__}: {str(e)[:200]}"
                 out["hint"] = ("LLM 调用失败，已降级为采集模式：由调用方智能体基于 "
-                               "pages[].text 自行总结。")
+                               "pages[].text 自行总结。修好 LLM 配置后可用 "
+                               "`summarize <本结果.json> --prompt ...` 只重跑摘要，"
+                               "无需重新检索与抓页。")
         else:
             out["mode"] = "collect"
             out["hint"] = (f"{cerr}；已降级为采集模式。由调用方智能体基于 pages[].text "
@@ -494,12 +560,16 @@ def cmd_search(a):
         out["mode"] = "collect"
 
     print(json.dumps(out, ensure_ascii=False, indent=2))
-    return 0 if pages else 2
+    # 「成功」= 至少抓到一页，或快照已确认提前停止。
+    # 旧实现只看 pages 是否非空，而 _collect 对失败页也会 append 记录，
+    # 导致全部抓取失败时仍返回 0。
+    ok = any(p.get("method") for p in pages)
+    return 0 if (ok or early_stop) else 2
 
 
 def cmd_urls(a):
     if a.urls_file:
-        with open(a.urls_file, encoding="utf-8") as f:
+        with open(a.urls_file, encoding="utf-8-sig") as f:
             urls = [l.strip() for l in f
                     if l.strip() and not l.startswith("#")]
     else:
@@ -511,7 +581,9 @@ def cmd_urls(a):
 
     render_ok, render_note = _render_status(not a.no_render)
     pages = _collect(urls, use_render=render_ok, timeout=a.timeout,
-                     delay=a.delay, extract=a.extract)
+                     delay=a.delay, extract=a.extract,
+                     per_page_delay=a.page_delay,
+                     domain_interval=a.min_domain_interval)
     out = {"mode": "collect", "pages": pages, "count": len(pages),
            "render": {"enabled": render_ok, "note": render_note}}
     if a.extract:
@@ -524,15 +596,86 @@ def cmd_urls(a):
         if cfg:
             try:
                 out["mode"] = "llm"
-                out["answer"] = _llm_summarize(cfg, a.prompt, pages)
+                answer, cached = _llm_summarize(
+                    cfg, a.prompt, pages, use_cache=not a.no_llm_cache)
+                out["answer"] = answer
+                out["llm_cached"] = cached
             except Exception as e:
+                out["mode"] = "collect"
                 out["llm_error"] = f"{type(e).__name__}: {str(e)[:200]}"
                 out["hint"] = "LLM 调用失败，已降级为采集模式。"
         else:
             out["hint"] = f"{cerr}；已降级为采集模式。"
 
     print(json.dumps(out, ensure_ascii=False, indent=2))
-    return 0 if pages else 2
+    return 0 if any(p.get("method") for p in pages) else 2
+
+
+def cmd_summarize(a):
+    """从已有结果 JSON 重跑摘要：不检索、不抓页、**不向任何目标网站发请求**。
+
+    注意：若启用 LLM 且缓存未命中，仍会向 LLM 接口发 1 次请求；
+    输出用 web_requests / llm_requests 分开计数，不再笼统写「0 网络请求」。
+
+    解决「LLM 配置写错了 / 想换个问法 / 摘要失败后重试」时，
+    不得不把整条采集链路（搜索 + 抓页 + 渲染）重跑一遍的浪费。
+    """
+    try:
+        with open(a.source, encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"[错误] 无法读取结果文件 {a.source}: {e}", file=sys.stderr)
+        return 3
+
+    pages = [p for p in (data.get("pages") or []) if p.get("text")]
+    if a.include_snippets:
+        for sf in data.get("snippet_findings") or []:
+            pages.append({
+                "url": sf.get("url", ""),
+                "text": "搜索引擎摘要中已确认的信息：" +
+                        json.dumps(sf, ensure_ascii=False),
+            })
+    if not pages:
+        print("[错误] 结果文件里没有可用的 pages[].text；若结果来自 "
+              "early_stop（快照确认即停），请加 --include-snippets", file=sys.stderr)
+        return 2
+
+    out = {"mode": "collect", "source": a.source, "pages": pages,
+           "count": len(pages), "web_requests": 0, "llm_requests": 0}
+    if a.prompt:
+        cfg, cerr = _llm_config(a)
+        if cfg:
+            try:
+                out["mode"] = "llm"
+                answer, cached = _llm_summarize(
+                    cfg, a.prompt, pages, use_cache=not a.no_llm_cache)
+                out["answer"] = answer
+                out["llm_cached"] = cached
+                out["llm_requests"] = 0 if cached else 1
+            except Exception as e:
+                out["mode"] = "collect"
+                out["llm_requests"] = 1
+                out["llm_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+                out["hint"] = "LLM 调用失败，已降级为采集模式。"
+        else:
+            out["hint"] = f"{cerr}；已降级为采集模式。"
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _add_efficiency_args(p):
+    """三个子命令共用的效率 / 风控 / LLM 参数。"""
+    p.add_argument("--no-llm-cache", action="store_true",
+                   help="禁用 LLM 响应缓存（默认启用，TTL 由 WSP_LLM_CACHE_TTL 控制）")
+    p.add_argument("--page-delay", type=float, default=1.0,
+                   help="抓取每个页面后的固定间隔秒数，默认 1.0（原硬编码值）")
+    p.add_argument("--min-domain-interval", type=float,
+                   default=efficiency.DOMAIN_MIN_INTERVAL,
+                   help="同一域名两次请求的最小间隔秒数，叠加在 --page-delay 之上；"
+                        "用于访问过快会触发验证/禁用的站点，默认 0=关闭")
+    p.add_argument("--llm-base-url", help="OpenAI 兼容接口 base url")
+    p.add_argument("--llm-api-key", help="API key")
+    p.add_argument("--llm-model", help="模型名")
 
 
 def main():
@@ -555,9 +698,7 @@ def main():
     p.add_argument("--no-render", action="store_true", help="禁用渲染兜底")
     p.add_argument("--timeout", type=int, default=30, help="渲染超时秒数")
     p.add_argument("--delay", type=float, default=1.5, help="渲染后等待秒数")
-    p.add_argument("--llm-base-url", help="OpenAI 兼容接口 base url")
-    p.add_argument("--llm-api-key", help="API key")
-    p.add_argument("--llm-model", help="模型名")
+    _add_efficiency_args(p)
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser("urls", help="直接抓取给定 URL 并摘要")
@@ -570,12 +711,23 @@ def main():
     p.add_argument("--no-render", action="store_true")
     p.add_argument("--timeout", type=int, default=30)
     p.add_argument("--delay", type=float, default=1.5)
-    p.add_argument("--llm-base-url")
-    p.add_argument("--llm-api-key")
-    p.add_argument("--llm-model")
+    _add_efficiency_args(p)
     p.set_defaults(func=cmd_urls)
 
+    p = sub.add_parser("summarize",
+                       help="从已有结果 JSON 只重跑摘要（零目标站请求）")
+    p.add_argument("source", help="先前 search / urls 输出的 JSON 文件")
+    p.add_argument("--prompt", help="摘要指令（可用新问法复用同一批正文）")
+    p.add_argument("--include-snippets", action="store_true",
+                   help="把 snippet_findings 也作为上下文（early_stop 结果需加此项）")
+    _add_efficiency_args(p)
+    p.set_defaults(func=cmd_summarize)
+
     a = ap.parse_args()
+    # 让 --min-domain-interval 对 _fetch_page 的渲染路径也生效：
+    # Playwright 不经过 fetch_raw，读的是模块属性而非函数参数。
+    if hasattr(a, "min_domain_interval"):
+        efficiency.DOMAIN_MIN_INTERVAL = a.min_domain_interval
     try:
         return a.func(a)
     except SystemExit:

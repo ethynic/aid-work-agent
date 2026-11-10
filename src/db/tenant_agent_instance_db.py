@@ -17,17 +17,19 @@ from src.db.database import get_db_connection
 
 _COLUMNS = (
     "id, tenant_id, agent_id, base_agent_id, base_source, display_name, description, "
-    "extra_prompt, greeting_summary, greeting_prompts, status, created_by, "
+    "extra_prompt, greeting_summary, greeting_prompts, llm_provider, status, created_by, "
     "created_at, updated_at"
 )
 
-# 允许租户覆盖的字段（update_overrides 白名单，表无工具/模型列即天然不可覆盖）
+# 允许租户覆盖的字段（update_overrides 白名单，表无工具列即天然不可覆盖）。
+# llm_provider 为 JSONB（pack_llm_config 形态），租户是否可写由 API 层按租户开关把关
 OVERRIDABLE_FIELDS = (
     "display_name",
     "description",
     "extra_prompt",
     "greeting_summary",
     "greeting_prompts",
+    "llm_provider",
 )
 
 
@@ -43,6 +45,13 @@ def _row_to_dict(row) -> Optional[Dict[str, Any]]:
             data["greeting_prompts"] = json.loads(gp)
         except (json.JSONDecodeError, TypeError):
             data["greeting_prompts"] = None
+    lp = data.get("llm_provider")
+    if isinstance(lp, str):
+        import json
+        try:
+            data["llm_provider"] = json.loads(lp)
+        except (json.JSONDecodeError, TypeError):
+            data["llm_provider"] = None
     return data
 
 
@@ -125,6 +134,8 @@ class TenantAgentInstanceDB:
             sets.append(f"{f} = %s")
             value = overrides[f]
             if f == "greeting_prompts":
+                value = psycopg2.extras.Json(value) if value is not None else None
+            elif f == "llm_provider":
                 value = psycopg2.extras.Json(value) if value is not None else None
             params.append(value)
         sets.append("updated_at = CURRENT_TIMESTAMP")

@@ -144,7 +144,8 @@ export function machineFingerprint(): string {
  * 按字典序——首个可用 provider 即旧 provider_id 兼容字段的取值来源，顺序漂移会改变
  * 上报字节与云端 catalog 归属，不可依赖对象插入顺序的隐式行为。
  */
-export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessReady = false, wecomDirectoryReady = false): Record<string, unknown> {
+export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessReady = false, wecomDirectoryReady = false,
+  wecomDirectorySearchReady = false, wecomConfigDoctorReady = false, wecomConfigCalibrateReady = false): Record<string, unknown> {
   const cfg = config === undefined ? loadConfig() : config
   const entries = resolveProviderEntries(cfg)
   const skillsPython = typeof cfg?.skills?.python === 'string' && cfg.skills.python !== '' ? cfg.skills.python : null
@@ -166,7 +167,9 @@ export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessR
     const manifest = key === 'wecom'
       ? { ...current, tools: current.tools.filter(name =>
           (name !== 'wecom_read_sessions' || wecomBusinessReady) &&
-          (name !== 'wecom_session_directory' || wecomDirectoryReady)) } : current
+          (name !== 'wecom_session_directory' || wecomDirectoryReady) &&
+          (name !== 'wecom_config_doctor' || wecomConfigDoctorReady) &&
+          (name !== 'wecom_config_calibrate' || wecomConfigCalibrateReady)) } : current
     manifests[key] = {
       provider_id: manifest.provider_id,
       manifest_digest: manifestDigestOf(manifest),
@@ -194,7 +197,12 @@ export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessR
     const effectiveWecom = effectiveManifestFor('wecom')
     if (effectiveWecom) capabilities.push(...effectiveWecom.tools.filter(name =>
       (name !== 'wecom_read_sessions' || wecomBusinessReady) &&
-      (name !== 'wecom_session_directory' || wecomDirectoryReady)))
+      (name !== 'wecom_session_directory' || wecomDirectoryReady) &&
+      (name !== 'wecom_config_doctor' || wecomConfigDoctorReady) &&
+      (name !== 'wecom_config_calibrate' || wecomConfigCalibrateReady)))
+    if (wecomDirectoryReady && wecomDirectorySearchReady && effectiveWecom?.tools.includes('wecom_session_directory')) {
+      capabilities.push('wecom_session_directory_search')
+    }
   }
   return {
     providers: available,

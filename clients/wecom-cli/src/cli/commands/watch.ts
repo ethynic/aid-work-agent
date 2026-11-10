@@ -1,33 +1,11 @@
 /**
- * CLI 子命令 watch：新消息跟踪循环（本 CLI 的核心价值——无会话归档时的新消息跟踪）。
- *
- * 用法：
- *   aid-wecom watch [--interval 秒] [--once] [--channel local-db|ui] [--focus 名1,名2]
- *
- * 每轮调用 wecom_watch_poll operation，事件以 NDJSON 逐行写 stdout：
- *   UI 通道（缺省按 doctor 状态 / --channel ui）：
- *     {"type":"new_messages","session":"...","unread_count":N,"messages":[{"side","text"},...]}
- *     {"type":"tick","unread_total":N}（本轮无新消息）
- *   本地库通道（--channel local-db / doctor 状态 db|ui(transient)）——冻结点 4 事件形态：
- *     {"channel":"local-db","new_messages":[{"conversation_id":"...","messages":[...],"has_more"?}],
- *      "last_sender":{"<conv_id>":"self"|"peer"|null},"failed"?}
- * 进度/告警只写 stderr，stdout 恒为纯净 NDJSON（可管道给 jq/其它进程）。
- * Ctrl+C（AbortSignal）干净退出（退出码 0）；--once 单轮（测试/手动）；
- * 跨进程互斥【按轮获取/释放】（P2 任务 3.3，评审 v4）：每轮开始 acquire，轮结束（含失败轮）
- * 立即 release，轮询间隔不持锁——否则 watch 长循环全程占锁会堵死 send/search 等命令，
- * 无法支撑「监控 + AI 回复」场景。**本地库轮同样过锁**（设计决策 #39「DB 读取绕过 UI 锁」
- * 延后：共享状态（水位/密钥/模式文件）的多进程读改写需要串行协调，不提前建读写锁）；
- * MCP 侧 runExclusive（src/mcp/server.ts）本就是每 tool call 独占/释放，两侧锁粒度已对齐
- * （每轮/每调用）。单轮失败不终止循环（stderr 告警后等下一轮；DB 不可用轮告警含
- * db_unavailable 并继续下轮——水位保留，绝不自动落 UI）；--once 失败退出码 1。
- *
- * --focus（冻结点 4）：仅本地库通道生效（逗号分隔会话名，逐名解析失败进 failed）；
- * UI 模式 stderr 注明忽略。本地库首轮建立关注基线时输出一次提示（新增关注基线 = 当前
- * 水位，存量待回复不回放——存量待回复由调用方初始化流程处理，如 aid-wecom unread）。
+ * CLI watch：本地库新消息跟踪循环，按轮获取互斥，水位异常轮不推进。
+ * 每轮输出 {channel:'local-db',new_messages,last_sender,failed?} NDJSON。
+ * --channel ui 已停用；本地库失败保留水位，下轮重试。
  */
 import { getOperationEntry } from '../../operations/registry.js'
 import { okResult, type OperationResult, type OpContext } from '../../operations/types.js'
-import type { LocaldbWatchEvent, WatchEvent, WecomWatchPollArgs } from '../../operations/watchPoll.js'
+import type { LocaldbWatchEvent, WecomWatchPollArgs } from '../../operations/watchPoll.js'
 import { NamedMutex, resolveMutexScope } from '../../platform/namedMutex.js'
 
 export interface WatchCommandOptions {
@@ -64,12 +42,6 @@ function sleepAbortable(ms: number, signal: AbortSignal): Promise<boolean> {
   })
 }
 
-function emitEvents(events: WatchEvent[]): void {
-  for (const e of events) {
-    process.stdout.write(JSON.stringify(e) + '\n')
-  }
-}
-
 /** 本地库通道单轮事件（冻结点 4 形态）整行输出（每轮一行，含空轮——NDJSON 心跳语义） */
 function emitLocaldbEvent(event: LocaldbWatchEvent): void {
   process.stdout.write(JSON.stringify(event) + '\n')
@@ -88,15 +60,16 @@ export async function watchCommand(opts: WatchCommandOptions): Promise<number> {
     console.error(`非法 --channel 值「${opts.channel}」（必须是 local-db 或 ui）`)
     return 2
   }
+  if (opts.channel === 'ui') {
+    console.error('watch 仅支持本地库通道；请升级到已验证的企业微信版本')
+    return 2
+  }
   const focus = opts.focus !== undefined
     ? opts.focus.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
     : undefined
   if (focus !== undefined && focus.length === 0) {
     console.error('非法 --focus 值：至少需要一个会话名（逗号分隔；如无关注目标请不要传 --focus）')
     return 2
-  }
-  if (opts.channel === 'ui' && focus !== undefined) {
-    console.error('⚠️ --focus 仅本地库通道生效，UI 模式已忽略（对齐冻结点 4）')
   }
 
   const ac = new AbortController()
@@ -123,13 +96,12 @@ export async function watchCommand(opts: WatchCommandOptions): Promise<number> {
       ...(focus !== undefined ? { focus } : {}),
     }
     /** 冻结点 4 调用方初始化语义：本地库首轮建立关注基线时输出一次提示（存量不回放） */
-    let baselineHintShown = opts.channel === 'ui'
-    let focusIgnoredNoted = focus === undefined
+    let baselineHintShown = false
     const executeRound = (): Promise<OperationResult> => {
       if (process.env[TEST_DRIVER_STUB_ENV] === '1') {
         return Promise.resolve(
           okResult('watch-stub-round', '测试桩轮（未触达真实驱动）', 'none', {
-            events: [{ type: 'tick', unread_total: 0 }],
+            channel: 'local-db', new_messages: [], last_sender: {},
           }),
         )
       }
@@ -157,19 +129,10 @@ export async function watchCommand(opts: WatchCommandOptions): Promise<number> {
         } else {
           const result = await executeRound()
           if (result.success) {
-            if (result.data.channel === 'local-db') {
-              // 本地库轮：冻结点 4 事件形态整行输出
-              emitLocaldbEvent(result.data as unknown as LocaldbWatchEvent)
-              if (!baselineHintShown) {
-                baselineHintShown = true
-                console.error('ℹ️ 本地库 watch 关注基线已按当前水位建立（基线 = 各会话当前最新消息，存量消息不回放）；存量待回复请先运行 aid-wecom unread 获取快照')
-              }
-            } else {
-              emitEvents((result.data.events as WatchEvent[] | undefined) ?? [])
-              if (!focusIgnoredNoted && result.data.focus_ignored === true) {
-                focusIgnoredNoted = true
-                console.error('⚠️ --focus 仅本地库通道生效，当前轮按状态分派到 UI 通道，已忽略（对齐冻结点 4）')
-              }
+            emitLocaldbEvent(result.data as unknown as LocaldbWatchEvent)
+            if (!baselineHintShown) {
+              baselineHintShown = true
+              console.error('ℹ️ 本地库 watch 关注基线已按当前水位建立（基线 = 各会话当前最新消息，存量消息不回放）；存量待回复请先运行 aid-wecom unread 获取快照')
             }
           } else {
             if (result.code === 'CANCELLED') break

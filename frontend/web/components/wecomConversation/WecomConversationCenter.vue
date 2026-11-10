@@ -1,5 +1,5 @@
 <template>
-  <div class="h-screen flex flex-col bg-gray-50">
+  <div :class="embedded ? 'h-full' : 'h-screen'" class="flex flex-col bg-canvas">
     <AppHeader
       title="企微会话"
       :is-logged-in="effectiveIsLoggedIn"
@@ -8,8 +8,11 @@
       @logout="handleLogout"
     >
       <template #menu-items="{ closeMenu }">
-        <button class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover" @click="goDaily(); closeMenu()">
+        <button v-if="!embedded" class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover" @click="goDaily(); closeMenu()">
           日报工作台
+        </button>
+        <button v-if="!embedded" class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover" @click="goProxy(); closeMenu()">
+          代理任务
         </button>
         <button class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover" @click="refreshAll(); closeMenu()">
           刷新
@@ -17,9 +20,9 @@
       </template>
     </AppHeader>
 
-    <main class="flex-1 flex overflow-hidden">
+    <main class="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
       <!-- 左：记录范围会话列表（自动纳入；无人工开关） -->
-      <aside class="w-72 border-r border-default bg-surface flex flex-col min-w-0">
+      <aside class="max-h-[35%] min-h-0 md:max-h-none md:w-72 lg:w-96 md:shrink-0 border-b md:border-b-0 md:border-r border-default bg-surface flex flex-col">
         <div class="p-3 border-b border-default">
           <p class="text-xs text-muted leading-relaxed">
             需要日报或智能体已回复的会话自动记录全部参与者消息；无人工开启/关闭流程。
@@ -32,17 +35,18 @@
           <button
             v-for="item in conversations"
             :key="item.id"
-            class="w-full text-left px-3 py-2.5 flex items-center gap-2.5 border-b border-default hover:bg-surface-hover"
-            :class="item.id === selectedId ? 'bg-primary-50' : ''"
+            class="w-full text-left px-4 py-3 flex items-center gap-3 border-b border-b-default border-l-4"
+            :class="item.id === selectedId ? 'bg-primary-50 border-l-primary-500' : 'border-l-transparent hover:bg-surface-hover'"
+            :aria-current="item.id === selectedId ? 'true' : undefined"
             @click="selectConversation(item)"
           >
             <span
-              class="w-9 h-9 shrink-0 rounded-lg flex items-center justify-center text-sm font-medium"
+              class="w-10 h-10 shrink-0 rounded-full flex items-center justify-center text-sm font-medium"
               :class="item.kind === 'group' ? 'bg-primary-100 text-primary-700' : 'bg-success-100 text-success-700'"
             >{{ avatarText(item) }}</span>
             <span class="flex-1 min-w-0">
               <span class="flex items-center gap-1.5">
-                <span class="text-sm text-default truncate">{{ item.name || '未命名会话' }}</span>
+                <span class="text-sm font-medium text-default truncate">{{ item.name || '未命名会话' }}</span>
               </span>
               <span class="block text-xs text-muted mt-0.5 truncate">
                 {{ item.kind === 'group' ? '群聊' : '单聊' }} · {{ syncLabel(item) }}
@@ -53,20 +57,29 @@
       </aside>
 
       <!-- 右：聊天时间线（与列表同页；进入定位最新，向上滚动加载） -->
-      <section class="flex-1 flex flex-col min-w-0">
-        <div class="px-4 py-2.5 border-b border-default bg-surface flex items-center gap-3 flex-wrap">
-          <h2 class="text-base font-medium text-default m-0">{{ selected?.name || '请选择会话' }}</h2>
-          <BaseBadge v-if="selected" intent="neutral">{{ selected.kind === 'group' ? '群聊' : '单聊' }} · {{ selected.timezone }}</BaseBadge>
-          <span v-if="selected" class="text-xs text-muted truncate">
-            账号 {{ shortAccount(selected) }}<template v-if="selected.device_id"> · 设备 {{ shortDevice(selected) }}</template>
-          </span>
-          <div class="flex-1" />
-          <BaseButton size="sm" intent="secondary" :disabled="!selected" @click="reloadMessages()">刷新当前</BaseButton>
+      <section class="flex-1 flex flex-col min-h-0 min-w-0">
+        <div class="px-4 py-3 border-b border-default bg-surface flex items-center gap-3">
+          <span
+            v-if="selected"
+            aria-hidden="true"
+            class="w-10 h-10 shrink-0 rounded-full flex items-center justify-center text-sm font-medium"
+            :class="selected.kind === 'group' ? 'bg-primary-100 text-primary-700' : 'bg-success-100 text-success-700'"
+          >{{ avatarText(selected) }}</span>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center flex-wrap gap-x-2 gap-y-0.5">
+              <h2 class="min-w-0 truncate text-base font-medium text-default m-0">{{ selected ? selected.name || '未命名会话' : '请选择会话' }}</h2>
+              <BaseBadge v-if="selected" intent="neutral">{{ selected.kind === 'group' ? '群聊' : '单聊' }} · {{ selected.timezone }}</BaseBadge>
+            </div>
+            <p v-if="selected" class="text-xs text-muted truncate">
+              账号 {{ shortAccount(selected) }}<template v-if="selected.device_id"> · 设备 {{ shortDevice(selected) }}</template>
+            </p>
+          </div>
+          <BaseButton class="shrink-0" size="sm" intent="secondary" :disabled="!selected" @click="reloadMessages()">刷新当前</BaseButton>
         </div>
 
         <div
           ref="timelineEl"
-          class="flex-1 overflow-y-auto px-4 py-3 space-y-2"
+          class="flex-1 overflow-y-auto p-4 space-y-4"
           data-testid="message-timeline"
           @scroll="onScroll"
         >
@@ -88,24 +101,28 @@
             <div v-else class="flex gap-2" :class="message.sender_side === 'self' ? 'justify-end' : 'justify-start'">
               <span v-if="message.sender_side !== 'self'" class="w-8 h-8 shrink-0 rounded-full bg-gray-100 border border-default flex items-center justify-center text-xs text-muted">{{ avatarChar(message) }}</span>
               <div
-                class="max-w-[70%] min-w-0"
+                class="max-w-[85%] md:max-w-[70%] min-w-0 flex flex-col"
                 :data-source-msg-id="message.source_message_id"
-                :class="{ 'ring-2 ring-primary-400 rounded-xl': message.source_message_id === highlightMsgId }"
+                :class="[
+                  message.sender_side === 'self' ? 'items-end' : 'items-start',
+                  { 'ring-2 ring-primary-400 rounded-xl': message.source_message_id === highlightMsgId },
+                ]"
               >
-                <div class="text-xs text-muted mb-0.5" :class="message.sender_side === 'self' ? 'text-right' : ''">
+                <div class="max-w-full break-words text-xs text-muted mb-1" :class="message.sender_side === 'self' ? 'text-right' : ''">
                   <span class="font-medium">{{ displaySender(message) }}</span>
                   <span v-if="message.sender_platform === 'wechat'" class="ml-1">（微信用户）</span>
                   <BaseBadge v-if="message.sender_side === 'self' && message.send_origin === 'agent'" intent="info" class="ml-1">Agent代发</BaseBadge>
                   <BaseBadge v-else-if="message.sender_side === 'self'" intent="warning" class="ml-1">本人，来源未确认</BaseBadge>
-                  <span class="ml-1.5">{{ timeText(message) }}</span>
                 </div>
                 <div
-                  class="px-3 py-2 rounded-xl text-sm text-default break-words cursor-pointer"
-                  :class="message.sender_side === 'self' ? 'bg-primary-600 text-white' : 'bg-surface border border-default'"
+                  class="max-w-full px-4 py-2 rounded-2xl text-sm [overflow-wrap:anywhere] cursor-pointer"
+                  :class="message.sender_side === 'self'
+                    ? 'bg-primary-500 text-white rounded-br-sm'
+                    : 'bg-surface border border-default text-default rounded-bl-sm shadow-sm'"
                   @click="openDetail(message)"
                 >
                   <!-- 消息类型互斥链：Markdown → 图片/文件元数据占位 → 文本 → 未解析 -->
-                  <div v-if="message.text_format === 'markdown' && message.text" class="markdown-body" v-html="renderMarkdown(message.text)" />
+                  <div v-if="message.text_format === 'markdown' && message.text" class="markdown-body overflow-x-auto" v-html="renderMarkdown(message.text)" />
                   <div v-else-if="message.kind === 'image' || message.kind === 'file'" class="flex items-center gap-2">
                     <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6">
                       <path v-if="message.kind === 'image'" stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm2 10l3-3 3 3 3-3 3 3" />
@@ -113,15 +130,16 @@
                     </svg>
                     <span>{{ attachmentLabel(message) }}</span>
                   </div>
-                  <span v-else-if="message.text">{{ message.text }}</span>
+                  <span v-else-if="message.text" class="whitespace-pre-wrap">{{ message.text }}</span>
                   <span v-else class="opacity-70">[未解析内容]</span>
                 </div>
+                <span class="mt-1 px-1 text-xs text-muted">{{ timeText(message) }}</span>
               </div>
             </div>
           </template>
         </div>
 
-        <div class="px-4 py-2 border-t border-default bg-surface flex items-center justify-between text-xs text-muted">
+        <div class="px-4 py-2 border-t border-default bg-surface flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-muted">
           <span v-if="selected">
             最近保存 {{ selected.last_archived_at ? new Date(selected.last_archived_at).toLocaleString() : '—' }}
             <template v-if="logError(selected)">；最近错误：{{ logError(selected) }}</template>
@@ -157,6 +175,9 @@
 </template>
 
 <script setup lang="ts">
+// 企业微信Agent 工作区内嵌模式（WecomAgentHub Tab）：根容器 h-full，页内跳转入口由统一 Tab 取代
+defineProps<{ embedded?: boolean }>()
+
 import { computed, inject, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
@@ -194,6 +215,9 @@ function handleLogout() {
 }
 function goDaily() {
   router.push({ name: 'tenant-wecom-daily' })
+}
+function goProxy() {
+  router.push({ name: 'tenant-wecom-proxy' })
 }
 
 const conversations = ref<WecomConversation[]>([])

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """sample_color.py — 从产品/材质图中取"精确色"，供效果图提示词锁定颜色（治色差）。
 
-我方接入说明（2026-11-06 移植自 ext_package/qwen-interior-render，逻辑零改动）：
+我方接入说明（2026-11-06 移植自 ext_package/qwen-interior-render，逻辑零改动；
+2026-11-08 合并上游更新：Pillow>=10 Resampling 兼容 + 中心取色区至少 1 像素）：
 - 图片输入须为本地绝对路径或 URL；file_id（file_xxx）不能直接喂脚本，
   先用 image_read 工具判读拿到其返回的 file_path 再传入。
 - 经 skill_execute 执行；依赖 Pillow（容器已内置）。
@@ -26,7 +27,10 @@ import sys
 try:
     from PIL import Image
 except ImportError:
-    sys.exit("需要 Pillow：pip install pillow")
+    sys.exit("需要 Pillow：pip install Pillow")
+
+# Pillow >= 10 移除了 Image.BOX 顶层别名，改用 Resampling 枚举并兼容旧版
+_BOX = getattr(Image, "Resampling", Image).BOX
 
 
 def load_image(src):
@@ -46,8 +50,8 @@ def region(img, crop):
         x = max(0, min(x, w - 1)); y = max(0, min(y, h - 1))
         cw = max(1, min(cw, w - x)); ch = max(1, min(ch, h - y))
         return img.crop((x, y, x + cw, y + ch))
-    # 中心 40%
-    bw, bh = int(w * 0.4), int(h * 0.4)
+    # 中心 40%（至少 1 像素，防极小图算出 0 尺寸）
+    bw, bh = max(1, int(w * 0.4)), max(1, int(h * 0.4))
     x0, y0 = (w - bw) // 2, (h - bh) // 2
     return img.crop((x0, y0, x0 + bw, y0 + bh))
 
@@ -55,7 +59,7 @@ def region(img, crop):
 def avg_hex(im):
     im = im.convert("RGB")
     # 用 BOX 重采样到 1x1 取整块平均色（避免逐像素遍历与 getdata 弃用告警）
-    r, g, b = im.resize((1, 1), Image.BOX).getpixel((0, 0))
+    r, g, b = im.resize((1, 1), _BOX).getpixel((0, 0))
     return "#%02X%02X%02X" % (r, g, b), (r, g, b)
 
 

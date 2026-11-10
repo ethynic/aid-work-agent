@@ -64,7 +64,7 @@
   - `dashscope wan/qwen-image-edit`：异步任务模式，文生图 + 图生图，复用 qwen 现有 key 配置。
   - Agent 工具层新增 `generate_image`（text2image）与 `edit_image`（img2image）工具注册到 `src/tools/`，与 XToImageTool 并列。
 - **二期（效果升级）**：视一期使用反馈引入火山方舟 Seedream provider。
-- 计费登记：新工具需同步接入 LLM 调用计费体系（参照 `plans/llm-billing-audit-20260912.md` 的计费缺口规范，生图按张计费）。
+- 计费登记：新工具需同步接入 LLM 调用计费体系（参照 `audit/llm-billing-audit-20260912.md` 的计费缺口规范，生图按张计费）。
 
 ## 参考来源
 

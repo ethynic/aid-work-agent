@@ -99,9 +99,14 @@ def playwright_available():
 def is_js_heavy(url):
     """判断 URL 是否属于「需渲染才有内容」的站点。"""
     low = (url or "").lower()
+    # JS 重站点判定必须优先：aiqicha.baidu.com 虽属百度系，但正是本技能最典型的
+    # 「HTTP 有正文、电话靠客户端渲染」用例。若先按 "baidu.com" 命中跳过名单，
+    # 会把它错误排除，pipeline 的「关键字段缺失 → 转渲染」分支永不触发。
+    if any(d in low for d in JS_HEAVY_DOMAINS):
+        return True
     if any(d in low for d in RENDER_SKIP_DOMAINS):
         return False
-    return any(d in low for d in JS_HEAVY_DOMAINS)
+    return False
 
 
 def render_html(url, timeout=30, wait_until="domcontentloaded", delay=1.5,
@@ -297,7 +302,8 @@ def main():
 
     try:
         if a.batch:
-            with open(a.batch, encoding="utf-8") as f:
+            # utf-8-sig：兼容带 BOM 的 Windows 文本列表
+            with open(a.batch, encoding="utf-8-sig") as f:
                 urls = [l.strip() for l in f if l.strip() and not l.startswith("#")]
             out = []
             for i, u in enumerate(urls, 1):
@@ -306,8 +312,11 @@ def main():
                     r = _do(u)
                     r.pop("html", None)
                     out.append(r)
-                except RuntimeError as e:
-                    if "playwright" in str(e).lower():
+                except Exception as e:
+                    # Playwright 的 TimeoutError 继承自 Error -> Exception，
+                    # 不是 RuntimeError：只捕 RuntimeError 会让单页超时中断整批，
+                    # 并丢掉前面已经成功的结果。
+                    if _is_env_missing(e):
                         return _print_hint(str(e))
                     out.append({"url": u, "error": f"{type(e).__name__}: {str(e)[:200]}"})
                 time.sleep(a.delay_between)

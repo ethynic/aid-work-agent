@@ -1,4 +1,4 @@
-"""The three model-facing WeCom operations; native recovery stays internal."""
+"""The four model-facing WeCom operations; native recovery stays internal."""
 
 from typing import Annotated
 

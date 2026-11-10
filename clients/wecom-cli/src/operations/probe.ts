@@ -6,7 +6,7 @@
  * 解析主窗口 rect、登录态与当前内容页（内容子窗口类名编码页名）。
  * E5（完整替代 RPA get_login_state）：need_login 时附登录窗 rect（login_window）、
  * 登录窗整窗二维码 PNG base64（qr_image_base64，供扫码上线）与状态提示
- * qr_status_hint（normal/expired/limited/unknown，驱动侧 RapidOCR best-effort）。
+ * qr_status_hint（无二维码文字判读时为 unknown，保留既有返回字段）。
  * 二维码是登录凭证：qr base64 只随 OperationResult 走 stdout，绝不写日志、不存 artifact。
  *
  * 任何环境异常快速返回结构化结果；绝不激活窗口、发送输入或改剪贴板（effect 恒为 none）。
@@ -34,7 +34,7 @@ export interface WecomProbeArgs {
 const LOGIN_STATES = ['online', 'need_login', 'offline'] as const
 type LoginState = (typeof LOGIN_STATES)[number]
 
-/** need_login 时二维码状态提示（驱动截图失败 → unknown；OCR 不可用/无标记由驱动归 normal） */
+/** need_login 时二维码状态提示；当前驱动不判读二维码文字，返回 unknown。 */
 const QR_STATUS_HINTS = ['normal', 'expired', 'limited', 'unknown'] as const
 type QrStatusHint = (typeof QR_STATUS_HINTS)[number]
 

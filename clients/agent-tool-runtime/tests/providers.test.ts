@@ -145,7 +145,7 @@ test('weixin v2 会话变体：仅显式协商后生效（setManifestOverride）
   assert.ok(!isToolAllowedFor(reverted, 'weixin_message_send_v2'))
 })
 
-test('wecom manifest：页面目录进入受信调用白名单，旧业务工具与写集合保持兼容', () => {
+test('wecom manifest：页面目录与代理配置工具进入受信调用白名单，旧业务工具与写集合保持兼容', () => {
   const wecom = getProviderManifest('wecom')!
   assert.deepEqual([...wecom.tools], [
     'wecom_probe',
@@ -157,6 +157,8 @@ test('wecom manifest：页面目录进入受信调用白名单，旧业务工具
     'wecom_read_session',
     'wecom_read_sessions',
     'wecom_session_directory',
+    'wecom_config_doctor',
+    'wecom_config_calibrate',
     'wecom_unread_list',
   ])
   assert.equal(wecom.provider_id, 'ai.aidwork.wecom')
@@ -164,15 +166,19 @@ test('wecom manifest：页面目录进入受信调用白名单，旧业务工具
   assert.equal(wecom.protocol_version, 1)
   assert.equal(wecom.shared_lock_capable, false)
   assert.equal(isWriteToolFor(wecom, 'wecom_session_directory'), false, '页面目录只读；Agent 可见工具由云端目录决定')
+  // 代理任务 P3（契约 §3）：calibrate 与 CLI OPERATIONS cli.write=true 对齐归写；doctor 只读
+  assert.equal(isWriteToolFor(wecom, 'wecom_config_calibrate'), true, 'calibrate 归写集合（锁屏前置/崩溃 unknown 沿写语义）')
+  assert.equal(isWriteToolFor(wecom, 'wecom_config_doctor'), false, 'doctor 只读诊断')
   for (const tool of wecom.tools) {
     const expected = tool === 'wecom_message_send' || tool === 'wecom_send_image' || tool === 'wecom_send_file'
-    assert.equal(isWriteToolFor(wecom, tool), expected, `${tool} 写属性不符（读类 probe/unread/read_session 不进写集合）`)
+      || tool === 'wecom_config_calibrate'
+    assert.equal(isWriteToolFor(wecom, tool), expected, `${tool} 写属性不符（读类 probe/unread/read_session/doctor 不进写集合）`)
   }
   // M11b 决策：search/select 不接入（send 内含 search 定位）；watch_poll/add_customer 不接入
   assert.ok(!isToolAllowedFor(wecom, 'wecom_chat_search'))
   assert.ok(!isToolAllowedFor(wecom, 'wecom_chat_select'))
   assert.ok(!isToolAllowedFor(wecom, 'wecom_watch_poll'))
-  assert.ok(!isToolAllowedFor(wecom, 'wecom_add_customer'))
+  assert.ok(!wecom.tools.includes('wecom_add_customer'))
   // digest 独立计算（与 boss/weixin 各不相同，boss 基线不受影响——见上）
   assert.match(manifestDigestFor('wecom'), /^[0-9a-f]{64}$/)
   assert.notEqual(manifestDigestFor('wecom'), manifestDigestFor('boss-recruiting'), '各 Provider digest 应独立')

@@ -84,7 +84,7 @@ test('外部目标按DB唯一定位直接发送，不搜索；真实新出站记
       localdbVerifyPoll: { attempts: 1, delayMs: 1 },
       runDriverFn: async opts => {
         assert.ok(opts.script.endsWith('message-send.ps1'), '可信DB定位不能再搜索或选择联系人')
-        assert.ok(opts.args?.includes('-SkipVerify'))
+        assert.ok(!opts.args?.includes('-VerifyOnly'), '发送后只用本地库核验')
         sends++
         f.command('append', 2)
         return { navigate_required: false, title: 'Peer @微信', sent_verification: { method: 'skipped', result: 'unverified' } }
@@ -117,18 +117,15 @@ test('operation默认通道外部身份不完整时拒绝，不把DB拒绝降级
   const f = await fixture()
   try {
     f.command('external-unknown')
-    let uiCalls = 0
     const keyDir = join(f.base, 'refs')
-    const op = createWecomReadSessionOperation({ artifactDirFn: () => join(f.base, 'artifacts'), localdb: f.deps,
+    const op = createWecomReadSessionOperation({ localdb: f.deps,
       verifyRefFn: ref => verifyTargetRef(ref, { keyDir }),
-      runDriverFn: async () => { uiCalls++; throw new Error('unexpected UI') },
     })
     const ref = createTargetRef('Peer@微信', 'contact', '微信联系人', { keyDir, account: SELF })
     for (const selector of [{ target_name: 'Peer@微信' }, { target_ref: ref }]) {
       const result = await op.execute(selector, ctx())
       assert.equal(result.code, 'VERSION_UNSUPPORTED')
       assert.equal(result.effect, 'none')
-      assert.equal(uiCalls, 0, '外部身份拒绝不能变成宽松UI读取')
     }
   } finally { f.close() }
 })

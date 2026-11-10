@@ -2,7 +2,7 @@
  * CLI argv 极简解析（纯函数，可单测）：--key value / --flag / 位置参数。
  *
  * 命名铁律（与 weixin-cli 相同）：动词子命令集合固定为
- * mcp / doctor / version / probe / add-customer（后续里程碑再加 search/read/send/watch）；
+ * mcp / doctor / version / probe / search/read/send/watch；
  * 不允许出现按对象命名的子命令。
  */
 

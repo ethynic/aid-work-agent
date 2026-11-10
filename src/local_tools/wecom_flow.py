@@ -2,8 +2,6 @@
 
 import asyncio
 
-from .wecom_business import BUSINESS_TOOLS
-
 RESOLVE_BRANCH = 'wecom.resolve'
 
 
@@ -35,7 +33,8 @@ def validate_resolve_phase(arguments, ref):
 
 def modern_call(name, arguments):
     return name == 'wecom_read_sessions' or (
-        name in BUSINESS_TOOLS and isinstance(arguments.get('session'), str))
+        name in {'wecom_read_session', 'wecom_message_send'}
+        and isinstance(arguments.get('session'), str))
 
 
 def readonly_db_call(name, arguments):

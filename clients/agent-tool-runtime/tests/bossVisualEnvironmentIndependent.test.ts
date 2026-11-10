@@ -20,12 +20,12 @@ test('independent: the effective BOSS catalog admits open_detail as a page-state
   assert.equal(isToolAllowedFor(manifest, 'boss_unknown_detail'), false)
 })
 
-for (const polluted of [false, true]) test(`independent: paired Host supplies identity only to BOSS without manual configuration (ambient pollution=${polluted})`, { skip: process.platform !== 'win32', timeout: 30_000 }, async () => {
+for (const polluted of [false, true]) test(`independent: paired Host supplies identity to BOSS and WeCom without manual configuration (ambient pollution=${polluted})`, { skip: process.platform !== 'win32', timeout: 30_000 }, async () => {
   const home = mkdtempSync(join(tmpdir(), 'boss-visual-env-'))
   const cloud = new FakeCloud(); await cloud.start()
   const device = cloud.createDeviceDirectly()
   const entry = join(home, 'provider.mjs')
-  const envKeys = ['AID_BOSS_SERVER_URL', 'AID_BOSS_SERVER_TOKEN', 'AIDWORK_RUNTIME_SERVER', 'AIDWORK_RUNTIME_DEVICE_TOKEN', 'ZHIPU_API_KEY'] as const
+  const envKeys = ['AID_BOSS_SERVER_URL', 'AID_BOSS_SERVER_TOKEN', 'AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN', 'AIDWORK_RUNTIME_SERVER', 'AIDWORK_RUNTIME_DEVICE_TOKEN', 'ZHIPU_API_KEY'] as const
   const before = Object.fromEntries(envKeys.map(key => [key, process.env[key]]))
   let adapter: LegacyExecution | undefined
   try {
@@ -33,6 +33,8 @@ for (const polluted of [false, true]) test(`independent: paired Host supplies id
     if (polluted) {
     process.env.AID_BOSS_SERVER_URL = 'http://127.0.0.1:7999'
     process.env.AID_BOSS_SERVER_TOKEN = 'fictional-boss-binding'
+    process.env.AID_WECOM_SERVER_URL = 'https://ambient-wecom.invalid'
+    process.env.AID_WECOM_SERVER_TOKEN = 'fictional-wecom-binding'
     process.env.AIDWORK_RUNTIME_SERVER = 'https://ambient-wrong.invalid'
     process.env.AIDWORK_RUNTIME_DEVICE_TOKEN = 'fictional-ambient-device'
     process.env.ZHIPU_API_KEY = 'fictional-vendor-must-not-inherit'
@@ -47,14 +49,19 @@ writeFileSync(${JSON.stringify(join(home, 'observed.json'))}, JSON.stringify({
 }));
 const {startFakeProvider}=await import(${JSON.stringify(pathToFileURL(fakeProviderEntry()).href)}); await startFakeProvider();`)
     writeFileSync(join(home, 'config.json'), JSON.stringify({ server: cloud.baseUrl, device_id: device.device_id,
-      providers: { 'boss-recruiting': { entry }, wecom: { entry } } }))
+      providers: { 'boss-recruiting': { entry }, wecom: { entry }, weixin: { entry } } }))
     configureRuntimeHome(home); await saveDeviceToken(device.token)
     adapter = new LegacyExecution(process.execPath, home, undefined, true)
     await adapter.initialize(); await adapter.executionMarker(randomUUID()); await adapter.start(() => {}, () => {})
     const providers = (adapter as unknown as { providers: ProviderSet }).providers
     await providers.get('boss-recruiting').ensureStarted()
     assert.deepEqual(JSON.parse(readFileSync(join(home, 'observed.json'), 'utf8')), { bossUrl: true, bossBinding: true, legacyUrl: false, legacyToken: false, vendorPresent: false })
-    await providers.get('wecom').ensureStarted()
+    const wecomManager = providers.get('wecom')
+    assert.equal('AID_WECOM_SERVER_URL' in (wecomManager as unknown as { providerEnv: Record<string, string> }).providerEnv, polluted)
+    assert.equal('AID_WECOM_SERVER_TOKEN' in (wecomManager as unknown as { providerEnv: Record<string, string> }).providerEnv, polluted)
+    await wecomManager.ensureStarted()
+    assert.deepEqual(JSON.parse(readFileSync(join(home, 'observed.json'), 'utf8')), { bossUrl: true, bossBinding: true, legacyUrl: false, legacyToken: false, vendorPresent: false })
+    await providers.get('weixin').ensureStarted()
     assert.deepEqual(JSON.parse(readFileSync(join(home, 'observed.json'), 'utf8')), { bossUrl: false, bossBinding: false, legacyUrl: false, legacyToken: false, vendorPresent: false })
   } finally {
     await adapter?.stop(); await cloud.stop(); configureRuntimeHome(undefined)

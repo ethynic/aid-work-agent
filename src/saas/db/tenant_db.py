@@ -107,6 +107,30 @@ class TenantDB:
             return None
 
     @staticmethod
+    def is_llm_edit_allowed(tenant_id: str) -> bool:
+        """租户是否被允许定制 LLM 提供者（tenants.settings.allow_llm_provider_edit）。
+
+        故意绕过 get_by_id 的 Redis 缓存直查 DB：开关关闭需对运行时立即失效，
+        缓存 TTL 30 分钟会把失效延迟放大到 30 分钟。异常/未开启一律 False（fail-closed）。
+        """
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT settings FROM tenants WHERE tenant_id = %s", (tenant_id,))
+                row = cursor.fetchone()
+            if not row:
+                return False
+            settings = row["settings"]
+            if isinstance(settings, str):
+                settings = json.loads(settings) if settings else {}
+            if not isinstance(settings, dict):
+                return False
+            return settings.get("allow_llm_provider_edit") is True
+        except Exception as e:
+            logger.error(f"Failed to check allow_llm_provider_edit for tenant {tenant_id}: {e}")
+            return False
+
+    @staticmethod
     def update(tenant_id: str, **kwargs) -> bool:
         """更新租户信息"""
         allowed_fields = {

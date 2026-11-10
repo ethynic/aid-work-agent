@@ -27,6 +27,7 @@
 | 模板四渠道节（数字员工模板文件 file_id / 知识库文档 / 会话上传 / 平台内置 assets/templates/）+ fetch_file.py 用法 | 我方层，保留 |
 | `knowledge_search` → `knowledge_base_search`、`present_files` → `cp` 工具 | 我方层，保留 |
 | `scripts/fetch_file.py`（file_id 经 resolve_uploaded_file_path 解析；--src fail-closed 限 storage/tenants/ 下） | 我方胶水，合并时保留我方版本 |
+| SKILL.md 第 3 步「用户拒答降级」（2026-11-09 新增：明确拒答必填项时 required=false 留空出稿，上游原版无此机制，必填缺失即 ok=false） | 我方行为补丁，合并上游时保留我方版本，勿被上游覆盖 |
 
 ## 模板获取（用户已确认口径）
 

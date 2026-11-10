@@ -26,6 +26,114 @@
 | W17 长文本粘贴与草稿误判修复 | 窄窗草稿保护、取消粘贴后 OCR 门禁、数据库唯一记录核验 | 🔧 进行中 | CLI 0.2.6 已签包并放 Downloads、目标 Runtime 静态验包通过；待用户安装及真机验收 |
 | W18 文本发送输入替换 | 当前目标标题复核后清空输入区，沿用单行/多行输入方式 | ✅ 完成（2026-11-06） | 独测、最终 CR、本机空框/带草稿真实发送通过；已合并 master 并出 0.2.7 包，待客户安装 |
 | W19 移除输入后标题门禁 | 文本发送只在输入前确认目标，输入后直接进入发送 | ✅ 完成（2026-11-06） | 定向测试、独立 CR、本机切群发送通过；master `644b6328` 已出 WeCom 0.2.8，待安装及 agent2 验收 |
+| W20 稳定会话库核验与标题识别调研 | 稳定会话不回退 OCR；调查当前激活会话身份来源 | 🔧 进行中 | 库核验已实现；标题 OCR 误判由 W23 标题复制取代，待整体验收 |
+| W21 会话读取移除 OCR 兜底 | read-session、unread_list、watch_poll 只用已验证版本本地库 | ✅ 完成（2026-11-06） | 独立 TEST 合成回归 95/95、代理工具 25/25、构建及 CR 通过；真机验收另行安排 |
+| W22 搜索框清理移除 OCR | Ctrl+F 后固定清空，输入后完整复制回读 | 🔧 进行中 | 独立 TEST 四组合成 PS 回归与 CR 通过；待真机验收及打包 |
+| W23 文本发送标题复制 | GLM 标定首字坐标，企微自身复制标题后核对 | 🔧 进行中 | agent2 的 max 档定位→复制两轮成功；发送路径已改为只复制一次，完整发送待验收 |
+| W24 文本发送双点标定与去 OCR | 自会话标定标题与输入区，发送仅用本地库核验 | ✅ 完成（2026-11-06） | 双点缓存复用、目标标题核对与单聊发送真机通过；P8 右侧栏自动增宽修正独测/CR 通过，待 0.2.12 真机复验 |
+| W25 会话搜索与进入去 OCR | 本地目录唯一匹配后 Ctrl+F/Enter，复制标题核对 | ✅ 完成（2026-11-07） | 整数 ID 与两项 P1 修复；独测、真机及 CR 通过，025bb14f，未部署 |
+| W26 图片与文件发送去 OCR | 双点缓存粘贴附件，Enter 后本地库只读对账 | ✅ 完成（2026-11-07） | 独测 Node 65/65、PS 标题行为及 CR 通过；无真实 101/102 样本和媒体真机验收，未部署 |
+| W27 企微删除添加客户与 OCR 发行依赖 | 退役唯一 OCR 入口，拆独立便携本地库 Python 资产 | ✅ 完成（2026-11-07） | 独测、隔离签包及 CR 通过；未正式发行、部署或验证真实超长安装路径 |
+| W28 搜索门禁真机回炉 | 唯一本地目录后直接输入搜索并 Enter，标题复制做最终核对 | ✅ 完成（2026-11-07） | 真机唯一选择、标题“孙晨”核对、文本发送及本地库 1991 对账通过 |
+| W29 标题复制剪贴板诊断 | 分辨 OLE 读取阻塞、远控接管与 CAS 恢复结果 | ✅ 完成（2026-11-07） | 日志定位 AweSun 阻塞；剪贴板恢复可用后 select/send 真机通过 |
+| W30 无 OCR Agent→Runtime 真机验收 | 使用新版签名插件验收读发；补齐第四项只读目录工具 | ✅ 完成（2026-11-07） | A2/A3/A4 唯一出站回读通过；目录错名/多名/同名/唯一联系人真机通过；Skill 独测 27 项通过 |
+| W31 非文本剪贴板标题复制修复 | 五条标题复制路径只凭本次企微复制核对标题，均覆盖剪贴板 | ✅ 完成（2026-11-09） | 独测 PS 六组、Win32 fresh init、Node 66/66、typecheck/build 通过；真机标定、选择及文本发送本地库核验通过；CR 无阻断；0.2.13 验签并导入本机 Runtime，插件已启用且检查就绪，安装后标定成功。原代理批次 #15 未补发 |
+| W32 标定复用 Runtime 配对身份 | 后台设备鉴权专用接口、Runtime 注入、WeCom CLI 标定依次独立实施 | ✅ 完成（2026-11-09） | 独测后端 53/53＋相邻 API 29/29、Host 3/3、Desktop 17/17、CLI PS 回归、三模块类型检查与构建通过；CR 无阻断；Runtime 0.0.40＋WeCom 0.2.14 验收包验签通过。未部署或真机联调；旧插件＋新 Runtime 二进制组合未实测 |
+
+## W32 标定复用 Runtime 配对身份（2026-11-09）
+
+问题：新用户安装并配对 Runtime 后无需另填服务器地址或签发静态 ClientBinding。当前本机标定却依赖父进程环境变量，普通安装未提供，导致代理任务保存前失败。成功标准：同一已配对设备仅凭配对信息完成标定，服务端按设备租户计费；旧客户端 `/api/client/v1/llm/chat` 不变；错误时不写坐标缓存、不发送消息。
+
+1. 后台模块 `src/local_tools/`：新增仅企微双点定位的设备 Bearer API，固定模型和提示词，身份/租户取配对设备，复用原价目和 ×10 计费；保持旧 ClientBinding 路由。独立验证设备鉴权、租户计费、模型调用与旧接口兼容。
+2. Runtime 模块 `clients/agent-tool-runtime/`、`clients/agent-desktop/`：从已保存配对配置与 DPAPI 凭据向 WeCom Provider 注入服务端地址和设备 token；保留旧企微凭据仅供已交付旧插件，新 CLI 不读取；独立验证 WeCom 收到正确身份且其他 Provider 不收到。
+3. WeCom CLI 模块 `clients/wecom-cli/`：截图经专用设备 API 标定，继续检查返回的整数坐标与本人标题；未由 Runtime 提供配对上下文时明确失败，不读取设备凭据文件；验证不依赖旧企微环境变量和请求目标正确。
+4. 组合验收：先完成后台、Runtime、CLI 独立测试和 CodeReview，再签包；部署、安装与真机代理任务保存另按项目授权规则执行。旧客户端仅升级服务端的组合须保持原路径。
+
+发行记录：从提交 `75a40690` 隔离构建 Runtime 0.0.40 与 WeCom 0.2.14 验收包；插件验签、本地库 Python/AES/SQLite 离线检查、Runtime 安装包静态校验、目标 Runtime 与插件兼容核验及打包定向测试全部通过。交付包及两个安装文件已复制到本机 Downloads；复制后的 SHA-256 与交付清单一致：Runtime `c6ccdd0c4e7634aff7a725afaf5a9100910f1908edfb39d8a29a8382a136e905`，WeCom `d460b6de3fdacf9647e0a3ed45f88597ea4bf5f1dcd6fce2a7b741f83af3b3b7`。未安装本机或其他设备，未部署 agent2；服务端新设备 API 仍需发布后才能真机标定。
+
+## W31 发送标题复制解除原剪贴板纯文本门禁（2026-11-09）
+
+agent2 代理任务 #3 的消息 #269 读取成功；本机 0.2.12 连续三次 `wecom_message_send` 均返回 `UI_CHANGED/effect=none`，driver-log 只有 `original_read_begin/failed`，无标题双击、无输入或 Enter。相同剪贴板序号 3498 的只读检查显示格式为 Bitmap/DeviceIndependentBitmap/Format17，所有者为飞书进程；独立 `calibrate` 复现 `CLIPBOARD_NOT_PLAIN_TEXT`。所以问题是标题复制前要求旧剪贴板必须是纯文本，不是 agent2 页面发版改动或双点缓存丢失。
+
+发送文本、图片和文件本来会覆盖剪贴板；标定只需把本次复制的标题与本人名字全等比较，选择只需把本次复制的标题与目标会话名全等比较。五条路径现共用单一标题复制实现，均不读取、保存或恢复旧内容，会覆盖当前剪贴板；标定和选择后本次复制的标题留在剪贴板。只以本次企微 Ctrl+C 的新序号、所有者进程和非空标题作为复制证据；发送、选择按原规则全等核对目标，标定全等核对本人名字。原 `_common.ps1` 中只服务旧内容保存与恢复的纯文本读取、EDP 判断及 CAS 原语已无生产调用，同其专属旧行为测试一起删除，保留本次复制需要的 Win32 序号和所有者接口。旧阶段独立测试的 PowerShell 五组回归、Node 66/66 及 CLI typecheck/build 通过；本轮收敛后的开发自测 PowerShell 五组、Node 21/21、typecheck/build 通过，最终版独测 PowerShell 六组、Win32 fresh init、Node 66/66、typecheck/build 通过；CR 无阻断。改动版工作区 CLI 在原剪贴板为 WeWork 富格式时真机 `calibrate` 成功：本次复制序号 3518→3530、owner 为企微，标题与本人名字全等，标题点 (434,38)、输入点 (762,1230)；这次标定早于本轮代码收敛。最终版真机 `select` 唯一匹配陆伟，复制标题“陆伟”全等，序号 3541→3553、owner 为企微；随后 `send --target-name 陆伟` 发送明确标记测试消息成功，标题同样全等，复制序号 3553→3565、owner 为企微，`verification=local-record`、`message_id=271`、receipt 为 `send-2026-11-09T03-09-26-462Z`。`select` 缺缓存时先标定，再以本次复制核对目标；合成回归覆盖直接选择、连续标定后选择、错标题拒绝。0.2.13 已验签导入本机验收 Runtime，界面显示已启用、已就绪，安装后 `calibrate --json` 再次成功；未部署 agent2；P8 原批次 #15 未补发，消息 #269 也未自动重发，恢复需独立处理位置和未回复消息。
+
+## W30 无 OCR Agent→Runtime 真机验收（2026-11-07）
+
+验收目标：由网页 Agent 经 Runner、Runtime 调用实际暴露的 `wecom_read_session`、`wecom_read_sessions`、`wecom_message_send`，在售前客服群先读、只发送一次带唯一标记的测试文本、再只读对账；记录每个工具的实际结果、插件版本、发送状态与本地库消息 ID。发送结果未知时只读对账，不自动重发。重复实验须使用不同标记，逐次记录失败与修复。首轮 0.2.9 的 `wecom_session_directory` 仅用于页面，未当作 Agent 可调工具。
+
+首轮误用本机已安装的旧 OCR/Jev 插件：Agent 读会话成功，发送过程出现 `Jev` 搜索并因标题读为“售前客服群S”而在 Enter 前中止；随后只读回查未发现测试消息。该轮不能作为无 OCR 验收，且未重复发送。新分支源码 `19a5e860` 经隔离发行入口生成 WeCom 0.2.9 验收包，SHA-256 `1525b0a1672c85c24a767a1ffcc3c3734c39db7815ee4eb52be2de276b130081`；离线验签和本机 Runtime 0.2.24 静态兼容通过，15 项打包测试、5 项发行入口测试及 1 项安装前提测试均通过。载荷共 4,640 个路径，未见 OCR/Jev/添加客户资产。离线 doctor 因桌面运行条件返回未就绪，不能替代真实 Runtime 调用。按项目部署授权规则，导入本机验收 Runtime 前等待用户当场明确授权。
+
+用户已当场授权导入本机验收 Runtime 并进行 Agent 群聊测试。Runtime 升级前为 WeCom 0.2.6；导入 0.2.9 后界面显示插件已启用、已就绪且设备恢复已连接。短路径副本与原包 SHA-256 全等。实际 Agent 仅用模型可见工具：A2 读→发→回读，发送本地库唯一命中 `message_id=1992`，回读恰一条本人出站原文；A3 同流程唯一命中 `message_id=1993`，回读恰一条，无重发。两次调用的发送基线依次为 1989、1992。双点缓存文件修改时间仍为 2026-11-06 23:21:28，证明本次两轮未重写缓存；Agent 自称“未重标定”的返回推断不足，缓存时间是独立证据。发送确认只代表客户端记录落库，不代表对方收到/已读。
+
+边界实验：`孙程` 经 `wecom_read_session` 和 `wecom_read_sessions` 均返回 `TARGET_NOT_FOUND`，没有相似候选；Agent未发送，但无法提示用户可能是「孙晨」。`沟通` 的 Agent 在无目录工具时通过 `wecom_read_sessions` 累计 10 次分页扫描本地已同步的 36 个会话，最终列出「新劳务云系统项目沟通群」与「行政合同归档 智能体 沟通」两个不同名称，未导航或发送；首次回答在 `has_more=true` 时提前停下，用户追加“继续扫完”后才给出完整候选。现有插件 `wecom_session_directory` 已有 `search` 模式，能一次返回命中、同名标志与错名建议；服务端 `agent_tools` 只有三项且目录代理参数不含 `search`。修复方案：目录作为第四项模型可见只读工具，代理补 `search` 参数并更新描述；Agent 名称输入先目录检索，唯一才进入读/发，零匹配和多匹配只提示候选，不自动改目标。修改服务端工具装配属高风险，按开发→独测→CR 串行；本次插件导入授权不等于服务端部署授权，真实 Agent 复验新服务端前另候明确部署指示。
+
+首轮开发服务端定向 112 项自测通过；独立 TEST 在实际已安装 0.2.9 包发现 P1：该包的 MCP `wecom_session_directory` 定义只有 `list/preview/resolve`，`search` 被 Zod 拒绝且无 `type`。Runtime 仅检查页面目录 schema，仍上报 `wecom_session_directory` 能力；若按旧能力投影第四项，Agent 会得到一个无法执行的 `search` 工具。开发回炉补插件 MCP schema、Runtime 独立 `wecom_session_directory_search` 能力及服务端新能力门禁；原页面目录能力和旧三项业务工具继续可用。重新独立测试、CR、配套出包后才可请求新的部署授权与真机复验；不可用首轮 112 项代替跨端验收。
+
+W30 回炉独立 TEST：真实新 CLI MCP stdio 清单同时含 `search/type` 与原页面三模式，目录标记只读；实际已安装 0.2.9 的 Runtime 检查为页面目录可用、搜索能力缺席、读发能力保留，新 CLI 则两项目录能力均具备。CLI 定向 22 项、Runtime 定向 20 项、服务端定向 112 项通过，构建、Python 编译与导入、差异检查退出 0；恢复邻近 17 项通过、16 项因无隔离 PostgreSQL 库跳过，不宣称真实 SQL 恢复链已验证。出包前同步提升 WeCom CLI、Host Core、Runtime Host、Desktop 四组件及 lock 版本；版本变更后重验，再进入独立 CR。共同接口约定见系统契约 2.16。当前 0.2.9 群发验收与新搜索能力的静态/单测验证是两项不同结论，新搜索能力尚未在网页 Agent 真机调用。
+
+开发已将 WeCom CLI、Host Core、Runtime Host、Desktop 版本依次提升为 0.2.10、0.2.25、0.2.28、0.0.39，并同步四个自身 lockfile、共享 workspace lockfile 及 Runtime/Desktop 对 Core 的依赖记录。CLI、Runtime、Desktop 构建通过，版本一致性与差异检查通过；最终状态仍待独立 TEST 复核及 CR，未出包或部署。
+
+版本更新后的独立 TEST 再次核对四组件 package/lock 及 Core 的 workspace/file 依赖，全部一致；CLI、Host/Core、Desktop 构建退出 0，CLI manifest 8 项、Runtime 能力 20 项通过。新 Host 分别检查已安装 0.2.9 和新构建插件：均保留页面目录，仅新插件上报搜索能力。服务端代码未变化，复用上一轮 112 项通过结果；Desktop 构建前后 Git diff 哈希相同、无跟踪文件副作用。进入 CR 阶段，尚未发行或进行新能力真机调用。
+
+独立 CR 无 P0/P1；修正 §12.8 历史 OCR 表述和旧设备三工具下的条件式目录提示。唯一保留的非阻断 P2：能力查询异常时服务端沿既有可见性回退，可能暂时展示目录，但旧 Runtime/插件会在执行 `search` 前返回 `TOOL_NOT_SUPPORTED`，不触碰 UI/发送。W30 代码与文档已提交 `b67589ab` 并推送当前开发分支，未合并 master。
+
+从该提交隔离生成验收批次 `AID-Work-Runtime-0.0.39-WeCom-0.2.10-20261107-111952`：WeCom 插件 SHA-256 `2fa73b5606d4ee9f6a30263e34cbc074be5c3507bc40f110e2c7819c29505c19`，Runtime 安装器 SHA-256 `c4c182d255e4956b618a3809f94f588087b95c0801ca2f6b15e47229b725edab`，交付 ZIP SHA-256 `f233bc76a2101d24f15f9a66f81fc9f0e2743d5cf385d7a5728c0fc6beed7913`。包内 4,640 路径，无 OCR/Jev/addcustomer 路径；离线验签、配套 Runtime 静态兼容、打包测试 15/15、发行入口 5/5、安装前提 1/1、Runtime 打包 20/20 均通过，发行脚本退出 0。离线 doctor 仍因桌面运行条件未就绪返回 1，不视为实际调用通过。新 Runtime 安装、插件导入与 agent2 服务端升级均尚未执行；0.2.9 的本机导入授权不覆盖这些新部署，待用户分别明确授权后再做 Agent 四工具真机复验。
+
+用户随后分别明确授权本机验收 Runtime 0.0.39 安装、WeCom 0.2.10 导入和 agent2 分支部署。本机安装器完成并自动退出旧客户端，重启后界面显示已连接，WeCom 0.2.10 已启用、已就绪；下载目录短路径副本与发行包 SHA-256 全等。agent2 的更新脚本检出 `d5f68df2`、退出 0，API/Runner API/Worker 健康。部署前服务器有 1 项已跟踪注释改动和 34 个未跟踪文件；已按原路径、原哈希与原 Git 排除配置备份，临时只排除这 34 个路径供脚本洁净检查，部署后恢复已跟踪文件和排除配置，原 35 项现场状态重新可见，无未跟踪路径与目标分支文件冲突。已跟踪改动与分支版本仅注释不同，未覆盖业务逻辑。
+
+首轮真机调用发现第四工具仍未展示。设备心跳已上报 `wecom_session_directory_search=true`，网页当前选用同一台 `wecom-cli` 设备，服务端新 ToolCatalog 亦含第四项；根因是 agent2 数据库中的“在线电商客服”定义使用 `inherit=false` 的显式工具白名单，只列原三项企微工具。按当前工具配置原样追加 `wecom_session_directory`，其余字段和工具保持，定义更新时间触发 Runner 配置缓存刷新；新会话随即实际调用到第四项。这是验收环境的 Agent 配置补齐，不扩大旧客户端设备能力，也未让目录绕过旧设备 Runtime 拒绝。
+
+| 真机用例 | Agent 实际路径 | 结果 |
+|----------|----------------|------|
+| 错名「孙程」 | 目录 `search/type=any` | `match_count=0`，候选含「孙晨」，只提示确认；无导航、无发送 |
+| 多个不同名称「沟通」 | 目录 `search/type=any` | `match_count=2,same_name=false`，一次列出「新劳务云系统项目沟通群」「行政合同归档 智能体 沟通」；无导航、无发送 |
+| 完全同名「孙梦」 | 目录 `search/type=any` | `match_count=2,same_name=true`，两名同名联系人无法区分，仅此时建议备注；无导航、无发送 |
+| 唯一联系人「孙晨」 | 目录搜索→单会话读取 | 精确唯一，读取 2 条成功，`navigated=false`；未复述正文、未发送 |
+| 唯一群「售前客服群」 | 目录搜索→读取→发送一次 A4 标记→增量回读 | 精确唯一；发送 receipt `send-2026-11-07T03-46-10-544Z`，本地库 `message_id=1994,rows=1`；回读恰一条本人原文，无重复 |
+
+A4 的 Runtime 日志依次记录 `wecom_session_directory`、`wecom_read_session`、`wecom_message_send`、`wecom_read_session` 四次成功调用，发送 `effect=applied`；本次日志尾部未见 OCR/Jev，双点缓存文件仍为 2026-11-06 23:21:28、长度 100 字节，未重新标定。结果仅证明客户端本地库确认出站记录，不代表收件人已收到或已读。所有业务测试只由网页 Agent 调用模型可见工具，主控的文件/数据库读取仅用于部署监控和对账。关联产品 Skill 的“三工具”历史文案已更新为按实际可见工具使用目录/读发；独立验证实际 SkillLoader 可加载、定向 27 项通过、差异检查通过。
+
+补充提交 `475a5bc2` 已推送并按用户授权再次部署到 agent2：更新脚本退出 0，API、Runner API、Runner Worker 均健康；容器内可读取 Skill 2.1.0，数据库中的 `after-sales` 显式白名单重启后仍含第四工具。部署前的 1 项已跟踪改动与 34 项未跟踪文件再次按原哈希和原 Git 排除配置恢复，服务器现场状态仍为 35 项。该次部署未追加群发消息；真机业务验收结果以部署前同一代码功能的上述用例为准。
+
+五轮持续对话补充实验（2026-11-07 11:57—12:13）：继续使用 agent2 网页“在线电商客服”，企微读发操作仅经模型可见的 Runtime 工具，但主控逐轮提供了回复原文，智能体负责调用工具发送与回读，并未自主检索业务资料或生成答复。因此本实验只验证消息链路、增量读取、重复提问处理和无 OCR 路径，不能证明该业务智能体的活动查询、商品推荐或自主对话能力。先向精确唯一的「售前客服群」发送测试邀请（本地库 ID 1995），之后按消息 ID 增量只读监控；群成员孙晨的两次补 `@` 重复提问分别与原问题合并计轮，未触发重复回复。
+
+| 轮次 | 群成员消息 ID 与主题 | 预设回复 ID | 回复内容 |
+|------|----------------------|---------------|------|
+| 1/5 | 1996/1997 双十一活动 | 1998 | 无已核实活动详情，询问店铺或商品范围 |
+| 2/5 | 1999/2000 店铺经营品类 | 2001 | 无已核实商品清单，询问具体品类 |
+| 3/5 | 2002 跑鞋 | 2003 | 询问用途、尺码和预算 |
+| 4/5 | 2004 慢跑、200 元以内女鞋 | 2005 | 给出选鞋要点并询问尺码、脚型 |
+| 5/5 | 2006 36 码、正常脚型 | 2007 | 回应试穿要点，同条感谢用户并结束实验 |
+
+邀请及五条预设回复均各发送一次、各经 `wecom_read_session` 本地库回读确认，没有 Agent 重发。该时间窗 Runtime 日志 125 行，`wecom_session_directory` 成功 1 次、`wecom_read_session` 成功 18 次、`wecom_message_send` 成功 6 次，未检出 OCR/Jev/RapidOCR 字样；双点缓存文件修改时间仍为 2026-11-06 23:21:28。第五轮回读后停止监控。主控未让智能体使用业务检索工具，不能据此判断商品目录或活动数据是否存在、是否可用；发送结论仍仅限客户端本地库落库，不代表群成员实际收到或已读。
+
+## W29 标题复制剪贴板诊断（2026-11-07）
+
+事实：W28 真机 `select` 已实际切到孙晨，但 120 秒驱动超时；之后发送在复制标题/恢复剪贴板阶段返回 `UI_CHANGED clipboard_restore_failed`，明确未触碰输入区，库内最后 `message_id=1733` 无新增出站。普通 shell 只读 `Get-Clipboard -Raw` 10 秒无输出后被终止；仅 Win32 元数据读到剪贴板 owner PID 49232 为 `AweSun.exe`（远控），不是企微。远控同步/延迟渲染可能使 OLE 读阻塞，但未有分段计时，不能归因坐标或标题文字。`Get-WeComCopiedTitle` 当前恢复分支把初始错误、未尝试 CAS、CAS 返回 false 混报为 `clipboard_restore_failed`。
+
+开发范围：先在现有设计和自测中只观察无内容元数据，记录标题复制各同步剪贴板调用的开始/结束阶段、耗时、剪贴板序号与 owner PID，判断卡在哪一处；不读取或输出剪贴板文本、标题、凭据。仅在有明确代码证据时修复错误覆盖或更准确报告，不更改标题严格核对、自动重试、发送或设备协议。开发不在真机操作企微、发送、提交、推送或部署；独立 TEST/CR 后由主控决定可控真机探针。
+
+开发自测（2026-11-07）：`Get-WeComCopiedTitle` 在原剪贴板读取、nonce CAS、nonce 核验、标题 UI、复制、复制结果读取和恢复读取/CAS 前后记录 `phase`、`elapsed_ms`、剪贴板序号、owner PID 与是否企微 PID；日志不含标题、剪贴板文本、nonce 或凭据。C# `ExchangeClipboardText` 的 false 分支均在 `EmptyClipboard` 前，初始 CAS 返回 false 时不再做无需的恢复读取。真实已触碰后若外部 owner 接管，复制/恢复阶段先核 owner PID，跳过对远控数据的 OLE 文本读取并报原失败加 `restore=external_owner`；只有恢复 CAS 确实拒绝才报 `clipboard_restore_failed:cas_rejected`。原 120 秒超时尚无分段日志，不能宣称已定位为哪一次 OLE 调用。PowerShell 合成行为 5 项涵盖初始读失败零写、初始 CAS 拒绝保留原错误且零恢复/标题 UI、远控 PID 接管零 OLE 文本读取且不误称 CAS 失败、严格复制标题并恢复、真正 CAS 拒绝，且断言日志无正文；七份现存 PS 行为脚本 exit 0，CLI build exit 0、相关 Node 36/36 exit 0。真机探针需由主控在受控条件下先读当前 Win32 seq/owner/PID 和 artifact 最后阶段，再决定是否禁用远控剪贴板同步并重试；不得用 `Get-Clipboard` 文本读取作诊断，不自动重发。
+
+TEST 回炉自测（2026-11-07）：独立 TEST 指出初始 CAS false 分支缺少动态行为覆盖；新增合成用例模拟首次 `ExchangeClipboardText` 拒绝，断言保留 `clipboard_changed`、原剪贴板未变、零恢复读取、零标题点击/按键。PowerShell 行为脚本 7/7、CLI build、相关 Node 10/10、`git diff --check` 均 exit 0；待独立 TEST 复测。
+
+独立 TEST/CR 收尾（2026-11-07）：最终代码 CLI build、相关 Node 47/47、PowerShell 行为、驱动语法/BOM 与 `git diff --check` 均通过；标题复制诊断五项合成行为通过。CR 核对原生 CAS false 均在 `EmptyClipboard` 前、外部 owner 的复制/恢复 OLE 读取跳过、错误保因及日志无标题/剪贴板正文，无 P0/P1。P2：若诊断日志本身写入失败，异常仍可能覆盖原错误；当前 artifact 路径创建及写入已验证，本轮按最小范围记录。真实远控环境下卡住的具体同步调用仍待受控真机阶段日志确认，未实际发送或部署。
+
+主控真机探针（2026-11-07）：W29 代码提交后只执行 `search` 唯一目标与 `select`，未运行发送。`select` 返回 `UI_CHANGED clipboard_changed`，明确未触碰输入区；artifact 阶段日志显示 `original_read_begin` 时序号 2287、owner PID 49232（AweSun），原剪贴板读取耗时 60065 ms，随后 `nonce_exchange` 耗时约 30021 ms 后拒绝；没有 `nonce_read` 或 `title_ui` 阶段。前述 120 秒超时的具体阻塞点由此确认在标题复制前的远控剪贴板读取/交换，不是搜索结果选择或标题坐标。当前真机界面已进入孙晨会话，但 CLI 标题核对未完成；本地库最后仍为 `message_id=1733`。待远控剪贴板同步关闭、剪贴板可正常读取后，再执行一次 `select` 标题核对与一次 `send`，结果未知时只读对账，不自动重发。
+
+主控真机验收（2026-11-07）：用户无法关闭远控剪贴板同步，但手动复制后 Win32 owner 变为 WXWork，普通只读 `Get-Clipboard` 在 0.4 秒内返回；复制内容含企微富文本格式，CLI 的原剪贴板保护按设计不接受。主控将剪贴板换为普通测试文字（`UnicodeText/Locale/Text/OEMText`），`search` 唯一命中孙晨后 `select` 在约 14 秒内返回 `OK`，复制标题严格全等“孙晨”，且普通测试文字得到恢复。随后仅执行一次 `send`：发送前基线 `message_id=1733`，驱动标题仍为“孙晨”，本地库确认唯一出站 `message_id=1991`，CLI 返回 `effect=applied`；再次 `read-session --limit 2` 读取到孙晨原提问及完整新增回复。结论限于客户端本地库已记录发送，不代表对方已收到。没有关闭远控连接、部署或合并 master。
+
+Agent 调度验收边界（2026-11-07，更正工具口径）：Provider 的 CLI/MCP 清单不等于模型可见工具。当前服务端 `src/local_tools/catalog.py` 的 `agent_tools` 只有 `wecom_read_session`（读单会话）、`wecom_read_sessions`（批量读会话并返回会话与待回复候选）、`wecom_message_send`（发送）；独立的 `wecom_session_directory` 仅供页面使用，不进入模型工具集。`wecom_chat_search`、`wecom_chat_select` 虽在 Provider MCP/CLI 清单，当前并未投影给 Agent。上述真机实验在终端直接调用了这两个非 Agent 业务工具，还用了剪贴板读写、Win32 诊断、窗口激活和终端会话环境变量设置，因此只证明 CLI/驱动在人工准备后的真实企微与本地库行为，**未证明 Agent 仅用已暴露工具可独立完成全链路**。后续应在实际 Runtime 中仅调用当次模型可见的工具定义，由 `wecom_message_send(session,text)` 内部完成目标定位与发送，结果未知时由系统内部只读对账；遇到剪贴板异常应返回工具错误，不通过未暴露命令修环境。孙晨这条消息已确认入库，不能为补验收重发同一条。用户记忆中的独立“读会话列表”若指 `wecom_session_directory`，它与当前模型投影不一致，需单独确认是否要作为第四个业务工具暴露。
+
+## W28 搜索门禁真机回炉（2026-11-07）
+
+事实：当前分支只读 `read-session` 得到孙晨 9 条，`search` 得到唯一联系人；首次发送在 Ctrl+F 焦点证据前拒绝。激活可见主窗后，搜索框已显示“孙晨”且唯一联系人结果出现，旧 `Test-WeComSearchClipboardEcho` 却报 `clipboard_changed`，未按 Enter、未发消息。只读 select 同门禁无法进入；数据库最后 `message_id=1733`，没有新增出站记录。
+
+实现与验收：只在本地库跨类型完整名称唯一时进入 UI。`Open-WeComNamedChat` 保留焦点 caret、清框、同进程新结果面板和 Enter，去掉搜索词剪贴板全文回读及其专用 helper；调用方标题复制严格核对仍在草稿清理/发送前。合成行为要覆盖错误焦点零清草稿、旧/缺失/异进程面板零 Enter、唯一面板 Enter、错误标题零发送；目录无命中/歧义在 UI 前拒绝。只运行相关 PS/Node 和构建；开发不进行真实发送、会话切换、提交、推送或部署。
+
+开发自测（2026-11-07）：`Open-WeComNamedChat` 删除搜索词剪贴板全文回读与 `UI_CHANGED` 阻断，保留焦点 caret 双检、清框、旧结果面板排除、同 PID 新结果面板和 Enter；仅供该回读的 `_common.ps1` helper 删除，标题复制仍使用的剪贴板读取/原子恢复保留。PowerShell 行为测试让旧 echo 一旦运行就抛错，唯一新面板仍 Enter；错误 caret、缺失/旧/异 PID 面板均零 Enter。目录与 select Node 回归证明只有唯一账号绑定目标可进入、标题不符不确认，发送前标题仍先于清草稿/Enter。`npm run build` exit 0；相关 Node 54/54 exit 0；六份现存 PS 行为脚本 exit 0，其中剪贴板读取 policy 12 项；九份 live PS parser/UTF-8 BOM exit 0；`git diff --check` exit 0。未在真机切换会话、发送或部署；待独立 TEST/CR 和主控真机复验。
+
+独立 TEST/CR（2026-11-07）：最终代码相关 Node 42/42、Python 5/5、四份 PS 行为脚本、构建、驱动语法/BOM 与 `git diff --check` 均通过。CR 沿本地库唯一名称/账号绑定、搜索焦点与新结果面板、复制标题和发送前草稿清理顺序审查，无 P0/P1。搜索词缺字或默认结果偏离时，标题不符须在发送前拒绝；目前只有合成验证，尚待主控在真实企微上复验，不登记为阶段完成。
 
 ## W14 通用Runtime业务工具自动装配（2026-10-29）
 
@@ -755,3 +863,121 @@ agent2 16:10 首次进入会话时曾因 OCR 将目标「速动运动福利1群�
 本机真机验收（2026-11-06 16:40–16:44）：用户授权从当前非目标会话定位“售前客服群”并发送一条测试消息。CLI `probe` 确认已登录；预先执行的只读 `search` 找到唯一同名群，但在搜索框留下查询词，导致第一次自动 `send --target-name` 在搜索框状态校验处 `UI_CHANGED/effect=none`，未进入输入或发送。手动点搜索框清除按钮后仍处于“新劳务云系统项目沟通群”；再次只调用一次相同 `send --target-name`，自动搜索、选择并进入“售前客服群”，输入后直接发送，返回 `OK/effect=applied/navigated=true/verification=local-record`，唯一匹配本地出站 `message_id=1989`。发送后截图可见目标群内一条测试消息且输入框为空；这证明本机客户端动作和落库，不证明群成员已收到。两次尝试中实际仅一条消息发送成功；第一轮的残留搜索词由本次预检造成，正式自动发送前需确保搜索框为空。此项验收当时尚未出包、安装、部署 agent2 或提交代码。首次定位时其他群名末尾 OCR“+”的误判仍未覆盖。
 
 2026-11-06 交付：用户要求先合并 master 再打包。功能分支提交 `644b6328` 经 Codeup/GitHub 推送后快进合入 master，两端 master 均推送成功；源码与锁文件版本同步为 `0.2.8`。首次隔离打包目录中的 npm workspace 链接无法被 Node 解析，止于共享依赖构建，未产出交付包；改用短路径从合并后的 master 提交 `644b6328` 重新归档，仅构建 WeCom。稳定 acceptance 发布者签包、离线验包（OCR/SQLite/AES）、目标已安装 Runtime 信任根及四项工具兼容核验、19 项打包定向测试、最终 ZIP 内容与 SHA-256 校验均通过。包内 `drivers/ps1/message-send.ps1` 与 master 源码 SHA-256 一致，包内版本 `0.2.8`；`build-info.json` 记录 master 基线且无业务源码叠加。交付目录 `C:/Users/PC/Downloads/AID-Work-WeCom-0.2.8-20261106-165016/`，同名 ZIP 与 `.zip.sha256` 在 Downloads；插件 SHA-256 `3f6a7708cf2f558c4413765ad06b524be4e68f2f1f2eb9d7c92a13ea4c468ae5`，交付 ZIP SHA-256 `9fb459c93d9b43a994482934980c4f7d7586fcb7e425a467f5be9f806e68bdb0`。本批不含 Runtime 安装器，未安装插件、部署 agent2 或恢复监控；agent2 实际业务验收待用户进行。
+
+## W20 稳定会话库核验与标题识别调研（2026-11-06）
+
+agent2 17:02 的稳定会话发送在本地库读取成功后，仍进入旧的 OCR 发送后校验并返回 `EXECUTION_UNKNOWN`；17:10/17:11 两次发送将已打开的群标题读成末尾多 `+`，误走搜索并在搜索框预检返回 `UI_CHANGED/effect=none`，未输入或发送。代码定位：`session` 读取强制按进程版本矩阵准入，但发送计划先被 doctor 动态状态门截住，状态缺失或兼容态时回退到 OCR 终态。已改为稳定 `session` 发送始终尝试本地库基线与出站记录核验，发送前失败明确未发送；旧目标参数仍按原兼容路径。标题 OCR 误判尚未修复，相关独立 `+` token 宽松匹配试案因可能误认真实的「目标群 +」而撤回。未真机发送、安装、打包、提交或部署。
+
+本机只读探测：企微主窗口 UI Automation 子树仅有两个无文本 Pane，Win32 子窗口标题同样无可用文本；当前 agent2 调用 Jev 返回 `no_api_key`。本地 session 库会话表未见显式当前激活会话 ID 字段，状态/键值是否表示当前选择尚未完成切换对照；本机企微进入扫码安全验证后停止界面实验。按用户要求不调查或扫描会话进程内存，先逐项讨论 OCR 使用点。标题识别方案未定，暂不打包交付。
+
+## W21 会话读取移除 OCR 兜底（2026-11-06）
+
+范围限于 OCR 清单第 5、6 项：`wecom_read_session` 旧目标参数、`wecom_unread_list`、`wecom_watch_poll` 的 UI/OCR 读取分支退役。稳定 `session`/日期读取原本就是本地库。旧 `target_name` 仍由现有本地库精确消歧，账号绑定 `target_ref` 仍核对当前账号；无账号旧 ref 明确拒绝。doctor 状态 unset、ui(compat/transient) 均直接尝试本地库，`forced=true` 只绕过落盘模式，不绕过实际进程版本矩阵、账号、库指纹或快照。显式 `channel=ui` 返回 `VERSION_UNSUPPORTED`，旧 `max_pages` 返回参数错误；数据库不可用返回原码，不假装读到空消息。watch 失败轮保留 DB 水位并带 `db_unavailable=true`。CLI/MCP 说明同步更新，不改 Device/Runtime/Runner wire；已交付旧插件的自身代码不变。UI 搜索/选择、文本/媒体发送、添加客户的 OCR 仍按各自设计，非本批范围。
+
+开发验证采用合成 fixture 与依赖注入，禁止读取本机真实企业微信 UI、进程内存或数据库。旧 UI 专属测试退役，仍有效的参数、身份、取消、会话名过滤、监控水位与 CLI 按轮互斥断言由新 DB-only 测试及既有 localdb 套件覆盖。`npm run build:main` exit 0；`node --test dist/tests/operations-db-only.test.js dist/tests/localdb-read-session.test.js dist/tests/localdb-external-contact.test.js dist/tests/localdb-unread.test.js dist/tests/localdb-watch.test.js dist/tests/target-name.test.js dist/tests/cli-watch-mutex.test.js` exit 0，81/81；新增旧扫描缓存失效用例后 `node --test dist/tests/operations-db-only.test.js` exit 0，8/8。当前阶段仅源码修改，不提交、打包、安装或部署；独立 TEST/CR 及客户版本实机验收仍待进行，不以合成测试冒充真机可用。
+
+独立 TEST 核对后补齐云端代理工具文案：`WecomReadSessionInput` 的旧 `max_pages` 明示 CLI 会拒绝、`since_days` 明示本地库时间过滤；`WecomUnreadListTool` 明示 `data.conversations` 与 `judgment_basis=last_sender`，不再宣称角标列表；零工具积分注释不再引用退役的截图模型读取计费。字段保持旧请求可解析，运行时由 CLI 给明确错误。定向 `tests/unit/local_tools/test_wecom_proxy_tool.py` 25/25 通过；待独立复核。
+
+W21 独立 TEST 最终合成回归 95/95，代理工具 25/25，CLI 构建通过；独立 CR 通过。仅验证源码与合成 fixture，未触本机真实企业微信、部署或打包。
+
+## W22 搜索框清理移除 OCR（2026-11-06）
+
+范围限 OCR 清单第 2 项：`chat-search`、`add-customer` 及调用共享搜索框清理 helper 的会话选择、图片/文件发送准备链。共享 helper 先投递 Ctrl+F，失败立刻中止；成功后空框和非空框都固定 Ctrl+A/Delete，不再用 OCR 判断残留、清空或搜索框焦点。输入搜索词/手机号后以完整剪贴板复制回读验证；剪贴板恢复与外部写入保护保持原规则，失败不继续。搜索结果候选 OCR、聊天标题及聊天输入区的其他门禁仍照旧。现有客户端交付包不变，W22 源码尚未提交、打包、安装或部署。
+
+开发自测：`pwsh -NoProfile -File clients/wecom-cli/tests/ps1/search-input-regression.ps1 -DriverDir clients/wecom-cli/drivers/ps1` 与同参数 `input-locator-regression.ps1` 均 exit 0；测试仅替换 OS/OCR 边界，未碰真实企微。新增固定清空、Ctrl+F 失败零清理/零输入、添加客户一次补输与完整复制校验断言。变更的七个 PowerShell 驱动/共享脚本语法解析通过；CLI `npm run build` exit 0；云端代理工具 Python 定向测试 25/25 通过；`git diff --check` exit 0。后续需独立验证及客户机真机验收。
+
+独立 TEST 发现：完整剪贴板回读原先在确认原剪贴板可安全接管前就投递 Ctrl+F；富格式/不可读剪贴板应在触碰 UI 前拒绝。已将 Ctrl+F 移到原剪贴板策略预检和唯一 nonce 验证之后，保持复制全文、原文恢复及外部写入保护；同步修正旧 OCR 测试断言。`search-input-regression.ps1`、`input-locator-regression.ps1`、`input-independent.ps1`、`clipboard-policy-regression.ps1` 四组合成 PowerShell 测试均 exit 0；仍待独立 CR 和真机验收。
+
+独立 CR 指出添加客户的完整复制回读若返回 `search_focus_failed`，旧分支仍会清空并补输一次，与“Ctrl+F 失败立即中止”不符。现对此原因直接返回 `UI_CHANGED`，不进入第二次清空或输入；其他回读不匹配仍保留一次补输。合成用例验证第一次输入后复制回读的第二次 Ctrl+F 失败时，仅发生首次清空和一次输入；独立 TEST 重跑 `search-input-regression.ps1`、`input-independent.ps1` 34/34、`clipboard-policy-regression.ps1` 23/23 与七个 PowerShell 语法解析均通过，独立 CR 复核无阻断。尚待真机验收 Ctrl+F 实际焦点，尤其聊天框有草稿时。
+
+## W23 文本发送标题复制与 GLM 标定（2026-11-06）
+
+范围限 OCR 清单第 1 项的当前会话标题门禁。主控与开发在本机企微窗口 `1117×1354`、DPI 96 上只读验证：标题首字中心相对 `(433,38)`、屏幕 `(455,85)`；群聊未选中时 PostMessage 单击一次后标题进入 `EditWnd`，向该子窗口 Ctrl+A/C 可复制完整群名；普通单聊需向主窗口投递真实 `WM_LBUTTONDBLCLK`，再 Ctrl+C 可复制完整姓名。两种方式均可恢复原剪贴板；未发聊天消息。直接向主窗口投递群聊 Ctrl+C、以两次普通单击代替单聊双击均失败，实施不得使用。
+
+CLI 在首次与清理前读取标题，以及旧 `-VerifyOnly` 只读核验时，先取主窗口顶部 64×DPI/96 像素截图；按当前窗口宽、高、DPI 查本地坐标缓存，未命中则调用既有客户端 `/llm/chat` 的 `GLM-5.3-Flash` 标定右侧标题第一个字中心，要求返回分界线与整数坐标并检查聊天区几何。模型只定位，不提供会话名称；企微自身复制的全文与目标规则核对，群名严格全等。成功复制到任何当前会话标题即写入或保留坐标缓存；与目标不匹配仍按现有导航一次，导航后复用缓存；只有无法确认标题坐标或复制失败才删除缓存，下次调用重新标定。模型、剪贴板、窗口变化失败在清理输入框前终止，不回退标题 OCR；输入后不再复核标题。旧结果本地库核验与底部输入点 OCR、搜索/选择和媒体发送保持原边界。服务端只扩展 `/llm/chat` 白名单 `GLM-5.3-Flash -> zhipu`，沿原 binding 鉴权、价目非零校验、余额预检及 ×10 计费；无新 API/Runtime/Device wire。旧客户端代码不变。服务端与新插件需分别发布后才能端到端验收。
+
+独立 CR 回炉：最终清理前会话核对必须发生在首次点击输入框之后，避免标题复制后前台焦点仍留在标题。顺序调整为“点击输入框并等待稳定 → 复制标题核对 → 再点输入框恢复焦点 → 核主窗身份/几何 → Ctrl+A/Delete → 输入”；核对失败时只发生首次点击，绝不清理、输入或发送。缓存坐标若无法形成标题 `EditWnd` 或无法确认标题复制，则删除缓存，本次仍失败并停止，下次调用才重新标定；剪贴板被占用、原内容不可安全接管或被外部改写时保留缓存。`input-locator-regression.ps1` 锁定点击与标题核对顺序及失败零清理/零发送；`title-point-regression.ps1` 锁定缓存失效分类。两项回归、PowerShell UTF-8 BOM/语法解析、`git diff --check` 均 exit 0；未再次执行真实发送，待独立 TEST/CR 复核。
+
+开发自测：真机只读复制/恢复群聊和单聊通过；群聊再次用实际 `Get-WeComCopiedTitle` 验证已存在标题 `EditWnd` 和尚未点击标题两条路径，均复制完整『售前客服群』且恢复剪贴板。`title-point-regression.ps1` 新增“不重复点击、缺失时只点击一次、失败不盲重试”的意图断言，与 `input-locator-regression.ps1`、CLI `npm run build`、PowerShell BOM/语法解析和 `git diff --check` 均 exit 0；同工作区 Windows Python 执行 `tests/unit/api/test_client_routes.py` 为 48/48。统一 `dev_test.sh` 在当前 WSL shell 缺少 Linux `python`（exit 1），已用 Windows Python 验证当前服务端代码。尚未执行真实发送、agent2 服务端发布、插件打包/安装；待独立 TEST/CR。
+
+后续严格状态复位纠正了“有群无法复制”的旧判断：分别先从『售前客服群』切到另一群再切回，截图确认标题未选中、首字点无 `EditWnd`，再独立测试 PostMessage 和 Win32 SendInput 鼠标单击，每轮只点一次。两轮点击后标题全文蓝色选中，首字点均出现同进程 `EditWnd`；SendInput Ctrl+C 配唯一 nonce 复制出完整群名，剪贴板所有者与企微同 PID，原文 CAS 恢复成功。此前对已选中标题连续点击会取消全选，导致主窗 Ctrl+C 失败；不是群聊形态差异。实现先查标题区域 `EditWnd`，存在即 Ctrl+A/C，无需再点击；不存在只点击一次并重查，仍缺失便中止且不清理/发送。点击坐标按窗口相对值，未用标题 OCR；该真机实验只验证标题复制，完整发送仍待验收。
+
+W23 独立 TEST/CR 最终复核通过：生产 PowerShell 5.1 的 Int32 坐标解析、群名原文全等、点击输入框后最终复核标题、失败零清理/零发送、坏坐标缓存失效，以及从非目标会话导航时复用已验证坐标均有定向测试。PowerShell 两项回归、CLI 构建、API 48 项定向测试、脚本语法/BOM 与 `git diff --check` 均通过；最后仅调整 PowerShell 与文档后复跑受影响的两项回归、语法/BOM 与 diff 检查。未发布 agent2、安装新插件或执行完整发送；GLM 真实标定与发送结果待用户发布后验收。
+
+2026-11-06 agent2 接口真机复测：原 `/api/client/v1/llm/chat` 对 `GLM-5.3-Flash` 返回 400 `MODEL_NOT_ALLOWED`。确认 agent2 已配置智谱 Key 与非零输入/输出计价后，在 agent2 绑定挂载的 `src/api/client_routes.py` 只放行该模型；首次复测 502，日志证实接口统一传 `enable_thinking=False` 与 GLM 强制思考冲突。改为 GLM 使用项目既有的 `reasoning_effort=low`，其他模型仍传 `enable_thinking=False`；Gunicorn HUP 重新加载后，同一张真实『售前客服群』顶部截图通过客户端绑定鉴权返回 HTTP 200、模型 `GLM-5.3-Flash`、坐标 `(437,37)`。本地 API 单测 49/49 通过；统一 `dev_test.sh` 在当前 WSL 缺少 `python`，故由 Windows Python 执行。agent2 当前是未提交的现场热修复，后续 `agent2_update.sh` 重置代码会覆盖，正式发布须带上本地同一修正。当时用 PowerShell 7 临时测试 `Get-WeComCopiedTitle` 曾报 `title_edit_not_focused`；生产 PowerShell 5.1 的复测与纠正见下文，完整发送仍未验收。
+
+后续纠正：`low` 档对同一张图偶尔把标题首字报到左边界 `(410,38)`，不能用；先恢复 GLM 默认思考，完整 CLI 标定→复制得到 `(438,36)` 和完整群名。用户要求最高档后将 agent2 与本地路由改为 `reasoning_effort=max`。两轮各自先切离再进入『售前客服群』，通过 Windows PowerShell 5.1 调用实际 `Get-WeComTitlePoint` → `Get-WeComCopiedTitle`，分别得到 `(444,38)`、`(436,36)`，两次都复制完整群名并恢复原剪贴板；无消息输入或发送。早先 `title_edit_not_focused` 来自用 PowerShell 7 临时测试生产 PowerShell 5.1 驱动，不代表真实 CLI 复制失败。最高档仍需在不同窗口尺寸和单聊场景验证；完整发送未验。agent2 仍是现场热修复，正式发布需合入本地代码。
+
+用户取消清理输入框前的第二次标题复制：上述 W23 最终复核顺序已废止。发送路径现为“截图/GLM 坐标与底部 OCR/Jev 输入点选择 → 唯一一次复制标题并与目标核对 → 点击输入框一次 → 核已确认主窗身份/几何 → Ctrl+A/Delete → 输入/发送”。标题不符在点击输入框前返回导航，主窗口销毁重建则停止本次发送，不沿用旧标题结论；`-VerifyOnly` 的只读标题核验仍保留。PS5 `input-locator-regression.ps1` 通过，CLI 构建通过；相关 TS 静态与发送核验测试通过，独立验证复核了首次不符、仅一次复制/点击和窗口重建路径。未发真实消息，完整发送仍待验收。已补齐 `input-independent.ps1` 的 W23 标题坐标/复制测试桩及单次核对断言，PS5 33/33 通过，Node 包装用例同步通过。同步最新远端 master 后，CLI 定向 122 项、服务端 74 项、四组 PowerShell 回归及 CLI 构建均通过；全量 npm test 因旧 dist 保留已删除源码的编译测试而未作为验收依据。
+
+## W24 文本发送双点标定与去 OCR（2026-11-06）
+
+范围仅 `wecom_message_send` 与新 `calibrate` CLI。本人显示名取自已验证账号对应的 `user_table.name` 唯一行，不凭 UI 或模型猜测。新命令搜索本人名称、Enter 打开默认自会话，GLM 一次定位标题首字及输入区中心；企微自身复制的标题与本人名全等才缓存两个窗口相对点及宽、高、DPI。缺缓存、窗口变窄或高度/DPI 不符时发送前自动执行同一标定；宽度增加但高度/DPI 不变时复用左侧聊天区双点。缓存有效时无需模型与 OCR。
+
+本地库版本/身份/唯一目标/发送基线都在 UI 写入前验证；不满足时拒发。发送前搜索目标名并 Enter 进入默认结果，再复制标题核对；微信联系人标题仅接受“名字@微信”或“名字 @微信”两种全等形式，同名无法消歧或标题不符拒发。目标确认后点击缓存输入点、Ctrl+A/Delete、单行/多行统一复制到剪贴板并 Ctrl+V 粘贴后 Enter，不回读输入文字；标题不符清缓存供下次标定，本次拒发。只用本地库唯一出站记录作发送后核验，未知结果保留凭据供 `send-status` 只读对账，绝不自动重发。删除本链路搜索/选择、输入点及终态 OCR/Jev 调用和本地库不可用时的旧发送回退；独立 search/select 和媒体工具不变。无服务端与 Runtime wire 更改，已交付旧插件继续由服务端兼容。
+
+验收：有效缓存无 GLM/OCR；缺缓存成功自会话标题核对后双点落盘；宽度变窄、高度/DPI 变化重标定，自动展开右侧客户栏导致的宽度增加复用缓存；本地库准入失败时没有 UI 写入；目标标题核对在清理前；发送后只查本地库；未知时不自动重试。合成测试、CLI 构建与 PowerShell 语法/BOM 检查完成后由独立 TEST/CR 复核；真机发送单独验收。
+
+开发自测（2026-11-06）：`npm run build` exit 0；`node --test dist/tests/message-send-localdb-verify.test.js` 26/26、exit 0；相关导航/PowerShell 包装 31/31、exit 0；`python -m unittest discover -s tests/py -p test_localdb_query.py -q` 79/79、exit 0，`test_wecom_localdb.py` 22/22、exit 0；三份新/改 PowerShell 驱动均 UTF-8 BOM、PS 5.1 语法 0 错，双点与输入合成脚本 exit 0。完整 `npm test` 512 项中 491 过、21 失败：1 项既有指纹断言、1 项旧 dist 残留已删除源测试仍导入 `computeDelta`、10 项旧 unread/watch UI 兜底断言、9 项旧 read-session 模型/OCR 双通道断言；这些测试/模块均非 W24 改动。旧 dist 单文件清理被自动审批审查拒绝，未绕过。未执行真实企微标定或发送；独立 TEST/CR 和真机验收待续。
+
+CR 回炉（2026-11-06）：旧无 OCR 搜索在 Ctrl+F 后立即 Ctrl+A/Delete，快捷键成功只证明消息投递，不能证明聚焦搜索框；搜索词输入后也缺少本次结果面板证据。最小真机实验只投递 Ctrl+F，未输入/清理/发送：Win32 子窗口 0，UIA 仅不可聚焦 Pane；Ctrl+F 前后可见 SearchResultWindow2 均为 0；主线程 `GetGUIThreadInfo` 此后回报 focus/caret HWND 均为主窗口，caret 相对 `(212,27)`，同刻截图搜索框约 `x=176..353,y=23..54`。据此增加清理前及清理后 caret 区域门禁；清空后无旧面板，搜索词全文回读、同 PID 新结果面板与主窗身份稳定后才按 Enter；不能建立证据时在发送前失败。另一 P1 将联系人标题匹配收紧为完整标题/明确 `@微信` 后缀全等，不再接受任意 @/括号前缀。PowerShell 合成用例覆盖编辑区 caret/无 caret 均零清理零 Enter、查询回读失败/无新面板零 Enter、相似姓名和未知身份后缀拒发；实测仅覆盖 Ctrl+F 的焦点证据，未输入真实搜索词或真实发送。`npm run build`、43 项定向 Node 测试、两项 PowerShell 合成测试、三份驱动 BOM/语法检查及 `git diff --check` 均 exit 0；待独立复审与真机完整验收。
+
+独立 TEST（2026-11-06）：`npm run build` exit 0；相关 Node 测试（发送、本地库目标、群监控、PowerShell 包装与通用结果）80/80 exit 0，`send-receipt` 与 DB-only 邻接回归 11/11 exit 0；Python 查询 79/79、加密库 22/22 exit 0，`py_compile drivers/py/wecom_localdb.py` exit 0；双点与输入 PowerShell 合成脚本 exit 0，三份驱动 PowerShell 语法 0 错且 UTF-8 BOM；`git diff --check` exit 0。独立核对旧完整套件 21 项失败日志：指纹 1、旧 dist 残留 1、未改 unread/watch 10、未改 read-session 9，均不触及本次文本发送与 context 分支。本次未执行真实企微 UI 标定或发送，待 CR 和真机验收。
+
+P1 修复后独立 TEST（2026-11-06）：复核 `GetGUIThreadInfo` 的线程 ID、`GUITHREADINFO` 布局与 `cbSize` 赋值在 PowerShell 5.1 合成脚本可运行；生产 `Open-WeComNamedChat` 的动态测试验证错误/缺失 caret 时零清理零 Enter、搜索词全文回读失败或结果面板未出现/残留/异进程时零 Enter，成功路径仅一次 Enter。联系人标题严格全等；补足既有企微标题格式“名字 @微信”，只允许“名字@微信”与“名字 @微信”两种全等，不接受相似名或任意后缀。`npm run build` exit 0，发送及搜索门禁 Node 30/30 exit 0，三份 PowerShell 合成脚本 exit 0，三份生产驱动 PS 语法 0 错且 UTF-8 BOM，`git diff --check` exit 0。此前 Python 101/101 和邻接 Node 11/11 结果可复用：本轮仅修改 PowerShell 标题匹配、对应合成断言与文档，未修改其代码/依赖/环境。尚待 CR 与真机完整搜索、标定、发送验收。
+
+首次真机标定入口（2026-11-06）：主控运行 `node dist/src/cli/index.js calibrate --json` exit 1，脚本路径被错误解析到不存在的 `dist/drivers/ps1/point-calibrate.ps1`，在启动驱动前失败，未触碰企微 UI。修复 `calibrate.ts` 相对编译后模块的路径为包根 `drivers/ps1/point-calibrate.ps1`；新增从实际 `dist` 模块读取运行时路径并检查脚本存在的回归测试。修复后 `npm run build` exit 0、`node --test dist/tests/calibrate-driver-path.test.js` 1/1 exit 0、标定 PowerShell BOM/语法及 `git diff --check` 均 exit 0；真实标定结果待主控重试。
+
+独立 CR 复审（2026-11-06）：两处 P1 已修复。搜索清理前后的主窗口 caret 证据、搜索词全文回读及同进程新结果面板共同约束 Enter；联系人标题仅按全文或明确微信后缀全等，相关合成回归通过。源码审查无剩余 P0/P1。真实企微完整搜索、标定和发送仍待验收，故 W24 保持进行中。
+
+本机自会话标定（2026-11-06）：主控重试 `node dist/src/cli/index.js calibrate --json`，约 22 秒、exit 0；返回的窗口相对标题首字 `(437,39)`、输入区中心 `(760,1245)`，窗口 `1117×1354`、DPI `96`。独立读取 `send-points.json` 的 schema 2 缓存，双点与窗口参数均与返回值一致。该结果证明本机自会话搜索、标题复制核对与双点缓存流程完成；GLM 给出的输入点未经过独立焦点验证，真实目标搜索与文本发送尚未验收，本次没有发送消息。
+
+本机文本发送验收（2026-11-06）：用户明确指定联系人后，主控运行 `send --target-name <指定联系人> --text <测试消息> --json`，约 16 秒、exit 0；CLI 返回 `OK/effect=applied`，复制标题与目标全等，输入点为缓存中的 `(760,1245)`，本地库唯一出站记录核验命中 `message_id=1990`。发送前后 schema 2 缓存内容及修改时间一致，证明本轮复用已有双点；未自动重发。此结果只证明企微客户端记录落库，不代表对方已收到。W24 开发与本机单聊主路径验收完成，未部署；其他 OCR 入口按独立事项继续处理。
+
+2026-11-09 代理联测修正：agent2 任务 #2 已读取微信消息 245，但消息发送返回 `UI_CHANGED/effect=none`，本地库无新我方消息。真机观察自会话主窗 `1117×1354`、DPI 96，进入“陆伟@微信”后右侧客户栏自动展开，主窗变为 `1477×1354`；左侧标题和输入区原相对点不变。`Get-WeComCachedPoints` 的宽度全等判据误拒，改为只在窗口变窄、高度或 DPI 改变时失效；PowerShell 5.1 合成回归覆盖宽度增加复用、变窄/高度/DPI 变化失效。真机重新发送与本地库回执待 P8 复验。
+
+## W27 企微删除添加客户与 OCR 发行依赖（2026-11-07）
+
+成功条件：`wecom_add_customer` 不再出现在新 CLI/MCP/manifest/Runtime 能力；新企微签名 payload 无 add-customer/旧 OCR 驱动、RapidOCR/Pillow/模型/旧 dist 残留；企微本地库在独立 `localdb-python` 便携资产上实际可解密合成快照并进行 SQLite/IANA 日期查询；微信 Provider 的 OCR 资产和能力保持。旧客户机已交付包及服务端不修改，也不改变 Device/Runtime wire 或 Runner 恢复语义。不得依赖客户机系统 Python、真实添加客户或部署。
+
+共同检查点与唯一写入者：本开发角色唯一修改企微 CLI/驱动、`clients/runtime-plugin-packaging/{package.mjs,verify-offline.py,prepare-localdb.py,localdb-assets.lock.json}`、`clients/agent-desktop/scripts/release-batch.ps1` 及其测试和现有设计/计划/索引；独立 TEST/CR 只读。生产者 `wecom-cli version --json` 的工具集合与 `package.mjs` 的 `runtime-manifest.json/distribution.required_files` 同步去掉添加客户与 OCR；消费者 Runtime 仍按现有签名/manifest/能力协商装载，不新增 wire，缺新能力仅影响该企微工具，不改旧客户机原包。生产/消费验证：当前 TS build → 新 dist/src 复制过滤 → 便携资产准备/签包 → 离线验签/搬迁/doctor/本地库合成解密及 IANA → Runtime manifest/capability 测试；微信包仍具 OCR。
+
+最小实施：删除已退役的企微 OCR PS/Python 驱动及其无用共享 helper，保留非 OCR 窗口/搜索/剪贴板函数；包内 `localdb-python` 由锁定 CPython、pycryptodome、tzdata、CRT 构建并验证，`weixin` 继续使用原 `ocr-python`。打包时以精确生产输出清单剔除旧 dist 残留，不能只依赖 `tsc` 覆盖。同步脚本、说明与有业务意义的测试；源码完成后登记自测及独立验收结果。
+
+开发自测（2026-11-07）：退役 add-customer、旧 OCR PS/Python 与死 `serverProxy.ts`，删除 `navigate.ts` 未被生产调用的旧 Jev/两阶段导航；保留现用目标名称解析。本机以独立锁定资产构建 `localdb-python` exit 0（AES/SQLite/IANA）；固定 Node 22.23.3 用**当前工作区**签出隔离 WeCom 0.2.8 测试包 exit 0（15 工具），不是 `git archive HEAD` 的旧代码。离线验签/搬迁/doctor/包内 AES/IANA exit 0，`synthetic_ocr=false`；真实 payload 4,640 文件，`localdb-python/` 1,032 文件，`drivers/py/` 仅本地库和 bootstrap，OCR/add-customer/旧 dist 文件为零。包内 Python 与包内 `wecom_localdb.py` 解密独立参考加密器生成的 8,192 字节合成 SQLite，查询回读成功。`wecom-cli` 相关 Node 50/50、打包 15/15、发行入口 5/5、Runtime capability/provider 20/20 均 exit 0；九份 live PS parse 0 错、函数引用无缺项。没有真实企微写动作、部署或正式签署；待独立 TEST/CR。
+
+独立 TEST 回炉（2026-11-07）：独测其余 WeCom/Runtime build、Node 80/80 + 63/63、Runtime 20/20、package 15/15、release 5/5、Python 1+22+6+8、隔离包验签/包内合成解密均通过；唯一阻断为旧 `tray-escape-regression.ps1` 还导入已删 `Close-WeComSearchOverlay`。仅删除该旧 overlay 清理段，保留隐藏主窗 probe、注销优先、恢复原隐藏窗口及本地库登录语义；剩余实际 7 项检查与 `cases=7` 一致。六份现存 PS 行为脚本均 exit 0，tray Node + input-locator Node 4/4 exit 0，WeCom build 与 `git diff --check` exit 0；待独立 TEST 复测和 CR。
+
+独立 TEST/CR 收尾（2026-11-07）：最终 WeCom/Runtime build、受影响 Node 80/80 与 63/63、Runtime 20/20、打包 15/15、发行入口 5/5、Python 1/1、22/22、6/6、8/8、六份 PS 行为脚本、九份驱动语法/BOM 与差异检查均通过。隔离签名包 SHA256 `1f8d199b5a00977ab2c94f49ed5c70d176f30148fcf192eded9f1b5a2d54582c`；离线验签、required_files 和 payload 校验通过，15 个工具且无 OCR/add-customer/旧 dist，包内 Python 解密合成 SQLite 并读回。CR 未发现 P0/P1。P2：打包时只比对来源声明与锁文件，未逐文件重验已准备目录；准备时已校验下载 SHA，签名绑定实际包内容，本轮隔离包文件与工作区校验一致。没有真实超长安装路径验收、正式发行或部署。
+
+## W26 图片与文件发送去 OCR（2026-11-07）
+
+目标：复用 W24 已验证的双点缓存、自会话标定、搜索默认结果 Enter 与标题复制全等。发送前本地库唯一解析目标、账号、本人成员、源库和消息基线并保存加密 receipt；图片/文件驱动只清草稿、剪贴板粘贴和 Enter，不再调用 OCR/Jev 或视觉判据。发送后以原 receipt 只读核验：图片为唯一 101 本人出站记录，文件为唯一 102 且附件名全等的本人出站记录；未知保留凭据给 send-status，不重发。图片结论不声称原文件 SHA 一致。保留既有图片类型/大小、文件大小和 CLI/MCP 参数；去掉仅服务于 OCR 的极短文件名限制。没有真实 101/102 本地库样本，本轮合成投影及回执测试不能替代真机媒体验收。
+
+验收：无 OCR/Jev 驱动执行；缓存点与标题核对正确；101/102 唯一命中、歧义、未落库、文件名不符、库失败及 Enter 超时均按契约返回；账号切换在 UI 前拒发；unknown 的 send-status 只读、零重发。开发自测后交独立 TEST/CR；本轮不实际发送媒体、不部署。
+
+开发自测（2026-11-07）：`cd clients/wecom-cli && npm run build` exit 0；`node --test dist/tests/media-send.test.js dist/tests/send-receipt.test.js dist/tests/message-send-localdb-verify.test.js` 39/39、exit 0；`..\\..\\venv\\Scripts\\python.exe -m unittest discover -s tests/py -p test_send_messages.py -q` 10/10、exit 0。两个媒体 PS 脚本经 Windows PowerShell parser 检查 0 错且 UTF-8 BOM；实际媒体执行路径静态检索不到 `Invoke-WeComChatOcr`、Jev、旧 search/select 驱动调用；`git diff --check` exit 0。图片和文件唯一记录、未落库/歧义、文件名不符、库失败、驱动超时、账号切换及 send-status 仅只读均有合成回归。尚无真实 101/102 本地库样本、媒体真机发送或独立 TEST/CR，不视为业务验收完成。
+
+TEST 回炉（2026-11-07）：独立验证指出 Enter 后首轮未落库、第二轮等待时取消会漏出 `CANCELLED/effect=partial` 且无 receipt。轮询等待现纳入核验异常处理，统一返回 `EXECUTION_UNKNOWN/effect=unknown` 和原 receipt；动态测试按首轮读库后取消验证零重发。媒体 Ctrl+V 到 Enter 恢复旧驱动已使用的 1500ms 等待。`target-name.test.ts` 旧 OCR/Jev 导航夹具迁到 W26 本地库基线、无坐标账号句柄和单次驱动路径，保留唯一成功、无匹配、歧义、前缀陷阱及参数互斥；原文本参数矩阵亦保留。`npm run build` exit 0；`node --test dist/tests/media-send.test.js dist/tests/target-name.test.js dist/tests/send-receipt.test.js dist/tests/message-send-localdb-verify.test.js` 52/52、exit 0；随后补回原文本矩阵，`node --test dist/tests/target-name.test.js` 13/13、exit 0。Python `test_send_messages.py` 10/10、exit 0；两个媒体 PS parser 0 错、UTF-8 BOM 且 1500ms 等待存在；`git diff --check` exit 0。独立 TEST 对回炉代码复测及 CR 尚未完成。
+
+CR 标题规则回炉（2026-11-07）：独立审查指出 W25 无坐标联系人 ref 的副标题为空，裸名联系人在发送驱动中只接受全等，企微标题若显示 `名字@微信` / `名字 @微信` 则误拒。三条发送驱动统一复用 W25 select 的严格规则；PowerShell 合成行为覆盖裸名联系人两种微信后缀、任意后缀拒绝、群聊全等与三驱动接线。顺带修复 W24 文本发送同源缺口。群名字面以 `@微信` 结尾时搜索词被既有 `Open-WeComNamedChat` 截短，属于 W25 可用性边界、无真机样本，本轮不扩散独立 `chat-select`；后续另行验收。`send-title-wechat-regression.ps1` 9 项行为+3 驱动接线、`title-point-regression.ps1`、`send-search-gate-regression.ps1` 均 exit 0；五份 PS 文件 parser 0 错且 UTF-8 BOM；CLI `npm run build` exit 0；`git diff --check` exit 0（仅换行提示）。待独立 TEST/CR 复验。
+
+TEST 旧断言回炉（2026-11-07）：`message-send-localdb-verify.test.ts` 原静态顺序断言仍扫描旧 `Test-WeComTitleMatch` 名称，已仅改为新 `Test-WeComSendTitleMatch`，保留“标题核对早于清草稿与 Enter”断言。`npm run build` exit 0；媒体、目标名、回执、文本本地库四套 Node 联合 53/53、exit 0；PowerShell 标题行为 9 项/3 驱动接线 exit 0；`git diff --check` exit 0（仅换行提示）。待独立 TEST/CR 复验。
+
+独立 TEST/CR 收尾（2026-11-07）：最终构建、六文件 Node 联合 65/65、PowerShell 新旧三项脚本、五文件语法/BOM 与差异检查均通过；Python `test_send_messages.py` 10/10 的有效结果复用（Python 与夹具未改）。CR 复核发送标题规则、账号和目标预检、媒体回执及 Enter 后未知结果路径，无 P0/P1。此阶段仅完成源码与合成验证；真实 101/102 本地库样本和图片/文件真机发送均未验收，不据此宣称媒体业务已在客户机通过。
+
+## W25 会话搜索与进入去 OCR（2026-11-07）
+
+目标：`search` 先用本地库群会话及联系人名称做唯一性判断，不操作企微窗口。完全相同优先，随后包含匹配；无命中返回近似名称供 agent 提醒，不能自动纠错；多个不同名称请用户给出完整名称，多个同名身份请先备注或重命名。唯一命中且完整名称跨联系人/群聊类型也唯一，才允许 `select` 复核账号与全类型目录、Ctrl+F 输入完整名并 Enter，随后复制标题核对：群名全等，联系人只接受全名或全名后接 `@微信` / ` @微信` 两种全等形式。搜索和选择不调用 OCR；图片/文件发送只替换内部导航，发送阶段 OCR 留待后续任务。
+
+验收样例：`售前客服群` 唯一群名，经 search + select 进入且复制标题全等；`孙程` 无命中，返回 `孙晨` 供 agent 询问用户；`沟通` 返回真实本地名称 `新劳务云系统项目沟通群` 与 `行政合同归档 智能体 沟通`，请用户指定其一。同名不同身份返回重命名提示。搜索前及目录不唯一时不操作 UI；进入失败时不发送消息。
+
+开发状态：合成测试已覆盖上述三种查询、同名与账号绑定；相关 Node 47/47、CLI/manifest 46/46、Python 90/90、构建及 PS 语法/BOM 检查通过。完整 Node 505 项中 484 通过、21 项为既有失败（指纹 1、旧 dist 1、unread/watch 10、read-session 9），不称全绿。未部署。
+
+真机只读回炉（2026-11-07）：初版群搜索正常，但真实 `user_table.id` 为整数，联系人目录在 Python `isinstance(uid, str)` 过滤处被全部跳过；对齐既有本人身份查询的 `CAST(id AS TEXT)` 后，`孙晨` 精确搜索返回唯一联系人，`孙程` 仍不命中且近似候选包含 `孙晨`。合成测试改用 INTEGER id，防止该错误复发；进入会话真机验收尚未执行。
+
+CR 回炉（2026-11-07）：图片/文件的无账号旧 ref 在阶段驱动前拒绝；账号绑定 ref 在首轮及导航后的第二轮发送阶段驱动前都重新核对当前账号，切号则零发送、零自动重试。按类型缩小搜索时签发 ref 前仍核对完整名称跨联系人/群聊类型唯一，`select` 进入前也按全类型复核；跨类型同名不按默认结果 Enter，提示备注或重命名。已补账号 A→B 首轮/二轮与跨类型同名的回归用例；后续独立 TEST/CR 与真机复验结果见下。
+
+回炉后复验（2026-11-07）：独立 TEST 跑媒体/直达/搜索/选择/目录 Node 45/45、Python 搜索 5/5 与既有目录 7/7，构建、模块导入、Python 编译、PowerShell 语法/BOM 和 `git diff --check` 均 exit 0；账号切换及跨类型同名动态测试能检出原 P1。主控按最终代码重跑真实 `孙程`、`沟通`，仍分别返回含 `孙晨` 的建议和上述两个不同群名，两者都未签发可进入句柄；`售前客服群` 第一次 select 返回 `UI_CHANGED`（该次未保留详细错误消息，原因未确定），随后两次 fresh search+select 均返回 `OK`、标题复制全等。该间歇失败没有报告成功，也没有发送消息。独立 CR 复审无剩余 P0/P1，通过后提交 `025bb14f` 并推送 Codeup/GitHub；未合并 master、未部署。
+
+首次独立复测与真机验收（2026-11-07，两项 CR P1 修复前）：整数 ID 修复后，独立 TEST 复核 Python 搜索 4/4、既有目录 7/7、Node 搜索/选择/目录 11/11、构建、Python 编译、PS 语法/BOM 和 `git diff --check` 均 exit 0；真实 CLI 只读复核 `孙晨` 为唯一联系人、`孙程` 未命中但建议含 `孙晨`。主控在本机真实目录中确认 `沟通` 返回 `新劳务云系统项目沟通群` 与 `行政合同归档 智能体 沟通` 两个不同群名，没有签发可进入句柄；`售前客服群` 搜索唯一命中后调用 select，Ctrl+F/Enter 进入并复制标题全等，CLI `OK`、exit 0。三例均未发送消息；进入群可能清除该群未读角标。此轮结果已由上方最终复验替代。

@@ -7,10 +7,21 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261109-1314 | 企业微信代理旧失败批不再阻断监控 | ✅ 已完成开发；独立测试通过，待部署真机验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#95-接口兼容与验收边界) | [计划](plans/plan-wecom-proxy-event-driven.md#p11-旧失败批不再阻断合法后续监控2026-11-09) |
+| 20261109-1230 | 企业微信代理不同 Runtime 独立调度 | ✅ 已完成开发；独立测试通过，待部署真机验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#9-企业微信代理任务新消息触发回答2026-11-08设计待开发) | [计划](plans/plan-wecom-proxy-event-driven.md#p10-不同-runtime-的代理调度独立2026-11-09) |
+| 20261109-1200 | 企业微信代理停住目标手动恢复 | ✅ 已完成开发；独测与 CR 通过，待部署验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#95-接口兼容与验收边界) | [计划](plans/plan-wecom-proxy-event-driven.md#p9-停住目标手动恢复2026-11-09) |
+| 20261109-1130 | 企微标定复用 Runtime 配对身份 | ✅ 已完成开发；独测和 CR 通过，待部署真机验收。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w32-标定复用-runtime-配对身份2026-11-09) |
+| 20261109-1041 | 企微标题复制解除旧剪贴板纯文本门禁 | ✅ 已完成开发；0.2.13 本机 Runtime 验收通过。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w31-发送标题复制解除原剪贴板纯文本门禁2026-11-09) |
+| 20261107-0103 | 企微删除添加客户与 OCR 发行依赖 | ✅ 已完成开发；独测、隔离签包及 CR 通过，未正式发行或部署。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w27-企微删除添加客户与-ocr-发行依赖2026-11-07) |
+| 20261107-1045 | 企微无 OCR Agent→Runtime 真机验收 | ✅ 已完成开发；四工具真机读发、错名及歧义场景通过。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w30-无-ocr-agentruntime-真机验收2026-11-07) |
 | 20261103-1306 | 任务计划时间窗、最短间隔与用户任务数约束 | ✅ 已完成开发；独立测试与 CR 通过（1 P0+2 P1 修复关闭），发布验收与部署待授权。 | [设计 §15](system/scheduled-task-runner-refactor-design.md#15-时间窗最短间隔与用户任务数2026-11-03-待开发扩展) | [计划](plans/plan-scheduled-task-schedule-constraints.md) |
 | 20261102-1037 | BOSS沟通混排与搜索定位修复 | ✅ 已完成开发；混排与搜索真机回归通过，0.3.29签名出包并验包，未安装。 | [原设计§10.6.1](design/recruiting/boss-resume-assistant-native-cdp-design.md#1061-沟通页混排与搜索定位修正2026-11-02) | [原计划§17](plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md#17-沟通页混排与搜索定位修正2026-11-02) |
 | 20261023-1226 | wecom CLI 三工具与持续恢复 | ✅ 已完成开发；打包兼容复核完成，旧包验签/MCP、长路径及CR通过。 | [设计](design/wecom/wecom-cli-design.md#12-持续监控端到端收敛2026-10-27) | [开发计划](plans/plan-wecom-cli-group-chat-experiment.md) |
 | 20261013-1434 | 结构化提问交互（ask_user 提问卡片） | ✅ 已完成开发；选项焦点白屏已修，独立48项/CR、构建及原卡片实测通过。 | [设计](system/design-ask-user-interactive-question.md) | [实施计划](plans/plan-ask-user-interactive-question.md) |
+| 20261030-1710 | 追踪库保留清理调度化（obs_* 表保留 30 天） | ✅ 已完成并部署 243：每日 01:30 分批删 30 天前 obs_* 数据 + 周日 VACUUM（82ea04b2），生产实测连续 3 天正常执行，存量已收敛。 | [设计 §8](infrastructure/observability-design.md) | — |
+| 20261030-1644 | 每周例行巡检（计费/存储/日志/tool_error/tlog） | ✅ 已完成：周四 11:30 定时巡检五项（cron 9540fb2b），11-05 轮 P0/P2 整改项均已修复。 | [巡检规范](audit/weekly-inspection.md)（[11-05 报告](audit/weekly-2026-11-05.md)、[整改清单](audit/weekly-2026-11-05-整改清单.md)） | — |
+| 20261029-1800 | agent3 在线开发环境拆库启用 | ✅ 已完成：agent3 独立库 aid_work_agent3/logs3（自 agent2 复制）+ runner 容器名参数化 + background3 + test2dev.sh 整库单向同步（d928fc4b），部署验证通过。 | [部署现状 §5.2](../deploy/服务器部署现状.md) | — |
+| 20261026-1130 | 调度器幽灵锁自愈修复（发版强杀后后台调度器永久罢工） | ✅ 已完成并发布 243：三调度器与 manager 抢锁失败改循环重试自愈（f3410aa1），47 用例+1649 回归通过，CR 无 P0/P1。 | [事故复盘](incidents/scheduler-ghost-lock-stall-20261021.md) | — |
 | 20261026-1744 | 测试入口隔离与Runtime断言收尾 | ✅ 已完成开发；隔离准入及自建库清理证明完成，旧断言校准，独测/CR通过。 | [设计](design/devtools/test-database-isolation-design.md) | [计划](plans/plan-test-database-isolation-runtime-assertions.md) |
 | 20261022-2109 | agent2 指定分支发布 | ✅ 已完成开发：支持特性分支固定SHA发布，独立测试及CR通过，待部署验收。 | [设计与计划](plans/plan-agent2-branch-deploy.md) | [计划](plans/plan-agent2-branch-deploy.md) |
 | 20261023-1624 | 旧版快捷选项整体退役 | ✅ 已完成开发；停用所有旧编号按钮，统一使用ask_user，待部署验收。 | [设计](system/design-ask-user-interactive-question.md#12-旧版快捷选项整体退役2026-10-23) | [计划](plans/plan-ask-user-interactive-question.md#8-2026-10-23旧版快捷选项整体退役) |
@@ -24,6 +35,7 @@
 | 20261010-1448 | 测试有效性审计与清理 | ✅ 已完成开发：清理失效、自证及重复测试，保留关键行为契约并完成三轮独立验证。 | — | [计划](plans/plan-test-suite-cleanup-20261010.md) |
 | 20260828-1421 | zhipu 默认模型切 GLM-5.3-Flash + 价目表多模态标识 | ✅ 已完成开发：zhipu 缺省切 GLM-5.3-Flash，token_cost_prices 增 is_multimodal 并标记存量多模态模型（预留图片路由）；commit 7f7e3235，缓存价修正 c1cd3915。 | [设计（已并入 weixin-cli 设计 §5）](design/weixin/weixin-cli-design.md) | — |
 | 20261008-1633 | 过时架构文档与入口引用清理 | ✅ 已完成开发：删除失效执行/协作方案，修正架构规则并清理旧入口链接。 | — | [清理记录](plans/plan-obsolete-architecture-doc-cleanup.md) |
+| 20260917-1201 | 生产 243 仿真环境（staging） | ✅ 已完成：SIMULATION_MODE 门控、同步脚本与 sim compose 上线 243，整库真镜像同步与办公 IP 白名单经实战联调验收，后续随 Runner 化持续运维。 | [设计](system/simulation-env-design.md) | — |
 | 20260916-1534 | 阿里云 ASR AccessKey 更换指南 | ✅ 已完成：AK 到期重新申请流程（RAM 用户创建、Secret 一次性保存、AliyunNLSFullAccess 授权）。 | [运维文档](ops/aliyun-asr-accesskey-renewal.md) | — |
 | 20260912-2313 | 端侧会话任务执行器（P5 后续） | ✅ 已完成开发：Runtime 常驻任务执行器 + Provider 观察器 + 云端决策服务（weixin.conversation.v1）；C0–C5 及发送性能/搜索清理/Demo 手册全过（微信 37/37、Runtime 31/31），NL 建任务向导 4 阶段完成（2026-09-28，回归 402 passed）；待部署真机验收，灰度仍禁止（见回滚手册）。 | [设计](design/desktop-automation/edge-session-task-design.md) / [Demo 手册](ops/weixin-auto-chat-demo-agent2.md) / [回滚手册](ops/edge-session-rollout.md) | — |
 | 20260819-1126 | 母体 Agent 收敛（并入 AgentRunner 重构） | ✅ 已完成开发：agent.py 保留兼容壳，执行内核与运行时职责已拆分，后续遵守治理原则。 | [原则](system/agent-kernel-convergence-principles.md) | [完成记录](plans/plan-agent-runner-service.md) |
@@ -56,11 +68,23 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20261109-1440 | 任务计划提示词展示与管理对话中断 | ✅ 已完成开发。隐藏计划提示词，修复列表和详情查询导致的对话中断。 | [设计](system/scheduled-task-runner-refactor-design.md) | [计划](plans/plan-scheduled-task-result-management.md) |
 | 20261106-1010 | 定时任务结果免登录链接 | ✅ 已完成开发；免登录结果页与三渠道链接通过本地验证，agent2 验收待授权。 | [设计](system/design-task-result-share-link.md) | [计划](plans/plan-task-result-share-link.md) |
+| 20261028-1600 | 通知规则引擎（留资业务通知 + 通知配置统一） | ✅ 已完成：规则层按租户规则展开事件通知，收编留资旧邮件与管理员通知，「通知规则」页面 + 客服账号级粒度 + 定时任务通知接入（scheduled.task）；10-30/11-02 修复与扩展均已落地。 | [设计](system/notification-rule-engine-design.md) | [计划](plans/plan-scheduled-task-notification-rules.md) |
 | 20261027-1600 | 定时任务重构（Runner 化） | ✅ 已完成开发；6 Phase 完成、agent2 浏览器 E2E 10/10、附件下载修复验证通过，生产部署待授权；过程计划文档已清理。 | [设计](system/scheduled-task-runner-refactor-design.md) | — |
+| 20261026-1520 | analyze_data 缺 table_id 按表名容错解析 | ✅ 已完成并部署：缺 ID 带表名线索时在调用方可见范围内精确解析，多/零命中显式失败（98ea4ca98），52 单测+137 回归绿。 | — | — |
+| 20261026-1340 | 数字员工实例用户授权口径修复（PROFILE_FORBIDDEN 403） | ✅ 已完成并部署：权限查询改实例 ID 或 base ID 任一命中（1e7261c29），14 集成用例全绿。 | [复盘](incidents/tenant-instance-agent-403-incident-20261026.md) | — |
+| 20261026-1530 | 定时任务一次性提醒修复与渠道尽力投递 | ⛔ 已取消（随 Runner 化删除）：once 校验与 wecom_kf 尽力投递随旧实现整体删除，功能未上线、无存量数据。 | — | [巡检报告 P1-1](audit/log-error-review-20261026.md) |
+| 20261022-2130 | 系统内置回复风格导出/导入（跨环境迁移） | ✅ 已完成并部署：平台管理端系统风格全量导出/导入，冲突选新版本/跳过，导入后热更新（e6498e98）。 | — | — |
+| 20261022-2100 | 自定义数字员工配置导出/导入（跨环境迁移） | ✅ 已完成并部署：管理后台导出/导入带版本头 JSON，冲突 409 选覆盖/另存，凭证与环境变量值不随文件导出（bb0962a26）。 | — | — |
 | 20261022-1956 | Agent 通用持久化休眠与自动唤醒 | ✅ 已完成开发：DeepSeek空思考字段恢复修复，独测及CR通过，未部署。 | [设计](system/agent-runner-durable-sleep-design.md) | [开发计划](plans/plan-agent-runner-durable-sleep.md) |
+| 20261107-1245 | Web 持续任务创建入口 | ✅ 已完成开发；双入口可创建持续任务，待部署验收。 | [原设计§13](system/agent-runner-durable-sleep-design.md#13-web-持续任务创建入口2026-11-07) | [原计划§19](plans/plan-agent-runner-durable-sleep.md#19-web-持续任务创建入口2026-11-07) |
 | 20261031-1800 | BOSS普通物理输入解除widget依赖 | ✅ 已完成开发；本机导航/筛选/读简历通过，搜索修复另见对应条目，未部署。 | [原设计§10.11](design/recruiting/boss-resume-assistant-native-cdp-design.md#1011-解除物理输入对-legacy-widget-的依赖2026-10-31) / [复盘](incidents/boss-agent2-widget-stuck-hidden-20261030.md) | [原计划§16](plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md#16-普通物理输入内容区定位修正2026-10-31) |
+| 20261016-1202 | 数字员工配置收敛：recap/工具技能带入锁定 | ✅ 已完成并部署：recap/工具按技能依赖实时推导锁定，取消勾选自动回删，保存时校验任务名与 when（631907030）。 | — | — |
+| 20261014-1645 | 租户自助复制/定制数字员工 | ✅ 已完成并部署：副本实例 4 类字段覆盖 + 模板/知识栏目克隆，recap/文档按父定义解析，卡片含删除校验（2c12f1ff6 等）。 | [设计](system/tenant-agent-instance-design.md) | — |
 | 20261012-1544 | trace 观测 span 计时精确化 | ✅ 已完成开发（提交与部署待授权）：span 改用引擎侧墙钟计时并立即闭合，失败 LLM 与恢复路径补 span；历史数据不回填。 | — | [开发计划](plans/traceobs-timing-precision.md) |
+| 20261010-1930 | 租户管理员通知（计费提醒 / 反滥用告警） | ✅ 已完成：站内信恒开兜底 + 外发渠道四选一，三事件（credit_low/tenant_expiry/abuse.rule_triggered），管理员逐人展开 + 租户级外发目标；启用需 notifications.tenant_events_enabled=true。 | [设计](system/tenant-admin-notification-design.md) | — |
+| 20261010-1642 | 系统级防滥用与限额 | ✅ Phase 1 已完成并通过测试：abuse 两表 + anti_abuse 引擎 + 定时扫描 + 站内信通知 + 渠道停用拦截 + 防滥用中心页；Phase 2 Runner 链路统一拦截点取消不做。 | [设计](system/saas/anti-abuse-policy-design.md) | — |
 | 20261010-1638 | 统一通知基础设施与 Web 推送 | ✅ 已完成开发：统一通知底座与Web推送通过内外部终审，真实到达待环境验收。 | [统一设计](system/notification-infrastructure-design.md) / [Web设计](system/web-task-push-notification-design.md) | [开发计划](plans/plan-web-task-push-notification.md) |
 | 20260918-2045 | Redis 夜间巡检任务（生产专用） | ✅ 已完成开发：background_runner 调度器每日 00:30 巡检 Redis——内存水位（600MB 警告/800MB 严重）、碎片率（仅 used>100MB 判）、AOF 写入/重写状态、键淘汰、连接数、无 TTL 键抽样（上限 1000，超 200 疑似泄漏），「[Redis巡检]」前缀进主日志（1 条 INFO 汇总 + 越界 WARNING/ERROR）；REDIS_INSPECTION_ENABLED 门控默认关。2026-10-10 agent2 容器内对腾讯云托管 Redis 实跑验证通过（INFO 汇总 + 告警格式正确，顺带发现测试 Redis evicted=4599 真实告警）；生产 .env 已开启待重启生效（属部署事项，不影响任务关闭）。 | — | — |
 | 20260930-1520 | 上下文压缩可观测性与计费改造 | ✅ 已完成开发：span usage/cost 透传 + 自适应摘要预算 + 50:1 经济性闸门（commit f947812f，2026-09-30）；2026-10-10 agent2 容器内全链路真机验证（check_threshold→compress_now→事件→TraceCollector）：压缩 LLM 真实用量透传 pt=24072/ct=175/cached=256，obs_spans.cost=3.66（tr_425af2359ea247a7，修复前恒 0），chat_records 独立计费 rec_713be10fa46f（background_llm，租户归属正确）。生产 agent1 部署 ≥f947812f 后生产 span 自然有值。 | — | — |
@@ -71,9 +95,9 @@
 | 20260918-2010 | 用户取消请求的 trace 标记与历史可见性 | ✅ 已完成开发（待部署）。触发：线上 tr_30005ad7dd284b3e 排查发现用户取消后 trace 落库 completed 且 output 为空、取消轮次消息不落库（历史页整轮消失）。改动：①agent 两条取消路径（cancel_check 命中 yield cancelled 事件 / CancelledError 穿透包装层）均标记 trace status=cancelled + termination_reason=user_cancelled；②Web SSE 取消轮次落库 user+assistant 消息并打 metadata.cancelled=true（不落 tool 序列防悬空 tool_calls）；③前端停止按钮加 confirm；④历史消息渲染"用户已取消本轮回复"徽章；⑤追踪页（TraceBrowser/TraceDetail/SessionTraces）状态文案改"用户取消"+warning 色。开发+单测（5 用例）+独立验证完成，待部署。 | — | — |
 | 20260901-1358 | 客户端计费统一接入（boss cli / 协会采集 / 未来客户端三模式） | ✅ 已完成开发。 | [设计](design/billing/client-billing-integration-design.md) | — |
 | 20260922-0920 | 知识库文档元数据查看 | ✅ 已完成开发（开发+独立测试+审查，待部署）。文档操作列新增「详情」弹窗查看 documents.metadata：溯源/易变字段键值展示、raw_payload 折叠 JSON；新增 GET /documents/{id} 详情接口（按需拉取，租户隔离与 chunks 同口径）。 | [设计](system/knowledge-base/doc-metadata-view-design.md) | — |
-| 20260918-2031 | 生产主日志 WARNING 审计（09-16~09-18） | ✅ 全部完成。3 天 119 条 WARNING 聚合 8 类全部收口：#1 deepseek-flash 部署时差噪音、#3 丢弃预览加长 500 字符（含完整 ASR 文本）、#4 sanitizer 降级 INFO + source 来源标签（8 入口）、#6 Redis DNS 降级三层防御（compose 健康依赖 + 启动重试 + 恢复清残留）、#7 ASR 400 根因为免费试用过期（渠道侧 WARNING 降级 INFO）、#2/#5/#8 人工核对/观察；另 agent_update.sh 发版不再连带重启 redis、Redis 夜间巡检任务（每日 00:30）上线。 | — | [审计报告](ops/log-warning-audit-20260918.md) |
-| 20260922-1855 | 生产与测试环境 WARNING 审计（09-20~09-22） | ✅ 整体完成。生产 232 条 / 测试 79 条聚合收口：P2 Reply style not found 根因查明——生产 reply_styles 表被直连 SQL 两次清空（来源未归因），已从 09-15 备份恢复 4 个系统风格 + reply_styles_audit 审计触发器观察点上线（应用侧数量下降告警待部署）；其余类别经用户评估不重要 ⏸ 暂不处理（复发再查）；0918 一揽子开发项仍未部署，部署后剩余噪音将消失。 | — | [审计报告](ops/log-warning-audit-20260922.md) |
-| 20260918-2106 | 测试环境主日志 WARNING 审计（09-16~09-18） | ✅ 全部完成。测试机 254 三天 4840 条 WARNING 聚合 15 类全部收口：#1 显示名重复告警删除（属正常设计，根除 95.6% 刷屏，63248ed6）、#9 deepseek-flash 未配单价复核为配置时差零复发、#12 max iterations 升级 ERROR；余类不重要不处理或属正常业务日志。 | — | [审计报告](ops/log-warning-audit-20260918-testenv.md) |
+| 20260918-2031 | 生产主日志 WARNING 审计（09-16~09-18） | ✅ 全部完成。3 天 119 条 WARNING 聚合 8 类全部收口：#1 deepseek-flash 部署时差噪音、#3 丢弃预览加长 500 字符（含完整 ASR 文本）、#4 sanitizer 降级 INFO + source 来源标签（8 入口）、#6 Redis DNS 降级三层防御（compose 健康依赖 + 启动重试 + 恢复清残留）、#7 ASR 400 根因为免费试用过期（渠道侧 WARNING 降级 INFO）、#2/#5/#8 人工核对/观察；另 agent_update.sh 发版不再连带重启 redis、Redis 夜间巡检任务（每日 00:30）上线。 | — | [审计报告](audit/log-warning-audit-20260918.md) |
+| 20260922-1855 | 生产与测试环境 WARNING 审计（09-20~09-22） | ✅ 整体完成。生产 232 条 / 测试 79 条聚合收口：P2 Reply style not found 根因查明——生产 reply_styles 表被直连 SQL 两次清空（来源未归因），已从 09-15 备份恢复 4 个系统风格 + reply_styles_audit 审计触发器观察点上线（应用侧数量下降告警待部署）；其余类别经用户评估不重要 ⏸ 暂不处理（复发再查）；0918 一揽子开发项仍未部署，部署后剩余噪音将消失。 | — | [审计报告](audit/log-warning-audit-20260922.md) |
+| 20260918-2106 | 测试环境主日志 WARNING 审计（09-16~09-18） | ✅ 全部完成。测试机 254 三天 4840 条 WARNING 聚合 15 类全部收口：#1 显示名重复告警删除（属正常设计，根除 95.6% 刷屏，63248ed6）、#9 deepseek-flash 未配单价复核为配置时差零复发、#12 max iterations 升级 ERROR；余类不重要不处理或属正常业务日志。 | — | [审计报告](audit/log-warning-audit-20260918-testenv.md) |
 | 20260918-2200 | 租户类型（真实/测试）与平台统计口径改造 | ✅ 全部完成（开发+独立测试+CodeReview，待部署）。tenants 加 tenant_type（real/test，存量默认 test）+ 前后端 TenantType 枚举；/portal/token-usage 汇总只算真实租户（明细保留全部+类型徽章）；/portal/recharge 头部新增总充值金额汇总（真实租户、排除赠送）+「赠送金额」勾选（is_gift，积分照常入余额但不计入汇总，租户前台显示赠送徽章）；租户管理列表/表单支持类型字段。口径实时判断不影响审计数据；PLATFORM_USAGE 缓存 key 升 v2；租户类型变更主动失效月度缓存。上线后需管理员把生产真实租户标为 real（运营动作）。 | — | — |
 | 20260916-2300 | 租户 API 接口文档通用模板（${APP_ID} 环境变量渲染） | ✅ 已完成并上生产：新租户开通免上传接口文档——通用模板 `configs/api_doc_templates/{skill}.md`（按技能基础名命名，具备对应技能的智能体适用），${APP_ID} 占位符加载期按租户环境变量（subagent 精确 → 租户级兜底）渲染，凭证类占位符由 http_api 运行时替换防泄漏；租户上传文档优先级最高；推送/对话 skill/SSO 三入口接入。设计点已并入总体架构文档核心组件节。 | [架构文档](../.claude/rules/architecture.md) | — |
 | 20260810-2104 | 第一方 CLI / MCP Provider 架构规范 | ✅ 已完成：规范文档确定并被三个落地实例验证（BOSS CLI 首个参考实现、weixin-cli、wecom-cli），Runtime 插件宿主复用其 Provider 契约。 | [规范](system/first-party-cli-mcp-provider-standard.md) | — |
@@ -90,6 +114,7 @@
 | 20260911-2042 | chat_lite 计费模型错配 | ✅ 已完成开发。11 处小任务调用点 chat_lite 与计费模型错配（多收租户）：交互型改走 chat_no_thinking 对齐实际消耗模型；已完成待部署。 | [已知问题记录](plans/chat-lite-billing-model-mismatch.md) | — |
 | 20260902-2228 | 彻底移除 demo 模式与 SAAS_ENABLED 开关 | ✅ 已完成开发。demo 模式（`DEMO_ENABLED`/`VITE_DEMO_ENABLED` 控制）已无人使用且与租户模式并存造成大量死分支；系统定位即 SaaS 平台。 | — | — |
 | 20260602-1417 | 知识库能力增强 | 🔧 已完成开发 | 知识库能力增强分期：文档级权限/检索日志（P1）、Rerank/改写/质量评估（P2）；分类树形化、批量移动、搜索跟随分类已上线。 | [设计](system/knowledge-base/knowledge-base-enhancement-design.md) | [计划](system/knowledge-base/knowledge-base-dev-plan.md) |
+| 20260908-2229 | 外部系统入口（SSO 打开第三方系统） | ✅ 已完成：连接中心「外部系统」入口 + SSO 通用契约（direct_url/ticket_redirect/token_param）打开第三方系统。 | [方案](system/external-system-entry-design.md) | — |
 | 20260908-1606 | 知识库 Excel 行级分块（表头注入 + 格式前置判定） | 🔧 已完成开发 | 上传 Excel 时按「一行数据 = 一个 chunk」分块，表头字段名注入每个数据行 chunk（键值对形式），使单个商品/记录可独立命中检索。 | [设计](system/knowledge-base/excel-row-chunking-design.md) | — |
 | 20260716-2107 | 租户积分充值与计费 | 🔧 已完成开发 | 预付费积分（credit）充值 + 对话消耗积分 + 余额报警 + 账单查询。 | [设计+计划](system/saas/tenant-credit-billing-design.md) / [LLM 计费接入设计](system/saas/llm-billing-integration-design.md) | — |
 | 20260730-1649 | 连接中心 | 🔧 已完成开发 | 租户前台新增「连接中心」一级菜单（`/t/:tenant_id/connections`），单页面 4 Tab：API 配置 / 环境变量 / 内置连接器 / 自定义连接器。 | [设计](system/connection-center-design.md) | — |
@@ -99,11 +124,17 @@
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
 | 20261014-boss-resume-recovery | BOSS 续筛评分与故障恢复 | ✅ 已完成开发；存量未知受管资源闭环通过独立验证，不要求Windows重启，未部署。 | [设计](system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量) / [复盘](incidents/recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md) | [计划](plans/plan-boss-resume-next-recovery-fix.md) |
+| 20261030-1213 | AI获客交互改造：问卷瘦身 + 去邮件预览直接发送 | ✅ 已完成并部署：问卷只必问地域+行业、去预览直接发送、统一大白话汇报口径（ce5a0ec3c），57 单测绿。 | [设计](subagent/ai-lead-gen/ai-lead-gen-agent-design.md) | — |
+| 20261028-2200 | AI获客业务数据页面（5 个只读列表页） | ✅ 已完成并部署：五表 5 个只读列表页，8 端点强制租户过滤、正文仅预览，集成测试 28 passed。 | [设计](subagent/ai-lead-gen/ai-lead-gen-agent-design.md) | — |
+| 20261027-1800 | 获客检索百度风控治理：151 办公网代理通道 + 检索链路四项加固 | ✅ 已完成并部署：151 tinyproxy 代理 + cookie 预热 + 路径加固 + 检索纪律（5a329a494）；Loop 内压缩另立 20261027-2100。 | [trace 分析会话记录](subagent/ai-lead-gen/) | — |
+| 20261027-1641 | AI报价智能体（知识库报价） | ✅ 已完成并部署：移植 quotation-pricing 技能 + 新建 AI报价 子智能体（spec PDF→清单→知识库填价），11 单测绿。 | [设计](subagent/ai-quotation/ai-quotation-agent-design.md) | — |
+| 20261026-1551 | AI获客智能体（B2B 邮件获客） | ✅ 已完成并部署：b2b-lead-gen 移植为 ai-lead-gen（五表+发送+租户邮箱+web-search-pro 检索+定时编排与回复监控，4672dd93）；trade-specialist 已下线。 | [设计](subagent/ai-lead-gen/ai-lead-gen-agent-design.md) | — |
 | 20261013-1618 | 职位VIP筛选与BOSS权益识别 | ✅ 已完成开发；配置分组、权益门禁与18项VIP组合真机验收通过。 | — | [开发计划](plans/desktop-automation/plan-boss-job-vip-entitlements.md) |
 | 20261013-1918 | BOSS筛选结果与推荐边界 | ✅ 已完成开发；排除补充推荐并返回无匹配，独立验证及真机只读验收通过。 | — | [计划](plans/desktop-automation/plan-boss-filter-result-boundary.md) |
 | 20261013-2023 | BOSS头像下方VIP徽标识别 | ✅ 已完成开发；跨iframe徽标自动识别，独立验证及真机VIP只读验收通过。 | — | [计划](plans/desktop-automation/plan-boss-avatar-vip-marker.md) |
 | 20261013-2113 | BOSS筛选打招呼模式选择 | ✅ 已完成开发；默认人工审核名单，详情即时打招呼需显式启用，独立验证通过。 | — | [计划](plans/desktop-automation/plan-boss-greet-mode-opt-in.md) |
 | 20261013-2308 | BOSS已加载候选人直接定位 | ✅ 已完成开发；定位、发送与幂等真机通过，用户豁免重名真机验收，未部署。 | — | [计划](plans/desktop-automation/plan-boss-loaded-candidate-navigation.md) |
+| 20260910-1259 | 留资线索动态刷新（lead_refresh） | ✅ 已完成并部署：Phase 1 意向度/需求分条/人工归属 + Phase 2 external_push_human 人工期推送 + 对接外部 CRM 租户守卫（f007b3580/e73f3ab2a）。 | [设计](subagent/pre-sales/lead-capture-refresh-design.md) | — |
 | 20260908-1431 | 桌面 CLI 无人值守自动任务底座＋微信营销首场景 | ✅ 已完成开发并真机验收（P0–P5 交付；2026-10-11 确认真机验证通过）：中立底座（调度/账本/许可/journal/桌面锁/effect/phase）+ 微信固定内容场景（工作台/触发/素材/webhook）；P0–P5 过程记录已注销，协议与算法细节并入底座设计。与端侧会话任务（20260912-2313）共用底座。 | [底座设计](design/desktop-automation/desktop-cli-automation-design.md) / [场景设计](design/weixin/weixin-marketing-automation-design.md) | [灰度发布与回滚手册](ops/weixin-marketing-rollout.md) |
 | 20261011-boss-screening | BOSS 简历数量选择与连续筛选 | ✅ 已完成开发（Windows真机验收通过） | — | [开发计划](plans/desktop-automation/plan-boss-screening-continuation.md) |
 | 20261011-1456 | BOSS 筛选面板适配与详情页打分即打招呼 | ✅ 已完成开发 | VIP 弹窗滚动适配+操作性能埋点（2026-09-28 交付）与详情页三件套 boss_open_detail/boss_greet_detail/boss_close_detail 主路径切换（2026-09-28 真机闭环）；两份过程计划已注销，遗留 VIP 真机验证与详情页两项加固转入[续筛计划](plans/desktop-automation/plan-boss-screening-continuation.md) | — | — |
@@ -146,6 +177,9 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261107-0949 | 企微搜索门禁真机回炉 | ✅ 已完成开发；CLI 真机通过，Agent 工具调度待验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w28-搜索门禁真机回炉2026-11-07) |
+| 20261107-1004 | 企微标题复制剪贴板诊断 | ✅ 已完成开发；远控剪贴板阻塞已定位，Agent 工具调度待验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w29-标题复制剪贴板诊断2026-11-07) |
+| 20261021-1625 | pptx-vi-gen 技能：模板 VI 提取 + 原生可编辑 PPT 生成与修改 | ✅ 已完成并部署：python-pptx 原生可编辑渲染 14 版式 + edit_deck 修改 + 模板填充，三轮上游合并至 v2.2.0，单测与上游 verify 全过（5719f10f4）。 | — | — |
 | 20261015-1457 | Excel读取性能与正式库KB补迁 | ✅ 已完成开发；正式库240份已补迁，Excel修复独验96通过，代码未部署。 | [设计](tools/excel-read-performance-design.md) | [计划](plans/plan-excel-read-performance.md) |
 | 20261015-1516 | BOSS部分筛选项不可读时继续执行 | ✅ 已完成开发：跳过未匹配条件，独立测试与CR通过，待部署验收。 | [设计](design/recruiting/resume-job-matching-design.md) | [计划](plans/desktop-automation/plan-boss-partial-filter-discovery.md) |
 | 20261013-1410 | BOSS 会员筛选与聊天补充条件 | ✅ 已完成开发；会员滚动和聊天补充条件已通过真机验证。 | [设计](design/recruiting/resume-job-matching-design.md) | [开发计划](plans/desktop-automation/plan-boss-vip-dynamic-filters.md) |
@@ -193,10 +227,15 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261106-2052 | wecom-cli 登录探测移除 OCR | ✅ 已完成开发；登录态按窗口枚举判断，扫码截图保留，待真机复验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-probe-remove-ocr.md) |
+| 20261106-1200 | 企微文本发送双点标定与去 OCR | ✅ 已完成开发；双点缓存复用单聊发送及本地库核验真机通过，未部署。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w24-文本发送双点标定与去-ocr2026-11-06) |
+| 20261107-0001 | 企微会话搜索与进入去 OCR | ✅ 已完成开发；独测、真机及 CR 通过，未部署。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w25-会话搜索与进入去-ocr2026-11-07) |
+| 20261107-0037 | 企微图片与文件发送去 OCR | ✅ 已完成开发；独测和 CR 通过，媒体真机与真实库样本待验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w26-图片与文件发送去-ocr2026-11-07) |
 | 20261105-2300 | wecom-personal-rpa 全量删除（废弃功能清退） | ✅ 已完成开发（cleanup SQL 与 nginx 同步待择机执行） | 已被 runtime+wecom-cli 取代的企微个人号 RPA 整链路删除。 | — | [删除计划](plans/plan-wecom-personal-rpa-removal.md) |
 | 20261105-1011 | 企微群聊目录平台标签 | ✅ 已完成开发；群聊不显示会话级平台，仅微信发言人显示标记，待真机视觉验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#621-后续任务群聊平台标签与逐消息发言人) | [计划](plans/plan-wecom-group-platform-label.md) |
 | 20261008-1603 | 飞书、钉钉对话服务接入 AgentRunner | ✅ 已完成开发（待部署真机验收）：保留原渠道业务，仅接入独立 Runner 并传递可信渠道来源；两轮审核修复完成。 | [接入边界](system/agent-application-architecture-design.md#81-后续接入的固定边界) | [飞书](channel/feishu/implementation_plan.md#agentrunner-接入后续独立事项) / [钉钉](channel/dingtalk/implementation_plan.md#agentrunner-接入后续独立事项) / [审核](reviews/feishu-dingtalk-agentrunner-review-2026-10-09.md) |
 | 20261010-wecom-runner | 企业微信应用渠道接入 AgentRunner | ✅ 已完成开发，保留原渠道流程；待部署及真机验收。 | [接入设计](plans/plan-wecom-agent-runner-integration.md#2-接入设计) / [共同契约](system/runner-desktop-runtime-integration-contract.md) | [开发计划](plans/plan-wecom-agent-runner-integration.md) |
+| 20261012-1200 | wecom_kf 并发限频修复（sync_msg 45009 重试 + 拉取去重） | ✅ 已完成并部署：45009 指数退避重试 + 同 open_kfid 拉取任务去重合并（ad71afb97），修复演示限频事故。 | [事故复盘](incidents/wecom-kf-sync-msg-45009-incident.md) | — |
 | 20261009-1452 | 微信客服完整 Markdown 交付 | ✅ 已完成开发：文件路径答复一律原文前缀呈现（2026-10-26 短表格前缀修订 §14.10），原生完整 MD；MD 渲染已真机部分验收。 | [设计](channel/wecom_kf/wecom_kf_design.md#十四2026-10-09-长答复交付调整) | — |
 | 20261008-1340 | 微信客服原渠道恢复与 AgentRunner 接入 | ✅ 已完成开发：原渠道接入独立 Runner，误重构已移除，迁移历史保留；agent2 已发布并真机验收通过（文本/语音/合并/取代）。 | [设计](system/agent-application-architecture-design.md) | [计划](plans/plan-wecom-kf-channel-restore.md) |
 | 20260916-1830 | 公众号自有号清单源（历史文章导入，主通道） | ✅ 已完成开发：租户扫码绑定自有号，定期拉「发表记录」清单走既有 URL 直采入库（首次回填上限+增量重叠即停，r3 修生产超量回填事故）；2026-10-09 验收通过。 | [设计](system/wechat-mp/wechat-mp-list-source-design.md) | — |
@@ -238,6 +277,12 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261109-1628 | 企业微信代理任务详情自动刷新 | ✅ 已完成开发。运行中定时更新会话统计和批次记录。 | [设计](design/wecom/wecom-conversation-operations-design.md#92-页面与任务配置) | [计划](plans/plan-wecom-proxy-event-driven.md#p15-运行中代理任务详情自动刷新) |
+| 20261109-1607 | 企业微信代理批次长回复预览 | ✅ 已完成开发。精简发送提示，长回复支持预览与全文复制。 | [设计](design/wecom/wecom-conversation-operations-design.md#92-页面与任务配置) | [计划](plans/plan-wecom-proxy-event-driven.md#p14-批次长回复预览与全文复制) |
+| 20261109-1555 | 企业微信代理任务详情精简 | ✅ 已完成开发。精简详情操作和批次展示，按原消息配对回复。 | [设计](design/wecom/wecom-conversation-operations-design.md#92-页面与任务配置) | [计划](plans/plan-wecom-proxy-event-driven.md#p13-代理任务详情与原消息配对展示) |
+| 20261109-1545 | 企业微信代理任务列表精简 | ✅ 已完成开发。移除五列并显示执行智能体的名称。 | [设计](design/wecom/wecom-conversation-operations-design.md#92-页面与任务配置) | [计划](plans/plan-wecom-proxy-event-driven.md#p12-精简代理任务列表) |
+| 20261109-1503 | 侧栏最近会话与定时任务标签 | ✅ 已完成开发。两个标签可直接切换，选中项显示主题色下划线。 | [设计](system/scheduled-task-runner-refactor-design.md) | [计划](plans/plan-sidebar-recent-scheduled-tabs.md) |
+| 20261109-1442 | 企业微信会话记录布局调整 | ✅ 已完成开发。参考客服对话页调整会话列表和消息气泡。 | [设计](design/wecom/wecom-conversation-operations-design.md#61-会话记录页面) | [计划](plans/plan-wecom-conversation-record-layout.md) |
 | 20261021-1126 | Web Agent 单条回复分享 | ✅ 已完成开发：所选回复独立分享，图标与时间同行，弹框支持可选密码及图片附件。 | [设计](system/web-agent-reply-sharing-design.md) | [计划](plans/plan-web-agent-reply-sharing.md) |
 | 20260602-0956 | 前端 Office 预览 | ✅ 已完成开发：Word/Excel/PPT 三格式预览（整页/整表缩放、10MB/20MB/1000 行硬门槛、FileTypeIcon 类型徽标、懒加载分包），511 项单测与手动验收全过。 | [设计](research/frontend-office-preview-design.md) | — |
 | 20260922-1931 | 租户前台知识库「访问授权」矩阵 | ✅ 已完成开发：知识库页面「访问授权」矩阵弹框（行=一级栏目、列=数字员工）三态复选框自助配置栏目授权——半选=未配置默认全允许、首勾 confirm 收窄、取消全部勾选恢复默认、保存原样保留跨租户共享项（复用现有接口后端零改动）；三态语义同步管理后台 TenantMgmt「知识库关联」弹框（本租户栏目三态、共享栏目二态）。2026-10-10 agent2 全链路验证：矩阵渲染/首勾确认文案/半选→勾选流转/保存落库（own 项 owner_tenant_id=null）/共享项原样保留/取消勾选恢复未配置/后台三态一致；验证后租户配置已还原。 | — | — |

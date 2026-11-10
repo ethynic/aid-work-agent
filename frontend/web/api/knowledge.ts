@@ -17,6 +17,7 @@ export interface DocumentResponse {
   total_chunks: number
   created_at: string
   summary: string | null
+  disabled?: boolean
 }
 
 export interface UploadResponse {
@@ -129,6 +130,21 @@ export async function deleteDocument(docId: number): Promise<ApiResponse> {
   const response = await fetch(`${API_BASE}/documents/${docId}`, {
     method: 'DELETE',
     headers: { ...getAuthHeader() }
+  })
+  return response.json()
+}
+
+/**
+ * 设置知识库文档禁用/启用（禁用后智能体检索不可见，可逆）
+ */
+export async function setDocumentDisabled(docId: number, disabled: boolean): Promise<ApiResponse> {
+  const response = await fetch(`${API_BASE}/documents/${docId}/set_disabled`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({ disabled })
   })
   return response.json()
 }

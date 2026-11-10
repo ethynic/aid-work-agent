@@ -256,7 +256,7 @@ RunnerSubmit(
 
 **任务会话统一识别**（单一标记来源 `metadata.scheduled_task`）：
 
-- 会话侧栏两个分组：普通会话 / 任务计划（任务计划来自 `/api/scheduled-tasks`）；任务会话从普通会话列表排除；
+- 会话侧栏在列表上方固定展示「最近」「定时任务」两个标签，选中项下方用主题色横条标识。默认展示最近会话，进入任务详情自动选中「定时任务」。标签切换只切换侧栏列表，任务计划来自 `/api/scheduled-tasks`，任务会话从最近会话列表排除；
 - **旧聊天链接直接打开任务会话** → 前端识别标记后路由到任务视图（不出现聊天形态）；
 - 普通 chat 提交拒绝（§5.2）；普通会话删除入口拒绝删除任务会话；
 - 任务操作全部走任务接口/任务视图操作区。
@@ -266,6 +266,7 @@ RunnerSubmit(
 - 头部：任务说明、调度规则、状态（pause_reason 映射文案）、下次执行时间；
 - 操作区：暂停、恢复、改期、编辑（任务内容/附件/通知规则）、立即执行一次、**取消当前执行**（对非终态 runner 经网关调 runner cancel）、删除（409 引导重试）；
 - 执行记录列表：以 agent_runners 为执行事实——`scheduled.trigger`（触发原因，运行中来自公开投影）、accepted_at/finished_at（时间）、status、result.output 或 error_code 映射文案（**执行前失败、空输出同样成记录**）；费用 `result.credit_cost`；
+- 执行详情展示 Runner 的输出、图片、下载附件和执行过程。计划提示词属于任务定义，执行详情不读取会话消息；
 - 当前执行进度：经网关订阅该 runner 事件流（source='scheduled' 用户 token 只读）；
 - 通知投递状态：按任务资源查询通知投递（§8.4 轻量查询接口）；
 - 无自由聊天输入框；定时执行只更新任务数据，不切换用户当前页面。
@@ -361,10 +362,11 @@ CREATE INDEX idx_scheduled_tasks_owner ON scheduled_tasks(tenant_id, user_id, st
 - 两工具 `chat_only`；
 - create：保留产品校验（时间必填不猜测 / once 未来时间 / 每用户上限 / R56 引导）；**无长度上限**（服从请求容量闸）；描述要求自包含 + 按相关性的默认行为约定；profile/instance 继承；可选 `notification_rule_id`（经 task-rules 只读接口供选项）；创建即 active + 计算首 due；
 - manage：list/pause/resume/cancel 适配新状态机；view 改为任务统计 + 最近执行摘要 + 指引任务视图；支持修改通知规则（list_notify_rules/set_notify_rule）。
+- `list` 和 `view` 返回的任务时间字段使用 ISO 格式字符串，供 Runner 将工具结果序列化为会话消息。`resume` 仅适用于暂停的计划，已完成的一次性计划不可恢复。
 
 ### 前端
 
-任务计划分组 + 任务执行视图（§6）；通知规则选择（task-rules 接口）；通知点击 → 任务视图；旧聊天链接路由（§6）；`ScheduledTasks.vue` 改造为操作区基础。
+侧栏定时任务标签 + 任务执行视图（§6）；通知规则选择（task-rules 接口）；通知点击 → 任务视图；旧聊天链接路由（§6）；`ScheduledTasks.vue` 改造为操作区基础。
 
 ## 11. 代码变更清单
 

@@ -296,6 +296,21 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册视频生成轮询任务失败: {e}")
 
+        # ===== 企微代理设备组 job 登记（每 10s，只在 background_runner 进程跑）=====
+        # 每设备＋账号的监控/派发各有独立 job；全局登记只查组身份，不执行设备调用。
+        try:
+            self._scheduler.add_job(
+                self._refresh_wecom_proxy_group_jobs,
+                IntervalTrigger(seconds=10),
+                id="job_system_wecom_proxy_groups",
+                name="WeCom Proxy Device Group Jobs",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册企微代理设备组登记 (interval=10s)")
+        except Exception as e:
+            logger.error(f"后端日志：注册企微代理设备组登记失败: {e}")
+
         # ===== skill_ws 临时工作目录残留清理（每日 03:30）=====
         # 正常路径由 agent.process_message 结束时删除工作目录；
         # 本任务兜底清理进程崩溃 / 异常退出遗留的 skill_ws_* 目录
@@ -1296,6 +1311,94 @@ class ScheduledTaskManager:
                 tlog("video-agent-阶段三", "background_runner 轮询异常 err={err}", err=str(e), level="ERROR")
             except Exception:
                 pass
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    # ===== 企微代理设备组登记与独立回调（每组各 10s）=====
+    def _load_wecom_proxy_groups(self):
+        """登记有活动目标或停止请求的任务，以及待结算批次的设备组。"""
+        from src.db.database import get_db_connection
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                '''SELECT tenant_id, device_id, wecom_account_id FROM (
+                     SELECT t.tenant_id, t.device_id, t.wecom_account_id
+                       FROM bs_wecom_proxy_tasks t
+                      WHERE t.status='running' AND (t.stop_requested=TRUE OR EXISTS (
+                            SELECT 1 FROM bs_wecom_proxy_task_sessions s
+                             WHERE s.tenant_id=t.tenant_id AND s.task_id=t.id
+                               AND s.status='active'))
+                     UNION
+                     SELECT t.tenant_id, t.device_id, t.wecom_account_id
+                       FROM bs_wecom_proxy_batches b
+                       JOIN bs_wecom_proxy_tasks t ON t.id=b.task_id AND t.tenant_id=b.tenant_id
+                      WHERE b.status='running'
+                   ) groups ORDER BY tenant_id, device_id, wecom_account_id''')
+            return [(row['tenant_id'], str(row['device_id']), row['wecom_account_id'])
+                    for row in cursor.fetchall()]
+
+    def _refresh_wecom_proxy_group_jobs(self):
+        """只登记设备组；各组慢调用在各自 APScheduler job 中执行。"""
+        if self._scheduler is None:
+            return
+        try:
+            groups = self._load_wecom_proxy_groups()
+            desired = set()
+            for group in groups:
+                for kind, callback in (('monitor', self._run_wecom_proxy_monitor),
+                                       ('dispatch', self._run_wecom_proxy_dispatch)):
+                    job_id = f'job_system_wecom_proxy_{kind}:{group[0]}:{group[1]}:{group[2]}'
+                    desired.add(job_id)
+                    if self._scheduler.get_job(job_id) is None:
+                        self._scheduler.add_job(
+                            callback, IntervalTrigger(seconds=10), args=[group],
+                            id=job_id, name=f'WeCom Proxy {kind} {group[1]}',
+                            max_instances=1, coalesce=True,
+                            next_run_time=datetime.now(self._scheduler.timezone))
+            for job in self._scheduler.get_jobs():
+                if (job.id.startswith('job_system_wecom_proxy_monitor:')
+                        or job.id.startswith('job_system_wecom_proxy_dispatch:')) \
+                        and job.id not in desired:
+                    self._scheduler.remove_job(job.id)
+        except Exception as e:  # noqa: BLE001 登记失败保留已注册的设备组 job
+            logger.opt(exception=True).error(f'后端日志：企微代理设备组登记异常: {e}')
+
+    def _run_wecom_proxy_monitor(self, group_key):
+        """单设备企微代理监控回调（APScheduler 后台线程执行）。
+
+        设计 docs/design/wecom/wecom-conversation-operations-design.md §9.3。
+        只在 background_runner 进程跑（调度器有 manager 级 Redis 锁）。
+        """
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            from src.wecom_conversation.proxy_monitor import run_tick
+            loop.run_until_complete(run_tick(group_key))
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：企微代理监控轮询异常: {e}")
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    def _run_wecom_proxy_dispatch(self, group_key):
+        """单设备企微代理批次派发回调（APScheduler 后台线程执行）。
+
+        代理任务契约 §5/§6（P6）：核定终态 Runner、释放等待、恢复驱动与派发；
+        与监控循环同进程（Q1 单持有者），组级锁互斥见两模块 docstring。
+        """
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            from src.wecom_conversation.proxy_dispatcher import run_tick
+            loop.run_until_complete(run_tick(group_key))
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：企微代理派发轮询异常: {e}")
         finally:
             try:
                 loop.close()

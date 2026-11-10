@@ -1,9 +1,9 @@
 /**
  * CLI 命令端到端（spawn dist 产物）：doctor/version 结构化输出、未知子命令拒绝、
- * add-customer 缺 --yes 参数错误、probe 驱动桩（AID_WECOM_TEST_DRIVER_STUB=1）。
+ * 退役命令拒绝、probe 驱动桩（AID_WECOM_TEST_DRIVER_STUB=1）。
  *
  * 铁律：本文件绝不触达真实 drivers/ps1 脚本——probe 一律走驱动桩
- * （进程在运行时也不启动 probe.ps1）；add-customer 在参数校验阶段即失败，不 spawn 驱动。
+ * （进程在运行时也不启动 probe.ps1）；退役命令不 spawn 驱动。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -15,7 +15,7 @@ const DIST_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const CLI = path.join(DIST_ROOT, 'src', 'cli', 'index.js')
 
 // 测试密闭性（评审附带项，与 SESSIONNAME 注入同族）：本文件的 write 类 CLI 子进程
-// （send/select/read-session/add-customer）为 exclusive——与并行测试文件的同类子进程
+// （send/select/read-session）为 exclusive——与并行测试文件的同类子进程
 // 共用默认 session 命名管道时互相 BUSY（exit 1 ≠ 预期退出码）；按文件隔离 mutex scope。
 process.env.AID_WECOM_MUTEX_SCOPE = 'test-cli-commands'
 
@@ -90,21 +90,10 @@ test('version --json：机器可读 manifest（含 schema_digest）', () => {
   assert.match(parsed.schema_digest, /^sha256:[0-9a-f]{64}$/)
 })
 
-test('add-customer --json：缺 --yes → 参数错误 OperationResult JSON，退出码 2，不触达企微', () => {
-  const { status, stdout } = runCli(['add-customer', '--phone', '13800138000', '--json'])
+test('退役 add-customer 命令不再被调度到业务操作', () => {
+  const { status, stderr } = runCli(['add-customer', '--phone', '13800138000', '--json'])
   assert.equal(status, 2)
-  const parsed = JSON.parse(stdout.trim().split('\n').pop()!)
-  assert.equal(parsed.success, false)
-  assert.equal(parsed.code, 'INVALID_ARGUMENT')
-  assert.equal(parsed.effect, 'none')
-  assert.equal(typeof parsed.run_id, 'string')
-})
-
-test('add-customer --json：非法手机号 → INVALID_ARGUMENT，退出码 2', () => {
-  const { status, stdout } = runCli(['add-customer', '--phone', '123', '--yes', '--json'])
-  assert.equal(status, 2)
-  const parsed = JSON.parse(stdout.trim().split('\n').pop()!)
-  assert.equal(parsed.code, 'INVALID_ARGUMENT')
+  assert.match(stderr, /未知子命令：add-customer/)
 })
 
 test('search --json：缺 --query → INVALID_ARGUMENT，退出码 2，不触达企微', () => {

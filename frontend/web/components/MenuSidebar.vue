@@ -50,7 +50,7 @@
       </div>
     </div>
 
-    <!-- Middle Content - 菜单区固定，仅历史会话列表滚动 -->
+    <!-- 菜单和标签固定，仅当前列表滚动 -->
     <div class="flex-1 flex flex-col min-h-0">
     <!-- Navigation Menu - 导航菜单区域（固定不滚动） -->
     <div class="flex-shrink-0 p-2 space-y-1">
@@ -263,27 +263,38 @@
       </div>
     </div>
 
-    <!-- Decorative Divider - 装饰性分隔线 -->
-    <div v-if="showHistory" class="flex-shrink-0 px-4 py-2">
-      <div class="flex items-center gap-3">
-        <div class="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
-        <svg class="w-4 h-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-        <div class="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
-      </div>
+    <div
+      v-if="showHistory"
+      class="mx-2 flex shrink-0 border-b border-gray-200"
+      role="tablist"
+      aria-label="侧栏列表"
+      @keydown="handleSidebarTabKey"
+    >
+      <button
+        v-for="tab in sidebarTabs"
+        :id="`${sidebarTabId}-${tab.key}-tab`"
+        :key="tab.key"
+        type="button"
+        role="tab"
+        :aria-selected="sidebarTab === tab.key"
+        :aria-controls="`${sidebarTabId}-${tab.key}-panel`"
+        :tabindex="sidebarTab === tab.key ? 0 : -1"
+        class="min-h-11 flex-1 border-b-2 px-2 text-sm whitespace-nowrap focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-500"
+        :class="sidebarTab === tab.key ? 'border-primary-600 font-semibold text-primary-700' : 'border-transparent text-gray-600 hover:bg-gray-50'"
+        @click="sidebarTab = tab.key"
+      >
+        {{ tab.label }}
+      </button>
     </div>
 
-    <!-- History Sessions Header - 历史会话标题（固定展示，不再支持整体折叠） -->
-    <div v-if="showHistory" class="flex-shrink-0 px-5 py-2 flex items-center gap-3 text-sm text-gray-600">
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-      <span>历史会话</span>
-    </div>
-
-    <!-- Session List - 会话列表（侧边栏唯一滚动区域：普通会话 / 任务计划两组，设计 §6） -->
-    <div v-show="showHistory" class="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
+    <div
+      v-show="showHistory && sidebarTab === 'recent'"
+      :id="`${sidebarTabId}-recent-panel`"
+      role="tabpanel"
+      :aria-labelledby="`${sidebarTabId}-recent-tab`"
+      tabindex="0"
+      class="flex-1 min-h-0 overflow-y-auto px-2 pt-1 pb-2"
+    >
       <div v-if="isLoading" class="p-4 text-center text-gray-500">
         <svg class="w-6 h-6 mx-auto animate-spin" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -292,7 +303,7 @@
         <p class="mt-2 text-sm">加载中...</p>
       </div>
 
-      <div v-else-if="filteredSessions.length === 0 && scheduledTasks.length === 0" class="p-4 text-center text-gray-500">
+      <div v-else-if="filteredSessions.length === 0" class="p-4 text-center text-gray-500">
         <svg class="w-10 h-10 mx-auto mb-2 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
         </svg>
@@ -383,15 +394,24 @@
         </button>
       </div>
 
-        <!-- 任务计划分组（定时任务 Runner 化 Phase 5，设计 §6）：点击进入任务视图，非聊天页 -->
-        <template v-if="scheduledTasks.length > 0">
-          <div class="flex-shrink-0 px-5 py-2 mt-2 flex items-center gap-3 text-sm text-gray-600">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span>任务计划</span>
-          </div>
-          <div class="space-y-0.5">
+    </div>
+
+    <div
+      v-show="showHistory && sidebarTab === 'scheduled'"
+      :id="`${sidebarTabId}-scheduled-panel`"
+      role="tabpanel"
+      :aria-labelledby="`${sidebarTabId}-scheduled-tab`"
+      tabindex="0"
+      class="flex-1 min-h-0 overflow-y-auto px-2 pt-1 pb-2"
+    >
+        <div v-if="scheduledTasksError" class="p-4 text-center text-xs text-gray-600" role="status">
+          定时任务加载失败
+          <button type="button" class="ml-1 text-primary-700 underline" @click="loadScheduledTasks">重试</button>
+        </div>
+        <p v-else-if="scheduledTasks.length === 0" class="p-4 text-center text-xs text-gray-500" role="status">
+          {{ scheduledTasksLoading ? '加载中…' : '暂无定时任务' }}
+        </p>
+        <div v-else class="space-y-0.5">
             <!-- button：Tab/Enter 键盘可达（评审 P2-10，替代 div+click） -->
             <button
               v-for="plan in scheduledTasks"
@@ -417,8 +437,7 @@
               </span>
               <span class="mt-0.5 pl-4 block text-xs text-gray-400 truncate">{{ taskPlanSummary(plan) }}</span>
             </button>
-          </div>
-        </template>
+        </div>
     </div>
 
     </div>
@@ -821,7 +840,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, watchEffect, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, watchEffect, reactive, onMounted, onBeforeUnmount, useId } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { onClickOutside } from '@vueuse/core'
 import { useSession } from '@/composables/useSession'
@@ -1083,6 +1102,8 @@ const connectionSubMenuItems = computed(() => {
     { path: `${base}/wechat-mp`, label: '公众号内容', icon: 'M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 9h8M8 13h8M8 17h5', adminOnly: true },
     // 本地工具：电脑
     { path: `${base}/local-tools`, label: '本地工具', icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z', adminOnly: false },
+    // 企业微信Agent：三入口合并（会话记录/每日总结/代理任务，页内 Tab 切换）
+    { path: `${base}/wecom-agent`, label: '企业微信Agent', icon: 'M12 3a8 8 0 018 8v6H4v-6a8 8 0 018-8zM9 21h6M9 11h6', adminOnly: false },
     // 外部系统：链接（管理员与普通员工均可见）
     { path: `${base}/connections/external-systems`, label: '外部系统', icon: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71', adminOnly: false },
   ]
@@ -1110,6 +1131,10 @@ const isConnectionActive = computed(() => {
     `${base}/wechat-mp`,
     `${base}/hongtao-shop`,
     `${base}/local-tools`,
+    `${base}/wecom-agent`,
+    `${base}/wecom-agent/conversations`,
+    `${base}/wecom-agent/daily`,
+    `${base}/wecom-agent/proxy`,
   ].includes(route.path)
 })
 
@@ -1150,13 +1175,36 @@ const filteredAvailableSubagents = computed(() => {
 
 // 永远显示该用户的所有历史会话，不按数字员工过滤；
 // 任务专属会话（metadata.scheduled_task 标记，设计 §6）从普通会话列表排除，
-// 改在「任务计划」分组展示（/api/sessions 列表行含 metadata，JSONB）
+// 改在「定时任务」标签展示（/api/sessions 列表行含 metadata，JSONB）
 const filteredSessions = computed(() => {
   return sessions.value.filter(session => !scheduledTaskSessionMark(session))
 })
 
-// ============== 任务计划分组（Runner 化 Phase 5，设计 §6） ==============
+const sidebarTabs = [
+  { key: 'recent', label: '最近' },
+  { key: 'scheduled', label: '定时任务' },
+] as const
+const sidebarTabId = useId()
+const sidebarTab = ref<(typeof sidebarTabs)[number]['key']>('recent')
+const isScheduledTaskRoute = computed(() => route.name === 'tenant-scheduled-task-view')
+
+function handleSidebarTabKey(event: KeyboardEvent) {
+  let index = sidebarTabs.findIndex(tab => tab.key === sidebarTab.value)
+  if (event.key === 'Home') index = 0
+  else if (event.key === 'End') index = sidebarTabs.length - 1
+  else if (event.key === 'ArrowLeft') index = (index + sidebarTabs.length - 1) % sidebarTabs.length
+  else if (event.key === 'ArrowRight') index = (index + 1) % sidebarTabs.length
+  else return
+  event.preventDefault()
+  sidebarTab.value = sidebarTabs[index].key
+  const tabList = event.currentTarget as HTMLElement
+  tabList.querySelectorAll<HTMLButtonElement>('[role="tab"]')[index]?.focus()
+}
+
+// ============== 定时任务列表（设计 §6） ==============
 const scheduledTasks = ref<ScheduledTask[]>([])
+const scheduledTasksLoading = ref(false)
+const scheduledTasksError = ref(false)
 // 上下文代际（评审 P2-5）：租户切换/登出后旧响应按代际丢弃，不写入新租户视图
 let scheduledTasksGeneration = 0
 // 可见性/焦点唤醒节流（评审 P2-5）：30s 内不重复拉取
@@ -1166,6 +1214,8 @@ let scheduledTasksLastLoad = 0
 async function loadScheduledTasks() {
   if (!tenantIsLoggedIn.value) return
   const generation = ++scheduledTasksGeneration
+  scheduledTasksLoading.value = true
+  scheduledTasksError.value = false
   try {
     const tasks = await listScheduledTasks()
     if (generation !== scheduledTasksGeneration) return
@@ -1174,8 +1224,12 @@ async function loadScheduledTasks() {
     // 任务列表加载失败不阻塞侧栏（普通会话不受影响），下次路由/挂载/信号重试
     if (generation !== scheduledTasksGeneration) return
     scheduledTasks.value = []
+    scheduledTasksError.value = true
   } finally {
-    if (generation === scheduledTasksGeneration) scheduledTasksLastLoad = Date.now()
+    if (generation === scheduledTasksGeneration) {
+      scheduledTasksLoading.value = false
+      scheduledTasksLastLoad = Date.now()
+    }
   }
 }
 
@@ -1191,7 +1245,7 @@ function onSidebarVisibilityChange() {
 }
 
 function isTaskPlanActive(taskId: string): boolean {
-  return route.path === `/t/${tenantId.value}/tasks/${taskId}`
+  return isScheduledTaskRoute.value && route.params.task_id === taskId
 }
 
 function openTaskPlan(taskId: string) {
@@ -1225,12 +1279,15 @@ function taskPlanSummary(plan: ScheduledTask): string {
 watch(() => [tenantId.value, tenantAdmin.value?.user_id, tenantIsLoggedIn.value] as const, () => {
   scheduledTasksGeneration += 1
   scheduledTasks.value = []
+  scheduledTasksLoading.value = false
+  scheduledTasksError.value = false
   scheduledTasksLastLoad = 0
   if (tenantIsLoggedIn.value) void loadScheduledTasks()
 }, { immediate: true })
-watch(() => route.path, path => {
-  if (tenantIsLoggedIn.value && path.includes('/tasks/')) void loadScheduledTasks()
-})
+watch(() => route.path, (_, previousPath) => {
+  sidebarTab.value = isScheduledTaskRoute.value ? 'scheduled' : 'recent'
+  if (previousPath && tenantIsLoggedIn.value && isScheduledTaskRoute.value) void loadScheduledTasks()
+}, { immediate: true })
 watch(scheduledTasksVersion, () => {
   if (tenantIsLoggedIn.value) void loadScheduledTasks()
 })

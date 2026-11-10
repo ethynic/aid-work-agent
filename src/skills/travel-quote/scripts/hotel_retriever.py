@@ -22,6 +22,14 @@ class HotelRetriever:
 
     SOURCE_TYPE = "hotel_resource"
 
+    # 检索侧文档可见性（与 src/knowledge/retriever/tenant_range.py
+    # build_active_document_condition 同口径；脚本独立运行不引 src 模块）
+    VISIBLE_DOC_SQL = (
+        "(d.status = 'active' "
+        "AND (d.expires_at IS NULL OR d.expires_at > now()) "
+        "AND d.disabled IS NOT TRUE)"
+    )
+
     def __init__(self):
         self._embedding_client = None
 
@@ -91,6 +99,7 @@ class HotelRetriever:
                 JOIN documents d ON c.doc_id = d.id
                 WHERE d.source_type = %s
                   AND {tenant_sql}
+                  AND {self.VISIBLE_DOC_SQL}
                   AND c.chunk_index = 0
                   AND (c.text ILIKE %s OR d.title ILIKE %s)
                 ORDER BY d.id
@@ -144,6 +153,7 @@ class HotelRetriever:
                 JOIN documents d ON c.doc_id = d.id
                 WHERE d.source_type = %s
                   AND {tenant_sql}
+                  AND {self.VISIBLE_DOC_SQL}
                   AND c.chunk_index = 0
                 ORDER BY distance
                 LIMIT %s
@@ -184,7 +194,7 @@ class HotelRetriever:
         tenant_sql, tenant_params = self._tenant_scope(tenant_id, subagent_id, shared_tenant_ids)
         with self._get_conn() as conn:
             conn.execute(
-                f"SELECT COUNT(*) AS cnt FROM documents d WHERE d.source_type = %s AND {tenant_sql}",
+                f"SELECT COUNT(*) AS cnt FROM documents d WHERE d.source_type = %s AND {tenant_sql} AND {self.VISIBLE_DOC_SQL}",
                 (self.SOURCE_TYPE, *tenant_params),
             )
             total = conn.fetchone()["cnt"]
@@ -194,7 +204,7 @@ class HotelRetriever:
                        c.text AS info
                 FROM documents d
                 LEFT JOIN chunks c ON c.doc_id = d.id AND c.chunk_index = 0
-                WHERE d.source_type = %s AND {tenant_sql}
+                WHERE d.source_type = %s AND {tenant_sql} AND {self.VISIBLE_DOC_SQL}
                 ORDER BY d.id
                 LIMIT %s OFFSET %s
             """, (self.SOURCE_TYPE, *tenant_params, limit, offset))

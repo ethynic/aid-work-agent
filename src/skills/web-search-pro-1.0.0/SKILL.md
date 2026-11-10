@@ -5,7 +5,7 @@ description: >
   页面正文抓取、邮箱电话等结构化字段抽取，以及「检索→抓取→内容级摘要」组合管线。
   适用于需要批量抓取网页、调研企业与联系人信息、平台 web_search 摘要不够深入
   需要页面级信息（官网联系方式、邮箱、电话）的场景。
-version: 1.0.0
+version: 1.1.0
 metadata:
   openclaw:
     emoji: "🔍"
@@ -43,8 +43,9 @@ metadata:
   系统会自动替换为技能目录绝对路径，无需 cd。不要写裸文件名（会解析到临时目录）
   或 `/app/...` 绝对路径（会被二次拼接）。
 - 依赖 `httpx` / `beautifulsoup4` / `lxml` 已随容器镜像安装。
-- `render.py` / 管线渲染兜底需要 Playwright，**当前容器未安装**：渲染路径会以
-  退出码 4 退出并提示，不影响 `search` / `fetch` / `extract` 和管线的非渲染路径。
+- `render.py` / 管线渲染兜底需要 Playwright，**当前容器不可用**（2026-11-07 实测：
+  包可导入但 chromium 打开页面即 `Page crashed`，共享内存不足）：渲染路径会尝试
+  然后失败降级，不影响 `search` / `fetch` / `extract` 和管线的非渲染路径。
   不要主动走渲染兜底；JS 站改由平台 web_fetch 或浏览器工具处理。
 - **百度通道代理（可选）**：环境变量 `WEBSEARCH_BAIDU_PROXY`
   （形如 `http://user:pass@host:port`）设置后，baidu / baidu_m 通道经该代理执行
@@ -73,6 +74,7 @@ metadata:
 | `scripts/web_search.py` | 检索 / 抓取 / 字段抽取 / 批量抓取（基础层） |
 | `scripts/render.py` | 无头浏览器渲染兜底（当前容器不可用） |
 | `scripts/pipeline.py` | 组合管线：检索→抓取→内容级摘要（核心） |
+| `scripts/efficiency.py` | 请求节流 / 风控冷却 / LLM 响应缓存（状态落盘，跨进程生效） |
 
 ## 工作流 1：检索网页
 
@@ -108,7 +110,8 @@ python scripts/web_search.py batch sites.txt               # 批量：默认抽�
 - **电话**：`tel:` 链接、带「电话/热线/Tel」标签的同行文本、号码前置排版里的
   完整手机号/400 号/带区号固话。不做无约束的全文数字扫描。
 - **负责人**：中文称谓 + 英文职位模式匹配，弱信号，须结合页面上下文核对。
-- 批量参数：`--full-text`、`--delay`（默认 1.5s）。
+- 批量参数：`--full-text`、`--delay`（默认 1.5s）、`--min-domain-interval`
+  （按目标域名额外限速，默认 0=关闭；对访问过快会触发验证的站点建议设 2.0）。
 
 ## 工作流 4：组合管线（★ 联系人挖掘核心）
 
@@ -138,6 +141,36 @@ python scripts/pipeline.py urls "https://a.com,https://b.com" --extract --json
 多页掩码还原完整号码，给出 `confidence` 与合并来源；位冲突判为不同号码，
 信息不足不下结论。
 
+> ⚠️ **合并结果是推断值，必须人工核对。** 算法只校验「长度一致 + 已知位不冲突」，
+> 无法证明两个掩码来自同一个号码——两个**不同**号码只要掩码窗口互补
+> （如 `139****7580` + `1391234****`），会拼出看似完整、实际不存在的号码且仍标
+> `confidence=high`。输出已带 `basis: "mask_merge_inference"` 与 `verification`
+> 提醒字段；**下游请勿把 `recovered_phones` 当作已确认事实直接写入客户库或外发**。
+
+### 效率与风控（v1.1.0）
+
+**本环境固定走采集模式**（不配 `WSP_LLM_*`），技能内部零 LLM 调用，正文由调用方
+智能体总结。以下能力主要服务于「少打目标网站、少走重复链路」：
+
+- **跳转解析三重保护**：SERP 里每条 `…/link?url=` 不再零间隔连发 HEAD——同一 URL
+  进程内只解析 1 次（重试结果集高度重叠）、每次补 ≥0.35s 同组间隔、单次搜索上限
+  40 条、临时失败不缓存。这是「访问太快触发验证/临时禁用」的主因修复。
+- **命中验证码 → 同厂商组冷却 20s**：baidu / baidu_m / *.baidu.com 同组；PC 被拦后
+  不立刻打移动端继续加压（只会从验证码升级为禁用）；sogou / bing 等**不同组**的
+  降级通道照常可用。`baidu_m` 是唯一例外：有**一次冷静重试**——等冷却自然走完
+  （期间零请求）后再试，上限 25s 且受搜索总预算约束。`WSP_BLOCK_COOLDOWN=0`
+  可关闭冷却。冷却只作用于搜索引擎通道，不误伤用户明确指定的目标 URL 抓取。
+- **代理通道与冷却共存**：百度代理（`WEBSEARCH_BAIDU_PROXY`）执行时命中风控
+  同样触发整组冷却；代理连接失败回落直连的行为不变。
+- **编码修复**：响应头声明 iso-8859-1 或未声明 charset 的 GBK/GB18030 中文页
+  不再整页乱码（HTML meta 覆盖 → strict 失败回退 GB18030 → replace 兜底）。
+- **长单行电话抽取修复**：搜索引擎 snippet 常是整段无换行，旧逻辑对 >200 字的
+  行整行跳过会漏掉全部电话；现按 200 字窗口（步长 180 重叠）扫描。
+
+全部开关（环境变量，默认值即更保守）：`WSP_CACHE_DIR`、`WSP_MIN_REQUEST_INTERVAL`(0)、
+`WSP_REDIRECT_INTERVAL`(0.35)、`WSP_MAX_REDIRECTS`(40，0=不限)、
+`WSP_BLOCK_COOLDOWN`(20)、`WSP_DOMAIN_MIN_INTERVAL`(0)、`WSP_LLM_CACHE_TTL`(86400)。
+
 **LLM 摘要**：`WSP_LLM_BASE_URL` 等环境变量未配置时自动降级为**采集模式**
 （`mode: "collect"`），输出 `pages[].text` 结构化正文由你自行总结——本环境固定走
 采集模式，不要尝试配置 LLM。
@@ -148,6 +181,7 @@ python scripts/pipeline.py urls "https://a.com,https://b.com" --extract --json
 ## 检索纪律（配合 ai-lead-gen 等批量场景）
 
 - 搜索通道**串行**执行，连续失败时先换关键词/引擎，不要连续重试同一 query；
+- 命中验证码后**不要立刻换通道重试同组引擎**——整组冷却中，等冷却走完或换厂商；
 - 官网页面间隔 ≥ 1.2s（管线 `--delay` 默认已带）；
 - 相关性闸门（`relevance_ok`）**不得放宽**——宁可 0 条，不收无关结果。
 

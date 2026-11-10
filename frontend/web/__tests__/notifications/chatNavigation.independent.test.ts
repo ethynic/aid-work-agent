@@ -3,8 +3,8 @@ import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { defineComponent, ref } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
-const network = vi.hoisted(() => ({ getSession: vi.fn(), listSessions: vi.fn(), getLatestSession: vi.fn() }))
-const agent = vi.hoisted(() => ({ send: vi.fn(), switch: vi.fn(), clear: vi.fn(), abort: vi.fn() }))
+const network = vi.hoisted(() => ({ getSession: vi.fn(), listSessions: vi.fn(), getLatestSession: vi.fn(), createSession: vi.fn() }))
+const agent = vi.hoisted(() => ({ send: vi.fn(), switch: vi.fn(), clear: vi.fn(), abort: vi.fn(), restoreDraft: vi.fn() }))
 const initialization = vi.hoisted(() => ({ auth: vi.fn(), subagents: vi.fn() }))
 const admin = ref<any>({ user_id: 'alice', tenant_id: 'tenant-one', username: 'Alice', role: 'user' })
 const loggedIn = ref(true)
@@ -19,7 +19,7 @@ vi.mock('@/composables/useAgent', () => ({ useAgent: () => ({ messages, sessionI
   uploadAttachment: vi.fn(), removeAttachment: vi.fn(), clearAttachments: vi.fn(), abortStreaming: agent.abort,
   inputHintState: ref('idle'), isWaitingHuman: ref(false), runnerFeedback: ref(null),
   isSessionRunning: () => false, hasSessionUnreadCompletion: () => false, removeStreamState: vi.fn() }) }))
-vi.mock('@/composables/useCreditCheck', () => ({ useCreditCheck: () => ({ checkCreditBeforeAction: vi.fn(async () => true) }) }))
+vi.mock('@/composables/useCreditCheck', () => ({ useCreditCheck: () => ({ checkCreditBeforeAction: vi.fn(async () => ({ allowed: true })) }) }))
 vi.mock('@/composables/useAttachmentPreview', () => ({ useAttachmentPreview: () => ({ previewAttachment: ref(null), isPreviewOpen: ref(false), closePreview: vi.fn() }) }))
 vi.mock('@/composables/useSubagentList', () => ({ useSubagentList: () => ({ availableSubagents: ref([]), loadAvailableSubagents: initialization.subagents }) }))
 vi.mock('@/composables/useMobile', () => ({ useMobile: () => ({ isMobile: ref(false) }) }))
@@ -43,6 +43,7 @@ beforeEach(() => {
   useSession().clearSessionCache(); agentSessionId.value = null; messages.value = []
   network.listSessions.mockResolvedValue({ sessions: [validSession], total: 1, page: 1, page_size: 20 })
   network.getLatestSession.mockResolvedValue({ session: null })
+  network.createSession.mockResolvedValue(validSession)
   initialization.auth.mockResolvedValue(undefined); initialization.subagents.mockResolvedValue(undefined)
   agent.switch.mockImplementation(async (id: string) => { agentSessionId.value = id; messages.value = [{ content: id }] })
   agent.clear.mockImplementation(() => { agentSessionId.value = null; messages.value = [] })
@@ -66,7 +67,8 @@ async function harness() {
   const fixture = defineComponent({ components: { MenuSidebar, ChatContainer }, template: '<div><MenuSidebar :is-collapsed="false" :available-subagents="[]"/><ChatContainer/></div>' })
   const wrapper = mount(fixture, { global: { plugins: [router], stubs: {
     AppHeader: true, MessageList: { props: ['messages'], template: '<section>{{ messages }}</section>' },
-    ChatInput: { name: 'IndependentChatInput', props: ['disabled'], template: '<textarea :disabled="disabled" />' },
+    ChatInput: { name: 'IndependentChatInput', props: ['disabled'], template: '<textarea :disabled="disabled" />',
+      methods: { restoreDraft: (...args: unknown[]) => agent.restoreDraft(...args) } },
     SettingsDialog: true, AttachmentPreviewPanel: true,
   } } })
   wrappers.push(wrapper)
@@ -96,6 +98,16 @@ function assertReady(wrapper: VueWrapper, router: ReturnType<typeof createRouter
 }
 
 describe('independent actual chat/sidebar notification navigation', () => {
+  it('restores the continuous draft when a new session cannot be created', async () => {
+    const { wrapper } = await harness()
+    await navigate(wrapper, 'new')
+    network.createSession.mockRejectedValueOnce(new Error('fixture create failed'))
+    wrapper.findComponent({ name: 'IndependentChatInput' }).vm.$emit('send', '请持续监控孙晨', 'continuous')
+    await flushPromises()
+    expect(agent.restoreDraft).toHaveBeenCalledWith('请持续监控孙晨', true)
+    expect(agent.send).not.toHaveBeenCalled()
+  })
+
   it.each(['auth', 'subagents'] as const)('does not reopen latest history after new-session navigation during pending %s initialization', async stage => {
     const pending = deferred(); initialization[stage].mockReturnValueOnce(pending.promise)
     const { wrapper, router } = await harness()

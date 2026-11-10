@@ -387,6 +387,9 @@ export function useAgent() {
       '请先完成原任务的人工协助，本次输入已保留。',
       '原任务需要恢复核对，本次输入已保留。',
       '补充消息暂时无法确认接收，请稍后重试。',
+      '当前服务不支持持续任务，本次消息未发送。',
+      '当前会话已有任务，请先处理原任务后再开启持续执行。',
+      '服务端未确认持续执行，本次任务可能已开始，请查看会话状态。',
     ])
     return safeMessages.has(issue.message) ? issue.message
       : issue instanceof RunnerRequestError && issue.code === 'NO_CREDIT'
@@ -765,7 +768,8 @@ export function useAgent() {
       if (session.session_id !== sid) throw new Error('RUNNER_SESSION_MISMATCH')
       const profile = row.profile_id || session.subagent_id
       await sendMessage(message.content, profile === 'main' ? null : profile,
-        sid, session.instance_id, message.attachments || [], row.runner_id)
+        sid, session.instance_id, message.attachments || [], row.runner_id,
+        row.execution_mode === 'continuous' ? 'continuous' : undefined)
     } catch (issue) {
       if (currentRunnerContext(state, sid, generation, headers)) runnerError(sid, issue as Error)
     } finally {
@@ -811,6 +815,9 @@ export function useAgent() {
       state.pendingRunner = undefined
       state.submitFailures = 0
       observeRunner(state, row, headers)
+      if (body.execution_mode === 'continuous' && row.execution_mode !== 'continuous') {
+        runnerError(body.session_id,new Error('服务端未确认持续执行，本次任务可能已开始，请查看会话状态。'))
+      }
     } catch (issue) {
       if (!currentRunnerContext(state, body.session_id, generation, headers)) return
       runnerError(body.session_id, issue as Error)
@@ -1119,7 +1126,7 @@ export function useAgent() {
   }
 
   async function sendMessage(content: string, subagent?: string | null, overrideSessionId?: string, instanceId?: string | null,
-    retryFiles?: UploadedFile[], retrySource?: string) {
+    retryFiles?: UploadedFile[], retrySource?: string, executionMode?: 'continuous') {
     if (!content.trim()) return
     const headers = getEffectiveAuthHeader()
     checkRunnerSubject(headers)
@@ -1147,7 +1154,7 @@ export function useAgent() {
       const creditCheck = await checkCreditBeforeAction('sendMessage')
       if (!currentSendContext()) return
       if (!creditCheck.allowed) {
-        return
+        return { restoreInput:true, canRestore:currentSendContext }
       }
     }
 
@@ -1181,6 +1188,11 @@ export function useAgent() {
     }
 
     if (!currentSendContext() || (retryFiles && [...state.runnerViews.values()].some(view => !runnerTerminal(view.status)))) return
+
+    if (executionMode && [...state.runnerViews.values()].some(row => !runnerTerminal(row.status))) {
+      runnerError(effectiveSessionId,new Error('当前会话已有任务，请先处理原任务后再开启持续执行。'))
+      return { restoreInput:true, canRestore:() => currentRunnerContext(state,effectiveSessionId,generation,headers) }
+    }
 
     // 按会话 guard：仅当目标会话正在处理时才拒绝，不阻塞其他会话发消息
     const parked = [...state.runnerViews.values()].sort((a,b) => a.queue_order-b.queue_order)
@@ -1244,6 +1256,13 @@ export function useAgent() {
       if (!currentSendContext()) return
       state.runnerClient.installCapabilities(capabilities)
       runnerTransport = capabilities.web_enabled
+      if (executionMode && (!runnerTransport || !capabilities.continuous_execution_v1)) {
+        state.submitSelecting = false
+        ownsSelection = false
+        state.isProcessing.value = false
+        runnerError(effectiveSessionId,new Error('当前服务不支持持续任务，本次消息未发送。'))
+        return { restoreInput:true, canRestore:() => currentRunnerContext(state,effectiveSessionId,generation,headers) }
+      }
     } catch (issue) {
       if (!currentSendContext()) return
       state.submitSelecting = false
@@ -1331,6 +1350,7 @@ export function useAgent() {
     if (runnerTransport) {
       const body: RunnerSubmission = JSON.parse(JSON.stringify({
         client_request_id: requestId, message: content, session_id: effectiveSessionId,
+        execution_mode: executionMode,
         files: filesToSend, subagent, instance_id: instanceId,
         video_params: !subagent || subagent === 'video-agent' ? { ...useVideoGenParams().params.value } : null,
       }))

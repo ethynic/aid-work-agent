@@ -25,8 +25,11 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'notification-rules', name: 'tenant-notification-rules', component: () => import('@/components/saas/NotificationRules.vue') },
       { path: 'local-tools', name: 'tenant-local-tools', component: () => import('@/components/saas/LocalToolDevices.vue') },
       { path: 'daily-report', name: 'tenant-daily-report', component: () => import('@/components/reports/PersonalDailyReport.vue') },
-      { path: 'wecom-conversations', name: 'tenant-wecom-conversations', component: () => import('@/components/wecomConversation/WecomConversationCenter.vue') },
-      { path: 'wecom-conversations/daily', name: 'tenant-wecom-daily', component: () => import('@/components/wecomConversation/WecomConversationDaily.vue') },
+      // 企业微信Agent 工作区（三入口合并，Tab 切换；旧路径重定向保住收藏与按名跳转）
+      { path: 'wecom-agent/:tab(conversations|daily|proxy)?', name: 'tenant-wecom-agent', component: () => import('@/components/wecomConversation/WecomAgentHub.vue') },
+      { path: 'wecom-conversations', name: 'tenant-wecom-conversations', redirect: to => ({ name: 'tenant-wecom-agent', params: { tenant_id: to.params.tenant_id, tab: 'conversations' }, query: to.query }) },
+      { path: 'wecom-conversations/daily', name: 'tenant-wecom-daily', redirect: to => ({ name: 'tenant-wecom-agent', params: { tenant_id: to.params.tenant_id, tab: 'daily' } }) },
+      { path: 'wecom-conversations/proxy', name: 'tenant-wecom-proxy', redirect: to => ({ name: 'tenant-wecom-agent', params: { tenant_id: to.params.tenant_id, tab: 'proxy' } }) },
       { path: 'work-outcomes', name: 'tenant-work-outcomes', component: () => import('@/components/reports/WorkOutcomes.vue') },
       { path: 'my-agents', name: 'tenant-my-agents', component: () => import('@/components/MyDigitalEmployees.vue') },
       { path: 'agent/:subagent_name/prompt', name: 'tenant-agent-prompt', redirect: to => ({ name: 'tenant-my-agents', params: { tenant_id: (to.params as any).tenant_id } }) },

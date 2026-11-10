@@ -1,5 +1,5 @@
 <template>
-  <div class="h-screen flex flex-col bg-canvas">
+  <div :class="embedded ? 'h-full' : 'h-screen'" class="flex flex-col bg-canvas">
     <AppHeader title="企业微信会话每日总结" :is-logged-in="effectiveIsLoggedIn" :user="effectiveUser"
       @toggle-sidebar="handleToggleSidebar" @logout="tenantLogout">
       <template #menu-items="{ closeMenu }">
@@ -213,6 +213,9 @@
 </template>
 
 <script setup lang="ts">
+// 企业微信Agent 工作区内嵌模式（WecomAgentHub Tab）：根容器 h-full
+defineProps<{ embedded?: boolean }>()
+
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'

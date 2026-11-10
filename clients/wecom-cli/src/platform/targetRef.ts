@@ -34,7 +34,7 @@ export interface TargetRefIdentity {
   /** 搜索结果条目在 overlay 图像内的相对坐标（M4 起可选；老 ref 签发时无此对字段） */
   x?: number
   y?: number
-  /** 当前账号直接证据确认时签发；缺失为 legacy，仅 UI 兼容。 */
+  /** 当前账号直接证据确认时签发；缺失为 legacy，读取会话时拒绝。 */
   account?: string
 }
 

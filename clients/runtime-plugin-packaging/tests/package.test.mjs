@@ -7,7 +7,21 @@ import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import canonicalize from 'canonicalize'
-import { createOfflinePackage, copyProviderScriptAssets, copyProviderDriverAssets, filesUnder, sha256, zipBytes, main, stageNativeInputDependency } from '../package.mjs'
+import { createOfflinePackage, copyCurrentProviderDist, copyProviderScriptAssets, copyProviderDriverAssets, filesUnder, sha256, zipBytes, main, stageNativeInputDependency } from '../package.mjs'
+
+test('WeCom staging excludes removed compiled commands even when dist is stale', () => {
+  const root = mkdtempSync(join(tmpdir(), 'aid-wecom-stale-dist-'))
+  try {
+    mkdirSync(join(root, 'src/cli'), { recursive: true })
+    mkdirSync(join(root, 'dist/src/cli'), { recursive: true })
+    writeFileSync(join(root, 'src/cli/index.ts'), 'export {}')
+    writeFileSync(join(root, 'dist/src/cli/index.js'), 'export {}')
+    writeFileSync(join(root, 'dist/src/cli/addCustomer.js'), 'throw Error("stale")')
+    copyCurrentProviderDist(root, join(root, 'staged'))
+    assert.ok(existsSync(join(root, 'staged/cli/index.js')))
+    assert.ok(!existsSync(join(root, 'staged/cli/addCustomer.js')))
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
 
 test('release signature binds inner payload and full canonical manifest, with no self hash', async () => {
   const pair = generateKeyPairSync('ed25519')
@@ -92,11 +106,11 @@ test('required files describes actual relocated payload bytes and rejects direct
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
 
-test('PowerShell OCR paths relocate, prefer bundled interpreter, and fail closed for installed packages', () => {
+test('Weixin PowerShell OCR path relocates and fails closed for installed packages', () => {
   const clients = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
   const home = mkdtempSync(join(tmpdir(), 'aid-ps-ocr-paths-'))
   try {
-    for (const [provider, resolver] of [['weixin-cli', 'Resolve-WeixinOcrPython'], ['wecom-cli', 'Resolve-WeComOcrPython']]) {
+    for (const [provider, resolver] of [['weixin-cli', 'Resolve-WeixinOcrPython']]) {
       const pkg = join(home, provider)
       mkdirSync(join(pkg, 'drivers/ps1'), { recursive: true })
       cpSync(join(clients, provider, 'drivers/ps1/_common.ps1'), join(pkg, 'drivers/ps1/_common.ps1'))
@@ -243,10 +257,10 @@ test('native input dependency: no declaration stays untouched; declared one is r
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
 
-test('ocr-assets lock carries tzdata for wecom day-mode ZoneInfo (review 2 P1-2)', () => {
+test('Weixin OCR asset lock retains its existing pinned timezone wheel', () => {
   const lock = JSON.parse(readFileSync(new URL('../ocr-assets.lock.json', import.meta.url), 'utf8'))
   const tzdata = lock.wheels.find((wheel) => wheel.name === 'tzdata')
-  assert.ok(tzdata, 'tzdata wheel must be pinned: Windows embeddable Python has no IANA tzdata and wecom day mode (_tz_day_bounds) needs ZoneInfo')
+  assert.ok(tzdata, 'existing Weixin OCR lock keeps its pinned tzdata wheel')
   assert.match(tzdata.filename, /^tzdata-\d+\.\d+(\.\d+)?-py2\.py3-none-any\.whl$/)
   assert.match(tzdata.url, /^https:\/\/files\.pythonhosted\.org\//)
   assert.match(tzdata.sha256, /^[0-9a-f]{64}$/)
@@ -260,13 +274,23 @@ test('wecom release closure verifies date/IANA capability end to end (review 3 P
   const pkg = readFileSync(new URL('../package.mjs', import.meta.url), 'utf8')
   const verify = readFileSync(new URL('../verify-offline.py', import.meta.url), 'utf8')
   const batch = readFileSync(new URL('../../agent-desktop/scripts/release-batch.ps1', import.meta.url), 'utf8')
-  // 最终打包冒烟：WeCom 专属 day-mode 断言（OCR/AES 之外的第三项）
-  assert.match(pkg, /WECOM_DAYMODE_BUNDLE_OK/)
+  // WeCom package uses its own Python with AES, SQLite and IANA capability.
+  assert.match(pkg, /WECOM_LOCALDB_BUNDLE_OK/)
   assert.match(pkg, /ZoneInfo\("Asia\/Shanghai"\)/)
   // 离线验包：缺 tzdata 时明确指向 prepare 刷新
-  assert.match(verify, /refresh assets via prepare-ocr\.py/)
+  assert.match(verify, /refresh assets via prepare-localdb\.py/)
   assert.match(verify, /ZoneInfo\("Asia\/Shanghai"\)/)
   // 发行批次入口：打包前预检嵌入式解释器 tzdata 能力
-  assert.match(batch, /prepare-ocr\.py 刷新 ocr-python-final/)
+  assert.match(batch, /prepare-localdb\.py 刷新 localdb-python-final/)
   assert.match(batch, /ZoneInfo\('Asia\/Shanghai'\)/, 'PowerShell must pass the quoted timezone to embedded Python when launched with -File')
+})
+
+test('WeCom localdb Python lock excludes OCR wheels while retaining AES and timezone inputs', () => {
+  const lock = JSON.parse(readFileSync(new URL('../localdb-assets.lock.json', import.meta.url), 'utf8'))
+  assert.deepEqual(lock.wheels.map(wheel => wheel.name), ['pycryptodome', 'tzdata'])
+  assert.match(lock.python.sha256, /^[0-9a-f]{64}$/)
+  assert.ok(lock.msvc.redist.sha256)
+  const prepare = readFileSync(new URL('../prepare-localdb.py', import.meta.url), 'utf8')
+  assert.match(prepare, /LOCALDB_SQLITE_AES_IANA_OK/)
+  assert.doesNotMatch(prepare, /RapidOCR|from PIL|onnxruntime/)
 })

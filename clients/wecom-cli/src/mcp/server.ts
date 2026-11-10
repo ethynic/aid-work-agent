@@ -38,15 +38,13 @@ const INSTRUCTIONS =
   'wecom_send_status（只读：用原发送receipt_id对账；查询成功不等于发送confirmed，unknown禁止重发）、' +
   'wecom_group_list（本地库群关键词搜索/列群，limit控制数量）、' +
   'wecom_group_read（本地库读群消息，支持时间范围，最近N条按时间升序；两工具不切会话、不清未读）、' +
-  'wecom_chat_search（只读搜索联系人/群聊，返回带 target_ref 的候选）、' +
+  'wecom_chat_search（只读查询本地联系人/群聊名称，唯一匹配返回 target_ref）、' +
   'wecom_message_send（写：向 target_ref/target_name 目标发送 1 条文本消息；target_name 直达模式内部自动 search 定位）、' +
   'wecom_send_image（写：向 target_ref 目标发送 1 张本地图片，image_path 须为本机绝对路径且 ≤20MB，调用方负责落盘）、' +
-  'wecom_add_customer（写：按手机号检索并发送添加客户邀请，confirm 必须显式为 true）、' +
-  'wecom_unread_list（只读：未读/待回复会话快照；本地库=待回复判定可发现已读未回复，UI=角标快照）,' +
-  'wecom_read_session（读：按 target_ref/target_name 读取会话消息；本地库不切会话，UI进入会话会清除角标；' +
-  '模型通道按次计费，未配置或不可用走本地 OCR）、' +
-  'wecom_watch_poll（读：新消息跟踪单轮，返回增量消息事件；本地库通道不清角标零 UI 副作用，' +
-  'UI 通道读取候选会话会清除其未读角标并推进本机文本水位）。' +
+  'wecom_unread_list（只读：本地库待回复会话快照，可发现已读未回复）,' +
+  'wecom_read_session（读：按 session 或旧 target_ref/target_name 读取会话消息；不切会话、不清角标）、' +
+  'wecom_watch_poll（读：本地库新消息跟踪单轮，返回增量消息事件；不切会话、不清角标）。' +
+  '这三个读取入口仅支持已验证企业微信版本；本地库不可用时明确报错，不回退 UI/OCR。' +
   '前提：仅 Windows（win32-x64），企业微信已运行登录；UI自动化需要交互桌面且未锁屏。本地库按身份/版本/密钥等自身条件检查，锁屏真实可用性仍待验收。' +
   '副作用预告：自动化全链路纯 PostMessage 后台注入，不移动真实光标、不使用 SendInput 键鼠注入（企微 5.0.9 会丢弃）；' +
   'target_ref 有效期 5 分钟，过期请重新搜索；' +

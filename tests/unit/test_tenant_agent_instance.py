@@ -170,11 +170,21 @@ class TestUpdateOverrides:
             db.get.return_value = _row("sales", "sales")
             db.update_overrides.return_value = True
             update_overrides("t1", "sales", {
-                "display_name": "新名", "tools": {"allowed": ["x"]}, "llm_provider": "hack",
+                "display_name": "新名", "tools": {"allowed": ["x"]}, "system_prompt": "hack",
             })
             called = db.update_overrides.call_args[0][2]
         assert set(called.keys()) <= set(OVERRIDABLE_FIELDS)
         assert called == {"display_name": "新名"}
+
+    def test_llm_provider_passes_whitelist_with_none_value(self):
+        """llm_provider（pack_llm_config JSONB 形态）在白名单内；None（清除）可写"""
+        assert "llm_provider" in OVERRIDABLE_FIELDS
+        with patch.object(svc, "TenantAgentInstanceDB") as db:
+            db.get.return_value = _row("sales", "sales")
+            db.update_overrides.return_value = True
+            update_overrides("t1", "sales", {"llm_provider": None})
+            called = db.update_overrides.call_args[0][2]
+        assert called == {"llm_provider": None}
 
     def test_auto_creates_direct_customization_row(self):
         """基础员工首次定制：自动补建直用实例行"""
@@ -407,3 +417,91 @@ class TestApplyDirectCustomizationOverrides:
     def test_empty_tenant_returns_items(self):
         items = [{"agent_id": "sales", "name": "销售助手"}]
         assert svc.apply_direct_customization_overrides("", items) == items
+
+
+# ============== API 层 LLM 字段校验与权限门 ==============
+
+import asyncio
+
+from fastapi import HTTPException
+from pydantic import ValidationError
+
+from src.api.tenant_agent_instances import UpdateInstanceRequest, update_instance, _sanitize_llm
+from src.models.subagent import extract_llm_config
+
+
+def _admin():
+    return {"tenant_id": "t1", "user_id": "u1", "role": "tenant_admin"}
+
+
+def _req(**kw):
+    return UpdateInstanceRequest(**kw)
+
+
+class TestSanitizeLlm:
+    def test_not_submitted_returns_none(self):
+        assert _sanitize_llm(_req(display_name="x")) is None
+
+    def test_invalid_provider_rejected(self):
+        with pytest.raises(HTTPException) as ei:
+            _sanitize_llm(_req(llm_provider="moonshot"))
+        assert ei.value.status_code == 400
+
+    def test_unknown_model_code_key_rejected(self):
+        with pytest.raises(HTTPException) as ei:
+            _sanitize_llm(_req(llm_provider="qwen", llm_model_codes={"openai": "gpt"}))
+        assert ei.value.status_code == 400
+
+    def test_non_ascii_model_code_sanitized(self):
+        # U+2011（非断行连字符）被移除；空格（0x20）不在 \x21-\x7E 内同样移除，与前端 sanitize 口径一致
+        out = _sanitize_llm(_req(llm_provider="qwen", llm_model_codes={"qwen": "qwen‑plus 3"}))
+        provider, codes = extract_llm_config(out["llm_provider"])
+        assert provider == "qwen"
+        assert codes == {"qwen": "qwenplus3"}
+
+    def test_all_empty_packs_none_as_clear(self):
+        out = _sanitize_llm(_req(llm_provider=None, llm_model_codes={"qwen": ""}))
+        assert out == {"llm_provider": None}
+
+    def test_packed_shape(self):
+        out = _sanitize_llm(_req(llm_provider="deepseek", llm_model_codes={"deepseek": "deepseek-v3"}))
+        assert out["llm_provider"] == {"provider": "deepseek", "model_codes": {"deepseek": "deepseek-v3"}}
+
+
+class TestUpdateInstanceLlmGate:
+    def test_switch_off_llm_fields_rejected_403(self):
+        body = _req(display_name="x", llm_provider=None, llm_model_codes=None)
+        with patch("src.api.tenant_agent_instances.TenantDB.is_llm_edit_allowed", return_value=False), \
+             patch("src.saas.services.tenant_agent_instance_service.update_overrides") as upd:
+            upd.return_value = _row("sales", "sales")
+            with pytest.raises(HTTPException) as ei:
+                asyncio.run(update_instance("sales", body, _admin()))
+        assert ei.value.status_code == 403
+
+    def test_switch_on_llm_fields_written(self):
+        body = _req(llm_provider="qwen", llm_model_codes={"qwen": "qwen-plus"})
+        with patch("src.api.tenant_agent_instances.TenantDB.is_llm_edit_allowed", return_value=True), \
+             patch("src.saas.services.tenant_agent_instance_service.update_overrides") as upd:
+            upd.return_value = _row("sales", "sales")
+            asyncio.run(update_instance("sales", body, _admin()))
+            called = upd.call_args[0][2]
+        assert called["llm_provider"] == {"provider": "qwen", "model_codes": {"qwen": "qwen-plus"}}
+
+    def test_no_llm_fields_skip_gate(self):
+        body = _req(display_name="新名")
+        with patch("src.api.tenant_agent_instances.TenantDB.is_llm_edit_allowed",
+                   side_effect=AssertionError("不应查询开关")):
+            with patch("src.saas.services.tenant_agent_instance_service.update_overrides") as upd:
+                upd.return_value = _row("sales", "sales")
+                asyncio.run(update_instance("sales", body, _admin()))
+                assert "llm_provider" not in upd.call_args[0][2]
+
+    def test_non_ascii_input_sanitized_before_write(self):
+        body = _req(llm_provider="zhipu", llm_model_codes={"zhipu": "GLM‑5"})
+        with patch("src.api.tenant_agent_instances.TenantDB.is_llm_edit_allowed", return_value=True), \
+             patch("src.saas.services.tenant_agent_instance_service.update_overrides") as upd:
+            upd.return_value = _row("sales", "sales")
+            asyncio.run(update_instance("sales", body, _admin()))
+            called = upd.call_args[0][2]
+        _, codes = extract_llm_config(called["llm_provider"])
+        assert codes == {"zhipu": "GLM5"}  # 输入 GLM‑5（U+2011）非法字符被移除

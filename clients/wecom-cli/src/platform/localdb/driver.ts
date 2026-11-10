@@ -1,12 +1,12 @@
 /**
  * TS→py 驱动桥（wecom_localdb.py 的 spawn 通道；C6/C7/C8 的统一 Python 调用入口）。
  *
- * - 解释器解析 resolveLocaldbPython（对齐 _common.ps1 Resolve-WeComOcrPython 的存在性探测
+ * - 解释器解析 resolveLocaldbPython（使用独立便携 localdb-python 的存在性探测
  *   思路 + matrix.ts 的相对包根解析）：
  *   ① 环境变量 AID_WECOM_LOCALDB_PYTHON（显式覆盖，文件存在才用）；
  *   ② 仓库根 venv\Scripts\python.exe（开发态；相对包根上一级解析，与 package.json test:py
  *      的 ..\..\venv 同位）；
- *   ③ 打包态 ocr-python\python.exe（发行包内解释器，存在才用）；
+ *   ③ 打包态 localdb-python\python.exe（发行包内解释器，存在才用）；
  *   ④ 全部不可用 → null（调用方按 CONFIG_MISSING 语义处理）。
  * - runLocaldbPy：spawn python -I -B drivers/py/wecom_localdb.py <args>，收集 stdout 最后一行
  *   `LOCALDB_JSON: {...}` 解析（前缀协议对齐 py emit()/ps1 DRIVER_JSON 惯例）；opts.stdin
@@ -57,7 +57,7 @@ export interface ResolveLocaldbPythonDeps {
 
 /**
  * 解析本地库 Python 可执行（存在性探测逐级回退；全部不可用 → null）。
- * 顺序：AID_WECOM_LOCALDB_PYTHON → 仓库根 venv\Scripts\python.exe → <包根>\ocr-python\python.exe。
+ * 顺序：AID_WECOM_LOCALDB_PYTHON → 仓库根 venv\Scripts\python.exe → <包根>\localdb-python\python.exe。
  */
 export function resolveLocaldbPython(deps: ResolveLocaldbPythonDeps = {}): string | null {
   const env = deps.env ?? process.env
@@ -68,8 +68,8 @@ export function resolveLocaldbPython(deps: ResolveLocaldbPythonDeps = {}): strin
   // 开发态：仓库根 venv（clients/wecom-cli 包根的上两级；与 package.json test:py 的 ..\..\venv 同位）
   const devPython = join(packageRoot, '..', '..', 'venv', 'Scripts', 'python.exe')
   if (existsFn(devPython)) return devPython
-  // 打包态：发行包内解释器（与 _common.ps1 Resolve-WeComOcrPython 的 bundled 同位）
-  const bundledPython = join(packageRoot, 'ocr-python', 'python.exe')
+  // 打包态：发行包内独立的便携本地库解释器。
+  const bundledPython = join(packageRoot, 'localdb-python', 'python.exe')
   if (existsFn(bundledPython)) return bundledPython
   return null
 }
@@ -185,7 +185,7 @@ export async function runLocaldbPy(
     // 明确 error 指出解析链全部落空（提示环境变量与两条候选位置）；不含任何密钥信息
     return failResult(
       `未找到本地库 Python 解释器（${LOCALDB_PYTHON_ENV_VAR}、仓库根 venv\\Scripts\\python.exe、` +
-        '打包 ocr-python\\python.exe 均不可用）',
+        '打包 localdb-python\\python.exe 均不可用）',
     )
   }
   const driverPath = deps.driverPath ?? PY_DRIVER_PATH

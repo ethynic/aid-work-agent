@@ -23,6 +23,8 @@ from src.local_tools.manifest import LOCAL_PROXY_TOOL_NAMES
 from src.local_tools.proxy_tool import (
     LOCAL_PROXY_TOOL_CLASSES,
     BossGotoTool,
+    WecomConfigCalibrateTool,
+    WecomConfigDoctorTool,
     WecomMessageSendTool,
     WecomProbeTool,
     WecomReadSessionTool,
@@ -41,7 +43,9 @@ TENANT = "tenant_t1"
 USER = "user_t1"
 REPO = "src.local_tools.proxy_tool.repository"
 
-# 与 runtime wecom manifest / catalog 条目逐字一致（顺序也一致）
+# 与 runtime wecom manifest / catalog 条目逐字一致（顺序也一致）；
+# 代理任务 P3/P4：runtime manifest（providers.ts WECOM_TOOLS）已含两个配置工具，
+# 服务端 catalog 镜像同步（契约 §3；仅受信配置流程可发起，不进模型工具集）
 WECOM_MANIFEST_TOOLS = [
     "wecom_probe",
     "wecom_message_send",
@@ -53,6 +57,8 @@ WECOM_MANIFEST_TOOLS = [
     "wecom_group_poll",
     "wecom_read_sessions",
     "wecom_session_directory",
+    "wecom_config_doctor",
+    "wecom_config_calibrate",
 ]
 
 WECOM_PROXY_CLASSES = [
@@ -66,6 +72,8 @@ WECOM_PROXY_CLASSES = [
     WecomGroupPollTool,
     WecomReadSessionsTool,
     WecomSessionDirectoryTool,
+    WecomConfigDoctorTool,
+    WecomConfigCalibrateTool,
 ]
 
 
@@ -117,6 +125,14 @@ SUCCEEDED_INVOCATION = {
 
 
 class TestCatalogWecomEntry:
+    def test_agent_surface_adds_only_readonly_directory(self):
+        """名称检索应可见，但不能顺带开放内部导航或媒体写工具。"""
+        assert catalog.agent_tools("wecom") == [
+            "wecom_read_session", "wecom_message_send", "wecom_read_sessions",
+            "wecom_session_directory",
+        ]
+        assert set(catalog.agent_tools("wecom")) <= set(catalog.allowed_tools("wecom"))
+
     def test_wecom_entry_registered_with_contract_fields(self):
         entry = catalog.TRUSTED_PROVIDERS["wecom"]
         assert entry["provider_id"] == "ai.aidwork.wecom"
@@ -177,7 +193,7 @@ class TestWecomToolDefinitions:
             assert tool.description
 
     def test_all_wecom_tools_zero_credit_price(self):
-        """防双计费：受信工具均为0；模型通道按原实际用量结算。"""
+        """本地工具层不另收积分；旧截图模型读取已退出当前会话读取链。"""
         for cls in WECOM_PROXY_CLASSES:
             assert cls()._tool_credit_price() == 0.0
 
@@ -228,6 +244,7 @@ class TestWecomInputValidation:
             target_ref="ref-1", file_path=r"C:\tmp\jd.pdf") is True
 
     def test_read_session_target_xor_and_page_bounds(self):
+        """旧 max_pages 保留入参形状以便原请求到 CLI 获得明确停用错误。"""
         with pytest.raises(ValidationError):
             WecomReadSessionTool.InputModel()
         with pytest.raises(ValidationError):
@@ -240,6 +257,57 @@ class TestWecomInputValidation:
             WecomReadSessionTool.InputModel(target_name="张三", since_days=0)
         assert WecomReadSessionTool().validate_parameters(
             target_name="张三", max_pages=5, since_days=3) is True
+
+    def test_read_descriptions_match_database_result_contract(self):
+        """模型不能把待回复快照误解为角标 OCR 未读列表。"""
+        unread = WecomUnreadListTool().description
+        assert 'data.conversations' in unread
+        assert 'judgment_basis=last_sender' in unread
+        assert 'unread_count' not in unread
+        assert '主窗口会话列表' not in unread
+        read = WecomReadSessionTool().description
+        assert '本机数据库' in read
+        assert '不发送、不搜索切换UI' in read
+        assert 'INVALID_ARGUMENT' in WecomReadSessionTool.InputModel.model_fields['max_pages'].description
+        assert 'send_time' in WecomReadSessionTool.InputModel.model_fields['since_days'].description
+
+    def test_directory_search_for_name_resolution_before_read_or_send(self):
+        """错名与同名必须给 Agent 可用候选，不能直接推断发送目标。"""
+        tool = WecomSessionDirectoryTool()
+        definition = tool.to_tool_definition()
+        assert 'search' in definition['input_schema']['properties']['mode']['enum']
+        assert 'wecom_session_directory' in WecomReadSessionTool().description
+        assert 'wecom_session_directory' in WecomMessageSendTool().description
+        for phrase in ('match_count', 'same_name', 'candidates', '不自动', '完整名称', '只读'):
+            assert phrase in definition['description']
+        assert tool.validate_parameters(mode='search', query='孙程')
+        assert tool.validate_parameters(mode='search', query='沟通', type='group', limit=50)
+        assert tool.validate_parameters(mode='search', query='孙晨', type='contact', limit=1)
+        assert tool.validate_parameters(mode='search', query='孙晨', type='any')
+
+    @pytest.mark.parametrize('arguments', [
+        {'mode': 'search'}, {'mode': 'search', 'query': ''},
+        {'mode': 'search', 'query': '  '}, {'mode': 'search', 'query': 'x' * 101},
+        {'mode': 'search', 'query': '沟通', 'type': 'unknown'},
+        {'mode': 'search', 'query': '沟通', 'limit': 0},
+        {'mode': 'search', 'query': '沟通', 'limit': 51},
+        {'mode': 'search', 'query': '沟通', 'limit': 1.5},
+        {'mode': 'search', 'query': '沟通', 'cursor': 'wdir1.x'},
+        {'mode': 'search', 'query': '沟通', 'session': 'ws1.x'},
+        {'mode': 'search', 'query': '沟通', 'sessions': ['ws1.x']},
+        {'mode': 'list', 'type': 'group'},
+        {'mode': 'preview', 'session': 'ws1.x', 'type': 'contact'},
+        {'mode': 'resolve', 'sessions': ['ws1.x'], 'type': 'group'},
+    ])
+    def test_directory_rejects_invalid_search_or_mode_combinations(self, arguments):
+        assert not WecomSessionDirectoryTool().validate_parameters(**arguments)
+
+    def test_directory_keeps_page_modes(self):
+        """Agent 投影不能改变既有页面列表、预览和核验请求。"""
+        tool = WecomSessionDirectoryTool()
+        assert tool.validate_parameters(mode='list', query='售前', limit=50)
+        assert tool.validate_parameters(mode='preview', session='ws1.x', limit=3)
+        assert tool.validate_parameters(mode='resolve', sessions=['ws1.x'])
 
     def test_probe_and_unread_accept_no_args(self):
         assert WecomProbeTool().validate_parameters() is True

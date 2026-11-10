@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 import test_localdb_query as fixtures
+from attachment_fixture import file_content
 
 drv = fixtures.drv
 CONV = 'R:send-confirmation'
@@ -86,6 +87,17 @@ class SendMessagesTest(unittest.TestCase):
         row = self.query()['messages'][0]
         self.assertIsNone(row['text'])
         self.assertFalse(row['trusted'])
+
+    def test_media_send_projection_exposes_descriptor_without_text_trust(self):
+        image_content = field(3, b'https://example.invalid/synthetic-image')
+        self.add_rows([self.row(image_content, content_type=101),
+                       self.row(file_content('a', 'synthetic-resource', b'bytes'), content_type=102)])
+        rows = self.query('--after-id', '0')['messages']
+        self.assertEqual([(row['content_type'], row['attachment']['kind']) for row in rows],
+                         [(101, 'image'), (102, 'file')])
+        self.assertEqual(rows[1]['attachment']['name'], 'a')
+        self.assertTrue(all(row['sender_id'] == fixtures.SELF and not row['trusted'] for row in rows),
+                        'media sender and descriptor, not text trust, determine confirmation')
 
     def test_legacy_and_send_cursors_interoperate_in_both_directions(self):
         self.add_rows([self.row(text_parts('first', '-tail')),

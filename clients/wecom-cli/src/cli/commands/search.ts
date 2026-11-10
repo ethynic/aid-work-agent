@@ -1,10 +1,10 @@
 /**
- * CLI 子命令 search：企业微信搜索联系人/群聊（只读）。
+ * CLI 子命令 search：在本地库匹配会话/联系人名称（只读，不操作窗口）。
  *
  * 用法：
  *   aid-wecom search --query <词> [--type contact|group|any] [--limit N] [--json]
  *
- * 返回候选列表（name/subtitle/section/target_ref），target_ref 供 send 使用（5 分钟有效）。
+ * 唯一匹配返回 target_ref；无匹配或多匹配返回候选名称供 agent/用户确认。
  * 与 MCP tool wecom_chat_search 调用同一 operation（业务能力只实现一次）。
  */
 import { getOperationEntry } from '../../operations/registry.js'

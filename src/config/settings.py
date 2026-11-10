@@ -19,6 +19,8 @@ load_dotenv()
 
 # 受支持的 LLM provider 名称（与 gateway.PROVIDERS / config.yaml llm.* 保持一致）
 _LLM_PROVIDERS = ("qwen", "zhipu", "deepseek")
+# 公开别名：模块外（如 API 层校验）统一 import 此名，不引用私有成员
+LLM_PROVIDERS = _LLM_PROVIDERS
 
 
 class LLMProviderConfig(BaseModel):

@@ -98,7 +98,7 @@ test('a scoped send writes the exact model text once to the original group and c
   } finally { rmSync(base, { recursive: true, force: true }) }
 })
 
-test('a wrong current contact is checked first; contact-only search cannot become a group send', scope, async () => {
+test('text send cannot fall into OCR search when the driver cannot confirm the target group', scope, async () => {
   const base = mkdtempSync(join(tmpdir(), 'wecom-contact-scope-'))
   try {
     const f = await groupMonitorFixture(base, true, '联系人')
@@ -113,11 +113,6 @@ test('a wrong current contact is checked first; contact-only search cannot becom
           assert.ok(options.args?.includes('group'), 'driver must receive expected group type')
           return { navigate_required: true, reason: 'current conversation is a contact, not the target group' }
         }
-        if (options.script.endsWith('chat-search.ps1')) {
-          searches++
-          return { query: '合成群甲', items: [{ name: '合成群甲', subtitle: '', section: '联系人', x: 100, y: 100 }],
-            best_index: 0, overlay: { x: 0, y: 0, w: 400, h: 500 }, jev: { used: false } }
-        }
         throw new Error('must not select or send to contact')
       },
     })
@@ -125,7 +120,7 @@ test('a wrong current contact is checked first; contact-only search cannot becom
     assert.equal(result.success, false)
     assert.equal(result.effect, 'none')
     assert.equal(checks, 1, 'first invocation only checks current target and performs no input')
-    assert.equal(searches, 1, 'search happens only after the current-target mismatch')
+    assert.equal(searches, 0, 'text send does not invoke OCR search/select navigation')
   } finally { rmSync(base, { recursive: true, force: true }) }
 })
 

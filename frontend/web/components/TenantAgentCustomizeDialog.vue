@@ -16,6 +16,44 @@
         </div>
       </section>
 
+      <!-- LLM 配置覆盖（仅平台开通「允许修改LLM提供者」的租户可见） -->
+      <section v-if="llmEditAllowed">
+        <h4 class="text-sm font-semibold text-default mb-2">LLM 配置覆盖</h4>
+        <p class="text-xs text-muted mb-2 leading-relaxed">
+          指定该数字员工使用的 LLM 提供者与各提供者模型；留空继承父定义/全局默认配置。
+        </p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-2">
+          <div>
+            <label class="text-sm text-muted mb-1 block">LLM 提供者</label>
+            <BaseSelect v-model="form.llm_provider" :disabled="saving">
+              <option value="">留空（继承父定义）</option>
+              <option value="deepseek">deepseek</option>
+              <option value="qwen">qwen</option>
+              <option value="zhipu">zhipu</option>
+            </BaseSelect>
+          </div>
+        </div>
+        <div>
+          <label class="text-sm text-muted mb-1 block">各 Provider Model 覆盖</label>
+          <div class="bg-canvas rounded-lg p-2 space-y-1.5">
+            <div v-for="p in LLM_PROVIDERS" :key="p" class="grid grid-cols-[80px_1fr] items-center gap-2">
+              <span class="text-xs text-muted">{{ p }}</span>
+              <input
+                v-model="form.llm_model_codes[p]"
+                type="text"
+                placeholder="留空用全局默认"
+                :disabled="saving"
+                :class="modelCodeErrors[p] ? 'border-danger-500 focus:border-danger-500' : ''"
+                @input="sanitizeModelCode(p, $event)"
+                class="w-full px-2 py-1 text-xs bg-surface border border-default rounded focus:outline-none focus:border-primary-400"
+              />
+            </div>
+            <p v-if="modelCodeErrorText" class="text-[11px] text-danger-500">{{ modelCodeErrorText }}</p>
+            <p class="text-[11px] text-muted">模型名留空使用全局默认；填写后该 provider 的调用改用此模型。</p>
+          </div>
+        </div>
+      </section>
+
       <!-- 扩展提示词 -->
       <section>
         <h4 class="text-sm font-semibold text-default mb-2">扩展提示词</h4>
@@ -241,6 +279,7 @@ import { useRouter } from 'vue-router'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import MyTextarea from '@/components/ui/MyTextarea.vue'
 import HelpExpand from '@/components/ui/HelpExpand.vue'
 import {
@@ -251,6 +290,7 @@ import {
   type TenantAgentInstance,
   type GreetingPrompt,
 } from '@/api/tenantAgentInstances'
+import { getTenantInfo } from '@/api/saasTenant'
 import {
   listTemplates,
   uploadTemplate,
@@ -296,7 +336,53 @@ const form = ref({
   description: '',
   extra_prompt: '',
   greeting_summary: '',
+  llm_provider: '',
+  llm_model_codes: { deepseek: '', qwen: '', zhipu: '' } as Record<string, string>,
 })
+
+// ============== LLM 配置覆盖 ==============
+const LLM_PROVIDERS = ['deepseek', 'qwen', 'zhipu']
+// 平台开关「允许修改LLM提供者」；读取失败按 false 隐藏（fail-closed，后端 403 兜底）
+const llmEditAllowed = ref(false)
+
+// Model 覆盖输入校验：只允许 ASCII 可见字符（\x21-\x7E），过滤全角/Unicode 特殊符号
+// 背景：曾发生把 U+2011（非断行连字符）当成普通连字符填入模型名导致调用失败
+const ASCII_VISIBLE_RE = /[^\x21-\x7E]/g
+const modelCodeErrors = ref<Record<string, string>>({})
+
+const modelCodeErrorText = computed(() => {
+  const parts = Object.entries(modelCodeErrors.value)
+    .filter(([, msg]) => msg)
+    .map(([k, msg]) => `${k}: ${msg}`)
+  return parts.length > 0 ? parts.join('；') : ''
+})
+
+function sanitizeModelCode(provider: string, e: Event) {
+  const input = e.target as HTMLInputElement
+  const raw = input.value
+  const cleaned = raw.replace(ASCII_VISIBLE_RE, '')
+  if (cleaned !== raw) {
+    const removed = [...new Set(raw.replace(/[\x21-\x7E]/g, ''))]
+    modelCodeErrors.value[provider] = `已移除非法字符 ${removed.join(' ')}`
+  } else {
+    delete modelCodeErrors.value[provider]
+  }
+  // 触发 modelCodeErrors 响应式更新（delete 不触发）
+  modelCodeErrors.value = { ...modelCodeErrors.value }
+  if (cleaned !== raw) {
+    input.value = cleaned
+    form.value.llm_model_codes[provider] = cleaned
+  }
+}
+
+async function loadLlmEditAllowed() {
+  try {
+    const res = await getTenantInfo()
+    llmEditAllowed.value = res?.tenant?.settings?.allow_llm_provider_edit === true
+  } catch {
+    llmEditAllowed.value = false
+  }
+}
 const greetingPrompts = ref<GreetingPrompt[]>([
   { label: '', message: '' },
   { label: '', message: '' },
@@ -346,6 +432,12 @@ async function loadInstance() {
     description: inst?.description || '',
     extra_prompt: inst?.extra_prompt || '',
     greeting_summary: inst?.greeting_summary || '',
+    llm_provider: inst?.llm_provider || '',
+    llm_model_codes: {
+      deepseek: inst?.llm_model_codes?.deepseek || '',
+      qwen: inst?.llm_model_codes?.qwen || '',
+      zhipu: inst?.llm_model_codes?.zhipu || '',
+    },
   }
   const gp = inst?.greeting_prompts
   greetingPrompts.value = [0, 1].map(i => ({
@@ -455,6 +547,20 @@ async function handleSave() {
       .map(p => ({ label: p.label.trim(), message: p.message.trim() }))
       .filter(p => p.label && p.message)
 
+    // LLM 字段为「提交即整体更新」契约：开关开启时总是携带（null=清除恢复继承）；关闭时不携带
+    let llmFields: { llm_provider?: string | null; llm_model_codes?: Record<string, string> | null } = {}
+    if (llmEditAllowed.value) {
+      const codes: Record<string, string> = {}
+      for (const p of LLM_PROVIDERS) {
+        const v = (form.value.llm_model_codes[p] || '').trim()
+        if (v) codes[p] = v
+      }
+      llmFields = {
+        llm_provider: form.value.llm_provider || null,
+        llm_model_codes: Object.keys(codes).length > 0 ? codes : null,
+      }
+    }
+
     await updateTenantAgentInstance(props.agentId, {
       // 空串=清除覆盖恢复继承；null=不改（后端契约）
       display_name: form.value.display_name.trim(),
@@ -462,6 +568,7 @@ async function handleSave() {
       extra_prompt: form.value.extra_prompt,
       greeting_summary: form.value.greeting_summary.trim(),
       greeting_prompts: prompts,
+      ...llmFields,
     })
     emit('changed')
     visible.value = false
@@ -517,11 +624,14 @@ function resetForm() {
     description: '',
     extra_prompt: '',
     greeting_summary: '',
+    llm_provider: '',
+    llm_model_codes: { deepseek: '', qwen: '', zhipu: '' },
   }
   greetingPrompts.value = [
     { label: '', message: '' },
     { label: '', message: '' },
   ]
+  modelCodeErrors.value = {}
 }
 
 watch(visible, (v) => {
@@ -532,6 +642,7 @@ watch(visible, (v) => {
     newTemplateName.value = ''
     selectedFile.value = null
     templates.value = []
+    loadLlmEditAllowed()
     loadInstance()
     loadTemplates()
   } else {

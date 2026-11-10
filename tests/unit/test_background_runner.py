@@ -76,6 +76,118 @@ class TestRegisterSystemJobs:
         job_ids = [c.kwargs.get("id") for c in m._scheduler.add_job.call_args_list]
         assert "job_system_publish_dispatch" not in job_ids
 
+    def test_registers_wecom_proxy_group_discovery(self):
+        """后台每 10 秒登记活跃设备组，设备慢调用由各组 job 承担。"""
+        from datetime import timedelta
+
+        m = self._make_manager()
+        with patch("src.config.settings.settings") as mock_settings:
+            mock_settings.memory.long_term.enabled = False
+            mock_settings.memory.mid_term.enabled = False
+            mock_settings.memory.cleanup_interval = 300
+
+            m._register_system_jobs()
+
+        calls = {c.kwargs.get("id"): c for c in m._scheduler.add_job.call_args_list}
+        assert "job_system_wecom_proxy_groups" in calls
+        assert "job_system_wecom_proxy_monitor" not in calls
+        assert "job_system_wecom_proxy_dispatch" not in calls
+        call = calls["job_system_wecom_proxy_groups"]
+        assert call.args[1].interval == timedelta(seconds=10)  # trigger 为位置参数
+        assert call.kwargs["max_instances"] == 1  # 整轮未完成不重叠
+        assert call.kwargs["coalesce"] is True
+
+    def test_wecom_proxy_monitor_callback_runs_tick_and_swallows_errors(self):
+        """回调经新 event loop 执行 run_tick（同视频轮询模式）；异常不外抛线程"""
+        from unittest.mock import AsyncMock
+
+        import src.wecom_conversation.proxy_monitor as proxy_monitor
+        from src.scheduler.manager import ScheduledTaskManager
+
+        m = ScheduledTaskManager.__new__(ScheduledTaskManager)
+        with patch.object(proxy_monitor, "run_tick", AsyncMock()) as tick:
+            m._run_wecom_proxy_monitor(('tenant', 'device', 'account'))
+        tick.assert_awaited_once_with(('tenant', 'device', 'account'))
+        with patch.object(proxy_monitor, "run_tick",
+                          AsyncMock(side_effect=RuntimeError("boom"))):
+            m._run_wecom_proxy_monitor(('tenant', 'device', 'account'))  # 不外抛
+
+    def test_wecom_proxy_dispatch_callback_runs_tick_and_swallows_errors(self):
+        """派发回调经新 event loop 执行 run_tick；异常不外抛线程"""
+        from unittest.mock import AsyncMock
+
+        import src.wecom_conversation.proxy_dispatcher as proxy_dispatcher
+        from src.scheduler.manager import ScheduledTaskManager
+
+        m = ScheduledTaskManager.__new__(ScheduledTaskManager)
+        with patch.object(proxy_dispatcher, "run_tick", AsyncMock()) as tick:
+            m._run_wecom_proxy_dispatch(('tenant', 'device', 'account'))
+        tick.assert_awaited_once_with(('tenant', 'device', 'account'))
+        with patch.object(proxy_dispatcher, "run_tick",
+                          AsyncMock(side_effect=RuntimeError("boom"))):
+            m._run_wecom_proxy_dispatch(('tenant', 'device', 'account'))  # 不外抛
+
+    def test_slow_device_does_not_block_other_device_second_tick(self):
+        """A 超过轮询间隔未结束，B 的监控与派发仍各执行第二轮。"""
+        import asyncio
+        import threading
+        import time
+
+        from apscheduler.schedulers.background import BackgroundScheduler
+
+        import src.wecom_conversation.proxy_dispatcher as proxy_dispatcher
+        import src.wecom_conversation.proxy_monitor as proxy_monitor
+
+        m = self._make_manager()
+        scheduler = BackgroundScheduler(timezone='Asia/Shanghai')
+        scheduler.start(paused=True)
+        m._scheduler = scheduler
+        m._load_wecom_proxy_groups = lambda: [
+            ('tenant', 'device-a', 'account'), ('tenant', 'device-b', 'account')]
+        release_a = threading.Event()
+        a_started = threading.Event()
+        counts = {'monitor': 0, 'dispatch': 0}
+        count_lock = threading.Lock()
+
+        async def device_tick(kind, group):
+            if group[1] == 'device-a':
+                a_started.set()
+                await asyncio.to_thread(release_a.wait)
+                return
+            with count_lock:
+                counts[kind] += 1
+
+        async def monitor_tick(group):
+            await device_tick('monitor', group)
+
+        async def dispatch_tick(group):
+            await device_tick('dispatch', group)
+
+        try:
+            with patch.object(proxy_monitor, 'run_tick', monitor_tick), \
+                    patch.object(proxy_dispatcher, 'run_tick', dispatch_tick):
+                m._refresh_wecom_proxy_group_jobs()
+                jobs = [job for job in scheduler.get_jobs()
+                        if job.id.startswith('job_system_wecom_proxy_')]
+                assert len(jobs) == 4
+                assert all(job.max_instances == 1 for job in jobs)
+                started_at = time.monotonic()
+                scheduler.resume()
+                deadline = started_at + 13
+                while time.monotonic() < deadline:
+                    with count_lock:
+                        enough = counts['monitor'] >= 2 and counts['dispatch'] >= 2
+                    if a_started.is_set() and enough:
+                        break
+                    time.sleep(0.01)
+                assert a_started.is_set()
+                assert counts['monitor'] >= 2 and counts['dispatch'] >= 2
+                assert time.monotonic() - started_at >= 10
+                assert not release_a.is_set()  # B 第二轮发生时 A 仍在原轮次
+        finally:
+            release_a.set()
+            scheduler.shutdown(wait=True)
+
 
 # ==================== background_runner import 安全 ====================
 

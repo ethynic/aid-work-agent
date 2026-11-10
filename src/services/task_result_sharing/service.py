@@ -140,8 +140,9 @@ def view_task_result(share_key, viewer=None):
     for name in ('images', 'downloadableFiles'):
         for item in message.get(name) or []:
             item['download_url'] = reply_sharing.SHARE_FILE.sub(resource_url, item.get('download_url') or '')
+    finished_at = runner['finished_at']
     return {'state': 'ready', 'task_name': task['name'], 'task_status': task['status'],
-            'runner_status': runner['status'], 'finished_at': runner['finished_at'],
+            'runner_status': runner['status'], 'finished_at': finished_at.isoformat() if finished_at else None,
             'tenant_id': record['tenant_id'], 'task_id': record['task_id'],
             'runner_id': record['runner_id'], 'message': message, 'access_ticket': ticket,
             'viewer_is_owner': bool(viewer and viewer.get('user_id') == record['user_id']

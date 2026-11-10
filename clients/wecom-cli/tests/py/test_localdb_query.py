@@ -969,6 +969,22 @@ class QueryProtocolTest(unittest.TestCase):
         self.assertEqual(payload['messages'][0]['text'], 'hash ' + hex_like)
         self.assertIn(hex_like, out)
 
+    def test_context_exposes_verified_self_name_without_changing_identity_mapping(self):
+        self.fx.add_user_db([(SELF, 'Self', '', '')])
+        payload, _ = run_driver(['query', '--workdir', self.fx.dir, '--task', 'context', '--account', SELF])
+        self.assertTrue(payload['ok'])
+        self.assertEqual(payload['self_user_id'], SELF)
+        self.assertEqual(payload['self_name'], 'Self')
+        conn = sqlite3.connect(os.path.join(self.fx.dir, 'user.db.dec.db'))
+        try:
+            conn.execute('UPDATE user_table SET name=NULL WHERE id=?', (SELF,))
+            conn.commit()
+        finally:
+            conn.close()
+        payload, _ = run_driver(['query', '--workdir', self.fx.dir, '--task', 'context', '--account', SELF])
+        self.assertTrue(payload['ok'], '其它本地库读取仍可用本人 ID 映射')
+        self.assertIsNone(payload['self_name'], '发送标定会单独拒绝缺失的本人显示名')
+
     def test_protocol_bad_args_exit_zero(self):
         payload, _ = run_driver(['query', '--task', 'messages'])
         self.assertEqual(payload['error'], 'BAD_ARGS')

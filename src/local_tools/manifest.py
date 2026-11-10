@@ -13,8 +13,10 @@ LOCAL_PROXY_TOOL_NAMES = frozenset({
     "boss_read_chat", "boss_open_chat",
     "boss_overlay_inspect", "boss_overlay_dismiss",
     # 企业微信 Provider（M11c，2026-09-29）：6 工具与 runtime wecom manifest /
-    # catalog TRUSTED_PROVIDERS['wecom'] 逐字一致
+    # catalog TRUSTED_PROVIDERS['wecom'] 逐字一致；代理任务 P3/P4 增配两个配置
+    # 工具（受信配置流程专用，不进模型工具集，契约 §2/§3）
     "wecom_probe", "wecom_message_send", "wecom_send_image",
     "wecom_send_file", "wecom_read_session", "wecom_unread_list",
     "wecom_send_status", "wecom_group_poll", "wecom_read_sessions", "wecom_session_directory",
+    "wecom_config_doctor", "wecom_config_calibrate",
 })

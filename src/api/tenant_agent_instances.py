@@ -8,13 +8,17 @@ X-Tenant-Id 代管理）；租户隔离由 DB 层 fail-closed 保证。
 """
 
 from typing import Any, Dict, List, Optional
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from src.config.settings import LLM_PROVIDERS
 from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
+from src.models.subagent import extract_llm_config, pack_llm_config
 from src.saas.api.tenant_auth import require_admin
+from src.saas.db.tenant_db import TenantDB
 from src.saas.services import tenant_agent_instance_service as svc
 
 router = APIRouter(prefix="/api/saas/tenant/agent-instances", tags=["tenant-agent-instances"])
@@ -28,12 +32,19 @@ class CreateCopyRequest(BaseModel):
 
 
 class UpdateInstanceRequest(BaseModel):
-    """覆盖项更新：None 表示不改，留空字符串表示清除覆盖（继承父定义）"""
+    """覆盖项更新。
+
+    普通字段（display_name 等）：None 表示不改，留空字符串表示清除覆盖（继承父定义）。
+    LLM 字段（llm_provider/llm_model_codes）契约不同：只要任一字段出现在请求体中
+    即视为整体更新 LLM 配置（未提交的另一个按 None 处理）；两字段全空 = 清除覆盖。
+    前端在租户开关开启时总是同时携带两字段。"""
     display_name: Optional[str] = Field(None, max_length=100)
     description: Optional[str] = Field(None, max_length=500)
     extra_prompt: Optional[str] = None
     greeting_summary: Optional[str] = Field(None, max_length=500)
     greeting_prompts: Optional[List[Dict[str, str]]] = None
+    llm_provider: Optional[str] = None
+    llm_model_codes: Optional[Dict[str, str]] = None
 
 
 def _sanitize_greeting_prompts(prompts: Optional[Any]) -> Optional[Any]:
@@ -57,8 +68,37 @@ def _sanitize_greeting_summary(summary: Optional[str]) -> Optional[str]:
     return summary.strip()[:500] if isinstance(summary, str) else summary
 
 
+def _sanitize_llm(body: UpdateInstanceRequest) -> Optional[Dict[str, Any]]:
+    """LLM 字段清洗（提交即整体更新契约）。
+
+    未提交任一 llm 字段返回 None（不更新）；提交则校验 provider 白名单与
+    model_codes 键白名单（非法 400），值做 ASCII 清洗，全空返回 packed None（清除）。
+    """
+    fields_set = body.model_fields_set
+    if "llm_provider" not in fields_set and "llm_model_codes" not in fields_set:
+        return None
+
+    provider = (body.llm_provider or "").strip()
+    if provider and provider not in LLM_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"llm_provider 非法，须为 {'/'.join(LLM_PROVIDERS)}")
+
+    raw_codes = body.llm_model_codes
+    if raw_codes is not None and not isinstance(raw_codes, dict):
+        raise HTTPException(status_code=400, detail="llm_model_codes 格式错误")
+    cleaned_codes: Dict[str, str] = {}
+    for key, value in (raw_codes or {}).items():
+        if key not in LLM_PROVIDERS:
+            raise HTTPException(status_code=400, detail=f"llm_model_codes 含未知 provider: {key}")
+        cleaned = re.sub(r"[^\x21-\x7E]", "", str(value or "")).strip()[:128]
+        if cleaned:
+            cleaned_codes[key] = cleaned
+
+    return {"llm_provider": pack_llm_config(provider or None, cleaned_codes or None)}
+
+
 def _row_to_item(row: Dict[str, Any]) -> Dict[str, Any]:
     is_copy = row.get("agent_id") != row.get("base_agent_id")
+    llm_provider, llm_model_codes = extract_llm_config(row.get("llm_provider"))
     return {
         "agent_id": row.get("agent_id"),
         "base_agent_id": row.get("base_agent_id"),
@@ -68,6 +108,8 @@ def _row_to_item(row: Dict[str, Any]) -> Dict[str, Any]:
         "extra_prompt": row.get("extra_prompt"),
         "greeting_summary": row.get("greeting_summary"),
         "greeting_prompts": row.get("greeting_prompts"),
+        "llm_provider": llm_provider,
+        "llm_model_codes": llm_model_codes,
         "is_copy": is_copy,
         "status": row.get("status"),
         "created_at": row.get("created_at"),
@@ -131,6 +173,13 @@ async def update_instance(agent_id: str, body: UpdateInstanceRequest, admin: dic
             if cleaned and any(not p for p in cleaned):
                 raise HTTPException(status_code=400, detail="快捷按钮 label/message 不能为空")
             overrides["greeting_prompts"] = cleaned or None
+
+        llm_overrides = _sanitize_llm(body)
+        if llm_overrides is not None and not TenantDB.is_llm_edit_allowed(admin["tenant_id"]):
+            # fail-closed：租户未开通 LLM 提供者定制时拒绝 llm 字段（防绕过前端显隐）
+            raise HTTPException(status_code=403, detail="未开通 LLM 提供者定制权限")
+        if llm_overrides is not None:
+            overrides["llm_provider"] = llm_overrides["llm_provider"]
 
         row = svc.update_overrides(admin["tenant_id"], agent_id, overrides)
         logger.info(

@@ -22,6 +22,11 @@ from typing import Any, Dict, List, Optional
 import httpx
 from loguru import logger
 
+from src.channels._image_reply import (
+    resolve_downloadable_file_local_path,
+    resolve_image_ref_local_path,
+)
+from src.channels._image_text_renderer import render_text_with_image_placeholders
 from src.channels.base import (
     ChannelAdapter,
     StatusDeliveryResult,
@@ -347,25 +352,69 @@ class WeComAdapter(ChannelAdapter):
         """
         发送企业微信消息（自动选择消息类型和拆分）
 
-        文本消息走 send_long_message，随后逐个发送 downloadable_files 为 textcard。
+        发送顺序：文本（含图片占位符）→ 图片 → 可下载文件。
+        单图失败不阻断后续发送，记 warning。
         """
         all_success = True
+        images = message.get_images()
 
-        # 1. 发送文本
+        # 1. 发送文本（含 placement 占位符）
         text = message.text
         if text:
+            text = render_text_with_image_placeholders(text, images)
             all_success = await self.send_long_message(text, message.reply_to)
 
-        # 2. 发送可下载文件卡片
+        # 2. 发送图片（ImageRef：判读出图、客户留资二维码等）
+        # 企微应用 image 消息只接受 media_id，先上传临时素材再发送；
+        # 单图失败记 warning 不阻断。
+        for ref in images:
+            try:
+                local_path = await resolve_image_ref_local_path(ref)
+                if not local_path:
+                    all_success = False
+                    continue
+                media_id = await self.media.upload_media(str(local_path), "image")
+                if not media_id:
+                    all_success = False
+                    continue
+                success = await self.send_image(media_id, message.reply_to)
+                if not success:
+                    all_success = False
+            except Exception as e:
+                logger.warning(
+                    f"[wecom] send image {ref.get('file_id') if isinstance(ref, dict) else '?'} failed: {e}"
+                )
+                all_success = False
+
+        # 3. 发送可下载文件：图片直接以 image 消息发送（用户在企微侧直接看到图片），
+        #    超过临时素材 2MB 限制、路径解析失败或非图片文件保持 textcard 下载链接
         for file_info in message.downloadable_files:
-            url = build_public_url(file_info.download_url)
-            success = await self.send_textcard(
-                title=f"{file_info.file_name}",
-                description=f"点击下载 ({format_file_size(file_info.file_size)})",
-                url=url,
-                user_id=message.reply_to,
-                btntxt="下载",
-            )
+            file_name = (file_info.file_name or "").lower()
+            is_image = file_name.endswith((".png", ".jpg", ".jpeg", ".gif"))
+            file_path = None
+            if is_image and file_info.file_size <= 2 * 1024 * 1024:
+                try:
+                    file_path = resolve_downloadable_file_local_path(file_info, self._tenant_id)
+                except Exception as e:
+                    logger.warning(f"[wecom] resolve image file {file_info.file_name} failed: {e}")
+                    file_path = None
+            if file_path:
+                success = False
+                try:
+                    media_id = await self.media.upload_media(file_path, "image")
+                    if media_id:
+                        success = await self.send_image(media_id, message.reply_to)
+                except Exception as e:
+                    logger.warning(f"[wecom] send image file {file_info.file_name} failed: {e}")
+            else:
+                url = build_public_url(file_info.download_url)
+                success = await self.send_textcard(
+                    title=f"{file_info.file_name}",
+                    description=f"点击下载 ({format_file_size(file_info.file_size)})",
+                    url=url,
+                    user_id=message.reply_to,
+                    btntxt="下载",
+                )
             if not success:
                 all_success = False
 

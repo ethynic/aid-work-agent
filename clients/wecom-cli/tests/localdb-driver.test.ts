@@ -407,8 +407,8 @@ test('resolveLocaldbPython：环境变量优先（存在才用）；不存在时
   assert.ok(seen.includes(envPath) && seen.includes(devPython), `探测序=${seen.join(' | ')}`)
 })
 
-test('resolveLocaldbPython：无 env → 仓库 venv 优先于打包 ocr-python；全不可用 → null', () => {
-  const bundled = join('C:\\pk', 'ocr-python', 'python.exe')
+test('resolveLocaldbPython：无 env → 仓库 venv 优先于打包 localdb-python；全不可用 → null', () => {
+  const bundled = join('C:\\pk', 'localdb-python', 'python.exe')
   const devPython = join('C:\\pk', '..', '..', 'venv', 'Scripts', 'python.exe')
   // venv 与 bundled 同时存在 → venv 优先
   assert.equal(
@@ -422,8 +422,8 @@ test('resolveLocaldbPython：无 env → 仓库 venv 优先于打包 ocr-python�
 })
 
 test('Windows Python 启动路径仅在打包标记存在时使用命名空间', () => {
-  const python = join('C:\\pk', 'ocr-python', 'python.exe')
-  const marker = join('C:\\pk', 'ocr-python', 'asset-provenance.json')
+  const python = join('C:\\pk', 'localdb-python', 'python.exe')
+  const marker = join('C:\\pk', 'localdb-python', 'asset-provenance.json')
   const seen: string[] = []
   const existsFn = (path: PathLike) => {
     seen.push(String(path))

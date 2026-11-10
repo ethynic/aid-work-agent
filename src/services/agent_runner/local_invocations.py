@@ -148,10 +148,13 @@ class LocalInvocationRepository:
                 or fact.get('phase') not in {'dispatching', 'waiting'}):
             raise LeaseLost('LOCAL_TOOL_NOT_DISPATCHED')
 
-        from .wecom_device_binding import bind_or_validate
+        from .wecom_device_binding import assert_proxy_dispatch_in_tx, bind_or_validate
         if tool_name == 'wecom_group_poll' and (fact.get('call') or {}).get('name') != tool_name:
             raise LeaseLost('WECOM_TASK_POLL_OWNER_MISMATCH')
         pinned = bind_or_validate(checkpoint, row, tool_name, provider_key, device_id, arguments)
+        # wecom_proxy 行每次企微工具派发的门禁（代理任务契约 §6）：批次占用、
+        # 任务未软删、目标 active、会话限定；其他来源零开销直通
+        assert_proxy_dispatch_in_tx(cursor, row, tool_name, arguments)
 
         # A pre-existing row without its atomic checkpoint is an invariant
         # failure, never evidence that it is safe to enqueue another IO.

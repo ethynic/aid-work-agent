@@ -70,6 +70,56 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     expect(agent.isSessionRunning('A')).toBe(true)
   })
 
+  it('creates a durable task only when the user selected continuous mode', async () => {
+    const task = agent.sendMessage('监控孙晨的新消息', null, 'A', null, undefined, undefined, 'continuous')
+    await flush()
+    request('/runners/capabilities').respond({ web_enabled: true, observe_existing: true,
+      continuous_execution_v1: true, contract_version: 1, transport: 'runner_poll' })
+    await flush()
+    request('/sessions/A/runners').respond({ runners: [], active_runners: [], has_more: false, next_cursor: null })
+    await flush()
+    const submitted = request('/runners', 'POST')
+    expect(JSON.parse(submitted.body!).execution_mode).toBe('continuous')
+    submitted.respond({ success: true, runner: runnerView({ execution_mode: 'continuous' }) }, 202)
+    await task
+  })
+
+  it('retains the draft when continuous execution is unavailable instead of creating an ordinary task', async () => {
+    const task = agent.sendMessage('监控孙晨的新消息', null, 'A', null, undefined, undefined, 'continuous')
+    await flush(); capability(); await flush()
+    request('/sessions/A/runners').respond({ runners: [], active_runners: [], has_more: false, next_cursor: null })
+    const disposition = await task
+    expect(disposition?.restoreInput).toBe(true)
+    expect(agent.runnerFeedback.value?.message).toBe('当前服务不支持持续任务，本次消息未发送。')
+    expect(network.requests.filter(item => item.method === 'POST')).toEqual([])
+  })
+
+  it('retains a continuous task draft when the tenant credit check rejects sending', async () => {
+    window.history.replaceState({}, '', '/t/test/chat')
+    external.credit.mockResolvedValue({ allowed: false })
+    try {
+      const disposition = await agent.sendMessage('监控孙晨的新消息', null, 'A', null,
+        undefined, undefined, 'continuous')
+      expect(disposition?.restoreInput).toBe(true)
+      expect(network.requests.filter(item => item.method === 'POST')).toEqual([])
+    } finally {
+      window.history.replaceState({}, '', '/')
+    }
+  })
+
+  it('warns if an accepted task was not confirmed as continuous by the server', async () => {
+    const task = agent.sendMessage('监控孙晨的新消息', null, 'A', null, undefined, undefined, 'continuous')
+    await flush()
+    request('/runners/capabilities').respond({ web_enabled: true, observe_existing: true,
+      continuous_execution_v1: true, contract_version: 1, transport: 'runner_poll' })
+    await flush()
+    request('/sessions/A/runners').respond({ runners: [], active_runners: [], has_more: false, next_cursor: null })
+    await flush()
+    request('/runners', 'POST').respond({ success: true, runner: runnerView() }, 202)
+    await task
+    expect(agent.runnerFeedback.value?.message).toContain('未确认持续执行')
+  })
+
   it('cumulative responses replace text and progress instead of appending duplicate snapshots', async () => {
     await send()
     const progress = [{ type: 'tool_start', toolName: 'read', toolCallId: 'call-1', toolArgs: {} }]

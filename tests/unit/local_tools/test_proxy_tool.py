@@ -75,7 +75,7 @@ class TestToolDefinitions:
         assert registered == boss | wecom
         assert boss.isdisjoint(wecom)
         assert "wecom_session_directory" in registered
-        assert "wecom_session_directory" not in catalog.agent_tools("wecom")
+        assert "wecom_session_directory" in catalog.agent_tools("wecom")
         for cls in LOCAL_PROXY_TOOL_CLASSES:
             tool = cls()
             assert tool.execution_target == ExecutionTarget.LOCAL_REQUIRED

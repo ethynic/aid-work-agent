@@ -228,7 +228,7 @@
                               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                             </svg>
                           </div>
-                          <span @click="openDocument(row.id, row.title)" class="text-sm font-medium text-primary-600 hover:text-primary-700 hover:underline cursor-pointer block flex-1 min-w-0 truncate" :title="'点击下载原文: ' + row.title">{{ row.title }}</span>
+                          <span @click="openDocument(row.id, row.title)" :class="row.disabled ? 'text-muted' : 'text-primary-600 hover:text-primary-700'" class="text-sm font-medium hover:underline cursor-pointer block flex-1 min-w-0 truncate" :title="'点击下载原文: ' + row.title">{{ row.title }}</span>
                         </div>
                       </template>
                       <template #category_name="{ row }">
@@ -245,10 +245,14 @@
                       <template #total_chunks="{ row }">
                         <span @click="openChunkDetail(row as DocumentResponse)" class="text-primary-600 hover:text-primary-700 hover:underline cursor-pointer">{{ row.total_chunks }}</span>
                       </template>
+                      <template #status="{ row }">
+                        <BaseBadge :intent="row.disabled ? 'warning' : 'success'">{{ row.disabled ? '已禁用' : '启用' }}</BaseBadge>
+                      </template>
                       <template #created_at="{ row }">{{ formatTime(row.created_at) }}</template>
                       <template #actions="{ row }">
                         <div class="flex justify-center gap-2">
                           <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openDocDetail(row as DocumentResponse)">详情</BaseButton>
+                          <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleToggleDisabled(row as DocumentResponse)">{{ row.disabled ? '启用' : '禁用' }}</BaseButton>
                           <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleDelete(row)">删除</BaseButton>
                         </div>
                       </template>
@@ -644,7 +648,7 @@ import { type SubagentListItem } from '@/api/subagent'
 import { getMyAllowedAgents } from '@/api/saasPermissions'
 import {
   listDocuments, deleteDocument, uploadDocument, searchDocuments, downloadDocument,
-  moveDocuments,
+  moveDocuments, setDocumentDisabled,
   type DocumentResponse, type SearchResultItem,
   listCategories, createCategory, updateCategory, deleteCategory, moveCategory,
   type CategoryResponse,
@@ -676,12 +680,13 @@ const columns = [
   { key: 'index', label: '序号', width: '60px' },
   { key: 'title', label: '文档名称', width: '260px' },
   { key: 'category_name', label: '所属栏目', width: '130px', tooltip: (row: Record<string, any>) => getCategoryPath(row as DocumentResponse) },
-  { key: 'summary', label: '摘要', width: '380px' },
+  { key: 'summary', label: '摘要', width: '320px' },
   { key: 'file_type', label: '类型', width: '110px' },
   { key: 'file_size', label: '大小', width: '90px' },
   { key: 'total_chunks', label: '分块数', width: '70px' },
+  { key: 'status', label: '状态', width: '80px', thAlign: 'center' as const },
   { key: 'created_at', label: '上传时间', width: '160px' },
-  { key: 'actions', label: '操作', width: '150px', thAlign: 'center' as const },
+  { key: 'actions', label: '操作', width: '190px', thAlign: 'center' as const },
 ]
 
 // ========== 分类状态 ==========
@@ -1466,6 +1471,23 @@ async function handleUpload() {
 function handleDelete(doc: any) {
   documentToDelete.value = doc
   showDeleteConfirm.value = true
+}
+
+// 禁用/启用为可逆操作，直接切换不弹确认
+async function handleToggleDisabled(doc: DocumentResponse) {
+  const target = !doc.disabled
+  try {
+    const res = await setDocumentDisabled(doc.id, target)
+    if (res.success) {
+      doc.disabled = target
+      toast.success(target ? '已禁用，智能体检索不再使用该文档' : '已启用，恢复正常检索')
+    } else {
+      toast.error(res.error || '操作失败')
+    }
+  } catch (error: any) {
+    console.error('前端日志：切换文档禁用状态失败', error)
+    toast.error('操作失败，请稍后重试')
+  }
 }
 
 async function confirmDelete() {

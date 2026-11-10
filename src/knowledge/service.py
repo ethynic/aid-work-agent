@@ -890,6 +890,43 @@ class KnowledgeBaseService:
             logger.opt(exception=True).error(f"后端日志：文档删除失败: {e}")
             return {"success": False, "error": str(e)}
 
+    def set_document_disabled(self, doc_id: int, disabled: bool, tenant_id: Optional[str] = None,
+                              global_view: bool = False) -> Optional[Dict[str, Any]]:
+        """设置文档检索级禁用/启用（知识库页面「禁用」按钮）
+
+        与软删 status='deleted' 正交：禁用只影响检索可见性
+        （build_active_document_condition 过滤 disabled IS NOT TRUE），
+        管理列表仍然可见、可重新启用，公众号复核等 status 回写不受影响。
+        对象级租户校验与 delete_document 同口径：对当前上下文不可见
+        （跨租户/无主）的文档按不存在处理，返回 None 不泄漏存在性。
+        """
+        if tenant_id:
+            scope_sql, scope_params = "tenant_id = %s", [tenant_id]
+        elif global_view:
+            scope_sql, scope_params = "1=1", []
+        else:
+            scope_sql, scope_params = "tenant_id IS NULL", []
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    UPDATE documents
+                    SET disabled = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s AND {scope_sql}
+                    RETURNING id, title, disabled
+                    """,
+                    [disabled, doc_id] + scope_params)
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                conn.commit()
+                logger.info(f"后端日志：文档禁用状态更新成功，doc_id={doc_id}, disabled={disabled}")
+                return dict(row)
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：文档禁用状态更新失败: {e}")
+            return None
+
     def move_documents(self, tenant_id: str, doc_ids: List[int],
                        source_type: str, sub_category: Optional[str]) -> Dict[str, Any]:
         """批量移动文档到目标分类（仅 UPDATE documents.source_type + sub_category，chunks/向量无需改动）。
@@ -1085,7 +1122,7 @@ class KnowledgeBaseService:
 
                 cursor.execute(f"""
                     SELECT id, title, source_type, sub_category, file_type, file_path, file_size,
-                           total_chunks, created_at, summary, origin, status, expires_at
+                           total_chunks, created_at, summary, origin, status, expires_at, disabled
                     FROM documents
                     {where_clause}
                     ORDER BY created_at DESC
@@ -1195,7 +1232,7 @@ class KnowledgeBaseService:
                 cursor.execute(f"""
                     SELECT id, title, source_type, sub_category, file_type, file_path,
                            file_size, total_chunks, created_at, summary, origin,
-                           status, expires_at, metadata
+                           status, expires_at, disabled, metadata
                     FROM documents
                     WHERE id = %s AND {scope_sql}{status_sql}
                 """, [doc_id] + scope_params)

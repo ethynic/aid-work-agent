@@ -343,3 +343,15 @@ agent2 实测两次休眠和三次企微读取成功后，DeepSeek 因下一轮�
 同轮补充业务动态：现有continuous根执行已经能发中间response并继续运行，但当前Web主要显示同一输出气泡与技术进度。后续考虑沿原事件/历史水位逐条展示业务动态，重要结果落库后可重连读取，空轮询保持安静；中间汇报不终结持续任务。本轮不深化实现，待讨论范围见[后续计划F4](../plans/plan-wecom-conversation-followups.md#5-f4原web交互后置需求)。
 
 2026-11-03用户逐条确认后的优先级：先按[本轮计划L1～L5](../plans/plan-wecom-conversation-operations.md)完成旁路日志三表、自动范围、元信息展示及多会话日报；本节交互、第九条恢复优化和附件原件统一另见[后续计划](../plans/plan-wecom-conversation-followups.md)，不作为本轮前置。
+
+## 13. Web 持续任务创建入口（2026-11-07）
+
+现场核对：agent2 已启用 durable sleep，Runner 支持显式 `execution_mode: "continuous"` 和绑定的 `ask_user(purpose=confirm_continuous)`；但 Web 普通发送请求没有传 execution_mode。2026-11-07 两次企微监控请求均缺该字段，虽然各自成功 sleep/唤醒数轮，最后仍以普通任务 `completed` 结束。模型文本声称“正在监控”不能作为持续策略的证据。
+
+用户选择同时提供两个确定入口，均沿现有 Web Runner 创建契约，不增加服务端或 Runtime 协议：
+
+1. 输入框提供默认关闭的“持续执行”显式选项。用户选中后发送，原创建请求携带 `execution_mode: "continuous"`；发送后选项复位，避免后续普通消息误启用。未选中时请求保持原形状。
+2. 输入有明确长期执行意图时，发送前给出“持续执行 / 按普通任务发送 / 返回编辑”的确认。识别仅负责**提示**，不能自行授权；选择“持续执行”才携带上述字段，选择普通任务则按原文普通请求发送（仍可能在本次任务内短时轮询，不承诺只检查一轮），关闭则保留草稿且不发送。识别有漏报时用户仍可使用显式选项，不承诺从任意自然语言自动推断持续意图。已有 `ask_user(purpose=confirm_continuous)` 保留给任务开始后的模型澄清，不让 Web 伪造模型工具调用或修改既有 checkpoint。
+3. 显式选择或确认结果须在 Web Runner 能力支持时受理；能力缺失、请求失败或返回普通任务时，不能提示“已开启持续监控”或静默改走旧聊天。页面继续使用服务端 `execution_mode`、任务状态与下次唤醒显示真实结果。原停止、暂停、恢复、50 轮保护、设备权限及计费语义不改。
+
+仅修改 Web 创建入口及其测试，不改变其他渠道、已接单任务、Runner/Device wire。实现与验收登记在[原开发计划第19节](../plans/plan-agent-runner-durable-sleep.md#19-web-持续任务创建入口2026-11-07)。

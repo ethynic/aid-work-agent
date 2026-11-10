@@ -4592,3 +4592,123 @@
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (task_id, runner_id)
     );
+- datetime: "2026-11-08 12:00:00"
+  remark: "ai-lead-gen 邮件打开追踪（D 项）：新增 bs_ai_lead_gen_opens 事件表（像素端点 /api/track/p.gif 匿名写入，track_tenant 为 md5 匿名租户）；bs_ai_lead_gen_emails 增 opens_at/open_count 两列承接回拉合并"
+  statements: |
+    CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_opens (
+        id SERIAL PRIMARY KEY,
+        tenant_id TEXT,
+        track_tenant TEXT NOT NULL,
+        campaign TEXT,
+        message_id TEXT,
+        recipient TEXT,
+        opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        user_agent TEXT,
+        ip TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_ailg_opens_track ON bs_ai_lead_gen_opens(track_tenant, id);
+    CREATE INDEX IF NOT EXISTS idx_bs_ailg_opens_tenant ON bs_ai_lead_gen_opens(tenant_id);
+    ALTER TABLE bs_ai_lead_gen_emails ADD COLUMN IF NOT EXISTS opens_at TIMESTAMP;
+    ALTER TABLE bs_ai_lead_gen_emails ADD COLUMN IF NOT EXISTS open_count INT DEFAULT 0;
+- datetime: "2026-11-08 12:01:00"
+  remark: "企微代理任务三表（bs_wecom_proxy_tasks/task_sessions/batches）：任务配置与会话目标位置、批次持久队列；状态机由服务端维护；与 src/wecom_conversation/tables.py 同源（代理任务契约 §4）"
+  statements: |
+    CREATE TABLE IF NOT EXISTS bs_wecom_proxy_tasks (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL DEFAULT 'main',
+        instance_id TEXT,
+        device_id UUID NOT NULL,
+        wecom_account_id TEXT NOT NULL,
+        self_user_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        instruction TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'stopped',
+        stop_requested BOOLEAN NOT NULL DEFAULT FALSE,
+        revision BIGINT NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        deleted_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_tasks_owner
+        ON bs_wecom_proxy_tasks (tenant_id, user_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_tasks_account
+        ON bs_wecom_proxy_tasks (tenant_id, wecom_account_id, status);
+    CREATE TABLE IF NOT EXISTS bs_wecom_proxy_task_sessions (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        task_id BIGINT NOT NULL,
+        session TEXT NOT NULL,
+        web_session_id TEXT,
+        source_generation TEXT,
+        wb1_cursor TEXT,
+        baseline_origin TEXT,
+        processed_position BIGINT,
+        latest_seen_msg_id BIGINT,
+        status TEXT NOT NULL DEFAULT 'active',
+        halted_reason TEXT,
+        halted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        UNIQUE (tenant_id, task_id, session)
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_task_sessions_task
+        ON bs_wecom_proxy_task_sessions (tenant_id, task_id, status);
+    CREATE TABLE IF NOT EXISTS bs_wecom_proxy_batches (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        task_id BIGINT NOT NULL,
+        session TEXT NOT NULL,
+        batch_end_msg_id BIGINT,
+        input_snapshot JSONB,
+        agent_id TEXT,
+        instruction_snapshot TEXT,
+        web_session_id TEXT,
+        runner_id TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        end_json JSONB,
+        cli_error TEXT,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        started_at TIMESTAMPTZ,
+        finished_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_batches_queue
+        ON bs_wecom_proxy_batches (tenant_id, task_id, session, status);
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_batches_task
+        ON bs_wecom_proxy_batches (tenant_id, task_id, status);
+
+- datetime: "2026-11-08 15:00:00"
+  remark: "企微代理批次表补同会话单未决批部分唯一索引（P5，P4 CR 备注③；与 src/wecom_conversation/tables.py 同源）"
+  statements: |
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_bs_wecom_proxy_batches_session_undecided
+        ON bs_wecom_proxy_batches (tenant_id, session)
+        WHERE status IN ('pending', 'running', 'waiting', 'reconcile_hold');
+- datetime: "2026-11-08 16:00:00"
+  remark: "企微代理批次表补持久化提交意图列 submit_text（P6 评审：Runner 提交受理后回写 runner_id 前重启，孤儿重提原样使用持久化文本，不重读不重渲染；2026-11-08 评审补充，加性；与 src/wecom_conversation/tables.py 同源）"
+  statements: |
+    ALTER TABLE bs_wecom_proxy_batches ADD COLUMN IF NOT EXISTS submit_text TEXT;
+- datetime: "2026-11-08 18:00:00"
+  remark: "企微代理目标表补空闲读取计数 idle_read_count、批次表补回答积分 credit_cost（P7 评审：列表显示空闲读取次数与累计回答积分；idle_read_count 由监控无候选推游标分支同事务累加，credit_cost 由批次核定取 Runner 终态 public_result.credit_cost 跨重试累加，权威仍在 chat_records；2026-11-08 评审补充，加性；与 src/wecom_conversation/tables.py 同源）"
+  statements: |
+    ALTER TABLE bs_wecom_proxy_task_sessions ADD COLUMN IF NOT EXISTS idle_read_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE bs_wecom_proxy_batches ADD COLUMN IF NOT EXISTS credit_cost DOUBLE PRECISION NOT NULL DEFAULT 0;
+- datetime: "2026-11-08 18:30:00"
+  remark: "企微代理目标表补最近检查时刻 last_checked_at（P7 评审：列表最近检查改取实际监控读取时刻，新建/核定不写，未检查显示无；2026-11-08 评审补充，加性；与 src/wecom_conversation/tables.py 同源）"
+  statements: |
+    ALTER TABLE bs_wecom_proxy_task_sessions ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ;
+- datetime: "2026-11-09 14:28:15"
+  remark: "documents 表加检索级禁用列 disabled（知识库文档禁用/启用功能；与软删 status='deleted' 正交，禁用文档检索不可见但管理列表仍可见可重新启用；加性）"
+  statements: |
+    ALTER TABLE documents ADD COLUMN IF NOT EXISTS disabled BOOLEAN NOT NULL DEFAULT FALSE;
+
+- datetime: "2026-11-09 15:45:08"
+  remark: "租户数字员工实例表加 LLM 覆盖列 llm_provider（定制弹框 LLM 提供者/Model 覆盖；JSONB 与 subagent_definitions.llm_provider 同构，是否生效由 tenants.settings.allow_llm_provider_edit 把关；加性）"
+  statements: |
+    ALTER TABLE tenant_agent_instances ADD COLUMN IF NOT EXISTS llm_provider JSONB;

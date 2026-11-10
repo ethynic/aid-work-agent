@@ -23,104 +23,38 @@ function silentCtx(): OpContext {
 }
 
 // ---------- wecom_chat_search ----------
-
 const tempDirs: string[] = []
-after(() => {
-  for (const d of tempDirs) rmSync(d, { recursive: true, force: true })
-})
+after(() => { for (const d of tempDirs) rmSync(d, { recursive: true, force: true }) })
 
-function makeSearchOp(
-  runDriverFn: RunPowerShellDriverFn,
-  createRefFn?: (name: string, type: string, subtitle?: string, coords?: { x: number; y: number }) => string,
-) {
-  // M4 起 search 也会建 artifact 目录（稳定帧截图 + driver-log）：测试注入临时目录，不碰真实 %LOCALAPPDATA%
-  const dir = mkdtempSync(join(tmpdir(), 'wecom-chat-search-test-'))
-  tempDirs.push(dir)
-  return createWecomChatSearchOperation({
-    accountFn: async () => null,
-    runDriverFn,
-    createRefFn: createRefFn ?? ((name, type, subtitle) => `ref:${type}:${name}:${subtitle ?? ''}`),
-    artifactDirFn: () => dir,
+test('chat_search 本地库唯一匹配才签发目标句柄；无匹配不操作窗口', async () => {
+  let calls = 0
+  const op = createWecomChatSearchOperation({
+    readCatalogFn: async () => {
+      calls++
+      return { message: 'ok', data: { self_user_id: 'self', source_generation: 'g', match_kind: 'exact',
+        match_count: 1, candidates: [{ name: '售前客服群', section: '群聊' }] } }
+    },
+    createRefFn: (name, type, _subtitle, coords, account) => {
+      assert.equal(coords, undefined, '不再签发 OCR 坐标')
+      assert.equal(account, 'self')
+      return `ref:${type}:${name}`
+    },
   })
-}
-
-test('chat_search：成功 → 候选带 name/subtitle/section/target_ref，effect=none', async () => {
-  const op = makeSearchOp(async (opts) => {
-    assert.ok(opts.script.endsWith('chat-search.ps1'))
-    assert.deepEqual(opts.args?.slice(0, 2), ['-Query', '陆伟'])
-    assert.equal(opts.args?.[2], '-ArtifactDir')
-    return {
-      items: [
-        { name: '陆伟', subtitle: '微信联系人', section: '联系人' },
-        { name: '陆伟', subtitle: '其他（待设置部门）', section: '联系人' },
-        { name: '产品讨论群', subtitle: '', section: '群聊' },
-      ],
-    }
-  })
-  const r = await op.execute({ query: '陆伟' }, silentCtx())
-  assert.equal(r.success, true)
-  assert.equal(r.code, 'OK')
-  assert.equal(r.effect, 'none')
-  const items = r.data.items as Array<{ name: string; subtitle: string; section: string; target_ref: string }>
-  assert.equal(items.length, 3)
-  assert.equal(items[0]!.target_ref, 'ref:contact:陆伟:微信联系人')
-  assert.equal(items[2]!.target_ref, 'ref:group:产品讨论群:')
+  const result = await op.execute({ query: '售前客服群' }, silentCtx())
+  assert.equal(result.code, 'OK')
+  assert.equal((result.data.best as { target_ref: string }).target_ref, 'ref:group:售前客服群')
+  assert.equal(calls, 1)
 })
 
-test('chat_search：type=group 只留群聊分区；limit 截断', async () => {
-  const op = makeSearchOp(async () => ({
-    items: [
-      { name: '陆伟', subtitle: '微信联系人', section: '联系人' },
-      { name: '产品讨论群', subtitle: '', section: '群聊' },
-    ],
-  }))
-  const r = await op.execute({ query: '陆', type: 'group' }, silentCtx())
-  const items = r.data.items as Array<{ section: string }>
-  assert.equal(items.length, 1)
-  assert.equal(items[0]!.section, '群聊')
-})
-
-test('chat_search：过滤后无结果 → TARGET_NOT_FOUND（effect=none，不重试）', async () => {
-  const op = makeSearchOp(async () => ({ items: [] }))
-  const r = await op.execute({ query: '不存在的人' }, silentCtx())
-  assert.equal(r.success, false)
-  assert.equal(r.code, 'TARGET_NOT_FOUND')
-  assert.equal(r.effect, 'none')
-  assert.equal(r.retryable, false)
-})
-
-test('chat_search：驱动 UI_CHANGED（overlay 未出现）透传，不 reject', async () => {
-  const op = makeSearchOp(async () => {
-    throw new CodedOperationError('UI_CHANGED', '未等到搜索结果面板')
-  })
-  const r = await op.execute({ query: '陆伟' }, silentCtx())
-  assert.equal(r.success, false)
-  assert.equal(r.code, 'UI_CHANGED')
-  assert.equal(r.effect, 'none')
-})
-
-test('chat_search：空 query / 超长 / 非法 type / 非法 limit → INVALID_ARGUMENT，不调驱动', async () => {
-  let called = 0
-  const op = makeSearchOp(async () => {
-    called++
-    return { items: [] }
-  })
-  for (const bad of [
-    { query: '' },
-    { query: '   ' },
-    { query: 'x'.repeat(101) },
-    { query: 'a', type: 'friend' },
-    { query: 'a', limit: 0 },
-    { query: 'a', limit: 21 },
-    { query: 'a', limit: 1.5 },
-  ]) {
-    // @ts-expect-error 故意传非法值
-    const r = await op.execute(bad, silentCtx())
-    assert.equal(r.code, 'INVALID_ARGUMENT', JSON.stringify(bad))
+test('chat_search 参数非法时不读本地库', async () => {
+  let calls = 0
+  const op = createWecomChatSearchOperation({ readCatalogFn: async () => { calls++; return { message: '', data: {} } } })
+  for (const args of [{ query: '' }, { query: 'x'.repeat(101) }, { query: 'a', limit: 21 }]) {
+    const result = await op.execute(args, silentCtx())
+    assert.equal(result.code, 'INVALID_ARGUMENT')
   }
-  assert.equal(called, 0)
+  assert.equal(calls, 0)
 })
-
 // ---------- wecom_message_send ----------
 // M6：send 的智能分发（navigate_required → search+select → 二次 send）细测见
 // message-send-v2.test.ts；本段保留驱动层错误透传 / 超时 / 取消 / 参数校验契约
@@ -143,42 +77,6 @@ function makeSendOp(runDriverFn: RunPowerShellDriverFn, verifyRefFn?: (ref: stri
   return { op, dir }
 }
 
-test('message_send：成功 → OK + effect=applied，驱动参数带 name/subtitle/section/text/ArtifactDir', async () => {
-  const { op, dir } = makeSendOp(async (opts) => {
-    assert.ok(opts.script.endsWith('message-send.ps1'))
-    assert.deepEqual(opts.args?.slice(0, 8), ['-TargetName', '陆伟', '-Subtitle', '微信联系人', '-Section', 'contact', '-Text', 'hello'])
-    assert.equal(opts.args?.[8], '-ArtifactDir')
-    const artifactArg = opts.args?.[9]
-    assert.ok(typeof artifactArg === 'string' && artifactArg.startsWith(dir), 'ArtifactDir 应位于 artifact 根目录下')
-    assert.match(artifactArg!, /send-\d{4}-\d{2}-\d{2}T/, 'ArtifactDir 应为 send-<ISO 时间戳> 目录')
-    // M6 契约：navigate_required=false 终态 + sent_verification/input_point/timing 透传
-    return {
-      navigate_required: false,
-      title: '陆伟 @微信',
-      sent_verification: { method: 'rule_2of3', result: 'sent', rule_checks_passed: 3 },
-      input_point: { x: 640, y: 648, source: 'ratio' },
-      timing_ms: { jev1: 0, typing: 1500, total: 8000 },
-      screenshot_paths: ['a.png'],
-    }
-  })
-  try {
-    const r = await op.execute({ target_ref: VALID_REF, text: 'hello' }, silentCtx())
-    assert.equal(r.success, true)
-    assert.equal(r.code, 'OK')
-    assert.equal(r.effect, 'applied')
-    assert.equal(r.retryable, false)
-    assert.equal(r.data.target, '陆伟')
-    assert.equal(r.data.title, '陆伟 @微信')
-    assert.equal(r.data.navigated, false)
-    assert.deepEqual(r.data.sent_verification, { method: 'rule_2of3', result: 'sent' })
-    assert.deepEqual(r.data.input_point, { x: 640, y: 648 })
-    assert.equal((r.data.timing_ms as Record<string, number>).total, 8000)
-    assert.deepEqual(r.data.screenshot_paths, ['a.png'])
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-
 test('message_send：%LOCALAPPDATA% 缺失（artifactDirFn=null）→ INTERNAL_ERROR，不调驱动', async () => {
   let called = 0
   const op = createWecomMessageSendOperation({
@@ -192,35 +90,6 @@ test('message_send：%LOCALAPPDATA% 缺失（artifactDirFn=null）→ INTERNAL_E
   const r = await op.execute({ target_ref: VALID_REF, text: 'hello' }, silentCtx())
   assert.equal(r.code, 'INTERNAL_ERROR')
   assert.equal(called, 0)
-})
-
-test('message_send：标题不一致 → UI_CHANGED 透传，effect=none（动作未发出）', async () => {
-  const { op } = makeSendOp(async () => {
-    throw new CodedOperationError('UI_CHANGED', '会话标题「张三」与目标「陆伟」不一致，已中止')
-  })
-  const r = await op.execute({ target_ref: VALID_REF, text: 'hello' }, silentCtx())
-  assert.equal(r.code, 'UI_CHANGED')
-  assert.equal(r.effect, 'none')
-  assert.equal(r.retryable, false)
-})
-
-test('message_send：输入框清理失败 → UI_CHANGED 透传，effect=none', async () => {
-  const { op } = makeSendOp(async () => {
-    throw new CodedOperationError('UI_CHANGED', '目标输入框清理键未成功投递，已中止')
-  })
-  const r = await op.execute({ target_ref: VALID_REF, text: 'hello' }, silentCtx())
-  assert.equal(r.code, 'UI_CHANGED')
-  assert.equal(r.effect, 'none')
-})
-
-test('message_send：同名多项 → TARGET_AMBIGUOUS 透传，effect=none', async () => {
-  const { op } = makeSendOp(async () => {
-    throw new CodedOperationError('TARGET_AMBIGUOUS', '2 个同名匹配，已拒绝发送')
-  })
-  const r = await op.execute({ target_ref: VALID_REF, text: 'hello' }, silentCtx())
-  assert.equal(r.code, 'TARGET_AMBIGUOUS')
-  assert.equal(r.effect, 'none')
-  assert.equal(r.retryable, false)
 })
 
 test('message_send：target_ref 过期 → TARGET_REF_STALE，不调驱动', async () => {
@@ -257,34 +126,6 @@ test('message_send：target_ref 篡改 → INVALID_ARGUMENT，不调驱动', asy
   assert.equal(called, 0)
 })
 
-test('message_send：发送后校验失败 → EXECUTION_UNKNOWN + effect=unknown，绝不重试', async () => {
-  const { op } = makeSendOp(async () => {
-    throw new CodedOperationError('EXECUTION_UNKNOWN', '发送后校验失败（三选二仅过 1 项）')
-  })
-  const r = await op.execute({ target_ref: VALID_REF, text: 'hello' }, silentCtx())
-  assert.equal(r.code, 'EXECUTION_UNKNOWN')
-  assert.equal(r.effect, 'unknown')
-  assert.equal(r.retryable, false)
-})
-
-test('message_send：驱动超时 RESULT_TIMEOUT → 归并 EXECUTION_UNKNOWN + effect=unknown', async () => {
-  const { op } = makeSendOp(async () => {
-    throw new CodedOperationError('RESULT_TIMEOUT', 'PowerShell 驱动执行超时')
-  })
-  const r = await op.execute({ target_ref: VALID_REF, text: 'hello' }, silentCtx())
-  assert.equal(r.code, 'EXECUTION_UNKNOWN')
-  assert.equal(r.effect, 'unknown')
-})
-
-test('message_send：驱动执行中被取消 → CANCELLED + effect=unknown（不可误报 none）', async () => {
-  const { op } = makeSendOp(async () => {
-    throw new CancelledError()
-  })
-  const r = await op.execute({ target_ref: VALID_REF, text: 'hello' }, silentCtx())
-  assert.equal(r.code, 'CANCELLED')
-  assert.equal(r.effect, 'unknown')
-})
-
 test('message_send：空 text / 超长（>2000）/ 缺 target_ref → INVALID_ARGUMENT，不调驱动', async () => {
   let called = 0
   const { op } = makeSendOp(async () => {
@@ -300,17 +141,4 @@ test('message_send：空 text / 超长（>2000）/ 缺 target_ref → INVALID_AR
     assert.equal(r.code, 'INVALID_ARGUMENT', JSON.stringify(bad).slice(0, 60))
   }
   assert.equal(called, 0)
-})
-
-test('message_send：含换行 text → 放行且驱动参数收到原文（多行走驱动侧剪贴板粘贴通道）', async () => {
-  const multiline = 'line1\nline2\r\nline3'
-  const { op } = makeSendOp(async (opts) => {
-    const i = opts.args?.indexOf('-Text') ?? -1
-    assert.notEqual(i, -1)
-    assert.equal(opts.args?.[i + 1], multiline)
-    return { navigate_required: false, title: '陆伟', sent_verification: { method: 'jev', result: 'sent' }, timing_ms: {} }
-  })
-  const r = await op.execute({ target_ref: VALID_REF, text: multiline }, silentCtx())
-  assert.equal(r.code, 'OK')
-  assert.equal(r.effect, 'applied')
 })

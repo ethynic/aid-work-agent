@@ -2,7 +2,7 @@
  * OPERATIONS 注册表：tool 名 → operation + CLI renderer 元数据（强制分层）。
  *
  * CLI command 与 MCP tool handler 都从这里取 operation，保证业务能力只实现一次。
- * M1 有 wecom_probe / wecom_add_customer；M2 增加 wecom_chat_search / wecom_message_send；
+ * Provider 工具由当前 registry 明确注册；
  * M3 增加 wecom_unread_list / wecom_history_read / wecom_watch_poll；M5 增加 wecom_chat_select
  * （CLI 按动作处理打 ⚠️ 前置提示：进会话清角标/切换当前会话视图，但 effect 恒 none）；
  * M7 增加 wecom_send_image（写：向 target_ref 目标发送 1 张本地图片）；
@@ -10,10 +10,12 @@
  * M9 将 wecom_history_read 改名为 wecom_read_session（CLI 动词 read → read-session，
  * 旧名直接废弃无别名）；M11b 起进 MCP toolDefs（撤销 M3「不进 MCP」决策：runtime
  * 模式调用方是 agent，低频理性，且模型通道已把长滚动抓取变快）。
+ * 代理任务 P2 增加 wecom_config_doctor / wecom_config_calibrate（受信配置流程专用，
+ * 无 CLI 动词，沿 wecom_session_directory 的 registry-only 接线先例）。
  */
-import { createWecomAddCustomerOperation } from './addCustomer.js'
 import { createWecomChatSearchOperation } from './chatSearch.js'
 import { createWecomChatSelectOperation } from './chatSelect.js'
+import { createWecomConfigDoctorOperation, createWecomConfigCalibrateOperation } from './configCheck.js'
 import { createWecomMessageSendOperation } from './messageSend.js'
 import { createWecomSendStatusOperation } from './sendStatus.js'
 import { createWecomProbeOperation } from './probe.js'
@@ -39,7 +41,6 @@ export interface OperationEntry {
 
 export const OPERATIONS: Record<string, OperationEntry> = {
   wecom_probe: { operation: createWecomProbeOperation(), cli: { write: false } },
-  wecom_add_customer: { operation: createWecomAddCustomerOperation(), cli: { write: true } },
   wecom_chat_search: { operation: createWecomChatSearchOperation(), cli: { write: false } },
   wecom_chat_select: { operation: createWecomChatSelectOperation(), cli: { write: true } },
   wecom_message_send: { operation: createWecomMessageSendOperation(), cli: { write: true } },
@@ -54,6 +55,8 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   wecom_group_list: { operation: createWecomGroupListOperation(), cli: { write: false } },
   wecom_group_read: { operation: createWecomGroupReadOperation(), cli: { write: false } },
   wecom_group_poll: { operation: createWecomGroupPollOperation(), cli: { write: false } },
+  wecom_config_doctor: { operation: createWecomConfigDoctorOperation(), cli: { write: false } },
+  wecom_config_calibrate: { operation: createWecomConfigCalibrateOperation(), cli: { write: true } },
 }
 
 export const OPERATION_NAMES = Object.keys(OPERATIONS)

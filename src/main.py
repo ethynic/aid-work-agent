@@ -1841,7 +1841,9 @@ app.include_router(scheduled_task_router)
 app.include_router(channels_api.router)
 app.include_router(customer_followup.router)
 from src.api.ai_lead_gen import router as ai_lead_gen_router
+from src.api.track import router as track_router
 app.include_router(ai_lead_gen_router)
+app.include_router(track_router)
 app.include_router(complaint_handling.router)
 app.include_router(after_sales.router)
 app.include_router(email_settings.router)
@@ -2017,6 +2019,11 @@ app.include_router(external_systems.router)
 # 见 docs/design/wecom/wecom-conversation-operations-design.md）
 from src.wecom_conversation import api as wecom_conversation_api  # noqa: E402
 app.include_router(wecom_conversation_api.router)
+
+# 企微代理任务（契约 §2/§4：创建检查/启动/停止/编辑/软删除；监控循环 P5、Runner P6，
+# 见 docs/design/wecom/wecom-proxy-task-contract.md）
+from src.wecom_conversation import proxy_api as wecom_proxy_api  # noqa: E402
+app.include_router(wecom_proxy_api.router)
 
 # 微信公众号回调端点（产品版 WP4：/api/wechat-mp/callback/{config_id}，每配置独立 token，
 # 见 docs/system/wechat-mp/wechat-mp-knowledge-ingestion-design.md §4）
