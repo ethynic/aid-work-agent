@@ -1,0 +1,143 @@
+{
+  "items": [
+    {
+      "supplier": "资料库-2025框架价",
+      "source_type": "library",
+      "source_ref": "2025年钢材框架协议价目表.xlsx",
+      "source_date": "2025-06-01",
+      "name": "冷轧钢板",
+      "spec": "1.0mm*1250*2500",
+      "qty": 10,
+      "uom": "吨",
+      "standard_uom": "吨",
+      "unit_price": 4050,
+      "currency": "CNY",
+      "tax_included": true,
+      "tax_rate": 0.13,
+      "unit_multiplier": 1.0,
+      "locator": {
+        "kind": "none"
+      }
+    },
+    {
+      "supplier": "资料库-2025框架价",
+      "source_type": "library",
+      "source_ref": "2025年网络设备集采价.xlsx",
+      "source_date": "2025-06-01",
+      "name": "工业交换机",
+      "spec": "8口千兆 导轨式 -40~75℃",
+      "qty": 4,
+      "uom": "台",
+      "standard_uom": "台",
+      "unit_price": 1220,
+      "currency": "CNY",
+      "tax_included": true,
+      "tax_rate": 0.13,
+      "unit_multiplier": 1.0,
+      "locator": {
+        "kind": "none"
+      }
+    },
+    {
+      "supplier": "资料库-2025框架价",
+      "source_type": "library",
+      "source_ref": "2025年紧固件价目表.xlsx",
+      "source_date": "2025-06-01",
+      "name": "镀锌螺栓",
+      "spec": "M8*30",
+      "qty": 500,
+      "uom": "个",
+      "standard_uom": "件",
+      "unit_price": 0.76,
+      "currency": "CNY",
+      "tax_included": true,
+      "tax_rate": 0.13,
+      "unit_multiplier": 1.0,
+      "locator": {
+        "kind": "none"
+      }
+    },
+    {
+      "supplier": "1688批发(参考)",
+      "source_type": "web",
+      "source_ref": "https://example.com/steel-price",
+      "source_date": "2026-11-10",
+      "name": "冷轧钢板",
+      "spec": "1.0mm*1250*2500",
+      "qty": 1,
+      "uom": "吨",
+      "standard_uom": "吨",
+      "unit_price": 4380,
+      "currency": "CNY",
+      "tax_included": true,
+      "tax_rate": 0.13,
+      "note": "零售挂牌价，含税不含运费，规格一致",
+      "locator": {
+        "kind": "none"
+      }
+    },
+    {
+      "supplier": "海外电商(参考)",
+      "source_type": "web",
+      "source_ref": "https://example.org/switch",
+      "source_date": "2026-11-10",
+      "name": "工业交换机",
+      "spec": "8口千兆 导轨式 -40~75℃",
+      "qty": 1,
+      "uom": "台",
+      "standard_uom": "台",
+      "unit_price": 178,
+      "currency": "USD",
+      "tax_included": true,
+      "tax_rate": 0.13,
+      "note": "海外零售价，需按汇率折算，仅参考",
+      "locator": {
+        "kind": "none"
+      }
+    },
+    {
+      "supplier": "戊公司",
+      "source_type": "upload",
+      "source_file": "戊公司报价.pdf",
+      "source_date": "2026-11-09",
+      "name": "冷轧钢板",
+      "spec": "1.0mm*1250*2500",
+      "qty": 10,
+      "uom": "吨",
+      "standard_uom": "吨",
+      "unit_price": 4700,
+      "currency": "CNY",
+      "tax_included": true,
+      "tax_rate": 0.13,
+      "unit_multiplier": 1.0,
+      "locator": {
+        "kind": "pdf",
+        "file": "{{SRC_DIR}}/戊公司报价.pdf",
+        "page": 1,
+        "price_text": "4700"
+      }
+    },
+    {
+      "supplier": "戊公司",
+      "source_type": "upload",
+      "source_file": "戊公司报价.pdf",
+      "source_date": "2026-11-09",
+      "name": "工业交换机",
+      "spec": "8口千兆 导轨式 -40~75℃",
+      "qty": 4,
+      "uom": "台",
+      "standard_uom": "台",
+      "unit_price": 1320,
+      "currency": "CNY",
+      "tax_included": true,
+      "tax_rate": 0.13,
+      "unit_multiplier": 1.0,
+      "locator": {
+        "kind": "pdf",
+        "file": "{{SRC_DIR}}/戊公司报价.pdf",
+        "page": 1,
+        "price_text": "1320"
+      }
+    }
+  ]
+}
