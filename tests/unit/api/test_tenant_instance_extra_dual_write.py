@@ -1,11 +1,13 @@
 """租户实例 update_instance 双写租户定制版本链单元测试
 
 补充双写（用户已确认的授权扩展）：租户对话框保存走实例行 API，链上「上一版」会与
-实例行脱节；显式保存非空 extra_prompt 时同步 commit_version，使回退上一版可用。
+实例行脱节；显式保存 extra_prompt 时同步 commit_version，使回退上一版可用。
+清空（空串）也记录为空版本：「使用默认配置」是生效状态，不记录则回退会跳过它
+（独立评审 P1：保存A→清空→保存B，回退应回到空=默认配置，而非跳到 A）。
 
 验证：
 - 非空 extra_prompt → 实例行更新 + 版本链 commit（dedup 由 commit_version 内建）
-- 空/纯空白 extra_prompt（=清除定制）→ 只清实例行，不写空版本、不建 registry
+- 空/纯空白 extra_prompt（=清除定制）→ 实例行清空 + 版本链写空串版本
 - 未携带 extra_prompt → 不写链
 - 链写失败 → 实例行保存不受阻（best-effort，运行时实例行权威）
 """
@@ -68,16 +70,56 @@ class TestUpdateInstanceExtraPromptDualWrite:
             created_by="user_001",
         )
 
-    def test_blank_extra_prompt_clears_instance_only(self, client, monkeypatch):
-        """纯空白 extra_prompt（=清除定制）：只清实例行，不写空版本、不建 registry"""
+    def test_blank_extra_prompt_clears_instance_and_records_empty_version(self, client, monkeypatch):
+        """纯空白 extra_prompt（=清除定制）：实例行清空 + 版本链写空串版本
+
+        「使用默认配置」是生效状态，必须可被回退（独立评审 P1）。
+        """
         get_prompt, commit = _patch_success_paths(monkeypatch)
         with get_prompt as mock_get, commit as mock_commit:
             resp = client.put("/api/saas/tenant/agent-instances/emp_a",
                               json={"extra_prompt": "   \n"})
 
         assert resp.status_code == 200
-        mock_get.assert_not_called()
-        mock_commit.assert_not_called()
+        assert resp.json()["data"]["extra_prompt"] is None
+        mock_get.assert_called_once_with("emp_a", "tenant_001", "user_001")
+        mock_commit.assert_called_once_with(
+            prompt_id="pid-1",
+            content="",
+            commit_message="租户前台编辑",
+            created_by="user_001",
+        )
+
+    def test_review_scenario_clear_between_saves_is_rollback_target(self, client, monkeypatch):
+        """评审场景：保存A → 清空 → 保存B，链上上一版应为空串（默认配置），而非 A
+
+        依赖实现：update_instance 对空串写版本（本文件）；get_previous_version 取
+        version-1（test_prompt_rollback.py）；previous/rollback 端点对空串原样返回、
+        回退空串经双写路径清实例行（test_subagent_extra.py）。此处端到端串联三步。
+        """
+        calls: list[str] = []
+
+        def fake_commit(prompt_id, content, commit_message=None, created_by=None):
+            calls.append(content)
+            return {"version": {"version": len(calls), "content": content}, "dedup": False}
+
+        monkeypatch.setattr(
+            "src.saas.services.tenant_agent_instance_service.update_overrides",
+            lambda tenant_id, agent_id, overrides: dict(ROW, **overrides),
+        )
+        with patch("src.api.subagent_extra._get_or_create_prompt",
+                   return_value={"id": "pid-1"}), \
+             patch("src.prompts.prompt_registry_service.PromptRegistryService.commit_version",
+                   side_effect=fake_commit):
+            client.put("/api/saas/tenant/agent-instances/emp_a",
+                       json={"extra_prompt": "提示词A"})
+            client.put("/api/saas/tenant/agent-instances/emp_a",
+                       json={"extra_prompt": ""})
+            client.put("/api/saas/tenant/agent-instances/emp_a",
+                       json={"extra_prompt": "提示词B"})
+
+        # 链 = [A, "", B]：清空态在链上，B 的上一版是空串而非 A
+        assert calls == ["提示词A", "", "提示词B"]
 
     def test_absent_extra_prompt_does_not_touch_chain(self, client, monkeypatch):
         """未携带 extra_prompt（改显示名等）：不写链"""

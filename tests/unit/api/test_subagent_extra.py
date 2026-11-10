@@ -297,6 +297,21 @@ class TestGetExtraPrevious:
         assert result["version"] == 2
         mock_prev.assert_called_once_with("p1")
 
+    @pytest.mark.asyncio
+    async def test_empty_previous_returns_empty_string_with_version(self):
+        """上一版为空串（清空定制）→ content="" 且 version 非空，与「无可回退」(None) 区分"""
+        request = _make_request()
+        registry = {"id": "p1"}
+        previous = {"version": 2, "content": "  \n"}
+        with patch.object(extra_module, "get_current_user") as mock_user, \
+             patch.object(extra_module.PromptRegistryService, "get_prompt_by_scope", return_value=registry), \
+             patch.object(extra_module.PromptRegistryService, "get_previous_version", return_value=previous):
+            mock_user.return_value = {"tenant_id": "tenant_001"}
+            result = await extra_module.get_extra_previous("travel-consultant", request)
+        assert result["success"] is True
+        assert result["content"] == ""
+        assert result["version"] == 2
+
 
 class TestRollbackExtraMd:
     """POST /api/v1/subagents/{name}/extra/rollback"""
@@ -367,6 +382,24 @@ class TestRollbackExtraMd:
         mock_rollback.assert_called_once_with("p1", created_by="user_001")
         # 回退内容走与保存同一条实例行双写路径
         mock_sync.assert_called_once_with("tenant_001", "travel-consultant", "\n回退后的内容\n", "user_001")
+
+    @pytest.mark.asyncio
+    async def test_rollback_to_empty_version_syncs_clear(self):
+        """回退到空版本（清空态）→ 实例行收到空串（双写路径内转 None=恢复默认配置）"""
+        request = _make_request()
+        registry = {"id": "p1"}
+        commit_result = {"version": {"version": 4, "content": "  \n"}, "dedup": False}
+        with patch.object(extra_module, "get_current_user") as mock_user, \
+             patch.object(extra_module.PromptRegistryService, "get_prompt_by_scope", return_value=registry), \
+             patch.object(extra_module.PromptRegistryService, "rollback_to_previous",
+                          return_value=commit_result), \
+             patch.object(extra_module, "_sync_instance_extra_prompt") as mock_sync:
+            mock_user.return_value = {"tenant_id": "tenant_001", "user_id": "user_001"}
+            result = await extra_module.rollback_extra_md("travel-consultant", request)
+
+        assert result["success"] is True
+        assert result["content"] == ""
+        mock_sync.assert_called_once_with("tenant_001", "travel-consultant", "  \n", "user_001")
 
 
 # ============================================================
