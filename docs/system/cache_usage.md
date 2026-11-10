@@ -95,6 +95,7 @@ Agent Desktop installation identity，不建立浏览器专用长期设备记录
 | 技能与配置 | 3 | 纯内存 | 进程生命周期 ~ 300s | 技能定义、Prompt 模板、页面元数据 |
 | 会话与队列 | 6 | Redis + 内存 | 5s ~ 3600s | 会话队列锁、短期记忆、实例状态 |
 | 去重 | 1 | PostgreSQL | 300s | 渠道消息去重 |
+| 系统健康监控 | 3 | Redis（采集/读取端禁用降级内存） | 90s ~ 600s | 健康快照、采集心跳、AI 研判结论 |
 
 ---
 
@@ -480,6 +481,22 @@ AI 获客邮件打开追踪的定时合并任务（每 10 分钟）记录已扫�
 **失效时机**：不失效（水位单调递增）；Redis 不可用时降级内存（仅当前进程有效，调度器单实例运行不影响正确性，退化行为是从 0 重扫，聚合幂等）
 **源文件**：`src/services/lead_opens_sync.py`（前缀注册：`src/core/cache_utils.py`）
 
+### 7.8 系统健康监控快照/心跳/研判
+
+平台管理后台「系统健康监控」（`/portal/system-health`）的三组数据，由 background 容器 APScheduler 采集器每 15s 写入、HTTP API 只读。设计文档：`docs/system/system-health-monitor-design.md`。
+
+**存储**：Redis（**显式禁用降级内存充当数据**：采集器 tick 与 API 读取端都以 `redis_client.is_available()` 为前置守卫，Redis 不可用时采集跳过、API 返回 `storage_unavailable`，绝不读降级内存快照充当监控数据）
+**键模式与 TTL**：
+
+| Key | TTL | 用途 | Redis 不可用时 |
+|-----|-----|------|---------------|
+| `monitor_snapshot` | 90s | 整体健康快照 JSON（runner/system/business/middleware 四组指标 + 活性指纹状态） | API 报 storage_unavailable，不读降级内存 |
+| `monitor_heartbeat` | 90s | 采集器心跳（value=ISO 时间戳，每轮刷新） | 同上 |
+| `monitor_assessment` | 600s | AI 健康研判结论（LLM，失败回落规则层判定；含离散态 hash 去重） | overview 不返回 assessment |
+
+**失效时机**：TTL 过期即视为采集中断（页面 60s 未更新显示「采集中断」）；采集器恢复后下一轮自动重写
+**源文件**：`src/services/system_health/collector.py`、`src/services/system_health/assessment.py`（前缀注册：`src/core/cache_utils.py`）
+
 ---
 
 ## 8. 去重缓存（PostgreSQL）
@@ -567,6 +584,11 @@ PostgreSQL（持久化，权威数据源）
 ├── recap_task:{tenant_id}:{task_name}:{round_message_id}  # recap 任务幂等（24h）
 ├── recap_task_queue                                       # recap 任务队列（FIFO，无 TTL，消费即出队）
 └── sched_task_lock:manager          # 定时任务调度器启动锁
+
+系统健康监控（src/services/system_health/）：
+├── monitor_snapshot                 # 整体健康快照（90s）
+├── monitor_heartbeat                # 采集器心跳（90s）
+└── monitor_assessment               # AI 研判结论（600s）
 
 内存缓存（无 Redis 键前缀）：
 ├── Dict[tenant_id → skills]         # 租户技能

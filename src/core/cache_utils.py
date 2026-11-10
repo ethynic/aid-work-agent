@@ -125,6 +125,13 @@ class CacheKeys:
     # 已清理的旧 workspace 路径还原为 file_id。TTL 24h 与 ImageRegistry.DEFAULT_TTL
     # 对齐，file_id 副本过期后索引同步失效，改写统一走失效标记）
     WORKSPACE_FILE_INDEX = "ws_file_idx"
+    # 系统健康监控（管理后台 /portal/system-health，src/services/system_health/）
+    # 单机单值键（无 identifier 维度）；快照/心跳 TTL 90s（采集 15s 一轮 ×6 容差），
+    # 研判 TTL 600s（60s 评估一轮）。Redis 不可用时页面显式显示「存储不可用」，
+    # 不读内存降级快照充当数据（设计 docs/system/system-health-monitor-design.md §4.5）
+    MONITOR_SNAPSHOT = "monitor_snapshot"      # monitor_snapshot（整体快照 JSON：四组指标+活性指纹状态）
+    MONITOR_HEARTBEAT = "monitor_heartbeat"    # monitor_heartbeat（采集器心跳，value=ISO 时间戳）
+    MONITOR_ASSESSMENT = "monitor_assessment"  # monitor_assessment（AI 健康研判结论 + 规则层回落判定）
 
 
 # ============== 通用缓存函数 ==============
