@@ -751,7 +751,10 @@ class ExcelProcessTool(BaseTool):
                 shape_hint=(
                     "当前传入的 data 不含可填充的数据行（rows 为空或不是列表）。两种改法："
                     "1) 若要把表格数据填入模板，构造 data={'rows': [{'列名': '值', ...}, ...]} 后重调；"
-                    "2) 若只需填写个别单元格并保留模板其余内容，改用 modify 操作（set_cell 指定单元格坐标），不要用 fill_template。"
+                    "2) 若只需填写个别单元格并保留模板其余内容与样式，重新调本工具并改用修改类指令，"
+                    "instruction 中写明『修改模板』及目标坐标与值，"
+                    '如 "修改模板：将 B4 单元格填写为2026年11月10日，B5 单元格填写为XX"，'
+                    "本工具会路由为 modify（内部生成 write_cell 操作），不要用 fill_template。"
                 ),
             )
         if data:

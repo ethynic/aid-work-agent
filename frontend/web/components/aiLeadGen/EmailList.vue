@@ -42,6 +42,17 @@
             {{ emailStatusBadge(row.status).label }}
           </span>
         </template>
+        <template #open="{ row }">
+          <div v-if="(row.open_count || 0) > 0" class="min-w-0">
+            <div class="text-xs">
+              <span class="inline-flex items-center px-2 py-0.5 rounded-md font-medium bg-success-100 text-success-700">
+                打开 {{ row.open_count }} 次
+              </span>
+            </div>
+            <div class="text-xs text-muted truncate" :title="row.opens_at">{{ row.opens_at ? formatDate(row.opens_at) : '' }}</div>
+          </div>
+          <span v-else class="text-muted">-</span>
+        </template>
         <template #sent_at="{ row }">{{ row.sent_at ? formatDate(row.sent_at) : '-' }}</template>
         <template #error="{ row }">
           <span class="text-xs text-danger-500 truncate block" :title="row.error">{{ row.error || '-' }}</span>
@@ -101,6 +112,7 @@ const columns = [
   { key: 'ab_group', label: 'A/B', width: '60px' },
   { key: 'subject', label: '主题' },
   { key: 'status', label: '状态', width: '100px' },
+  { key: 'open', label: '打开', width: '120px' },
   { key: 'sent_at', label: '发送时间', width: '150px' },
   { key: 'error', label: '错误', width: '140px' },
   { key: 'actions', label: '操作', width: '90px' },

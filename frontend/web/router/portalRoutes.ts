@@ -8,7 +8,9 @@ export const portalRoutes: RouteRecordRaw[] = [
     path: '/portal',
     component: () => import('@/components/saas/PortalLayout.vue'),
     children: [
-      { path: '', name: 'portal-dashboard', component: () => import('@/components/saas/TenantDashboard.vue') },
+      { path: '', redirect: { name: 'portal-system-health' } },
+      { path: 'system-health', name: 'portal-system-health', component: () => import('@/components/saas/SystemHealthMonitor.vue') },
+      { path: 'dashboard', name: 'portal-dashboard', component: () => import('@/components/saas/TenantDashboard.vue') },
       { path: 'tenants', name: 'portal-tenants', component: () => import('@/components/saas/TenantMgmt.vue') },
       { path: 'recharge', name: 'portal-recharge', component: () => import('@/components/saas/TenantRecharge.vue') },
       { path: 'subagents', name: 'portal-subagents', component: () => import('@/components/DigitalEmployeeManager.vue') },

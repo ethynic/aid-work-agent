@@ -288,6 +288,12 @@ if result and result.get("code") == 200:
 
 已计费短信点（对照）：`sms-verification` 技能 `sms_cli.py`（AID_* fail-closed 身份 + 余额预检 + `_record_sms_billing` 落账，source_type=sms_verification）。**后续新增短信发送点一律走 §4.5 标准模式，禁止复用 `send_sms_code`。**
 
+### 5.3 2026-11-10 豁免登记（系统健康监控 LLM 研判）
+
+| 调用点 | 场景 | 裁决 | 状态 |
+|--------|------|------|------|
+| `_run_llm_assessment`（`src/services/system_health/assessment.py`） | 平台管理后台「系统健康监控」（`/portal/system-health`）的 AI 健康研判，每 60s 在 background 容器采集器后台调用 `llm_gateway.chat_lite`（flash 模型，max_tokens=800） | 用户裁决（2026-11-10）：平台级运维监控功能，不向租户计费，参照 `send_sms_code` 豁免先例口径；调用处已显式注释豁免理由。研判在采集器后台执行、无 HTTP request 上下文，不适用 `record_admin_llm_usage` 模式；用量观测由追踪库 span 覆盖 | ✅ 豁免（注释已落地） |
+
 潜在风险（未启用/依赖单入口，扩展前需补计费）：
 - `gateway.stream_chat()` - 无业务调用点，启用流式前需在 chunk 累积 loop 补计费
 - `parse_association_evidence_with_llm`（`association_enrichment_ui.py:73`）- 死代码无调用方；接线时需补计费

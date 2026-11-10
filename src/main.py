@@ -1893,6 +1893,11 @@ app.include_router(tenant_agent_instances.router)
 from src.api import admin_reports
 app.include_router(admin_reports.router)
 
+# 系统健康监控 API（/portal/system-health，platform_admin；数据源为 background
+# 容器采集器写入的 Redis 快照，见 src/services/system_health/collector.py）
+from src.api import admin_monitor
+app.include_router(admin_monitor.router)
+
 # 平台错误日志管理 API
 from src.api import admin_error_logs
 app.include_router(admin_error_logs.router)

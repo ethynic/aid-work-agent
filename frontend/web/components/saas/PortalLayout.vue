@@ -213,6 +213,8 @@ const logoUrl = computed(() => {
 // /portal 下的菜单（仅平台管理员）
 // icon 字段为统一的 SVG path 数据，使用 stroke="currentColor" 的细线描边风格
 const portalMenuItems = [
+  // 系统健康：心跳波形（登录后默认页）
+  { path: '/portal/system-health', label: '系统健康', icon: 'M22 12h-4l-3 9L9 3l-3 9H2' },
   { path: '/portal/notifications', label: '通知设置', icon: 'M18 8a6 6 0 00-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4' },
   // 仪表盘：九宫格统计图（与参考图风格一致）
   { path: '/portal', label: '仪表盘', icon: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z' },

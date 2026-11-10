@@ -233,6 +233,52 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册渠道去重清理任务失败: {e}")
 
+        # ===== AI 获客邮件打开记录合并（每 10 分钟）=====
+        # 像素打点直写 bs_ai_lead_gen_opens，本任务按 message_id 聚合合并回
+        # emails.open_count/opens_at（替代技能侧 fetch_opens.py 手动 HTTP 回拉）
+        try:
+            from src.services.lead_opens_sync import sync_opens_once  # noqa: F401
+            self._scheduler.add_job(
+                self._run_lead_opens_sync,
+                IntervalTrigger(seconds=600),
+                id="job_system_lead_opens_sync",
+                name="AI Lead Gen Opens Sync",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册AI获客邮件打开记录合并任务 (interval=600s)")
+        except ImportError:
+            logger.debug("后端日志：lead_opens_sync 尚未实现，跳过")
+        except Exception as e:
+            logger.error(f"后端日志：注册AI获客打开记录合并任务失败: {e}")
+
+        # ===== 系统健康监控采集（每 15s）+ AI 健康研判（每 60s）=====
+        # 设计 docs/system/system-health-monitor-design.md：快照/心跳写 Redis（TTL 90s），
+        # 供 /api/admin/monitor/* 读取；研判按阈值带离散化哈希去重，平静时段零 LLM 调用；
+        # 仅在 background_runner 进程跑（调度器有 manager 级 Redis 锁）
+        try:
+            from src.services.system_health.assessment import run_assessment_tick  # noqa: F401
+            from src.services.system_health.collector import run_collection_tick  # noqa: F401
+            self._scheduler.add_job(
+                self._run_health_collect,
+                IntervalTrigger(seconds=15),
+                id="job_system_health_collect",
+                name="System Health Collector",
+                max_instances=1,
+                coalesce=True,
+            )
+            self._scheduler.add_job(
+                self._run_health_assessment,
+                IntervalTrigger(seconds=60),
+                id="job_system_health_assessment",
+                name="System Health Assessment",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("后端日志：已注册系统健康监控采集(15s)与AI研判(60s)任务")
+        except Exception as e:
+            logger.error(f"后端日志：注册系统健康监控任务失败: {e}")
+
         # ===== D14：wecom_kf_timeout（async，interval 60s）=====
         try:
             self._scheduler.add_job(
@@ -717,6 +763,23 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.opt(exception=True).error(f"后端日志：Channel dedup cleanup error: {e}")
 
+    # ===== AI 获客邮件打开记录合并回调（同步，每 10 分钟）=====
+    def _run_lead_opens_sync(self):
+        """把 opens 表新增打开事件合并进 emails 表（APScheduler 回调）。
+
+        实现见 src/services/lead_opens_sync.py；表不存在（技能未初始化）时静默跳过。
+        """
+        try:
+            import psycopg2
+            from src.services.lead_opens_sync import sync_opens_once
+            result = sync_opens_once()
+            if result.get("updated") or result.get("has_more"):
+                logger.info(f"后端日志：AI获客打开记录合并 {result}")
+        except psycopg2.errors.UndefinedTable:
+            logger.debug("后端日志：AI获客打开记录合并跳过（opens/emails 表未初始化）")
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：AI获客打开记录合并失败: {e}")
+
     # ===== 已删除租户夜间清理回调（同步）=====
     def _run_tenant_purge(self):
         """物理删除超期已删除租户 + 清理孤儿数据/附件目录（APScheduler 回调）。
@@ -1064,6 +1127,32 @@ class ScheduledTaskManager:
             logger.opt(exception=True).error(
                 f"后端日志：用户行为日志清理失败（已删除 {total_deleted} 行）: {e}"
             )
+
+    # ===== 系统健康监控采集回调（同步，每 15s）=====
+    def _run_health_collect(self):
+        """采集一轮健康指标并写 Redis 快照/心跳（APScheduler 回调）。
+
+        实现见 src/services/system_health/collector.py；全部为 DB/Redis/psutil
+        轻查询，同步直调（同 _run_abuse_scan 模式）。
+        """
+        try:
+            from src.services.system_health.collector import run_collection_tick
+            run_collection_tick()
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：系统健康监控采集任务异常: {e}")
+
+    # ===== AI 健康研判回调（async 内部，每 60s）=====
+    def _run_health_assessment(self):
+        """健康研判评估一轮（APScheduler 回调，后台线程执行）。
+
+        研判调 LLM（chat_lite）走新 event loop（同 _run_memory_summarizer 模式）；
+        哈希去重在 assess_once 内部，LLM 失败回落规则层判定。
+        """
+        try:
+            from src.services.system_health.assessment import run_assessment_tick
+            run_assessment_tick()
+        except Exception as e:
+            logger.opt(exception=True).error(f"后端日志：健康研判评估任务异常: {e}")
 
     # ===== D14：wecom_kf_timeout 回调（async tick + 新 event loop）=====
     def _run_wecom_kf_timeout(self):
