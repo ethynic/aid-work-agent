@@ -170,7 +170,7 @@
               <span class="text-default font-medium">{{ business?.requests_today ?? '-' }}</span>
             </div>
             <div class="flex justify-between">
-              <span class="text-muted">今日错误率</span>
+              <span class="text-muted">今日对话失败率</span>
               <span :class="levelCls(valueLevel('business.error_rate_today', business?.error_rate_today))" class="font-medium">
                 {{ fmtPercent(business?.error_rate_today) }}
               </span>
@@ -221,12 +221,6 @@
               <span :class="levelCls(keyPoolLevel)" class="font-medium">
                 {{ middleware?.key_pool_active ?? '-' }}
                 <template v-if="middleware?.key_pool_max"> / {{ middleware?.key_pool_max }}</template>
-              </span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-muted">模型错误率（今日）</span>
-              <span :class="levelCls(valueLevel('model_error_rate_today', business?.error_rate_today))" class="font-medium">
-                {{ fmtPercent(business?.error_rate_today) }}
               </span>
             </div>
           </div>
@@ -482,7 +476,6 @@ const middlewareGroupLevel = computed<HealthLevel>(() => {
     dbConnLevel.value,
     valueLevel('middleware.db_select1_ms', middleware.value?.db_select1_ms),
     keyPoolLevel.value,
-    valueLevel('model_error_rate_today', business.value?.error_rate_today),
   ])
 })
 
@@ -575,7 +568,7 @@ const METRIC_META: Record<string, { label: string; get: () => number | null | un
   'system.disk_used_percent_storage': { label: 'storage 分区使用率', get: () => system.value?.disk_used_percent_storage, fmt: (v) => `${v}%` },
   'system.disk_used_percent_log': { label: 'log 分区使用率', get: () => system.value?.disk_used_percent_log, fmt: (v) => `${v}%` },
   'middleware.db_select1_ms': { label: 'DB 查询延迟 (SELECT 1)', get: () => middleware.value?.db_select1_ms, fmt: (v) => `${v}ms` },
-  'business.error_rate_today': { label: '今日错误率', get: () => business.value?.error_rate_today, fmt: fmtPercent },
+  'business.error_rate_today': { label: '今日对话失败率', get: () => business.value?.error_rate_today, fmt: fmtPercent },
   'business.errors_last_hour': { label: '错误日志（1 小时）', get: () => business.value?.errors_last_hour, fmt: (v) => `${v} 条` },
 }
 
