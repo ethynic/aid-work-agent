@@ -23,6 +23,8 @@ export interface RunnerSection {
   oldest_queued_seconds: number
   wait_p50_seconds: number | null
   wait_p95_seconds: number | null
+  runner_started_today: number
+  runner_retried_today: number
   retried_share_today: number | null
   stalled_rounds: number
   runner_stalled: boolean

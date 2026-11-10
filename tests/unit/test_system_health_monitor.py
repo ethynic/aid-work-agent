@@ -7,9 +7,11 @@
 import pytest
 
 from src.services.system_health.collector import (
+    RETRY_SHARE_MIN_SAMPLES,
     STALL_ROUND_THRESHOLD,
     compute_stall,
     is_runner_stalled,
+    retried_share_of,
 )
 from src.services.system_health.assessment import (
     THRESHOLDS,
@@ -66,6 +68,21 @@ class TestIsRunnerStalled:
     def test_below_threshold_not_stalled(self):
         stall = {"stalled_rounds": STALL_ROUND_THRESHOLD - 1}
         assert is_runner_stalled(stall, queued_count=2) is False
+
+
+class TestRetriedShareOf:
+    def test_small_sample_returns_none(self):
+        # 3/18 之类的少重试日占比被小基数放大，不足最小样本时置 None
+        assert retried_share_of(RETRY_SHARE_MIN_SAMPLES - 1, 3) is None
+
+    def test_min_sample_boundary_computes(self):
+        assert retried_share_of(RETRY_SHARE_MIN_SAMPLES, 1) == round(1 / RETRY_SHARE_MIN_SAMPLES, 4)
+
+    def test_zero_started_returns_none(self):
+        assert retried_share_of(0, 0) is None
+
+    def test_large_sample(self):
+        assert retried_share_of(100, 25) == 0.25
 
 
 # ==================== assessment: 阈值离散化 ====================
