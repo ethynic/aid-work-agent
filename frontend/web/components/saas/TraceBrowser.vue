@@ -62,7 +62,7 @@
             v-model="traceIdInput"
             @keyup.enter="jumpToTrace"
             placeholder="Trace ID 直达"
-            title="输入 trace_id（tr_ 开头 + 16 位十六进制），回车直达详情页"
+            title="输入 trace_id（tr_ + 16 位十六进制，或 Runner 的 tr_runner_ + 32 位十六进制），回车直达详情页"
             class="px-3 py-1.5 border border-primary-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary-500 w-44"
           />
           <button @click="jumpToTrace"
@@ -229,9 +229,10 @@ function goToSession(sessionId: string) {
 function jumpToTrace() {
   const tid = traceIdInput.value.trim()
   if (!tid) return
-  // 与后端 src/core/trace_collector.py 的 trace_id 生成格式保持一致（tr_ + 16 位十六进制）
-  if (!/^tr_[0-9a-f]{16}$/i.test(tid)) {
-    toast.error('无效的 Trace ID，格式应为 tr_ 开头 + 16 位十六进制字符')
+  // 与后端 trace_id 生成格式保持一致两种：主 API tr_ + 16 位十六进制（trace_collector.py）；
+  // Runner tr_ + runner_id（runner_ + 32 位十六进制，repository.py/worker.py 拼接）
+  if (!/^tr_(runner_[0-9a-f]{32}|[0-9a-f]{16})$/i.test(tid)) {
+    toast.error('无效的 Trace ID，格式应为 tr_ + 16 位十六进制，或 tr_runner_ + 32 位十六进制')
     return
   }
   router.push(`/portal/monitoring/trace/${encodeURIComponent(tid)}`)
