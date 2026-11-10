@@ -98,6 +98,20 @@
   background: var(--color-primary-700);
 }
 
+/* 横向滚动条可见性修复：
+   BaseTable 根节点（.base-table-wrapper）自带 overflow-x-auto，会把横向滚动条
+   挂在高度不受限的内层容器上（位于表格内容最底部），纵向滚动到底才可见。
+   当其被 .table-scroll-wrapper 直接包裹时，将横向滚动上收到外层——外层高度受限
+   且已承担纵向滚动，横向滚动条始终贴在可视区底部。
+   width: fit-content 让根节点边框随表格内容宽度撑开（默认 w-full 会在
+   overflow visible 时让表格越过根节点边框绘制）；min-width: 100% 保证
+   窄表格仍撑满容器。 */
+.table-scroll-wrapper > .base-table-wrapper {
+  overflow-x: visible;
+  width: fit-content;
+  min-width: 100%;
+}
+
 /* ============================================
    表单字段样式
    ============================================ */
