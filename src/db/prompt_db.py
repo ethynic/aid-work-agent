@@ -1,11 +1,13 @@
 """
 Prompt 版本管理数据库访问层
 
-提供 prompt_registry、prompt_versions、prompt_labels、prompt_drafts 四张表的 CRUD 操作。
+提供 prompt_registry、prompt_versions 两张表的 CRUD 操作。
+prompt_labels/prompt_drafts 表的读写已随标签/草稿机制下线，表保留不 drop；
+删除 prompt 时仍原生 SQL 清理两表孤儿行（见 PromptRegistryDB.delete）。
 """
 
 import uuid
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 
 from loguru import logger
 
@@ -269,120 +271,3 @@ class PromptVersionDB:
             except Exception as e:
                 logger.error(f"Failed to commit version atomically: {e}")
                 return None
-
-
-# ============== PromptLabelDB ==============
-
-class PromptLabelDB:
-    """Prompt 标签数据库访问"""
-
-    @staticmethod
-    def upsert(
-        prompt_id: str,
-        version_id: str,
-        label: str,
-        created_by: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute("""
-                    INSERT INTO prompt_labels (prompt_id, version_id, label, created_by, updated_by)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (prompt_id, label) DO UPDATE SET
-                        version_id = EXCLUDED.version_id,
-                        updated_by = EXCLUDED.created_by,
-                        updated_at = CURRENT_TIMESTAMP
-                """, (prompt_id, version_id, label, created_by, created_by))
-                conn.commit()
-                return PromptLabelDB.get_by_label(prompt_id, label)
-            except Exception as e:
-                logger.error(f"Failed to upsert prompt label: {e}")
-                return None
-
-    @staticmethod
-    def get_by_label(prompt_id: str, label: str) -> Optional[Dict[str, Any]]:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT * FROM prompt_labels WHERE prompt_id = %s AND label = %s",
-                (prompt_id, label),
-            )
-            row = cursor.fetchone()
-            return dict(row) if row else None
-
-    @staticmethod
-    def list_labels(prompt_id: str) -> List[Dict[str, Any]]:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT * FROM prompt_labels WHERE prompt_id = %s ORDER BY created_at",
-                (prompt_id,),
-            )
-            return [dict(row) for row in cursor.fetchall()]
-
-    @staticmethod
-    def delete(prompt_id: str, label: str) -> bool:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM prompt_labels WHERE prompt_id = %s AND label = %s",
-                (prompt_id, label),
-            )
-            conn.commit()
-            return cursor.rowcount > 0
-
-
-# ============== PromptDraftDB ==============
-
-class PromptDraftDB:
-    """Prompt 草稿数据库访问"""
-
-    @staticmethod
-    def upsert(
-        prompt_id: str,
-        content: str,
-        variables: Optional[Dict] = None,
-        base_version: Optional[int] = None,
-        updated_by: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute("""
-                    INSERT INTO prompt_drafts (prompt_id, content, variables, base_version, updated_by)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (prompt_id) DO UPDATE SET
-                        content = EXCLUDED.content,
-                        variables = EXCLUDED.variables,
-                        base_version = EXCLUDED.base_version,
-                        updated_by = EXCLUDED.updated_by,
-                        updated_at = CURRENT_TIMESTAMP
-                """, (prompt_id, content, variables, base_version, updated_by))
-                conn.commit()
-                return PromptDraftDB.get(prompt_id)
-            except Exception as e:
-                logger.error(f"Failed to upsert prompt draft: {e}")
-                return None
-
-    @staticmethod
-    def get(prompt_id: str) -> Optional[Dict[str, Any]]:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT * FROM prompt_drafts WHERE prompt_id = %s",
-                (prompt_id,),
-            )
-            row = cursor.fetchone()
-            return dict(row) if row else None
-
-    @staticmethod
-    def delete(prompt_id: str) -> bool:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM prompt_drafts WHERE prompt_id = %s",
-                (prompt_id,),
-            )
-            conn.commit()
-            return cursor.rowcount > 0

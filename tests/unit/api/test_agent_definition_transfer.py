@@ -31,7 +31,7 @@ def _definition(**overrides):
         "knowledge_sources": [], "chat_toolbar": [],
         "upload_accept": None, "recap": {"tasks": []},
         "status": "active", "prompt_id": "p1",
-        "production_version": 2, "latest_version": 3,
+        "latest_version": 3,
     }
     d.update(overrides)
     return d
