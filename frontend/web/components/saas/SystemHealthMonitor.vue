@@ -114,8 +114,11 @@
               </span>
             </div>
             <div class="flex justify-between">
-              <span class="text-muted">Load (1m)</span>
-              <span :class="levelCls(loadLevel)" class="font-medium">{{ system?.load_1 ?? '-' }}</span>
+              <span class="text-muted">系统负载（1 分钟）</span>
+              <span :class="levelCls(loadLevel)" class="font-medium"
+                title="平均排队使用 CPU 的任务数；等于核数即满载，超出核数说明有积压">
+                {{ system?.load_1 ?? '-' }}
+              </span>
             </div>
             <div class="flex justify-between">
               <span class="text-muted">内存</span>
@@ -601,7 +604,7 @@ function collectAnomalyLines(): string[] {
     const load = system.value?.load_1
     const cpuCount = system.value?.cpu_count
     if (load != null && cpuCount) {
-      lines.push(`- [${levelLabel(loadLevel.value)}] Load (1m): ${load}（CPU 核数 ${cpuCount}，观察 ≥${cpuCount} / 警告 ≥${cpuCount * 2}）`)
+      lines.push(`- [${levelLabel(loadLevel.value)}] 系统负载 (1m): ${load}（CPU 核数 ${cpuCount}，观察 ≥${cpuCount} / 警告 ≥${cpuCount * 2}）`)
     }
   }
   if (dbConnLevel.value !== 'normal') {
