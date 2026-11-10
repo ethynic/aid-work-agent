@@ -11,6 +11,18 @@ export function formatFileSize(bytes: number | null | undefined): string {
   return `${size} ${units[idx]}`
 }
 
+/**
+ * 文件内联预览 URL（浏览器直接展示图片/PDF）。
+ *
+ * 注意：`<img>` 等内联展示必须用本 URL（/api/files/{file_id}），不要用
+ * download_url（/api/files/{file_id}/download）——后者在 nginx 下载限速
+ * location 内，单 IP 并发上限 2（limit_conn 2），批量加载图片时第 3 个
+ * 连接会被 503 拒绝导致破图。/download 仅用于真实下载动作。
+ */
+export function inlineFileUrl(fileId: string): string {
+  return `/api/files/${fileId}`
+}
+
 /** 文件类型图标种类：决定 FileTypeIcon 渲染哪种徽标 */
 export type FileIconKind =
   | 'word'

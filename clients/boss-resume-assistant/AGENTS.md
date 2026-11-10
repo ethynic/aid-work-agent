@@ -46,9 +46,20 @@
 cd clients/boss-resume-assistant
 npm run build:main      # 编译（tsc -p tsconfig.main.json）→ dist/
 npm run typecheck       # 类型检查（0 错误才能提交）
-npm test                # 先 build:main 再 node:test 收集 dist/tests/*.test.js
+bash scripts/test-bounded.sh   # 测试：逐文件 90s 超时、8 并行，默认排除挂死文件（可加文件名子串过滤）
 node dist/src/cli/index.js <command> [--cdp-port 9222]   # 跑 CLI
 ```
+
+**测试警告（多次踩坑，2026-11-10 沉淀，必读）：**
+
+- **禁裸跑 `npm test` / `node scripts/run-tests.mjs` 全量收集**：`mcp-conformance.test.js` / `mcp-server.test.js` 会派生 MCP 子进程且子进程不退出，一次 `node --test` 收集全部测试文件时**整个进程挂死、零输出**，开发会话曾因此整段阻塞 30 分钟以上。用 `scripts/test-bounded.sh`（逐文件限时并行，默认排除挂死文件），或定向 `node --test dist/tests/<文件>`。
+- **长命令输出不要接 `| tail` 等缓冲管道**：tail 把全部输出缓冲到命令结束，挂死时日志恒空、无从判断。长命令后台跑、直写日志文件，按固定间隔看日志增量；**日志 2-3 分钟零增长视为挂起**，去查进程树而不是继续等。
+- **基线预存失败清单（master 上同样失败，勿计入新改动，改动前先看这里）**：
+  - `manifest` 3 用例：期望 24 个 MCP 工具 vs toolDefs 实际 25（`boss_recovery_probe` 引入后未同步期望）
+  - `dom-snapshot-owner-scroll` 2 用例
+  - `readonly-recovery-continuation`：dist/ 孤儿陈旧产物（源码已删），build 后仍在
+  - `page-click-experiment`：偶发 flake（`Date.now()-mtime` 时钟粒度），隔离重跑即过
+  - 新改动的验收口径：**除这份清单外全绿**；出现清单外失败先查与本改动的关系
 真机前提：用户先关掉所有 Chrome，再用 `chrome.exe --remote-debugging-port=9222` 启动日常 Chrome，登录 BOSS 打开目标页面。
 
 ## 6. 真机调试 / 写 probe（最容易犯错的地方）

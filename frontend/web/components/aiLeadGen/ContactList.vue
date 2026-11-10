@@ -30,6 +30,15 @@
         <template #title="{ row }">
           <span class="truncate block" :title="row.title">{{ row.title || '-' }}</span>
         </template>
+        <template #phone="{ row }">
+          <button
+            v-if="row.phone"
+            class="font-mono text-xs text-primary-600 hover:text-primary-700 hover:underline whitespace-nowrap"
+            :title="revealed[row.id] ? '点击隐藏' : '点击查看完整号码'"
+            @click="togglePhone(row)"
+          >{{ revealed[row.id] || row.phone }}</button>
+          <span v-else>-</span>
+        </template>
         <template #email="{ row }">
           <span class="text-xs break-all whitespace-normal" :title="row.email">{{ row.email || '-' }}</span>
         </template>
@@ -95,7 +104,15 @@
                 <div class="col-span-2"><span class="text-muted">邮箱：</span><span class="text-default break-all">{{ selected.email || '-' }}</span></div>
                 <div><span class="text-muted">职能：</span><span class="text-default">{{ selected.email_function || '-' }}</span></div>
                 <div><span class="text-muted">语言：</span><span class="text-default">{{ selected.language || '-' }}</span></div>
-                <div><span class="text-muted">电话：</span><span class="text-default">{{ selected.phone || '-' }}</span></div>
+                <div><span class="text-muted">电话：</span>
+                  <button
+                    v-if="selected.phone"
+                    class="font-mono text-xs text-primary-600 hover:text-primary-700 hover:underline break-all"
+                    :title="revealed[selected.id] ? '点击隐藏' : '点击查看完整号码'"
+                    @click="togglePhone(selected)"
+                  >{{ revealed[selected.id] || selected.phone }}</button>
+                  <span v-else class="text-default">-</span>
+                </div>
                 <div><span class="text-muted">所属公司：</span><span class="text-default">{{ selected.company_name || '-' }}</span></div>
               </div>
             </div>
@@ -155,6 +172,7 @@ const columns = [
   { key: 'index', label: '序号', width: '60px' },
   { key: 'name', label: '姓名', width: '100px' },
   { key: 'title', label: '职务', width: '140px' },
+  { key: 'phone', label: '手机号', width: '130px' },
   { key: 'email', label: '邮箱', width: '200px' },
   { key: 'email_function', label: '职能', width: '120px' },
   { key: 'email_source', label: '来源', width: '110px' },
@@ -167,6 +185,27 @@ const filters = ref<{ campaign_id: string; confidence: string; email_source: str
 const keyword = ref('')
 const selected = ref<Contact | null>(null)
 const campaignOptions = ref<CampaignOption[]>([])
+
+// 已显码的手机号（contact_id -> 明文）。翻页/刷新后保留：同会话已审计过，避免重复写审计日志
+const revealed = ref<Record<number, string>>({})
+const revealing = ref<Record<number, boolean>>({})
+
+async function togglePhone(row: any) {
+  if (revealed.value[row.id]) {
+    delete revealed.value[row.id]
+    return
+  }
+  if (revealing.value[row.id]) return
+  revealing.value[row.id] = true
+  try {
+    const res = await aiLeadGenAPI.revealContactPhone(row.id)
+    if (res.phone) revealed.value[row.id] = res.phone
+  } catch (e: any) {
+    console.error('显码失败:', e)
+  } finally {
+    delete revealing.value[row.id]
+  }
+}
 
 const list = useLeadGenList<Contact>(
   (page, pageSize) => aiLeadGenAPI.listContacts({

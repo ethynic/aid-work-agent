@@ -288,6 +288,7 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 | 图片资产元信息（通用） | `uploaded_file:file_{uuid12}`（Hash） | 86400s | `cleanup_temp` 定时清理 source∈(tool_generated/web_fetch)∧usage∈(inline/embedded) 的过期图 |
 | 图片资产元信息（知识库） | `uploaded_file:file_{uuid12}`（Hash） | -1（永久） | 知识库文档删除时级联清理（Phase 3） |
 | Web 图片抓取去重 | `image_fetch_url:{sha256(url)}` | 604800s（7 天） | 同 URL 复用 file_id，不重复下载 |
+| workspace 产物反查索引 | `ws_file_idx:{sha256(绝对路径)}`（String，value JSON `{file_id,name,tenant_id,registered_at}`） | 86400s | TTL 自动过期（与 `uploaded_file` 的 24h 对齐：file_id 副本过期后索引同步失效，跨轮路径改写统一走失效标记）；读侧 tenant_id 不一致按未命中降级 |
 
 **Hash 字段**：`file_id / name / path / size / mime_type / type="image" / source / usage / source_ref / linked_doc_id / linked_chunk_id / visible / width / height / registered_at`
 

@@ -285,6 +285,7 @@ class BehaviorAction(str, Enum):
     DELETE = "delete"                    # 删除资源（Phase 2/3）
     BATCH_DELETE = "batch_delete"        # 批量删除（Phase 3）
     EXPORT = "export"                    # 导出（Phase 2/3）
+    PHONE_VIEW = "phone_view"            # 查看敏感字段明文（AI获客联系人手机号显码）
 
     @classmethod
     def all_values(cls) -> list[str]:
@@ -306,6 +307,7 @@ class BehaviorAction(str, Enum):
             self.DELETE: "删除",
             self.BATCH_DELETE: "批量删除",
             self.EXPORT: "导出",
+            self.PHONE_VIEW: "查看手机号",
         }
         return mapping.get(self, "未知")
 

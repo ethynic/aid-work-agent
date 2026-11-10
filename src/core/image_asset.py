@@ -13,6 +13,7 @@ hset + expire），磁盘写入走 `src/core/storage.py` 的租户目录规范
 （`storage/tenants/{tenant_id}/images/{yyyy-mm}/{file_id}{ext}`）。
 """
 
+import asyncio
 import hashlib
 import os
 import re
@@ -166,7 +167,7 @@ class ImageRegistry:
         move: bool = False,
         ttl_seconds: Optional[int] = None,
     ) -> ImageRef:
-        """注册图片到租户目录，返回 ImageRef。
+        """注册图片到租户目录，返回 ImageRef（异步入口，同步核心走线程池）。
 
         存储路径：`storage/tenants/{tenant_id}/images/{yyyy-mm}/{file_id}{ext}`
         Redis 写入与 cp_tool 一致的 `uploaded_file:{file_id}` 命名空间。
@@ -186,6 +187,52 @@ class ImageRegistry:
 
         Returns:
             ImageRef（含完整元信息）
+        """
+        return await asyncio.to_thread(
+            self._register,
+            source_path, tenant_id, user_id, display_name, source, usage,
+            source_ref, linked_doc_id, linked_chunk_id, move, ttl_seconds,
+        )
+
+    def register_sync(
+        self,
+        source_path: Union[str, Path],
+        tenant_id: str,
+        user_id: Optional[str] = None,
+        display_name: Optional[str] = None,
+        source: str = "tool_generated",
+        usage: str = "inline",
+        source_ref: Optional[str] = None,
+        linked_doc_id: Optional[int] = None,
+        linked_chunk_id: Optional[int] = None,
+        move: bool = False,
+        ttl_seconds: Optional[int] = None,
+    ) -> ImageRef:
+        """register 的同步版本：供同步上下文调用（如 attachments.prepare，
+        其本身已在 asyncio.to_thread 中执行，直接调同步核心避免再嵌套线程）。
+
+        禁止在 async def 函数中直接调用本方法（会阻塞事件循环），应使用 register()。
+        """
+        return self._register(
+            source_path, tenant_id, user_id, display_name, source, usage,
+            source_ref, linked_doc_id, linked_chunk_id, move, ttl_seconds,
+        )
+
+    def _register(
+        self,
+        source_path: Union[str, Path],
+        tenant_id: str,
+        user_id: Optional[str] = None,
+        display_name: Optional[str] = None,
+        source: str = "tool_generated",
+        usage: str = "inline",
+        source_ref: Optional[str] = None,
+        linked_doc_id: Optional[int] = None,
+        linked_chunk_id: Optional[int] = None,
+        move: bool = False,
+        ttl_seconds: Optional[int] = None,
+    ) -> ImageRef:
+        """register 同步核心：文件复制/移动 + Redis 元信息 + 持久化。
         """
         if not tenant_id:
             raise ValueError("tenant_id 不能为空")

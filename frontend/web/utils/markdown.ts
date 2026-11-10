@@ -47,13 +47,14 @@ const linkRenderer = ({ href, title, tokens }: any) => {
 
 // Markdown 内嵌图片渲染：
 // - `file_id:file_xxx` 是后端约定的图片资产引用 scheme，浏览器原生不识别
-//   需要转成 /api/files/file_xxx/download 才能加载
+//   需要转成 /api/files/file_xxx（inline 预览端点）才能加载；不能用 /download，
+//   该路由在 nginx 下载限速 location 内（limit_conn 2），多图并发会 503
 // - 其他 URL（http/https/相对路径）保持原样
 // - 统一加 loading="lazy" + class，方便后续样式 / lightbox 扩展（Phase 2 P2.8）
 const imageRenderer = ({ href, title, text }: any) => {
   let src = href
   if (typeof href === 'string' && href.startsWith('file_id:')) {
-    src = `/api/files/${href.slice('file_id:'.length)}/download`
+    src = `/api/files/${href.slice('file_id:'.length)}`
   }
   const altAttr = (text ?? '').replace(/"/g, '&quot;')
   const titleAttr = title ? ` title="${title.replace(/"/g, '&quot;')}"` : ''
