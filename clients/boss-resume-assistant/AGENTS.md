@@ -104,7 +104,7 @@ const gw = new CdpGateway(); await gw.connect('http://127.0.0.1:9222')
 
 ## 9. 部署
 
-以 npm 全局包形式分发：`npm pack` 出 tgz，用户 `npm install -g` 后用 `boss-cli` 命令；同时作为 MCP Provider 可 `boss-cli mcp --stdio` 供 Codex/WorkBuddy 等 Host 调用（设计文档 §1、`docs/ideas.md` 条目 51 第一方 CLI/MCP Provider 架构）。
+Runtime 导入的 `.aidplugin.zip` 与独立 npm `.tgz` 的命令、用途和验证都见[统一打包手册](../../docs/ops/runtime-boss-release-guide.md)。
 
 ## 10. 核心机制速查：CDP 定位 → 坐标换算 → Win32 点击 → 输入模拟（完整链路）
 

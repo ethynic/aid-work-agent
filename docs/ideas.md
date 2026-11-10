@@ -79,7 +79,7 @@
 | 20261105-1100 | 企微群聊长文本粘贴与监控等待修复 | 🔧 部分完成 | agent2 的 GLM 标定与标题复制已真机验证，完整发送待验收。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w23-文本发送标题复制与-glm-标定2026-11-06) |
 | 20261102-1430 | 企微旁路聊天日志、前端与按日日报 | 🔧 部分完成（工作台由新计划接续） | 旁路日志与日期读取已有初版实现；日报页面及计划按新方案重做。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [历史计划](plans/plan-wecom-conversation-operations.md) / [新计划](plans/plan-wecom-daily-summary-workbench.md) |
 | 20261018-1736 | wecom-cli 登录引导增强（自动拉起 + 二维码直返） | 💡 灵感 | 三态验收发现：need_login 态 probe 已返回登录二维码 base64，缺口是 WECOM_NOT_FOUND（进程未启动）时不自动拉起企微——增加自动启动后把二维码转交 agent 引导用户扫码。 | [验收记录](plans/wecom-cli-localdb-three-state-acceptance.md) | — |
-| 20261014-2043 | wecom-cli 本地库数据通道（local-db） | 🔧 部分完成 | 统一打包入口及Runtime＋WeCom配套验包完成，实际安装待验。 | [设计](design/wecom/wecom-cli-localdb-design.md) | [开发计划](plans/plan-wecom-cli-localdb.md) |
+| 20261014-2043 | wecom-cli 本地库数据通道（local-db） | 🔧 部分完成 | 三件同批出包与双插件隔离导入通过，成品默认进下载目录。 | [设计](design/wecom/wecom-cli-localdb-design.md) | [开发计划](plans/plan-wecom-cli-localdb.md) |
 | 20261026-1110 | 本地生图推理容器（Qwen-Image-2.1 · stable-diffusion.cpp GPU） | 🔧 部分完成 | deploy/image-gen/ 独立 compose（手动启停，不随 agent）：sd-cli CUDA 镜像 + FastAPI t2i/edits 串行队列；agent 侧工具接入待做。 | [部署文档](../deploy/image-gen/README.md) | — |
 | 20260714-1911 | 浏览器混合执行、可视化与人工接管 | 🔧 部分完成 | Phase 0～1 已完成；Phase 2 已实现、待真实 Redis/PostgreSQL 门禁。 | [设计](tools/browser/browser_visualization_design.md) | [开发计划](tools/browser/browser_execution_dev_plan.md) |
 | 20260630-1733 | PDF reportlab 固定版式生成器 | 📋 待开发 | 暂不开发，未来如出现强固定版式需求再评估。 | [设计](tools/pdf/pdf_tool_design.md) | — |

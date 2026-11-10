@@ -44,6 +44,14 @@ test('installation preflight uses the target public roots and Host tools, not th
     assert.equal(report.hostVersion, '0.2.25')
     assert.equal(report.coreVersion, '0.2.10')
     assert.deepEqual(readFileSync(pkg), before, 'Preflight must not extract/import or rewrite signed bytes')
+    await assert.rejects(verifyPluginRuntime(home, pkg, 'boss'), /Expected a boss plugin/)
+    const bossManifest = { ...manifest, provider_id: 'ai.aidwork.boss-recruiting', tools: [{ name: 'boss_fixture' }] }
+    const bossPayload = await zipBytes([['runtime-manifest.json', Buffer.from(JSON.stringify(bossManifest))], ['index.js', cli]])
+    const boss = await createOfflinePackage(bossPayload, bossManifest, { release_id: 'fixture-boss', key_id: trust.key_id, created_at: '2026-11-02T00:00:00Z' }, pair.privateKey.export({ format: 'pem', type: 'pkcs8' }))
+    const bossPath = join(home, 'boss.aidplugin.zip'); writeFileSync(bossPath, boss.archive)
+    await assert.rejects(verifyPluginRuntime(home, bossPath, 'boss'), 'A WeCom-only publisher cannot sign an importable BOSS package')
+    writeFileSync(roots, JSON.stringify({ roots: [{ ...trust, providers: [...trust.providers, bossManifest.provider_id] }] }))
+    assert.equal((await verifyPluginRuntime(home, bossPath, 'boss')).result, 'BOSS_TARGET_RUNTIME_PASS')
     // A separate resource tree models an old Host whose allowlist lacks the new directory tool.
     const old = join(home, 'old'); mkdirSync(old)
     const { cpSync } = await import('node:fs'); cpSync(join(home, 'host'), join(old, 'host'), { recursive: true })

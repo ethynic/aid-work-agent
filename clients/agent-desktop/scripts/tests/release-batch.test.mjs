@@ -30,10 +30,35 @@ test('release plan selects components independently and never edits versions or 
   files.forEach((file, i) => assert.deepEqual(readFileSync(resolve(root, file)), before[i], 'Plan must return before package writes or trust registration'))
 })
 
-test('ordinary BOSS packaging requires a stable signer instead of silently inventing a new publisher', () => {
-  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', script, '-Component', 'Boss', '-Plan'], { encoding: 'utf8', windowsHide: true })
-  assert.notEqual(result.status, 0)
-  assert.match(result.stderr, /Signer/)
+test('acceptance plugins share a fixed build-machine signer while production requires its own', () => {
+  const local = mkdtempSync(resolve(tmpdir(), 'aid-release-localappdata-'))
+  try {
+    const run = (...args) => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', script, ...args], {
+      encoding: 'utf8', windowsHide: true, env: { ...process.env, LOCALAPPDATA: local },
+    })
+    const plan = run('-Component', 'Boss', '-Plan')
+    assert.equal(plan.status, 0, plan.stderr)
+    assert.equal(JSON.parse(plan.stdout).signing, 'external-stable', 'Planning must work before the signer is provisioned')
+    const missing = run('-Component', 'Boss')
+    assert.notEqual(missing.status, 0)
+    assert.match(missing.stderr, /acceptance-cli-v1[\\/]signer\.json/)
+
+    const signer = resolve(local, 'AidWorkBuild/signers/acceptance-cli-v1/signer.json')
+    mkdirSync(dirname(signer), { recursive: true })
+    writeFileSync(signer, '{}')
+    const override = run('-Component', 'Boss', '-Signer', resolve(local, 'explicit-missing.json'))
+    assert.notEqual(override.status, 0)
+    assert.match(override.stderr, /explicit-missing\.json/, 'A bad explicit path must never fall back to the default signer')
+    const wecom = run('-Component', 'Wecom', '-LocaldbPythonDirectory', resolve(local, 'missing-python'))
+    assert.notEqual(wecom.status, 0)
+    assert.match(wecom.stderr, /prepare-localdb\.py/, 'WeCom resolves the same signer and gives a recovery command for missing Python')
+    const production = run('-Component', 'Boss', '-Profile', 'production', '-TrustRoots', 'C:/fixture/roots.json', '-Plan')
+    assert.notEqual(production.status, 0)
+    assert.match(production.stderr, /-Signer/, 'A configured acceptance signer cannot silently sign a production release')
+  } finally { rmSync(local, { recursive: true, force: true }) }
+})
+
+test('production runtime verifies the selected profile even when it does not build a plugin', () => {
   const production = runPlan('-Component', 'Runtime', '-Profile', 'production', '-TrustRoots', 'C:/isolated-fixture/public-roots.json')
   assert.equal(production.profile, 'production')
   assert.doesNotMatch(readFileSync(script, 'utf8'), /@\('run',\s*'runtime:verify'\)/, 'A production-only batch must not run the verifier whose default directory is acceptance; packaging already verifies its exact output')
@@ -57,6 +82,26 @@ test('WeCom delivery is independent of BOSS and can include its required Runtime
   assert.equal(defaults.wecomVersion, null)
   assert.equal(defaults.releaseId, null, 'Plan must not mistake uncommitted workspace versions for isolated SourceRef input')
   assert.match(defaults.versionDefaults, /SourceRef/)
+})
+
+test('All plans one installer and two independently versioned import packages in Downloads', () => {
+  const all = runPlan('-Component', 'All', '-RuntimeVersion', '1.2.3', '-BossVersion', '2.3.4', '-WecomVersion', '3.4.5')
+  assert.equal(all.runtime && all.boss && all.wecom, true)
+  assert.deepEqual(all.releaseIds, { boss: 'boss-2.3.4', wecom: 'wecom-3.4.5' })
+  assert.equal(all.steps.filter(step => step === 'package-installer').length, 1)
+  assert.ok(all.steps.includes('verify-target-runtime'))
+  assert.match(all.outputDirectory, /[\\/]AID-Work-Releases$/)
+  assert.ok(!all.outputDirectory.startsWith(process.env.LOCALAPPDATA + '\\AidWorkBuild'))
+  const deferred = runPlan('-Component', 'All', '-SourceRef', 'another-commit')
+  assert.equal(deferred.versions.boss, null, 'The checkout version must not masquerade as the selected SourceRef version')
+  assert.deepEqual(deferred.releaseIds, { boss: null, wecom: null })
+
+  const output = resolve(tmpdir(), 'aid release output')
+  const before = existsSync(output)
+  const boss = runPlan('-Component', 'Boss', '-OutputDirectory', output, '-TargetRuntimeResources', resolve(tmpdir(), 'target'))
+  assert.equal(boss.outputDirectory, output, 'Explicit delivery directories must survive planning with spaces')
+  assert.ok(boss.steps.includes('verify-target-runtime'), 'Single BOSS can check the customer Runtime without building another')
+  assert.equal(existsSync(output), before, 'Plan never creates the delivery directory')
 })
 
 test('WeCom day preflight preserves Python timezone quotes through PowerShell -File', () => {
