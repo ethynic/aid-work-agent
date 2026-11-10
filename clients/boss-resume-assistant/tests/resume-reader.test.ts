@@ -18,10 +18,13 @@ import { randomUUID } from 'node:crypto'
 import {
   ResumeReader,
   ResumeReadError,
+  ResumeObstructedError,
   locateResumeCanvas,
   canvasCandidates,
   SCROLL_TOP_NOTCHES,
   SEGMENT_WHEEL_NOTCHES,
+  SCROLL_TOP_SETTLE_DELAY,
+  SEGMENT_REPAINT_DELAY,
   BOTTOM_CONFIRM_DELAY,
   MAX_SEGMENTS,
   MAX_CAPTURES,
@@ -87,10 +90,45 @@ const CANVAS_BOUNDS: [number, number, number, number] = [0, 0, 727, 1237] // 真
 const CANVAS_RECT: DeviceRect = { x: 0, y: 0, w: 727, h: 1237 }
 const STITCHED_PNG = Buffer.from('fake-stitched-png-bytes')
 
+/**
+ * 构造「全屏弹窗盖住简历画布」的快照（Phase 2 后续段截后遮挡回归用，构造方式参照
+ * resume-obstruction-independent.test.ts 的 paint order 手法）：单文档内 CANVAS（paint 10）+
+ * role=dialog 遮罩节点（paint 20，全屏覆盖）→ assertResumeUnobstructed 应抛 ResumeObstructedError。
+ */
+function obstructedSnap(): DomSnapshot {
+  return {
+    strings: ['', 'HTML', 'BODY', 'CANVAS', 'DIV', 'role', 'dialog'],
+    documents: [
+      {
+        nodes: {
+          nodeValue: [-1, -1, -1, -1],
+          nodeName: [1, 2, 3, 4], // HTML / BODY / CANVAS / DIV（strings 下标）
+          contentDocumentIndex: [],
+          parentIndex: [-1, 0, 1, 1],
+          attributes: [[], [], [], [5, 6]], // 仅遮罩节点带 role=dialog
+        },
+        layout: {
+          nodeIndex: [0, 1, 2, 3],
+          bounds: [
+            [0, 0, 1249, 1277], // 根视口
+            [0, 0, 1249, 1277],
+            [0, 0, 727, 1237], // 简历画布（与 CANVAS_BOUNDS 同）
+            [0, 0, 1249, 1277], // 全屏遮罩
+          ],
+          paintOrders: [0, 1, 10, 20], // 遮罩 paint 高于画布 → 盖住
+        },
+        scrollOffsetY: 0,
+      },
+    ],
+  }
+}
+
 /** fake 依赖容器：captureSizes 按次序给出每段整页 PNG 字节数（越界取末值）；stitch 落盘假 PNG 供 copyFile。 */
 interface Fake {
   wheels: Array<{ deltaY: number; notches: number }>
   captures: number[]
+  /** readerDeps.snapshot（默认实现）被调用次数；测试覆写 snapshot 后此计数不再增长 */
+  snapshots: number
   sleeps: number[]
   sameViewCalls: Array<{ a: string; b: string }>
   /** sameView 返回值队列（shift 消费；空则恒 true） */
@@ -108,6 +146,7 @@ function makeFake(captureSizes: number[]): Fake {
   const f: Fake = {
     wheels: [],
     captures: [],
+    snapshots: 0,
     sleeps: [],
     sameViewCalls: [],
     sameViewResults: [],
@@ -118,7 +157,10 @@ function makeFake(captureSizes: number[]): Fake {
   }
   let captureIdx = 0
   f.readerDeps = {
-    snapshot: async () => canvasSnap({ canvases: [CANVAS_BOUNDS] }),
+    snapshot: async () => {
+      f.snapshots++
+      return canvasSnap({ canvases: [CANVAS_BOUNDS] })
+    },
     captureFullpage: async () => {
       const size = captureSizes[Math.min(captureIdx++, captureSizes.length - 1)]!
       f.captures.push(size)
@@ -252,8 +294,20 @@ test('正常 3 段：第 4 段字节相同 → sameView 确认 → 再滚再截�
       ['part-raw-4.png', 'part-raw-2.png'],
     ],
   )
-  // 确认路径等待 BOTTOM_CONFIRM_DELAY（懒加载留时间），普通段间隔 SEGMENT_REPAINT_DELAY
-  assert.deepEqual(f.sleeps, [1500, 900, 900, 900, BOTTOM_CONFIRM_DELAY])
+  // 确认路径等待 BOTTOM_CONFIRM_DELAY（懒加载留时间，定值 1000）；回顶 settle 与各段间 repaint
+  // 为 {500,600} 区间抖动（2026-11-10 提速 Phase 1 随机化，区间语义见 timing.test.ts）
+  assert.equal(f.sleeps.length, 5)
+  assert.equal(f.sleeps[4]!, BOTTOM_CONFIRM_DELAY)
+  assert.ok(
+    f.sleeps[0]! >= SCROLL_TOP_SETTLE_DELAY.min && f.sleeps[0]! <= SCROLL_TOP_SETTLE_DELAY.max,
+    `回顶 settle 等待 ${f.sleeps[0]}ms 不在抖动区间`,
+  )
+  for (const ms of f.sleeps.slice(1, 4)) {
+    assert.ok(
+      ms >= SEGMENT_REPAINT_DELAY.min && ms <= SEGMENT_REPAINT_DELAY.max,
+      `段间 repaint 等待 ${ms}ms 不在抖动区间`,
+    )
+  }
   assert.equal(f.stitchCalls.length, 1)
   assert.equal(f.stitchCalls[0]!.parts.length, 3)
   assert.match(f.stitchCalls[0]!.parts[0]!, /part-raw-0\.png$/)
@@ -267,6 +321,24 @@ test('正常 3 段：第 4 段字节相同 → sameView 确认 → 再滚再截�
   assert.deepEqual(res.imageBuffer, STITCHED_PNG)
   const tmpDir = path.dirname(f.stitchCalls[0]!.parts[0]!)
   assert.equal(existsSync(tmpDir), false)
+})
+
+test('Phase 1 等待抖动：多次运行，settle/repaint 恒落区间、确认路径恒定值（随机性覆盖）', async () => {
+  for (let round = 0; round < 8; round++) {
+    const f = makeFake([1000, 2000, 3000, 3000, 3000])
+    await makeReader(f).readResume()
+    assert.equal(f.sleeps.length, 5)
+    for (const [i, ms] of f.sleeps.entries()) {
+      if (i === 4) {
+        assert.equal(ms, BOTTOM_CONFIRM_DELAY) // 到底确认路径不做随机化（判到底必须稳）
+      } else {
+        assert.ok(
+          ms >= SCROLL_TOP_SETTLE_DELAY.min && ms <= SCROLL_TOP_SETTLE_DELAY.max,
+          `第 ${round} 轮第 ${i} 个等待 ${ms}ms 不在 [${SCROLL_TOP_SETTLE_DELAY.min},${SCROLL_TOP_SETTLE_DELAY.max}] 抖动区间`,
+        )
+      }
+    }
+  }
 })
 
 test('单段：第 2 段即到底（简历一屏放得下），只拼 1 段（连续两次相同才确认）', async () => {
@@ -448,5 +520,73 @@ test('分段中原详情画布消失时停止采图，不把列表页当简历�
   fake.readerDeps.snapshot = async () => fake.captures.length === 0 ? canvasSnap({ canvases: [CANVAS_BOUNDS] }) : canvasSnap({})
   await assert.rejects(makeReader(fake).readResume(), /原简历画布消失或几何已变化/)
   assert.equal(fake.captures.length, 1)
+  assert.equal(fake.stitchCalls.length, 0)
+})
+
+// ---------- Phase 2 快照校验精简（设计 §3.3 决策 8：首段前后双校验基准，后续段仅截后一次） ----------
+
+test('Phase 2 快照计数：正常 3 段（含到底确认）= 1 入口 + 2 首段 + 1+1 后续段 + 2 确认路径 = 7', async () => {
+  const f = makeFake([1000, 2000, 3000, 3000, 3000]) // 场景与「正常 3 段」用例一致：3 段 + 2 张确认截图
+  const res = await makeReader(f).readResume()
+  assert.equal(res.segments, 3)
+  assert.equal(f.captures.length, 5)
+  // 首段 2 次（截前+截后），其余每次截图各 1 次（截后）；若后续段/确认路径误用双校验会得 9
+  assert.equal(f.snapshots, 1 + 2 + 1 + 1 + 1 + 1)
+})
+
+test('Phase 2 快照计数：打满 MAX_SEGMENTS 未到底 = 1 入口 + 2 首段 + 15×1 后续段 = 18', async () => {
+  const sizes = Array.from({ length: 30 }, (_, i) => 1000 + i * 500) // 每段字节差 ≥ 200，永不到底
+  const f = makeFake(sizes)
+  const res = await makeReader(f).readResume()
+  assert.equal(res.segments, MAX_SEGMENTS)
+  assert.equal(f.captures.length, MAX_SEGMENTS)
+  assert.equal(f.snapshots, 1 + 2 + (MAX_SEGMENTS - 1))
+})
+
+test('Phase 2 后续段截后画布几何变化 → ResumeReadError（单快照路径仍拦截，基准 activeRect）', async () => {
+  const fake = makeFake([1000, 2000])
+  const moved = canvasSnap({ canvases: [[50, 30, 727, 1237]] }) // 画布漂移 ≠ activeRect {0,0,727,1237}
+  let calls = 0
+  fake.readerDeps.snapshot = async () => {
+    calls++
+    // 调用次序：1=入口、2=首段截前、3=首段截后、4=后续段截后；仅最后一次画布漂移
+    return calls <= 3 ? canvasSnap({ canvases: [CANVAS_BOUNDS] }) : moved
+  }
+  await assert.rejects(makeReader(fake).readResume(), (e: unknown) => {
+    assert.ok(e instanceof ResumeReadError)
+    assert.match(e.message, /分段采图期间原简历画布消失或几何已变化/)
+    return true
+  })
+  assert.equal(fake.captures.length, 2) // 第 2 段已截图，但截后校验拒绝 → 不写盘、不拼接
+  assert.equal(fake.stitchCalls.length, 0)
+})
+
+test('Phase 2 后续段截后画布消失 → ResumeReadError（不把列表页当简历拼接）', async () => {
+  const fake = makeFake([1000, 2000])
+  let calls = 0
+  fake.readerDeps.snapshot = async () => {
+    calls++
+    // 1=入口、2=首段截前、3=首段截后均正常；后续段截后（4）详情已关闭 → 无画布
+    return calls <= 3 ? canvasSnap({ canvases: [CANVAS_BOUNDS] }) : canvasSnap({})
+  }
+  await assert.rejects(makeReader(fake).readResume(), /分段采图期间原简历画布消失或几何已变化/)
+  assert.equal(fake.captures.length, 2)
+  assert.equal(fake.stitchCalls.length, 0)
+})
+
+test('Phase 2 后续段截后被弹窗遮挡 → ResumeObstructedError（截后遮挡断言仍全量执行）', async () => {
+  const fake = makeFake([1000, 2000])
+  let calls = 0
+  fake.readerDeps.snapshot = async () => {
+    calls++
+    // 1=入口、2=首段截前、3=首段截后均正常；后续段截后（4）全屏弹窗盖住画布
+    return calls <= 3 ? canvasSnap({ canvases: [CANVAS_BOUNDS] }) : obstructedSnap()
+  }
+  await assert.rejects(makeReader(fake).readResume(), (e: unknown) => {
+    assert.ok(e instanceof ResumeObstructedError)
+    assert.match(e.message, /原简历采集区域被上层弹窗遮挡/)
+    return true
+  })
+  assert.equal(fake.captures.length, 2) // 截图已发生但被截后遮挡断言拦下，不入列
   assert.equal(fake.stitchCalls.length, 0)
 })
