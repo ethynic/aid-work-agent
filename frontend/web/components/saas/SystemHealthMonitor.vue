@@ -7,6 +7,7 @@
         <span v-if="lastUpdated" class="text-xs text-muted">
           采集 {{ formatTs(overview?.snapshot?.collected_at) }} · 更新 {{ lastUpdated }}
         </span>
+        <BaseButton v-if="hasAnomaly" size="sm" intent="primary" @click="copyAnomalyInfo">复制异常信息</BaseButton>
         <BaseButton size="sm" intent="secondary" @click="togglePolling">
           {{ polling ? '暂停刷新' : '恢复刷新' }}
         </BaseButton>
@@ -313,10 +314,13 @@
  * - 数据量小（运行中/排队任务有限），全量渲染，不分页（设计 §6.2）
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useToast } from 'vue-toastification'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseTable, { type TableColumn } from '@/components/ui/BaseTable.vue'
 import { useMobile } from '@/composables/useMobile'
+import { resolveEnvLabel } from '@/utils/envLabel'
+import { formatDateTimeWithSeconds } from '@/utils/date'
 import {
   getMonitorOverview,
   getMonitorRunners,
@@ -326,6 +330,7 @@ import {
 } from '@/api/adminMonitor'
 
 const { isMobile } = useMobile()
+const toast = useToast()
 
 const overview = ref<MonitorOverview | null>(null)
 const runningTasks = ref<RunnerTaskItem[]>([])
@@ -450,6 +455,99 @@ function groupLabel(group: string) {
     runner: 'Runner', system: '系统资源', middleware: '中间件', business: '业务面',
   }
   return map[group] || group
+}
+
+// ==================== 复制异常信息 ====================
+// 阈值项的取值来源、显示名与单位格式化（键与 THRESHOLDS 同源镜像）
+const METRIC_META: Record<string, { label: string; get: () => number | null | undefined; fmt: (v: number) => string }> = {
+  'runner.queued': { label: 'Runner 排队任务', get: () => runner.value?.queued, fmt: (v) => `${v} 个` },
+  'runner.oldest_running_seconds': { label: '最老任务运行', get: () => runner.value?.oldest_running_seconds, fmt: fmtDuration },
+  'runner.oldest_queued_seconds': { label: '最老排队等待', get: () => runner.value?.oldest_queued_seconds, fmt: fmtDuration },
+  'runner.wait_p95_seconds': { label: '今日等待 P95', get: () => runner.value?.wait_p95_seconds, fmt: fmtDuration },
+  'runner.active_alerts': { label: 'Runner 活跃告警', get: () => runner.value?.active_alerts, fmt: (v) => `${v} 条` },
+  'system.cpu_percent': { label: 'CPU 使用率', get: () => system.value?.cpu_percent, fmt: (v) => `${v}%` },
+  'system.mem_used_percent': { label: '内存使用率', get: () => system.value?.mem_used_percent, fmt: (v) => `${v}%` },
+  'system.disk_used_percent_storage': { label: 'storage 分区使用率', get: () => system.value?.disk_used_percent_storage, fmt: (v) => `${v}%` },
+  'system.disk_used_percent_log': { label: 'log 分区使用率', get: () => system.value?.disk_used_percent_log, fmt: (v) => `${v}%` },
+  'middleware.db_select1_ms': { label: 'DB 查询延迟 (SELECT 1)', get: () => middleware.value?.db_select1_ms, fmt: (v) => `${v}ms` },
+  'business.error_rate_today': { label: '今日错误率', get: () => business.value?.error_rate_today, fmt: fmtPercent },
+  'business.errors_last_hour': { label: '错误日志（1 小时）', get: () => business.value?.errors_last_hour, fmt: (v) => `${v} 条` },
+}
+
+const hasAnomaly = computed(() => {
+  if (collectorBanner.value) return true
+  const overall = overview.value?.assessment?.overall
+  if (overall === 'watch' || overall === 'critical') return true
+  // 兜底：后端研判缺失或滞后时，按前端阈值判断
+  if (middleware.value?.redis_available === false) return true
+  if (runnerStallLevel.value !== 'normal' || loadLevel.value !== 'normal'
+    || dbConnLevel.value !== 'normal' || keyPoolLevel.value !== 'normal') return true
+  return Object.entries(METRIC_META).some(([key, meta]) => {
+    const value = meta.get()
+    return value != null && valueLevel(key, value) !== 'normal'
+  })
+})
+
+function collectAnomalyLines(): string[] {
+  const lines: string[] = []
+  if (runner.value?.runner_stalled) lines.push('- [异常] Runner 调度停摆（runner_stalled=true）')
+  if (middleware.value?.redis_available === false) lines.push('- [异常] Redis 不可用/降级（redis_available=false）')
+  for (const [key, meta] of Object.entries(METRIC_META)) {
+    const value = meta.get()
+    const level = valueLevel(key, value)
+    if (level === 'normal' || value == null) continue
+    const [watch, critical] = THRESHOLDS[key]
+    lines.push(`- [${levelLabel(level)}] ${meta.label}: ${meta.fmt(value)}（观察 ≥${meta.fmt(watch)} / 异常 ≥${meta.fmt(critical)}）`)
+  }
+  if (loadLevel.value !== 'normal') {
+    const load = system.value?.load_1
+    const cpuCount = system.value?.cpu_count
+    if (load != null && cpuCount) {
+      lines.push(`- [${levelLabel(loadLevel.value)}] Load (1m): ${load}（CPU 核数 ${cpuCount}，观察 ≥${cpuCount} / 异常 ≥${cpuCount * 2}）`)
+    }
+  }
+  if (dbConnLevel.value !== 'normal') {
+    const conns = middleware.value?.db_connections
+    const max = middleware.value?.db_max_connections
+    if (conns != null && max) {
+      lines.push(`- [${levelLabel(dbConnLevel.value)}] DB 连接数: ${conns}/${max}（观察 ≥80% / 异常 ≥95%）`)
+    }
+  }
+  if (keyPoolLevel.value !== 'normal') {
+    const active = middleware.value?.key_pool_active
+    const max = middleware.value?.key_pool_max
+    if (active != null && max) {
+      lines.push(`- [${levelLabel(keyPoolLevel.value)}] 模型 Key 并发: ${active}/${max}（观察 ≥80% / 异常 ≥100%）`)
+    }
+  }
+  return lines
+}
+
+function buildAnomalyText(): string {
+  const parts: string[] = [`${resolveEnvLabel()}系统健康异常：`]
+  const collectedAt = overview.value?.snapshot?.collected_at || overview.value?.heartbeat?.collected_at
+  parts.push(collectedAt
+    ? `时间: 采集 ${formatDateTimeWithSeconds(collectedAt)}（页面更新 ${lastUpdated.value || '-'}）`
+    : `时间: 采集时间未知（页面更新 ${lastUpdated.value || '-'}）`)
+  const lines = collectAnomalyLines()
+  if (lines.length) parts.push(`异常指标:\n${lines.join('\n')}`)
+  const a = overview.value?.assessment
+  if (a) {
+    parts.push(`${a.source === 'llm' ? 'AI 研判' : '规则判定'}: ${a.summary}`)
+    if (a.suggestion) parts.push(`建议: ${a.suggestion}`)
+    const items = (a.items || []).map((i) => `${groupLabel(i.group)}·${levelLabel(i.status)}`).join(' / ')
+    if (items) parts.push(`分组状态: ${items}`)
+  }
+  if (collectorBanner.value) parts.push(collectorBanner.value.text)
+  return parts.join('\n')
+}
+
+function copyAnomalyInfo() {
+  navigator.clipboard.writeText(buildAnomalyText()).then(() => {
+    toast.success('已复制到剪贴板')
+  }).catch(() => {
+    toast.error('复制失败')
+  })
 }
 
 // ==================== 表格列定义 ====================
