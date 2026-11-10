@@ -123,6 +123,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261110-0916 | 提示词直达生效与一键回退 | ✅ 已完成开发；三智能体流程通过（独测+CR），分支待合并部署与宏陶场景真机验证。 | [设计](system/prompt-direct-delivery-rollback-design.md) | [计划](plans/plan-prompt-direct-delivery-rollback.md) |
 | 20261014-boss-resume-recovery | BOSS 续筛评分与故障恢复 | ✅ 已完成开发；存量未知受管资源闭环通过独立验证，不要求Windows重启，未部署。 | [设计](system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量) / [复盘](incidents/recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md) | [计划](plans/plan-boss-resume-next-recovery-fix.md) |
 | 20261030-1213 | AI获客交互改造：问卷瘦身 + 去邮件预览直接发送 | ✅ 已完成并部署：问卷只必问地域+行业、去预览直接发送、统一大白话汇报口径（ce5a0ec3c），57 单测绿。 | [设计](subagent/ai-lead-gen/ai-lead-gen-agent-design.md) | — |
 | 20261028-2200 | AI获客业务数据页面（5 个只读列表页） | ✅ 已完成并部署：五表 5 个只读列表页，8 端点强制租户过滤、正文仅预览，集成测试 28 passed。 | [设计](subagent/ai-lead-gen/ai-lead-gen-agent-design.md) | — |
