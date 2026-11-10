@@ -301,6 +301,10 @@ class TestGetExtraPrevious:
 class TestRollbackExtraMd:
     """POST /api/v1/subagents/{name}/extra/rollback"""
 
+    def test_rollback_endpoint_is_audit_wrapped(self):
+        """设计 §4.3：两个回退端点均挂审计（functools.wraps 保留 __wrapped__）"""
+        assert getattr(extra_module.rollback_extra_md, "__wrapped__", None) is not None
+
     @pytest.mark.asyncio
     async def test_no_tenant_context_returns_400(self):
         """无租户上下文 → HTTPException 400"""

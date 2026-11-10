@@ -11,6 +11,8 @@ from loguru import logger
 
 from src.api.auth import get_current_user
 from src.prompts.prompt_registry_service import PromptRegistryService
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 
 
 router = APIRouter(prefix="/api/v1/subagents", tags=["subagent-extra"])
@@ -182,6 +184,7 @@ async def get_extra_previous(subagent_name: str, request: Request):
 
 
 @router.post("/{subagent_name}/extra/rollback")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.PROMPT, id_arg="subagent_name")
 async def rollback_extra_md(subagent_name: str, request: Request):
     """回退上一版（上一版内容走保存链存为新版本，最新即生效）"""
     tenant_id = _resolve_tenant_id(request)

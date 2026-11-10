@@ -108,3 +108,38 @@ class TestRollbackToPrevious:
         assert result == commit_result
         assert result["dedup"] is True
         mock_commit.assert_called_once()
+
+
+class TestGetPromptInfoReadsLatestDirectly:
+    """_get_prompt_info 版本号直查版本表（CR P2 修复）
+
+    commit_version 只失效 content 缓存，registry 缓存（TTL 300s）里的
+    latest_version 会滞后：保存/回退后 get_section_keys 与配置导出会读旧版。
+    """
+
+    def _get_info(self, registry, latest):
+        from src.services.subagent_definition_service import SubagentDefinitionService
+
+        with patch("src.prompts.prompt_resolver.prompt_resolver") as mock_resolver, \
+             patch(f"{SVC}.PromptVersionDB.get_latest", return_value=latest) as mock_get_latest:
+            mock_resolver._resolve_registry.return_value = registry
+            result = SubagentDefinitionService._get_prompt_info("agent_a")
+        return result, mock_get_latest
+
+    def test_version_from_version_table_not_cached_registry(self):
+        """registry 缓存携带滞后的 latest_version=3 时，返回版本表里的 9"""
+        result, mock_get_latest = self._get_info(
+            registry={"id": "pid-1", "latest_version": 3},   # 缓存中的旧水位
+            latest={"version": 9},
+        )
+        assert result == {"prompt_id": "pid-1", "latest_version": 9}
+        mock_get_latest.assert_called_once_with("pid-1")
+
+    def test_no_versions_returns_zero(self):
+        result, _ = self._get_info(registry={"id": "pid-1"}, latest=None)
+        assert result == {"prompt_id": "pid-1", "latest_version": 0}
+
+    def test_no_registry_returns_none_without_version_query(self):
+        result, mock_get_latest = self._get_info(registry=None, latest={"version": 1})
+        assert result is None
+        mock_get_latest.assert_not_called()

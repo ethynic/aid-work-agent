@@ -314,16 +314,24 @@ class SubagentDefinitionService:
 
     @staticmethod
     def _get_prompt_info(agent_id: str) -> Optional[Dict[str, Any]]:
-        """获取子智能体关联的 prompt 信息（最新版本即生效版本）"""
+        """获取子智能体关联的 prompt 信息（最新版本即生效版本）
+
+        prompt_id 走 registry（可缓存）；版本号必须直查版本表——commit_version
+        只失效 content 缓存，registry 缓存里的 latest_version 在 TTL 内滞后，
+        会导致 get_section_keys 与配置导出读到旧版。
+        """
+        from src.db.prompt_db import PromptVersionDB
         from src.prompts.prompt_resolver import prompt_resolver
 
         registry = prompt_resolver._resolve_registry("subagent", agent_id, None)
         if not registry:
             return None
 
+        prompt_id = str(registry["id"])
+        latest = PromptVersionDB.get_latest(prompt_id)
         return {
-            "prompt_id": str(registry["id"]),
-            "latest_version": registry.get("latest_version", 0),
+            "prompt_id": prompt_id,
+            "latest_version": latest["version"] if latest else 0,
         }
 
 
