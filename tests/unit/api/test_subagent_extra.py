@@ -1,15 +1,14 @@
 """
-extra_md API 单元测试（Phase 4 起 DB 驱动）
+extra_md API 单元测试（DB 驱动；保存即生效，无标签第二指针）
 
 验证：
-- GET /api/v1/subagents/{name}/extra：无注册记录 → {content: None}；有记录 → 返回 production 内容
-- PUT /api/v1/subagents/{name}/extra：自动 register + commit_version + set_label('production')
+- GET /api/v1/subagents/{name}/extra：无注册记录 → {content: None}；有记录 → 返回最新版内容
+- PUT /api/v1/subagents/{name}/extra：自动 register + commit_version（保存即生效，不再 set_label）
+- GET /{name}/extra/previous：上一版内容预览；无记录/无上一版 → content=None
+- POST /{name}/extra/rollback：回退成功 + 实例行同步；无可回退版本 → 400
 - DELETE /api/v1/subagents/{name}/extra：无记录幂等；有记录级联删除
-- tenant_extra 不走 staging，直接标 production
-- 无租户上下文 → GET 返回默认配置；PUT/DELETE 报 400
+- 无租户上下文 → GET 返回默认配置；PUT/DELETE/rollback 报 400
 - API 签名保持不变（路径 /api/v1/subagents/{name}/extra）
-
-参考：docs/infrastructure/prompt-lifecycle-design.md §八.2
 """
 
 import pytest
@@ -126,7 +125,7 @@ class TestGetExtraMd:
 # ============================================================
 
 class TestSaveExtraMd:
-    """PUT /api/v1/subagents/{name}/extra"""
+    """PUT /api/v1/subagents/{name}/extra：保存即生效，不再写标签"""
 
     @pytest.mark.asyncio
     async def test_no_tenant_context_returns_400(self):
@@ -140,8 +139,8 @@ class TestSaveExtraMd:
         assert exc.value.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_save_creates_and_commits_and_labels(self):
-        """保存时自动 register → commit_version → set_label('production')"""
+    async def test_save_commits_version_and_dual_writes_instance(self):
+        """保存 = register → commit_version → 实例行双写；不再 set_label"""
         request = _make_request()
         body = extra_module.ExtraMdRequest(content="新内容")
         registry = {"id": "prompt-uuid-1"}
@@ -152,7 +151,8 @@ class TestSaveExtraMd:
              patch.object(extra_module.PromptRegistryService, "register_prompt", return_value=registry) as mock_register, \
              patch.object(extra_module.PromptRegistryService, "commit_version",
                           return_value={"version": version_record, "dedup": False}) as mock_commit, \
-             patch.object(extra_module.PromptRegistryService, "set_label", return_value={"id": "label1"}) as mock_label:
+             patch.object(extra_module.PromptRegistryService, "set_label", create=True) as mock_label, \
+             patch.object(extra_module, "_sync_instance_extra_prompt") as mock_sync:
             mock_user.return_value = {"tenant_id": "tenant_001", "user_id": "user_001"}
             result = await extra_module.save_extra_md("travel-consultant", body, request)
 
@@ -161,14 +161,14 @@ class TestSaveExtraMd:
         # 验证调用链
         mock_register.assert_called_once()
         mock_commit.assert_called_once()
-        mock_label.assert_called_once()
-        # set_label 标的是 production
-        assert mock_label.call_args.kwargs["label"] == "production"
-        assert mock_label.call_args.kwargs["version"] == 1
+        # 标签机制已下线：保存即生效（运行时直读最新版），绝不能再写标签
+        mock_label.assert_not_called()
+        # 实例行双写保留
+        mock_sync.assert_called_once_with("tenant_001", "travel-consultant", "新内容", "user_001")
 
     @pytest.mark.asyncio
     async def test_save_existing_prompt_skips_register(self):
-        """已有注册记录时不再 register，直接 commit + label"""
+        """已有注册记录时不再 register，直接 commit"""
         request = _make_request()
         body = extra_module.ExtraMdRequest(content="更新内容")
         registry = {"id": "prompt-uuid-existing"}
@@ -179,7 +179,7 @@ class TestSaveExtraMd:
              patch.object(extra_module.PromptRegistryService, "register_prompt") as mock_register, \
              patch.object(extra_module.PromptRegistryService, "commit_version",
                           return_value={"version": version_record, "dedup": False}), \
-             patch.object(extra_module.PromptRegistryService, "set_label"):
+             patch.object(extra_module, "_sync_instance_extra_prompt"):
             mock_user.return_value = {"tenant_id": "tenant_001", "user_id": "user_001"}
             result = await extra_module.save_extra_md("travel-consultant", body, request)
 
@@ -197,7 +197,7 @@ class TestSaveExtraMd:
              patch.object(extra_module.PromptRegistryService, "register_prompt", return_value={"id": "p1"}) as mock_register, \
              patch.object(extra_module.PromptRegistryService, "commit_version",
                           return_value={"version": {"version": 1}, "dedup": False}), \
-             patch.object(extra_module.PromptRegistryService, "set_label"):
+             patch.object(extra_module, "_sync_instance_extra_prompt"):
             mock_user.return_value = {"tenant_id": "tenant_X"}
             await extra_module.save_extra_md("my-agent", body, request)
         # register_prompt 的参数
@@ -208,10 +208,7 @@ class TestSaveExtraMd:
 
     @pytest.mark.asyncio
     async def test_save_returns_500_when_commit_version_fails(self):
-        """commit_version 返回 version=None（DB 失败）→ HTTPException 500，不调 set_label
-
-        P0 边界：避免 AttributeError 并避免给坏数据打标签。
-        """
+        """commit_version 返回 version=None（DB 失败）→ HTTPException 500"""
         request = _make_request()
         body = extra_module.ExtraMdRequest(content="x")
         registry = {"id": "prompt-uuid-1"}
@@ -219,18 +216,20 @@ class TestSaveExtraMd:
              patch.object(extra_module.PromptRegistryService, "get_prompt_by_scope", return_value=registry), \
              patch.object(extra_module.PromptRegistryService, "commit_version",
                           return_value={"version": None, "dedup": False}) as mock_commit, \
-             patch.object(extra_module.PromptRegistryService, "set_label") as mock_label:
+             patch.object(extra_module.PromptRegistryService, "set_label", create=True) as mock_label, \
+             patch.object(extra_module, "_sync_instance_extra_prompt") as mock_sync:
             mock_user.return_value = {"tenant_id": "tenant_001", "user_id": "user_001"}
             with pytest.raises(HTTPException) as exc:
                 await extra_module.save_extra_md("travel-consultant", body, request)
         assert exc.value.status_code == 500
         mock_commit.assert_called_once()
-        # version 都没拿到，绝不能给坏数据打 production 标签
+        # version 都没拿到：不写标签（机制已下线）也不同步实例行
         mock_label.assert_not_called()
+        mock_sync.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_save_dedup_skips_register_when_exists(self):
-        """dedup=True（内容相同）→ 复用已有 latest version，不再 register"""
+    async def test_save_dedup_still_dual_writes_instance(self):
+        """dedup=True（内容相同）→ 复用已有 latest version，实例行双写仍执行"""
         request = _make_request()
         body = extra_module.ExtraMdRequest(content="same-content")
         registry = {"id": "prompt-uuid-existing"}
@@ -239,13 +238,131 @@ class TestSaveExtraMd:
              patch.object(extra_module.PromptRegistryService, "register_prompt") as mock_register, \
              patch.object(extra_module.PromptRegistryService, "commit_version",
                           return_value={"version": {"version": 3}, "dedup": True}), \
-             patch.object(extra_module.PromptRegistryService, "set_label") as mock_label:
+             patch.object(extra_module, "_sync_instance_extra_prompt") as mock_sync:
             mock_user.return_value = {"tenant_id": "tenant_001", "user_id": "user_001"}
             result = await extra_module.save_extra_md("travel-consultant", body, request)
         assert result["version"] == 3
         mock_register.assert_not_called()
-        # dedup 时仍需把 production 指到这个已有版本（保证标签存在）
-        assert mock_label.call_args.kwargs["version"] == 3
+        mock_sync.assert_called_once_with("tenant_001", "travel-consultant", "same-content", "user_001")
+
+
+# ============================================================
+# GET /extra/previous + POST /extra/rollback
+# ============================================================
+
+class TestGetExtraPrevious:
+    """GET /api/v1/subagents/{name}/extra/previous（回退前预览）"""
+
+    @pytest.mark.asyncio
+    async def test_no_registry_returns_none_content(self):
+        """无注册记录 → content=None（前端据此隐藏回退入口）"""
+        request = _make_request()
+        with patch.object(extra_module, "get_current_user") as mock_user, \
+             patch.object(extra_module.PromptRegistryService, "get_prompt_by_scope", return_value=None), \
+             patch.object(extra_module.PromptRegistryService, "get_previous_version") as mock_prev:
+            mock_user.return_value = {"tenant_id": "tenant_001"}
+            result = await extra_module.get_extra_previous("travel-consultant", request)
+        assert result["success"] is True
+        assert result["content"] is None
+        assert result["version"] is None
+        mock_prev.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_previous_version_returns_none_content(self):
+        """仅一版（无上一版）→ content=None"""
+        request = _make_request()
+        registry = {"id": "p1"}
+        with patch.object(extra_module, "get_current_user") as mock_user, \
+             patch.object(extra_module.PromptRegistryService, "get_prompt_by_scope", return_value=registry), \
+             patch.object(extra_module.PromptRegistryService, "get_previous_version", return_value=None):
+            mock_user.return_value = {"tenant_id": "tenant_001"}
+            result = await extra_module.get_extra_previous("travel-consultant", request)
+        assert result["success"] is True
+        assert result["content"] is None
+        assert result["version"] is None
+
+    @pytest.mark.asyncio
+    async def test_returns_previous_content_and_version(self):
+        """有上一版 → 返回内容与版本号（去除首尾空白）"""
+        request = _make_request()
+        registry = {"id": "p1"}
+        previous = {"version": 2, "content": "\n上一版内容\n"}
+        with patch.object(extra_module, "get_current_user") as mock_user, \
+             patch.object(extra_module.PromptRegistryService, "get_prompt_by_scope", return_value=registry), \
+             patch.object(extra_module.PromptRegistryService, "get_previous_version", return_value=previous) as mock_prev:
+            mock_user.return_value = {"tenant_id": "tenant_001"}
+            result = await extra_module.get_extra_previous("travel-consultant", request)
+        assert result["success"] is True
+        assert result["content"] == "上一版内容"
+        assert result["version"] == 2
+        mock_prev.assert_called_once_with("p1")
+
+
+class TestRollbackExtraMd:
+    """POST /api/v1/subagents/{name}/extra/rollback"""
+
+    @pytest.mark.asyncio
+    async def test_no_tenant_context_returns_400(self):
+        """无租户上下文 → HTTPException 400"""
+        request = MagicMock()
+        request.state.tenant_id = None
+        with patch.object(extra_module, "get_current_user", return_value=None):
+            with pytest.raises(HTTPException) as exc:
+                await extra_module.rollback_extra_md("any-agent", request)
+        assert exc.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_no_registry_returns_400(self):
+        """无注册记录 → 400 无可回退版本"""
+        request = _make_request()
+        with patch.object(extra_module, "get_current_user") as mock_user, \
+             patch.object(extra_module.PromptRegistryService, "get_prompt_by_scope", return_value=None), \
+             patch.object(extra_module.PromptRegistryService, "rollback_to_previous") as mock_rollback, \
+             patch.object(extra_module, "_sync_instance_extra_prompt") as mock_sync:
+            mock_user.return_value = {"tenant_id": "tenant_001", "user_id": "user_001"}
+            with pytest.raises(HTTPException) as exc:
+                await extra_module.rollback_extra_md("travel-consultant", request)
+        assert exc.value.status_code == 400
+        assert "无可回退版本" in exc.value.detail
+        mock_rollback.assert_not_called()
+        mock_sync.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_previous_version_returns_400(self):
+        """仅一版（rollback_to_previous 返回 None）→ 400 无可回退版本"""
+        request = _make_request()
+        registry = {"id": "p1"}
+        with patch.object(extra_module, "get_current_user") as mock_user, \
+             patch.object(extra_module.PromptRegistryService, "get_prompt_by_scope", return_value=registry), \
+             patch.object(extra_module.PromptRegistryService, "rollback_to_previous", return_value=None), \
+             patch.object(extra_module, "_sync_instance_extra_prompt") as mock_sync:
+            mock_user.return_value = {"tenant_id": "tenant_001", "user_id": "user_001"}
+            with pytest.raises(HTTPException) as exc:
+                await extra_module.rollback_extra_md("travel-consultant", request)
+        assert exc.value.status_code == 400
+        assert "无可回退版本" in exc.value.detail
+        mock_sync.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rollback_success_syncs_instance_row(self):
+        """回退成功 → 实例行同步回退内容，返回 version + content"""
+        request = _make_request()
+        registry = {"id": "p1"}
+        commit_result = {"version": {"version": 4, "content": "\n回退后的内容\n"}, "dedup": False}
+        with patch.object(extra_module, "get_current_user") as mock_user, \
+             patch.object(extra_module.PromptRegistryService, "get_prompt_by_scope", return_value=registry), \
+             patch.object(extra_module.PromptRegistryService, "rollback_to_previous",
+                          return_value=commit_result) as mock_rollback, \
+             patch.object(extra_module, "_sync_instance_extra_prompt") as mock_sync:
+            mock_user.return_value = {"tenant_id": "tenant_001", "user_id": "user_001"}
+            result = await extra_module.rollback_extra_md("travel-consultant", request)
+
+        assert result["success"] is True
+        assert result["version"] == 4
+        assert result["content"] == "回退后的内容"
+        mock_rollback.assert_called_once_with("p1", created_by="user_001")
+        # 回退内容走与保存同一条实例行双写路径
+        mock_sync.assert_called_once_with("tenant_001", "travel-consultant", "\n回退后的内容\n", "user_001")
 
 
 # ============================================================

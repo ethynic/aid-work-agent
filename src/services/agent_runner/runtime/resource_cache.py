@@ -93,20 +93,18 @@ def _read_db_signature():
     from src.db.database import get_db_connection
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        # prompt_versions/prompt_labels 也参与签名：load_from_db 会把解析后的
-        # system_prompt 烤进 config 并计入 profile 指纹，签名不含它们时一次
-        # prompt-only 发布可能让 API 与 worker 的指纹持久分叉。prompt_versions
-        # 无 updated_at，用 (count, max(version)) 表达内容水位。
+        # prompt_versions 也参与签名：load_from_db 会把解析后的 system_prompt
+        # 烤进 config 并计入 profile 指纹，签名不含它时一次 prompt-only 发布
+        # 可能让 API 与 worker 的指纹持久分叉。prompt_versions 无 updated_at，
+        # 用 (count, max(version)) 表达内容水位。
         cursor.execute(
             "SELECT (SELECT COUNT(*) FROM subagent_definitions WHERE status = 'active') AS def_count,"
             " (SELECT COALESCE(MAX(updated_at)::text, '') FROM subagent_definitions) AS def_updated,"
             " (SELECT COUNT(*) FROM prompt_versions) AS pv_count,"
-            " (SELECT COALESCE(MAX(version)::text, '') FROM prompt_versions) AS pv_max,"
-            " (SELECT COALESCE(MAX(updated_at)::text, '') FROM prompt_labels) AS pl_updated"
+            " (SELECT COALESCE(MAX(version)::text, '') FROM prompt_versions) AS pv_max"
         )
         row = cursor.fetchone()
-        return (row["def_count"], row["def_updated"], row["pv_count"],
-                row["pv_max"], row["pl_updated"])
+        return (row["def_count"], row["def_updated"], row["pv_count"], row["pv_max"])
 
 
 def cached_subagent_registry(subagents_dir):

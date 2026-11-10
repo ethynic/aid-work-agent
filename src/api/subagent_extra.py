@@ -113,10 +113,7 @@ async def get_extra_md(subagent_name: str, request: Request):
 
 @router.put("/{subagent_name}/extra")
 async def save_extra_md(subagent_name: str, body: ExtraMdRequest, request: Request):
-    """保存 extra.md 内容（提交新版本 + 标记 production）
-
-    tenant_extra 非 HIGH_RISK_SCOPE，不走 staging，直接标 production。
-    """
+    """保存 extra.md 内容（提交新版本，保存即生效）"""
     tenant_id = _resolve_tenant_id(request)
     if not tenant_id:
         raise HTTPException(status_code=400, detail="无法确定租户ID")
@@ -130,7 +127,7 @@ async def save_extra_md(subagent_name: str, body: ExtraMdRequest, request: Reque
             raise HTTPException(status_code=500, detail="创建 prompt 记录失败")
         prompt_id = str(registry["id"])
 
-        # 2. 提交新版本（SHA-256 去重，内容相同则不产生新版本）
+        # 2. 提交新版本（SHA-256 去重，内容相同则不产生新版本；最新版本即生效版本）
         commit_result = PromptRegistryService.commit_version(
             prompt_id=prompt_id,
             content=body.content,
@@ -142,15 +139,7 @@ async def save_extra_md(subagent_name: str, body: ExtraMdRequest, request: Reque
             raise HTTPException(status_code=500, detail="提交版本失败")
         version_num = version_record["version"]
 
-        # 3. 标记 production（tenant_extra 非高危，直接标）
-        PromptRegistryService.set_label(
-            prompt_id=prompt_id,
-            label="production",
-            version=version_num,
-            created_by=user_id,
-        )
-
-        # 4. 双写租户实例表 extra_prompt（tenant_agent_instances 迁移过渡期双写，
+        # 3. 双写租户实例表 extra_prompt（tenant_agent_instances 迁移过渡期双写，
         #    运行时 _load_extra_md 优先读实例行）
         _sync_instance_extra_prompt(tenant_id, subagent_name, body.content, user_id)
 
@@ -164,6 +153,68 @@ async def save_extra_md(subagent_name: str, body: ExtraMdRequest, request: Reque
     except Exception as e:
         logger.opt(exception=True).error(f"保存 extra.md 失败 (DB): {e}")
         raise HTTPException(status_code=500, detail="保存失败")
+
+
+@router.get("/{subagent_name}/extra/previous")
+async def get_extra_previous(subagent_name: str, request: Request):
+    """获取上一版内容（回退前预览）
+
+    无注册记录或无上一版时 content=None（前端据此隐藏回退入口）。
+    """
+    tenant_id = _resolve_tenant_id(request)
+    if not tenant_id:
+        return {"success": True, "content": None, "version": None, "message": "无租户上下文"}
+
+    scope_id = f"extra:{subagent_name}:{tenant_id}"
+    try:
+        registry = PromptRegistryService.get_prompt_by_scope(tenant_id, "tenant_extra", scope_id)
+        if not registry:
+            return {"success": True, "content": None, "version": None, "message": "未配置租户定制"}
+
+        previous = PromptRegistryService.get_previous_version(str(registry["id"]))
+        if not previous:
+            return {"success": True, "content": None, "version": None, "message": "无可回退版本"}
+
+        return {"success": True, "content": previous["content"].strip(), "version": previous["version"]}
+    except Exception as e:
+        logger.opt(exception=True).error(f"读取上一版 extra 内容失败: {e}")
+        raise HTTPException(status_code=500, detail="读取上一版失败")
+
+
+@router.post("/{subagent_name}/extra/rollback")
+async def rollback_extra_md(subagent_name: str, request: Request):
+    """回退上一版（上一版内容走保存链存为新版本，最新即生效）"""
+    tenant_id = _resolve_tenant_id(request)
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="无法确定租户ID")
+
+    user_id = _resolve_user_id(request)
+
+    try:
+        scope_id = f"extra:{subagent_name}:{tenant_id}"
+        registry = PromptRegistryService.get_prompt_by_scope(tenant_id, "tenant_extra", scope_id)
+        if not registry:
+            raise HTTPException(status_code=400, detail="无可回退版本")
+
+        commit_result = PromptRegistryService.rollback_to_previous(str(registry["id"]), created_by=user_id)
+        if not commit_result or not commit_result.get("version"):
+            raise HTTPException(status_code=400, detail="无可回退版本")
+
+        version_record = commit_result["version"]
+
+        # 回退内容同步实例行（与保存链同一条双写路径）
+        _sync_instance_extra_prompt(tenant_id, subagent_name, version_record["content"], user_id)
+
+        logger.info(
+            f"回退 extra.md (DB): tenant={tenant_id}, subagent={subagent_name}, "
+            f"version={version_record['version']}, dedup={commit_result.get('dedup', False)}"
+        )
+        return {"success": True, "version": version_record["version"], "content": version_record["content"].strip()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.opt(exception=True).error(f"回退 extra.md 失败 (DB): {e}")
+        raise HTTPException(status_code=500, detail="回退失败")
 
 
 @router.delete("/{subagent_name}/extra")

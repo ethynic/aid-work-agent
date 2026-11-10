@@ -1817,11 +1817,6 @@ app.include_router(admin_subagent.router)
 app.include_router(admin_redis.router)
 app.include_router(subagent_extra.router)
 
-# Prompt 版本管理 API
-from src.api import prompt_management
-app.include_router(prompt_management.admin_router)
-app.include_router(prompt_management.tenant_router)
-
 # 子智能体定义管理 API
 from src.api import agent_definitions
 app.include_router(agent_definitions.router)

@@ -20,6 +20,8 @@ from src.api.auth import get_current_user
 from src.config.settings import settings
 from src.services.subagent_definition_service import SubagentDefinitionService
 from src.prompts.prompt_registry_service import PromptRegistryService
+from src.saas.models.enums import BehaviorAction, BehaviorResourceType
+from src.services.behavior_log import audit_action
 
 
 # ============== 请求模型 ==============
@@ -446,7 +448,7 @@ async def delete_definition(request: Request, agent_id: str):
 
 @router.put("/{agent_id}/system-prompt")
 async def update_system_prompt(request: Request, agent_id: str, body: UpdateSystemPromptRequest):
-    """提交 system_prompt 新版本并标记 production"""
+    """提交 system_prompt 新版本（保存即生效）"""
     try:
         admin = _require_admin(request)
         result = SubagentDefinitionService.update_system_prompt(
@@ -463,6 +465,33 @@ async def update_system_prompt(request: Request, agent_id: str, body: UpdateSyst
     except Exception as e:
         logger.error(f"更新 system_prompt 失败: {e}")
         return _error("更新失败")
+
+
+@router.post("/{agent_id}/system-prompt/rollback")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.PROMPT, id_arg="agent_id")
+async def rollback_system_prompt(request: Request, agent_id: str):
+    """回退 system_prompt 到上一版（上一版内容走保存链存为新版本）"""
+    try:
+        admin = _require_admin(request)
+        prompt_id = _get_prompt_id(agent_id)
+        if not prompt_id:
+            return _error(f"智能体 {agent_id} 无关联 Prompt", 404)
+        result = PromptRegistryService.rollback_to_previous(
+            prompt_id, created_by=admin.get("user_id")
+        )
+        if not result or not result.get("version"):
+            return _error("无可回退版本")
+        version = result["version"]
+        logger.info(
+            f"回退 system_prompt: agent={agent_id}, 新版本={version['version']}, "
+            f"dedup={result.get('dedup', False)}"
+        )
+        return _success({"version": version["version"], "content": version["content"]})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"回退 system_prompt 失败: {e}")
+        return _error("回退失败")
 
 
 # ========== Prompt 版本管理（委托给 PromptRegistryService） ==========
@@ -527,149 +556,6 @@ async def diff_versions(request: Request, agent_id: str, v1: int, v2: int):
         return _error("版本对比失败")
 
 
-@router.get("/{agent_id}/draft")
-async def get_draft(request: Request, agent_id: str):
-    """获取草稿"""
-    try:
-        _require_admin(request)
-        prompt_id = _get_prompt_id(agent_id)
-        if not prompt_id:
-            return _error(f"智能体 {agent_id} 无关联 Prompt", 404)
-        result = PromptRegistryService.get_draft(prompt_id)
-        return _success(result)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取草稿失败: {e}")
-        return _error("获取草稿失败")
-
-
-@router.put("/{agent_id}/draft")
-async def save_draft(request: Request, agent_id: str, body: dict):
-    """保存草稿"""
-    try:
-        admin = _require_admin(request)
-        prompt_id = _get_prompt_id(agent_id)
-        if not prompt_id:
-            return _error(f"智能体 {agent_id} 无关联 Prompt", 404)
-        result = PromptRegistryService.save_draft(
-            prompt_id=prompt_id,
-            content=body.get("content", ""),
-            variables=body.get("variables"),
-            base_version=body.get("base_version"),
-            updated_by=admin.get("user_id"),
-        )
-        return _success(result)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"保存草稿失败: {e}")
-        return _error("保存草稿失败")
-
-
-@router.delete("/{agent_id}/draft")
-async def delete_draft(request: Request, agent_id: str):
-    """删除草稿"""
-    try:
-        _require_admin(request)
-        prompt_id = _get_prompt_id(agent_id)
-        if not prompt_id:
-            return _error(f"智能体 {agent_id} 无关联 Prompt", 404)
-        PromptRegistryService.delete_draft(prompt_id)
-        return _success()
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"删除草稿失败: {e}")
-        return _error("删除草稿失败")
-
-
-@router.post("/{agent_id}/draft/commit")
-async def commit_draft(request: Request, agent_id: str, body: dict):
-    """提交草稿为新版本"""
-    try:
-        admin = _require_admin(request)
-        prompt_id = _get_prompt_id(agent_id)
-        if not prompt_id:
-            return _error(f"智能体 {agent_id} 无关联 Prompt", 404)
-        result = PromptRegistryService.commit_draft(
-            prompt_id=prompt_id,
-            commit_message=body.get("commit_message"),
-            created_by=admin.get("user_id"),
-        )
-        if not result or not result.get("version"):
-            return _error("提交草稿失败")
-        return _success(result)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"提交草稿失败: {e}")
-        return _error("提交草稿失败")
-
-
-@router.get("/{agent_id}/labels")
-async def list_labels(request: Request, agent_id: str):
-    """列出标签"""
-    try:
-        _require_admin(request)
-        prompt_id = _get_prompt_id(agent_id)
-        if not prompt_id:
-            return _error(f"智能体 {agent_id} 无关联 Prompt", 404)
-        result = PromptRegistryService.list_labels(prompt_id)
-        return _success(result)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"列出标签失败: {e}")
-        return _error("获取标签失败")
-
-
-@router.put("/{agent_id}/labels/{label}")
-async def set_label(request: Request, agent_id: str, label: str, body: dict):
-    """设置标签"""
-    try:
-        admin = _require_admin(request)
-        prompt_id = _get_prompt_id(agent_id)
-        if not prompt_id:
-            return _error(f"智能体 {agent_id} 无关联 Prompt", 404)
-        version = body.get("version")
-        if not version:
-            return _error("缺少 version 参数")
-        result = PromptRegistryService.set_label(
-            prompt_id=prompt_id,
-            label=label,
-            version=version,
-            created_by=admin.get("user_id"),
-        )
-        if not result:
-            return _error("设置标签失败")
-        return _success(result)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"设置标签失败: {e}")
-        return _error("设置标签失败")
-
-
-@router.delete("/{agent_id}/labels/{label}")
-async def delete_label(request: Request, agent_id: str, label: str):
-    """删除标签"""
-    try:
-        _require_admin(request)
-        prompt_id = _get_prompt_id(agent_id)
-        if not prompt_id:
-            return _error(f"智能体 {agent_id} 无关联 Prompt", 404)
-        result = PromptRegistryService.delete_label(prompt_id, label)
-        if not result:
-            return _error("删除标签失败")
-        return _success()
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"删除标签失败: {e}")
-        return _error("删除标签失败")
-
-
 # ============== 配置导出/导入（跨环境迁移） ==============
 
 EXPORT_FORMAT = "agent_definition_export"
@@ -688,14 +574,11 @@ class ImportDefinitionRequest(BaseModel):
 
 
 def _get_prompt_content(agent_id: str) -> str:
-    """读取当前 production（兜底 latest）版本的 system_prompt 内容"""
+    """读取最新版本（生效版本）的 system_prompt 内容"""
     info = SubagentDefinitionService._get_prompt_info(agent_id)
-    if not info:
+    if not info or not info.get("latest_version"):
         return ""
-    version_num = info.get("production_version") or info.get("latest_version")
-    if not version_num:
-        return ""
-    data = PromptRegistryService.get_version(str(info["prompt_id"]), int(version_num))
+    data = PromptRegistryService.get_version(str(info["prompt_id"]), int(info["latest_version"]))
     return (data or {}).get("content", "")
 
 

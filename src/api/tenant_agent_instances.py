@@ -158,8 +158,10 @@ async def update_instance(agent_id: str, body: UpdateInstanceRequest, admin: dic
             overrides["display_name"] = body.display_name.strip() or None
         if body.description is not None:
             overrides["description"] = body.description.strip() or None
+        extra_prompt_value: Optional[str] = None
         if body.extra_prompt is not None:
-            overrides["extra_prompt"] = body.extra_prompt.strip() or None
+            extra_prompt_value = body.extra_prompt.strip() or None
+            overrides["extra_prompt"] = extra_prompt_value
         if body.greeting_summary is not None:
             cleaned = _sanitize_greeting_summary(body.greeting_summary)
             if cleaned is None:
@@ -182,6 +184,29 @@ async def update_instance(agent_id: str, body: UpdateInstanceRequest, admin: dic
             overrides["llm_provider"] = llm_overrides["llm_provider"]
 
         row = svc.update_overrides(admin["tenant_id"], agent_id, overrides)
+
+        # 补充双写：显式保存非空 extra_prompt 时同步租户定制版本链，链上「上一版」
+        # 才能与实例行一致（支撑回退上一版）；空值=清除定制，只清实例行不写空版本。
+        # 只由「用户保存」与「回退」两个用户动作写链，不放 service 层避免内部同步
+        # 路径反向二次写链。best-effort：链写失败不阻塞实例行保存（运行时实例行权威）。
+        if "extra_prompt" in body.model_fields_set and extra_prompt_value:
+            try:
+                from src.api.subagent_extra import _get_or_create_prompt
+                from src.prompts.prompt_registry_service import PromptRegistryService
+
+                registry = _get_or_create_prompt(agent_id, admin["tenant_id"], admin["user_id"])
+                if registry:
+                    PromptRegistryService.commit_version(
+                        prompt_id=str(registry["id"]),
+                        content=extra_prompt_value,
+                        commit_message="租户前台编辑",
+                        created_by=admin["user_id"],
+                    )
+            except Exception as e:
+                logger.opt(exception=True).error(
+                    f"同步租户定制版本链失败 tenant={admin['tenant_id']} agent={agent_id}: {e}"
+                )
+
         logger.info(
             f"后端日志：租户 {admin['tenant_id']} 更新数字员工实例 {agent_id} "
             f"覆盖项: {list(overrides.keys())}"

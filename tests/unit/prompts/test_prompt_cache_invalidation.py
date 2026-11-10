@@ -1,9 +1,9 @@
 """删除数字员工时 PROMPT_REGISTRY 缓存失效的单元测试
 
-背景（2026-10-26）：invalidate_prompt 只按 prompt_id 清 CONTENT/LABEL，
-registry 缓存键按 scope_id（agent_id）组织且未被清除，导致删除后重建同
-agent_id 的智能体在 TTL（300s）内 resolve 命中旧 prompt_id，拿不到
-system_prompt 被 load_from_db 跳过，授权列表几分钟内看不到新智能体。
+背景（2026-10-26）：invalidate_prompt 只按 prompt_id 清 CONTENT（标签下线后
+不再有 LABEL 键），registry 缓存键按 scope_id（agent_id）组织且未被清除，
+导致删除后重建同 agent_id 的智能体在 TTL（300s）内 resolve 命中旧 prompt_id，
+拿不到 system_prompt 被 load_from_db 跳过，授权列表几分钟内看不到新智能体。
 """
 
 import pytest
