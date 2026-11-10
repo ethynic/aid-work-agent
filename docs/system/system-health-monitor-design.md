@@ -192,3 +192,7 @@ runner 栈已有 `agent-runner-monitor` 容器（`src/services/agent_runner/moni
 ### 9.5 分期
 
 **随首期交付**（2026-11-10 裁决：原 P1/P2 合并，见 §3.3——研判核心价值是组合异常判别，输入缺 CPU/内存时无法区分「同步阻塞」与「事件循环卡死」，拆期交付会让首期研判沦为单指标复述）。研判输入 = 首期全部指标（Runner 执行面 + 系统资源 + 中间件 + 模型面）；后期新增指标（渠道投递/积分速率等）接入后研判输入随之扩展。
+
+## 10. 修订记录
+
+- 2026-11-10：修正采集器重试占比口径 bug——实现误写 `attempt > 0`（acquire_claim 每次 claim 自增，attempt=1 即首次执行，占比恒为 100%），对齐设计改为 `attempt > 1`；同时排队等待分位（accepted -> execution_started_at）限定 attempt<=1 行，重试行的 execution_started_at 是最后一次 claim 时间、含重试间隔，会拉爆 P95（agent2 实例：单条 attempt=3 任务把 P95 顶到 163s）。修正后 agent2 当日实测 P95 38.8s、重试占比 16.7%，均回归正常。

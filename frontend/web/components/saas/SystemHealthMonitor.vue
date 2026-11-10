@@ -85,7 +85,7 @@
               </span>
             </div>
             <div class="flex justify-between">
-              <span class="text-muted">今日重试占比 (attempt&gt;0)</span>
+              <span class="text-muted">今日重试占比 (attempt&gt;1)</span>
               <span class="text-default">{{ fmtPercent(runner?.retried_share_today) }}</span>
             </div>
             <div class="flex justify-between">

@@ -198,15 +198,6 @@ class SkillExecutor:
 Follow the instructions in the skill above to complete the user's task."""
 
         return None
-    
-    def get_skill_descriptions(self) -> str:
-        """
-        获取所有Skill描述
-
-        Returns:
-            Skill描述字符串
-        """
-        return self.skill_registry.get_descriptions()
 
     def match_skill_by_file(self, filename: str) -> Optional[str]:
         """
