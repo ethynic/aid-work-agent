@@ -82,6 +82,50 @@ test('reconciling waits for the host-side confirmation and then starts once', as
   assert.ok(calls[3].params.request_key)
 })
 
+test('a successful explicit stop during the reconciliation wait cancels automatic start', async () => {
+  const autoStart = new AbortController()
+  const calls: string[] = []
+  let state = 'reconciling'
+  const request = async (value: unknown) => {
+    const { method } = value as { method: string }
+    calls.push(method)
+    if (method === 'stop') {
+      state = 'stopped'
+      return { code: 0, result: { status: 'succeeded' } }
+    }
+    assert.equal(method, 'getState')
+    return { code: 0, result: { state, device: { device_id: 'device' } } }
+  }
+  await resumeRuntimeAtLogin(request, async () => {
+    autoStart.abort()
+    assert.equal((await request({ method: 'stop' })).result.status, 'succeeded')
+  }, autoStart.signal)
+  assert.equal(state, 'stopped')
+  assert.deepEqual(calls, ['getState', 'stop'])
+})
+
+test('a stopped state arriving after quit cannot cause an automatic start', async () => {
+  const autoStart = new AbortController()
+  const calls: string[] = []
+  let readStarted!: () => void
+  const reading = new Promise<void>(resolve => { readStarted = resolve })
+  let finishRead!: () => void
+  const pending = new Promise<void>(resolve => { finishRead = resolve })
+  const resume = resumeRuntimeAtLogin(async value => {
+    const { method } = value as { method: string }
+    calls.push(method)
+    if (calls.length === 1) return { code: 0, result: { state: 'reconciling', device: { device_id: 'device' } } }
+    readStarted()
+    await pending
+    return { code: 0, result: { state: 'stopped', device: { device_id: 'device' } } }
+  }, async () => {}, autoStart.signal)
+  await reading
+  autoStart.abort()
+  finishRead()
+  await resume
+  assert.deepEqual(calls, ['getState', 'getState'])
+})
+
 test('reconciling that turns blocked or revoked needs attention instead of starting', async () => {
   for (const next of [{ state: 'blocked' }, { state: 'stopped', connection: 'revoked', device: { device_id: 'device' } }]) {
     const calls: any[] = []

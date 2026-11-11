@@ -10,7 +10,7 @@
  * 4. 无进展超阈值：本地 [无进展告警]（含「不代表业务推进/不自动重放」诊断语义），
  *    每个停滞周期只告警一次；新语义进展复位后进入第二停滞周期可再次告警；
  * 5. 复位后心跳无进展计数从 0 重新起算且不带告警标注；终态只回传一次（不默认重放）。
- * 直连 runner 轻量栈（skill-runner 进程内 handler），不依赖真实 Provider 子进程。
+ * 直连 runner 轻量栈（runtime-recovery 进程内 handler），不依赖真实 Provider 子进程。
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
@@ -21,7 +21,6 @@ import { test } from 'node:test'
 import { runInvocation } from '../src/invocationRunner.js'
 import type { RunnerDeps } from '../src/invocationRunner.js'
 import type { ApiClient, ClaimedInvocation, InvocationResultPayload } from '../src/apiClient.js'
-import type { SkillRunnerHandler } from '../src/skillRunner.js'
 import { ProviderSet } from '../src/providerManager.js'
 import { deriveResourceKey } from '../src/desktopLock.js'
 
@@ -54,16 +53,16 @@ function makeHarness(
     },
     operationResult: async () => ({}),
   } as unknown as ApiClient
-  const skillRunner = {
+  const recoveryObservation = {
     callTool: async (_tool: string, _args: Record<string, unknown>, callOpts: { onProgress?: (p: ProviderProgress) => void }) => {
       await script((p) => callOpts.onProgress?.(p))
       return { success: true, effect: 'none', data: { ok: 1 } }
     },
-  } as unknown as SkillRunnerHandler
+  }
   const deps: RunnerDeps = {
     api,
     providers: new ProviderSet({}),
-    skillRunner,
+    recoveryObservation,
     desktopCheck: async () => true,
     desktopResourceKey: deriveResourceKey(randomUUID()),
     retryBaseMs: 10,
@@ -76,13 +75,13 @@ function makeHarness(
   return { deps, progressPosts, events, results }
 }
 
-function skillInvocation(): ClaimedInvocation {
+function observeInvocation(): ClaimedInvocation {
   return {
     invocation_id: `inv-p8-${randomUUID().slice(0, 8)}`,
-    tool_name: 'skill_script_run',
-    arguments: { skill: 'demo', entry: 'main.js', exec_hash: 'abc' },
+    tool_name: 'runtime_recovery_observe',
+    arguments: {},
     claim_token: 'tok-p8',
-    provider: 'skill-runner',
+    provider: 'runtime-recovery',
   }
 }
 
@@ -106,7 +105,7 @@ test('组合4：语义进展/心跳分离展示 + 双停滞周期各告警一次
     onProgress({ message: 'stageC 入库完成', progress: 5, total: 5 })
     await sleep(120)
   })
-  await runInvocation(skillInvocation(), deps)
+  await runInvocation(observeInvocation(), deps)
 
   // 1) 三次语义进展均原文上报一次：不混入心跳标注，数值字段完整（展示用字段不丢失）
   const semanticA = progressPosts.filter((p) => p.message === 'stageA 设置筛选面板')

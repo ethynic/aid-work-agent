@@ -72,16 +72,27 @@ test('runtime_app confirms interrupted execution later and archives it without s
   assert.equal(f.a.starts, 0, 'confirmation alone must never start execution')
 })
 
-test('a typed structural recovery failure stops rechecking and restores the plain reconciling reason', async t => {
+test('a conclusive first query archives at open and never schedules the recheck loop', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
-  const f = await recheckHost(t, 'runtime_app', n => { if (n === 1) return false; throw new ManagementError(11, 'marker binding invalid') })
+  const f = await recheckHost(t, 'runtime_app', () => true)
+  assert.equal(f.count(), 1, 'the adapter is queried exactly once at open')
+  assert.equal(f.host.getState().state, 'stopped')
+  assert.equal(f.host.recoveredAfterInterruption, true)
+  assert.equal(existsSync(join(f.home, 'host-running.json')), false)
+  await t.mock.timers.tick(120_000); await drain()
+  assert.equal(f.count(), 1, 'no recheck loop after an open-time confirmation')
+})
+
+test('a transient failure of the first recovery query still enters the confirming recheck loop', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = await recheckHost(t, 'runtime_app', n => { if (n === 1) throw new Error('process supervision unavailable'); return true })
+  assert.equal(f.host.getState().state, 'reconciling', 'a failed first query keeps waiting instead of blocking admission')
   assert.ok(String(f.host.getState().blocked_reason).includes(CONFIRMING))
   await t.mock.timers.tick(10_000); await drain()
-  assert.equal(f.count(), 2)
-  assert.equal(f.host.getState().state, 'reconciling')
-  assert.equal(f.host.getState().blocked_reason, IDLE_REASON)
-  await t.mock.timers.tick(120_000); await drain()
-  assert.equal(f.count(), 2, 'no retries after a structural failure')
+  assert.equal(f.count(), 2, 'the loop rechecks after the open-time failure')
+  assert.equal(f.host.getState().state, 'stopped')
+  assert.equal(existsSync(join(f.home, 'host-running.json')), false)
+  assert.ok(readdirSync(f.home).some(name => name.startsWith('host-interrupted-')))
 })
 
 test('a transient recovery failure keeps the confirmation loop running', async t => {

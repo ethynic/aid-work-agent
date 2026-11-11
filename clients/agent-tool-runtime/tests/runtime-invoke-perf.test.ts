@@ -5,7 +5,7 @@
  * - 失败路径：Provider 调用抛错仍输出 [runtime-perf]（失败路径不崩、不丢段）
  * - 锁竞争路径：lock_wait_ms 反映真实等待（预先占住同一 resource_key 的桌面锁）
  *
- * 直连 runner 轻量栈（FakeApi + skill-runner 进程内 handler），复用 providerRouting.test.ts 范式。
+ * 直连 runner 轻量栈（FakeApi + wecom 写工具的进程内 Provider stub），不依赖真实 Provider 子进程。
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
@@ -16,11 +16,10 @@ import { test } from 'node:test'
 import { runInvocation } from '../src/invocationRunner.js'
 import type { RunnerDeps } from '../src/invocationRunner.js'
 import type { ApiClient, ClaimedInvocation, InvocationResultPayload } from '../src/apiClient.js'
-import type { SkillRunnerHandler } from '../src/skillRunner.js'
 import { deriveResourceKey, desktopLockName, withDesktopLock } from '../src/desktopLock.js'
 
 function makeHarness(overrides: {
-  skillRunner?: SkillRunnerHandler
+  callTool?: () => Promise<Record<string, unknown>>
   events?: string[]
   resourceKey?: string
 } = {}): { deps: RunnerDeps; results: Array<{ id: string; payload: InvocationResultPayload }> } {
@@ -33,10 +32,10 @@ function makeHarness(overrides: {
     },
     operationResult: async () => {},
   } as unknown as ApiClient
+  const provider = { callTool: overrides.callTool ?? (async () => ({ success: true, effect: 'applied', data: {} })) }
   const deps: RunnerDeps = {
     api,
-    providers: { has: () => false, get: () => { throw new Error('unused') } } as unknown as RunnerDeps['providers'],
-    ...(overrides.skillRunner ? { skillRunner: overrides.skillRunner } : {}),
+    providers: { has: (key: string) => key === 'wecom', get: (key: string) => key === 'wecom' ? provider : undefined } as unknown as RunnerDeps['providers'],
     desktopCheck: async () => true,
     desktopResourceKey: overrides.resourceKey ?? deriveResourceKey(randomUUID()),
     retryBaseMs: 10,
@@ -47,13 +46,13 @@ function makeHarness(overrides: {
   return { deps, results }
 }
 
-function skillInvocation(): ClaimedInvocation {
+function sendInvocation(): ClaimedInvocation {
   return {
     invocation_id: `inv-perf-${randomUUID().slice(0, 8)}`,
-    tool_name: 'skill_script_run',
-    arguments: { skill: 'demo-skill', entry: 'scripts/main.js', exec_hash: 'abc' },
+    tool_name: 'wecom_message_send',
+    arguments: {},
     claim_token: 'tok-perf',
-    provider: 'skill-runner',
+    provider: 'wecom',
   }
 }
 
@@ -70,18 +69,13 @@ function parsePerfLine(events: string[], invocationId: string): Record<string, s
 
 test('成功路径：[runtime-perf] 字段齐全、毫秒非负，且不含 desktop_check 字段', async () => {
   const events: string[] = []
-  const h = makeHarness({
-    events,
-    skillRunner: {
-      callTool: async () => ({ success: true, effect: 'applied', data: { stdout: 'ok' } }),
-    } as unknown as SkillRunnerHandler,
-  })
-  const inv = skillInvocation()
+  const h = makeHarness({ events, callTool: async () => ({ success: true, effect: 'applied', data: { stdout: 'ok' } }) })
+  const inv = sendInvocation()
   await runInvocation(inv, h.deps)
   assert.equal(h.results[0]!.payload['success'], true)
   const f = parsePerfLine(events, inv.invocation_id)
-  assert.equal(f['tool'], 'skill_script_run')
-  assert.equal(f['provider'], 'skill-runner')
+  assert.equal(f['tool'], 'wecom_message_send')
+  assert.equal(f['provider'], 'wecom')
   // desktopCheck 本体由 Phase 1 进程内化消除，不在此计时（有意的缺口）
   assert.ok(!('desktop_check_ms' in f), `[runtime-perf] 行不应含 desktop_check 字段：${JSON.stringify(f)}`)
   for (const key of ['started_ms', 'lock_wait_ms', 'lock_prep_ms', 'provider_call_ms']) {
@@ -92,18 +86,13 @@ test('成功路径：[runtime-perf] 字段齐全、毫秒非负，且不含 desk
 
 test('失败路径：Provider 调用抛错 → [runtime-perf] 仍输出，终态不受埋点影响', async () => {
   const events: string[] = []
-  const h = makeHarness({
-    events,
-    skillRunner: {
-      callTool: async () => { throw new Error('provider exploded') },
-    } as unknown as SkillRunnerHandler,
-  })
-  const inv = skillInvocation()
+  const h = makeHarness({ events, callTool: async () => { throw new Error('provider exploded') } })
+  const inv = sendInvocation()
   await runInvocation(inv, h.deps)
   const payload = h.results[0]!.payload
   assert.equal(payload['success'], false)
   assert.equal(payload['code'], 'INTERNAL_ERROR')
-  assert.equal(payload['effect'], 'unknown') // 写动作（skill_script_run）失败效果不可证明
+  assert.equal(payload['effect'], 'unknown') // 写动作（wecom_message_send）失败效果不可证明
   const f = parsePerfLine(events, inv.invocation_id)
   assert.ok(Number(f['provider_call_ms']) >= 0, '失败路径 provider_call_ms 也应记录')
 })
@@ -118,14 +107,8 @@ test('锁竞争路径：预先占住同一桌面锁 → lock_wait_ms 反映真�
     await new Promise<void>((resolve) => setTimeout(resolve, 250))
     release()
   })
-  const h = makeHarness({
-    events,
-    resourceKey,
-    skillRunner: {
-      callTool: async () => ({ success: true, effect: 'applied', data: {} }),
-    } as unknown as SkillRunnerHandler,
-  })
-  const inv = skillInvocation()
+  const h = makeHarness({ events, resourceKey })
+  const inv = sendInvocation()
   await runInvocation(inv, h.deps)
   await held
   assert.equal(h.results[0]!.payload['success'], true)

@@ -22,7 +22,7 @@ async function fixture(t: TestContext, business: boolean, legacy = false) {
     if (child && child.exitCode === null) await new Promise(resolve => { child!.once('exit', resolve); setTimeout(resolve, 2000).unref() })
     rmSync(home, { recursive: true, force: true })
   })
-  writeFileSync(join(home, 'config.json'), JSON.stringify({ server: 'https://isolated.invalid', skills: { python: 'configured-but-not-running' }, sessionTasks: true }))
+  writeFileSync(join(home, 'config.json'), JSON.stringify({ server: 'https://isolated.invalid', sessionTasks: true }))
   const supervisor = new ProcessSupervision(home, process.execPath), generation = randomUUID()
   await supervisor.marker(generation)
   if (business) await supervisor.noteBusinessExecution()

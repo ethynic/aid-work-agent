@@ -22,8 +22,6 @@ import { ApiError, DeviceRevokedError, isRetryableTransportError } from './apiCl
 import { getProviderManifest, isToolAllowedFor, isWriteToolFor, type ProviderManifest } from './providers.js'
 import type { ProviderSet, ProviderManager } from './providerManager.js'
 import { ProviderCrashError } from './providerManager.js'
-import { SKILL_RUNNER_PROVIDER_KEY } from './skillRunner.js'
-import type { SkillRunnerHandler } from './skillRunner.js'
 import { DesktopLockTimeoutError, desktopLockName, withDesktopLock } from './desktopLock.js'
 import { appendJournalEntry, JournalWriteError } from './journal.js'
 import { backoffSleep, deliverOutboxEntry, type OutboxEntry, ResultOutbox, resultOutboxDir } from './resultOutbox.js'
@@ -73,12 +71,8 @@ export interface RunnerDeps {
    * SessionPrecheckError，本 invocation 按 effect=none 收敛（不发送、不另建链）。
    * 仅会话任务引擎注入；缺失时行为不变。 */
   sessionPrecheck?: () => Promise<void>
-  /** skill-runner 进程内 handler（M2）：provider=skill-runner 时代替 ProviderSet
-   *  的 MCP 实例执行（无 MCP entry）；未注入 = 未配置 skills.python →
-   *  PROVIDER_NOT_AVAILABLE（能力真实性，与 capabilities 上报同源） */
   beforeProviderCall?: (invocation: ClaimedInvocation) => Promise<void>
   recoveryObservation?: Pick<ProviderManager, 'callTool'>
-  skillRunner?: SkillRunnerHandler
   /** Runtime-only bridge; called after lock/precheck/permit/journal, never by a model. */
   prepareProviderCall?: (inv: ClaimedInvocation, permit: WritePermit, signal: AbortSignal) => Promise<Record<string, unknown>>
   onEvent?: (message: string) => void
@@ -339,13 +333,10 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
   const sendFinalResult = isV2Invocation ? sendFinalResultV2 : sendFinalResultLegacy
 
   // 0. Provider 路由：invocation 级 provider_key（服务端旧数据无该字段 → 设备默认 boss，现状不变）。
-  // skill-runner（M2）：进程内 handler，不走 ProviderSet/MCP entry——可用性以 deps.skillRunner
-  // 注入为准（cli 按 config.skills.python 配置且存在注入），缺 handler = 未安装（fail-closed）
   const providerKey = inv.provider ?? 'boss-recruiting'
   const isRecoveryObservation = providerKey === 'runtime-recovery'
-  const isSkillRunner = providerKey === SKILL_RUNNER_PROVIDER_KEY
   const manifest = deps.manifests?.[providerKey] ?? getProviderManifest(providerKey)
-  if (!manifest || (isRecoveryObservation ? !deps.recoveryObservation : isSkillRunner ? !deps.skillRunner : !deps.providers.has(providerKey))) {
+  if (!manifest || (isRecoveryObservation ? !deps.recoveryObservation : !deps.providers.has(providerKey))) {
     emit(`invocation ${inv.invocation_id} provider=${providerKey} 未安装或未配置入口，拒绝执行`)
     await sendFinalResult({
       success: false,
@@ -440,11 +431,8 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
     }
   }
 
-  // 4. Provider 调用（进度转发 + 取消 + shutdown 中止 + 桌面资源仲裁）；
-  // skill-runner → 进程内 handler（同一桌面锁域/终态映射链路，零复制）
-  const provider: Pick<ProviderManager, 'callTool'> = isRecoveryObservation ? deps.recoveryObservation! : isSkillRunner
-    ? deps.skillRunner!
-    : deps.providers.get(providerKey)
+  // 4. Provider 调用（进度转发 + 取消 + shutdown 中止 + 桌面资源仲裁）
+  const provider: Pick<ProviderManager, 'callTool'> = isRecoveryObservation ? deps.recoveryObservation! : deps.providers.get(providerKey)
   const lockName = desktopLockName(deps.desktopResourceKey)
   const abortController = new AbortController()
   if (deps.shutdownSignal?.aborted) abortController.abort()

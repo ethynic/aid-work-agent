@@ -5,7 +5,7 @@
  * - 语义进展（内容有变化）原文上报；心跳续租消息带「（心跳续租，无新进展 Ns）」标注
  * - 重复同一句语义内容不重置无进展时钟、不重复上报
  * - 无进展超过阈值：本地 [无进展告警]（只诊断不重放）+ 心跳消息附加告警标注
- * 直连 runner 轻量栈（skill-runner 进程内 handler），不依赖真实 Provider 子进程。
+ * 直连 runner 轻量栈（runtime-recovery 进程内 handler），不依赖真实 Provider 子进程。
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
@@ -16,7 +16,6 @@ import { test } from 'node:test'
 import { runInvocation } from '../src/invocationRunner.js'
 import type { RunnerDeps } from '../src/invocationRunner.js'
 import type { ApiClient, ClaimedInvocation, InvocationResultPayload } from '../src/apiClient.js'
-import type { SkillRunnerHandler } from '../src/skillRunner.js'
 import { ProviderSet } from '../src/providerManager.js'
 import { deriveResourceKey } from '../src/desktopLock.js'
 
@@ -50,16 +49,16 @@ function makeHarness(
     },
     operationResult: async () => ({}),
   } as unknown as ApiClient
-  const skillRunner = {
+  const recoveryObservation = {
     callTool: async (_tool: string, _args: Record<string, unknown>, callOpts: { onProgress?: (p: ProviderProgress) => void }) => {
       await script((p) => callOpts.onProgress?.(p))
       return { success: true, effect: 'none', data: { ok: 1 } }
     },
-  } as unknown as SkillRunnerHandler
+  }
   const deps: RunnerDeps = {
     api,
     providers: new ProviderSet({}),
-    skillRunner,
+    recoveryObservation,
     desktopCheck: async () => true,
     desktopResourceKey: deriveResourceKey(randomUUID()),
     retryBaseMs: 10,
@@ -72,13 +71,13 @@ function makeHarness(
   return { deps, progressPosts, events, results }
 }
 
-function skillInvocation(): ClaimedInvocation {
+function observeInvocation(): ClaimedInvocation {
   return {
     invocation_id: `inv-prog-${randomUUID().slice(0, 8)}`,
-    tool_name: 'skill_script_run',
-    arguments: { skill: 'demo', entry: 'main.js', exec_hash: 'abc' },
+    tool_name: 'runtime_recovery_observe',
+    arguments: {},
     claim_token: 'tok-prog',
-    provider: 'skill-runner',
+    provider: 'runtime-recovery',
   }
 }
 
@@ -89,7 +88,7 @@ test('语义进展原文上报；心跳续租带标注与无进展时长；停�
     onProgress({ message: 'stageB 筛选完成', progress: 1, total: 2 })
     await sleep(150)
   })
-  await runInvocation(skillInvocation(), deps)
+  await runInvocation(observeInvocation(), deps)
 
   // 语义进展：原文上报（不混入心跳标注），字段完整
   const semanticA = progressPosts.filter((p) => p.message === 'stageA 设置筛选面板')
@@ -135,7 +134,7 @@ test('重复同一句语义内容不重报、不重置无进展时钟（68 条�
     }
     await sleep(850) // 首次语义进展后累计约 1.1s：若重复推送被误当作推进，告警不会在此窗口出现
   })
-  await runInvocation(skillInvocation(), deps)
+  await runInvocation(observeInvocation(), deps)
 
   const raw = progressPosts.filter((p) => p.message === 'stageA 设置筛选面板')
   assert.equal(raw.length, 1, '重复同一句只上报一次，不产生多条相同业务事件')
@@ -154,7 +153,7 @@ test('尚未收到业务进展时心跳明示等待状态（stage=running 不冒
   const { deps, progressPosts, events } = makeHarness(async () => {
     await sleep(200)
   })
-  await runInvocation(skillInvocation(), deps)
+  await runInvocation(observeInvocation(), deps)
 
   const heartbeats = progressPosts.filter((p) => typeof p.message === 'string' && p.message.includes('（心跳续租，无新进展'))
   assert.ok(heartbeats.length >= 1, '等待期应有心跳续租')
@@ -178,7 +177,7 @@ test('同步连续 push 多个不同进展：按原文顺序全部上报，不�
     },
     { noProgressWarnMs: 10_000 },
   )
-  await runInvocation(skillInvocation(), deps)
+  await runInvocation(observeInvocation(), deps)
 
   const steps = ['stepA 打开页面', 'stepB 输入关键词', 'stepC 点击搜索']
   const positions = steps.map((text) => progressPosts
@@ -217,7 +216,7 @@ test('队列积压（progress 消费慢）时中间步骤不丢：慢速消费�
     },
     { noProgressWarnMs: 10_000, progressDelayMs: 60 },
   )
-  await runInvocation(skillInvocation(), deps)
+  await runInvocation(observeInvocation(), deps)
 
   const steps = ['slowA 定位输入框', 'slowB 填入内容', 'slowC 提交表单']
   const positions = steps.map((text) => progressPosts

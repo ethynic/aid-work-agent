@@ -15,7 +15,6 @@ import { test } from 'node:test'
 import { runInvocation } from '../src/invocationRunner.js'
 import type { RunnerDeps } from '../src/invocationRunner.js'
 import type { ApiClient, ClaimedInvocation, InvocationResultPayload } from '../src/apiClient.js'
-import type { SkillRunnerHandler } from '../src/skillRunner.js'
 import { ProviderSet } from '../src/providerManager.js'
 import { deriveResourceKey } from '../src/desktopLock.js'
 
@@ -41,16 +40,16 @@ function makeHarness(
     },
     operationResult: async () => ({}),
   } as unknown as ApiClient
-  const skillRunner = {
+  const recoveryObservation = {
     callTool: async (_t: string, _a: Record<string, unknown>, callOpts: { onProgress?: (p: ProviderProgress) => void }) => {
       await script((p) => callOpts.onProgress?.(p))
       return { success: true, effect: 'none', data: { ok: 1 } }
     },
-  } as unknown as SkillRunnerHandler
+  }
   const deps: RunnerDeps = {
     api,
     providers: new ProviderSet({}),
-    skillRunner,
+    recoveryObservation,
     desktopCheck: async () => true,
     desktopResourceKey: deriveResourceKey(randomUUID()),
     retryBaseMs: 10,
@@ -63,13 +62,13 @@ function makeHarness(
   return { deps, progressPosts, events, results }
 }
 
-function skillInvocation(): ClaimedInvocation {
+function observeInvocation(): ClaimedInvocation {
   return {
     invocation_id: `inv-p7-ind-${randomUUID().slice(0, 8)}`,
-    tool_name: 'skill_script_run',
-    arguments: { skill: 'demo', entry: 'main.js', exec_hash: 'abc' },
+    tool_name: 'runtime_recovery_observe',
+    arguments: {},
     claim_token: 'tok-p7-ind',
-    provider: 'skill-runner',
+    provider: 'runtime-recovery',
   }
 }
 
@@ -85,7 +84,7 @@ test('current/total 数值推进（文案相同）算语义进展：原文上报
     onProgress({ message: 'stageA 固定文案', progress: 3, total: 4 })
     await sleep(200)
   })
-  await runInvocation(skillInvocation(), deps)
+  await runInvocation(observeInvocation(), deps)
 
   const raw = progressPosts.filter((p) => p['message'] === 'stageA 固定文案')
   assert.equal(raw.length, 3, '每次数值推进都应原文上报一次（与全字段重复的去重不同）')

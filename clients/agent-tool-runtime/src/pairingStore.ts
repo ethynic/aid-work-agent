@@ -25,7 +25,7 @@ function exactKeys(value: Record<string, unknown>, allowed: string[]): boolean {
   return Object.keys(value).every(key => allowed.includes(key))
 }
 function validConfig(value: unknown): value is RuntimeConfig {
-  if (!isRecord(value) || !exactKeys(value, ['server', 'device_id', 'name', 'bossCliEntry', 'providers', 'sessionTasks', 'skills'])
+  if (!isRecord(value) || !exactKeys(value, ['server', 'device_id', 'name', 'bossCliEntry', 'providers', 'sessionTasks'])
     || typeof value.server !== 'string' || !value.server || typeof value.device_id !== 'string' || !value.device_id) return false
   try {
     const url = new URL(value.server)
@@ -36,8 +36,6 @@ function validConfig(value: unknown): value is RuntimeConfig {
   if (value.providers !== undefined && (!isRecord(value.providers) || Object.values(value.providers).some(provider =>
     !isRecord(provider) || !exactKeys(provider, ['entry', 'v2Send']) || typeof provider.entry !== 'string'
     || (provider.v2Send !== undefined && typeof provider.v2Send !== 'boolean')))) return false
-  if (value.skills !== undefined && (!isRecord(value.skills) || !exactKeys(value.skills, ['dir', 'python'])
-    || Object.values(value.skills).some(item => typeof item !== 'string'))) return false
   return true
 }
 

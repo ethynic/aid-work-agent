@@ -203,12 +203,17 @@ export class RuntimeHost {
       }
       failureMessage = '旧执行的停止证明无法读取，原设备和任务记录已保留'
       if (!host.startupFailure && existsSync(host.markerFile)) {
+        // A first transient failure (native helper timeout, DPAPI hiccup, marker
+        // read) must not block runtime_app admission: it enters the recheck loop.
+        const recheck = options.supervisor === 'runtime_app' && typeof options.adapter.recoverPreviousExecution === 'function'
         try {
-          if (await options.adapter.recoverPreviousExecution?.(readFileSync(host.markerFile, 'utf8'))) host.archiveInterruptedExecution()
           // Cross-session evidence may only become available later (logout, receipts).
           // runtime_app rechecks on its own; Main then resumes admission once stopped.
-          else if (options.supervisor === 'runtime_app' && typeof options.adapter.recoverPreviousExecution === 'function') host.beginRecoveryRecheck()
-        } catch { throw new ManagementError(11, failureMessage) }
+          if (!await host.checkInterruptedExecution() && recheck) host.beginRecoveryRecheck()
+        } catch {
+          if (!recheck) throw new ManagementError(11, failureMessage)
+          host.beginRecoveryRecheck()
+        }
       }
       await host.cleanupPluginImports()
       return host
@@ -244,14 +249,17 @@ export class RuntimeHost {
   }
   /** Local composition metadata; deliberately absent from strict H1 state schema. */
   get recoveredAfterInterruption(): boolean { return this.recovered }
-  /** Caller just obtained fresh stop proof; the old execution becomes history. */
-  private archiveInterruptedExecution(): void {
+  /** Archive only after the adapter confirms that the previous execution stopped.
+   * A false verdict (or a transient evidence error surfacing here) keeps waiting. */
+  private async checkInterruptedExecution(): Promise<boolean> {
+    if (!await this.adapter.recoverPreviousExecution?.(readFileSync(this.markerFile, 'utf8'))) return false
     renameSync(this.markerFile, join(this.lease.home, `host-interrupted-${randomUUID()}.json`))
     this.state = 'stopped'; this.recovered = true; this.changed()
+    return true
   }
   /** runtime_app only: recheck old-execution stop evidence while reconciling, until
-   * it is confirmed (archive), structurally rejected (keep reason), or the marker
-   * disappears. Never starts execution; Main resumes admission after 'stopped'. */
+   * it is confirmed (archive) or the marker disappears. Never starts execution;
+   * Main resumes admission after 'stopped'. */
   private beginRecoveryRecheck(): void {
     this.confirmingRecovery = true
     this.changed()
@@ -269,18 +277,13 @@ export class RuntimeHost {
     const work = this.queue.then(async () => {
       // Serialized with user stop/start; every condition is re-read inside the queue.
       if (this.closed || this.closing || this.state !== 'reconciling' || this.ownsExecution || !existsSync(this.markerFile)) return this.endRecoveryRecheck()
-      let confirmed = false
-      try { confirmed = await this.adapter.recoverPreviousExecution?.(readFileSync(this.markerFile, 'utf8')) === true }
-      catch (error) {
-        // Typed rejections are structural (stop retrying); transient helper outages
-        // keep the cadence so a later round can still confirm the stop.
-        if (error instanceof ManagementError) return this.endRecoveryRecheck()
-        return this.scheduleRecoveryCheck()
-      }
-      if (!confirmed) return this.scheduleRecoveryCheck()
-      // An archive rename failure (e.g. a transient file lock) retries on the next
-      // round; stopping here would strand the confirming wording with a dead loop.
-      try { this.archiveInterruptedExecution() } catch { return this.scheduleRecoveryCheck() }
+      // The adapter no longer produces record-class rejections: false keeps waiting
+      // and a transient throw (helper outage, archive rename lock) keeps the cadence
+      // so a later round can still confirm the stop; stopping would strand the
+      // confirming wording with a dead loop.
+      try {
+        if (!await this.checkInterruptedExecution()) return this.scheduleRecoveryCheck()
+      } catch { return this.scheduleRecoveryCheck() }
       this.endRecoveryRecheck()
     })
     this.queue = work.catch(() => {})
@@ -458,11 +461,10 @@ export class RuntimeHost {
         if (this.state === 'stopped') return
         if (this.state === 'blocked') throw new ManagementError(11, '执行环境初始化失败，请检查连接或重新安装；原记录已保留')
         if (this.state === 'reconciling' && !this.ownsExecution) {
-          if (!existsSync(this.markerFile) || !await this.adapter.recoverPreviousExecution?.(readFileSync(this.markerFile, 'utf8'))) {
+          if (!await this.checkInterruptedExecution()) {
             throw new ManagementError(11, '旧执行尚未确认停止，请停止原Runtime后重试；不会重发旧任务')
           }
-          renameSync(this.markerFile, join(this.lease.home, `host-interrupted-${randomUUID()}.json`))
-          this.state = 'stopped'; this.recovered = true; this.changed()
+          this.endRecoveryRecheck()
           return
         }
         this.state = 'draining'; this.changed()
