@@ -27,6 +27,6 @@ Windows 提供进程、文件权限、凭据保护、进程组和本机通信等
 | 操作前确认企微账号、窗口和本地库 | WeCom CLI 按命令检查实际所需条件。桌面命令核对窗口、登录和目标，本地库读取核对数据库与账号。具备独立后台执行条件的命令由企微声明可并行，插件报告失败及已知进度。[WeCom CLI 设计](../design/wecom/wecom-cli-design.md#100-重构范围2026-11-11待开发) |
 | 浏览器名称特例、旧微信会话桥接、系统事件诊断 | 旧浏览器名称和工具特例由受管作业及插件声明的通用规则取代。旧自动业务核对随对应入口退役。微信路径按首轮范围退役。内置诊断使用自身运行记录与协议回执，系统事件供人工对照。 |
 
-源码可确认 BOSS 有真实光标和键盘输入，企微的点击与按键主要通过窗口消息投递。企微文本发送仍使用系统剪贴板，并可能触发窗口恢复。按屏幕坐标找窗口与屏幕截图回退也存在于企微驱动中。具体哪些企微窗口命令可与 BOSS 同跑，以完整命令的验收为准。[BOSS 真实输入](../../clients/boss-resume-assistant/scripts/BossPhysicalInput.cs) · [企微窗口原语](../../clients/wecom-cli/drivers/ps1/_common.ps1) · [企微文本发送](../../clients/wecom-cli/drivers/ps1/message-send.ps1)
+源码可确认 BOSS 有真实光标和键盘输入，企微的点击与按键主要通过窗口消息投递。企微文本发送仍使用系统剪贴板，并可能触发窗口恢复。首轮沿已确认的串行与显式并行规则实施，BOSS 与企微的业务各自验收。[BOSS 真实输入](../../clients/boss-resume-assistant/scripts/BossPhysicalInput.cs) · [企微窗口原语](../../clients/wecom-cli/drivers/ps1/_common.ps1) · [企微文本发送](../../clients/wecom-cli/drivers/ps1/message-send.ps1)
 
 升级保留有效配对身份和原作业、回执。首次安装、普通重启、升级和连接修复均应验证在启动项、会话编号、机器指纹及 Windows 事件日志不可用时，仍可按 Runtime 自身证据完成状态判断。另用两个对照验证实际停稳和隔离范围，一项是已登记的受管旧进程仍在，另一项是系统中有与本 Runtime 无关的 Node 或浏览器进程。插件未登录或桌面不可用由插件报告，原设备持续心跳，独立后台作业继续执行。实施和验证见[统一计划](../plans/plan-runtime-plugin-host.md#1612-运行状态依赖整改100待开发)。
