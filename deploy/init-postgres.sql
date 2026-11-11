@@ -5911,6 +5911,8 @@ CREATE TABLE IF NOT EXISTS bs_wecom_proxy_tasks (
     title TEXT NOT NULL,
     agent_id TEXT NOT NULL,
     instruction TEXT NOT NULL,
+    opening_message TEXT,
+    has_started BOOLEAN NOT NULL DEFAULT FALSE,
     status TEXT NOT NULL DEFAULT 'stopped',
     stop_requested BOOLEAN NOT NULL DEFAULT FALSE,
     revision BIGINT NOT NULL DEFAULT 0,
@@ -5945,12 +5947,19 @@ CREATE TABLE IF NOT EXISTS bs_wecom_proxy_task_sessions (
     status TEXT NOT NULL DEFAULT 'active',
     halted_reason TEXT,
     halted_at TIMESTAMPTZ,
+    opening_send_status TEXT,
+    opening_send_invocation_id UUID,
+    opening_send_reconcile_id UUID,
+    opening_send_error TEXT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
     UNIQUE (tenant_id, task_id, session)
 );
 CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_task_sessions_task
     ON bs_wecom_proxy_task_sessions (tenant_id, task_id, status);
+CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_opening_pending
+    ON bs_wecom_proxy_task_sessions (tenant_id, task_id)
+    WHERE opening_send_status IN ('pending','sending','unknown');
 
 -- 代理批次（持久队列；status: pending|running|waiting|reconcile_hold|
 -- succeeded|failed|ended_by_removal|ended_by_delete；waiting=Runner 持久等待

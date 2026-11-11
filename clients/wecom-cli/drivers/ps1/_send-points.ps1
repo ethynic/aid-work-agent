@@ -108,7 +108,7 @@ function Send-WeComTitleDoubleClick([int64]$Hwnd, [int]$ScreenX, [int]$ScreenY) 
     $ok = [WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0203, [IntPtr]1, $lp) -and $ok
     Start-Sleep -Milliseconds 60
     $ok = [WeComWin32]::PostMessageW([IntPtr]$Hwnd, 0x0202, [IntPtr]::Zero, $lp) -and $ok
-    if (-not $ok) { Throw-DriverError 'UI_CHANGED' '单聊标题双击消息未成功投递，未触碰输入区' }
+    if (-not $ok) { Throw-DriverError 'UI_CHANGED' '单聊标题双击消息未成功投递，未输入或发送消息' }
 }
 
 function Get-WeComTitleEditWindow([int64]$Hwnd, [int]$ScreenX, [int]$ScreenY) {
@@ -130,14 +130,14 @@ function Get-WeComTitleEditWindow([int64]$Hwnd, [int]$ScreenX, [int]$ScreenY) {
         return $true
     }
     [void][WeComWin32]::EnumChildWindows([IntPtr]$Hwnd, $callback, [IntPtr]::Zero)
-    if ($edits.Count -gt 1) { Throw-DriverError 'UI_CHANGED' '标题位置存在多个编辑框，未触碰输入区' }
+    if ($edits.Count -gt 1) { Throw-DriverError 'UI_CHANGED' '标题位置存在多个编辑框，未输入或发送消息' }
     if ($edits.Count -eq 0) { return [IntPtr]::Zero }
     return [IntPtr][int64]$edits[0]
 }
 
 function Get-WeComGroupTitleEditWindow([int64]$Hwnd, [int]$ScreenX, [int]$ScreenY) {
     $edit = Get-WeComTitleEditWindow -Hwnd $Hwnd -ScreenX $ScreenX -ScreenY $ScreenY
-    if ($edit -ne [IntPtr]::Zero) { return $edit }
+    if ($edit -ne [IntPtr]::Zero) { throw 'title_edit_not_reset' }
     # 一次点击会从未选中态选中完整群名；重复点击可能取消全选。
     [void](Send-WeComClick -Hwnd $Hwnd -ScreenX $ScreenX -ScreenY $ScreenY)
     Start-Sleep -Milliseconds 150
@@ -170,15 +170,20 @@ function Get-WeComCopiedTitle([int64]$Hwnd, [string]$Section, $Point) {
     try {
         $copyStartSeq = [WeComWin32]::GetClipboardSequenceNumber()
         if (-not [WeComWin32]::IsWindow([IntPtr]$Hwnd)) { throw 'window_changed' }
+        if ($Section -notin @('group', 'contact', 'other')) { throw 'section_missing' }
+        if ($Point.input_x -isnot [int] -or $Point.input_y -isnot [int] -or
+                $Point.input_x -lt 0 -or $Point.input_x -ge $main.W -or
+                $Point.input_y -le [int]($main.H * 0.80) -or $Point.input_y -ge $main.H) { throw 'input_point_invalid' }
+        # 只切换焦点，使上一次群标题留下的编辑框关闭；后续输入仍须先核对标题。
+        [void](Send-WeComClick -Hwnd $Hwnd -ScreenX ([int]($main.X + $Point.input_x)) -ScreenY ([int]($main.Y + $Point.input_y)))
+        Start-Sleep -Milliseconds 120
         Write-WeComTitleCopyTrace $clock 'title_ui_begin' $main.Pid
         if ($Section -eq 'group') {
             $copyHwnd = Get-WeComGroupTitleEditWindow -Hwnd $Hwnd -ScreenX $screenX -ScreenY $screenY
             if (-not (Send-WeComAttachChordKey -Hwnd $copyHwnd.ToInt64() -Vk 0x41)) { throw 'title_select_failed' }
-        } elseif ($Section -eq 'contact' -or $Section -eq 'other') {
+        } else {
             Send-WeComTitleDoubleClick -Hwnd $Hwnd -ScreenX $screenX -ScreenY $screenY
             $copyHwnd = [IntPtr]$Hwnd
-        } else {
-            throw 'section_missing'
         }
         Write-WeComTitleCopyTrace $clock 'title_ui_end' $main.Pid
         Start-Sleep -Milliseconds 120
@@ -220,7 +225,7 @@ function Get-WeComCopiedTitle([int64]$Hwnd, [string]$Section, $Point) {
         try { Clear-WeComCachedTitlePointOnCopyFailure -Point $Point -Failure $failure }
         catch { $failure += ';title_cache_invalidate_failed' }
     }
-    if ($failure) { Throw-DriverError 'UI_CHANGED' ('标题复制失败（' + $failure + '），未触碰输入区或发送消息') }
+    if ($failure) { Throw-DriverError 'UI_CHANGED' ('标题复制失败（' + $failure + '），未输入或发送消息') }
     return $copied
 }
 

@@ -209,8 +209,11 @@ async def create_proxy_task(request: Request):
         tenant_id, user_id, user = await _current_user_context(request)
         body = await request.json()
         if not isinstance(body, dict) or set(body) - {
-                'title', 'instruction', 'agent_id', 'sessions', 'profile_id', 'instance_id'}:
+                'title', 'instruction', 'agent_id', 'sessions', 'profile_id', 'instance_id',
+                'opening_message'}:
             return _err(400, '任务配置字段无效', 'VALIDATION_FAILED')
+        opening = ({'opening_message': proxy_tasks.validate_opening_message(body['opening_message'])}
+                   if 'opening_message' in body else {})
         agent_id = body.get('agent_id')
         if not await _agent_allowed(user, agent_id if isinstance(agent_id, str) else ''):
             return _err(409, '所选智能体不存在或当前用户无权使用', 'AGENT_NOT_ALLOWED')
@@ -232,7 +235,7 @@ async def create_proxy_task(request: Request):
             device_id=str(device['id']), account=account, self_user_id=account,
             title=body.get('title'), agent_id=agent_id, instruction=body.get('instruction'),
             sessions=body.get('sessions'), profile_id=body.get('profile_id'),
-            instance_id=body.get('instance_id'))
+            instance_id=body.get('instance_id'), **opening)
         return _ok({'task': task}, status_code=201)
     except service.ConversationServiceError as exc:
         return _service_error(exc)
@@ -359,8 +362,10 @@ async def edit_proxy_task(task_id: int, request: Request):
         tenant_id, user_id = await _current_user_and_tenant(request)
         body = await request.json()
         if not isinstance(body, dict) or not body or set(body) - {
-                'title', 'instruction', 'add_sessions', 'remove_sessions'}:
+                'title', 'instruction', 'add_sessions', 'remove_sessions', 'opening_message'}:
             return _err(400, '编辑字段无效', 'VALIDATION_FAILED')
+        opening = ({'opening_message': proxy_tasks.validate_opening_message(body['opening_message'])}
+                   if 'opening_message' in body else {})
         task = await asyncio.to_thread(proxy_tasks.get_task, tenant_id, user_id, task_id,
                                        include_targets=False)
         if task is None:
@@ -385,7 +390,7 @@ async def edit_proxy_task(task_id: int, request: Request):
             proxy_tasks.edit_stopped_task, tenant_id, user_id, task_id,
             title=body.get('title'), instruction=body.get('instruction'),
             add_sessions=add_sessions, add_baselines=add_baselines,
-            remove_sessions=body.get('remove_sessions'))
+            remove_sessions=body.get('remove_sessions'), **opening)
         return _ok({'task': task})
     except service.ConversationServiceError as exc:
         return _service_error(exc)

@@ -169,7 +169,7 @@ describe('企微代理任务页', () => {
     expect(rows[2]!.findAll('button').map(button => button.text())).toEqual(['详情'])
   })
 
-  it('创建向导校验必填项；只允许已登记会话；提交时如实展示设备检查进行中', async () => {
+  it.each([false, true])('创建向导校验必填和登记会话，首次发送选项启用=%s', async (opening) => {
     const pending = deferred<{ task: typeof stoppedTask }>()
     proxyApi.createProxyTask.mockReturnValueOnce(pending.promise)
     await mountPage()
@@ -201,11 +201,28 @@ describe('企微代理任务页', () => {
     const select = dialog.querySelector('select[aria-label="选择智能体"]') as HTMLSelectElement
     select.value = 'agent-a'
     select.dispatchEvent(new Event('change', { bubbles: true }))
+    const openingToggle = [...dialog.querySelectorAll('label')].find(label =>
+      label.textContent!.includes('首次执行时立即发送以下消息'))!.querySelector('input')!
+    expect(openingToggle.checked).toBe(false)
+    expect(dialog.querySelector('#proxy-task-opening-message')).toBeNull()
+    const openingText = '  欢迎\n咨询  '
+    if (opening) {
+      openingToggle.click()
+      await flushPromises()
+      ;[...dialog.querySelectorAll('button')].find(button => button.textContent === '创建任务')!.click()
+      await flushPromises()
+      expect(proxyApi.createProxyTask).not.toHaveBeenCalled()
+      expect(dialog.textContent).toContain('首次发送正文')
+      const textarea = dialog.querySelector('#proxy-task-opening-message') as HTMLTextAreaElement
+      textarea.value = openingText
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    }
     ;[...dialog.querySelectorAll('button')].find(button => button.textContent === '创建任务')!.click()
     await flushPromises()
     expect(proxyApi.createProxyTask).toHaveBeenCalledWith({
       title: '售前群代理', instruction: '有客户咨询就用一句话回答',
       agent_id: 'agent-a', sessions: ['ws1.acc.R%3Aone'],
+      ...(opening ? { opening_message: openingText } : {}),
     })
     // 提交进行中如实说明后端正在执行 doctor＋标定真实检查
     expect(dialogs()[0]!.textContent).toContain('正在创建并执行设备与账号真实检查')

@@ -4557,6 +4557,7 @@
         last_successful_scan_at TIMESTAMPTZ
     );
     INSERT INTO agent_runner_monitor_status (monitor_key) VALUES ('runner-long-running') ON CONFLICT DO NOTHING;
+
 - datetime: "2026-11-06 11:30:00"
   remark: "图像生成按张计费单价种子：qwen-image-3.0-pro 复用 token_cost_prices 通用 price_per_call 列（0.25 元/张为 1K 输出档单价，已按百炼控制台核实；默认出图 1280*960 面积属 1K 档，2K 档 0.5 元/张如启用需另行调价；×image_usage_factor 100 = 25 积分/张；运营改 DB 调价）"
   statements: |
@@ -4746,3 +4747,24 @@
         last_successful_scan_at TIMESTAMPTZ
     );
     INSERT INTO agent_runner_monitor_status (monitor_key) VALUES ('runner-long-running') ON CONFLICT DO NOTHING;
+
+- datetime: "2026-11-10 14:49:03"
+  remark: "企微监控任务首次启动发送：配置、旧启动事实与逐目标发送状态"
+  statements: |
+    ALTER TABLE bs_wecom_proxy_tasks
+        ADD COLUMN IF NOT EXISTS opening_message TEXT,
+        ADD COLUMN IF NOT EXISTS has_started BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE bs_wecom_proxy_task_sessions
+        ADD COLUMN IF NOT EXISTS opening_send_status TEXT,
+        ADD COLUMN IF NOT EXISTS opening_send_invocation_id UUID,
+        ADD COLUMN IF NOT EXISTS opening_send_reconcile_id UUID,
+        ADD COLUMN IF NOT EXISTS opening_send_error TEXT;
+    CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_opening_pending
+        ON bs_wecom_proxy_task_sessions (tenant_id, task_id)
+        WHERE opening_send_status IN ('pending','sending','unknown');
+    UPDATE bs_wecom_proxy_tasks t SET has_started=TRUE
+     WHERE NOT t.has_started AND EXISTS (
+       SELECT 1 FROM bs_wecom_proxy_task_sessions s
+        WHERE s.tenant_id=t.tenant_id AND s.user_id=t.user_id AND s.task_id=t.id
+          AND s.web_session_id IS NOT NULL
+     );

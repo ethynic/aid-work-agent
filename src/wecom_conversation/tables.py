@@ -142,6 +142,8 @@ CREATE TABLE IF NOT EXISTS bs_wecom_proxy_tasks (
     title TEXT NOT NULL,
     agent_id TEXT NOT NULL,
     instruction TEXT NOT NULL,
+    opening_message TEXT,
+    has_started BOOLEAN NOT NULL DEFAULT FALSE,
     status TEXT NOT NULL DEFAULT 'stopped',
     stop_requested BOOLEAN NOT NULL DEFAULT FALSE,
     revision BIGINT NOT NULL DEFAULT 0,
@@ -181,6 +183,10 @@ CREATE TABLE IF NOT EXISTS bs_wecom_proxy_task_sessions (
     status TEXT NOT NULL DEFAULT 'active',
     halted_reason TEXT,
     halted_at TIMESTAMPTZ,
+    opening_send_status TEXT,
+    opening_send_invocation_id UUID,
+    opening_send_reconcile_id UUID,
+    opening_send_error TEXT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
     UNIQUE (tenant_id, task_id, session)
@@ -252,6 +258,21 @@ _ALTER_STATEMENTS = (
     "ALTER TABLE bs_wecom_proxy_task_sessions ADD COLUMN IF NOT EXISTS idle_read_count INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE bs_wecom_proxy_task_sessions ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ",
     "ALTER TABLE bs_wecom_proxy_batches ADD COLUMN IF NOT EXISTS credit_cost DOUBLE PRECISION NOT NULL DEFAULT 0",
+    "ALTER TABLE bs_wecom_proxy_tasks ADD COLUMN IF NOT EXISTS opening_message TEXT",
+    "ALTER TABLE bs_wecom_proxy_tasks ADD COLUMN IF NOT EXISTS has_started BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE bs_wecom_proxy_task_sessions ADD COLUMN IF NOT EXISTS opening_send_status TEXT",
+    "ALTER TABLE bs_wecom_proxy_task_sessions ADD COLUMN IF NOT EXISTS opening_send_invocation_id UUID",
+    "ALTER TABLE bs_wecom_proxy_task_sessions ADD COLUMN IF NOT EXISTS opening_send_reconcile_id UUID",
+    "ALTER TABLE bs_wecom_proxy_task_sessions ADD COLUMN IF NOT EXISTS opening_send_error TEXT",
+    """CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_opening_pending
+          ON bs_wecom_proxy_task_sessions (tenant_id, task_id)
+          WHERE opening_send_status IN ('pending','sending','unknown')""",
+    """UPDATE bs_wecom_proxy_tasks t SET has_started=TRUE
+         WHERE NOT t.has_started AND EXISTS (
+           SELECT 1 FROM bs_wecom_proxy_task_sessions s
+            WHERE s.tenant_id=t.tenant_id AND s.user_id=t.user_id AND s.task_id=t.id
+              AND s.web_session_id IS NOT NULL
+         )""",
 )
 
 _DDL_ITEMS = (

@@ -228,7 +228,7 @@ def _requeue_waiting(tasks):
 # ==================== 组处理：设备闸门 → 占用核对 → 逐目标受信读 ====================
 
 def _group_runner_busy(tenant_id, device_id, account):
-    """组级 Runner 占用：同（租户/设备/企微账号）存在 running 批次时整组本轮不读。
+    """组级占用：同组有运行中的回答批次或未完成的首启发送时整组本轮不读。
 
     设计 §9.3：队列占用覆盖监控读与回答两阶段，Runner 运行时不发起下一轮
     监控读（避免监控读与自己的 Runner 抢 CLI），结束或进入等待后再补读。
@@ -242,8 +242,13 @@ def _group_runner_busy(tenant_id, device_id, account):
             '''SELECT 1 FROM bs_wecom_proxy_batches b
                JOIN bs_wecom_proxy_tasks t ON t.id=b.task_id AND t.tenant_id=b.tenant_id
                WHERE b.tenant_id=%s AND t.device_id=%s AND t.wecom_account_id=%s
-                 AND b.status=%s LIMIT 1''',
-            (tenant_id, device_id, account, proxy_tasks.BATCH_RUNNING))
+                 AND b.status=%s
+               UNION ALL
+               SELECT 1 FROM bs_wecom_proxy_task_sessions s
+               JOIN bs_wecom_proxy_tasks t ON t.id=s.task_id AND t.tenant_id=s.tenant_id
+               WHERE s.tenant_id=%s AND t.device_id=%s AND t.wecom_account_id=%s
+                 AND s.opening_send_status IN ('pending','sending') LIMIT 1''',
+            (tenant_id, device_id, account, proxy_tasks.BATCH_RUNNING, tenant_id, device_id, account))
         return cursor.fetchone() is not None
 
 

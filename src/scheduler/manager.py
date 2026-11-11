@@ -1426,6 +1426,16 @@ class ScheduledTaskManager:
                        FROM bs_wecom_proxy_batches b
                        JOIN bs_wecom_proxy_tasks t ON t.id=b.task_id AND t.tenant_id=b.tenant_id
                       WHERE b.status='running'
+                     UNION
+                     SELECT t.tenant_id, t.device_id, t.wecom_account_id
+                       FROM bs_wecom_proxy_task_sessions s
+                       JOIN bs_wecom_proxy_tasks t ON t.id=s.task_id AND t.tenant_id=s.tenant_id
+                         AND t.user_id=s.user_id
+                       LEFT JOIN local_tool_invocations i ON i.id=s.opening_send_invocation_id
+                         AND i.tenant_id=s.tenant_id AND i.user_id=s.user_id
+                      WHERE s.opening_send_status IN ('pending','sending')
+                         OR (s.opening_send_status='unknown' AND
+                             (i.result_json IS NOT NULL OR s.opening_send_reconcile_id IS NOT NULL))
                    ) groups ORDER BY tenant_id, device_id, wecom_account_id''')
             return [(row['tenant_id'], str(row['device_id']), row['wecom_account_id'])
                     for row in cursor.fetchall()]

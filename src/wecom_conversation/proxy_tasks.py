@@ -26,6 +26,7 @@ from .adapters import decode_locator
 from .service import ConversationServiceError
 
 PROXY_SCHEMA_VERSION = 1
+OPENING_MESSAGE_UNSET = object()
 
 # 任务状态（契约 §4）
 TASK_STOPPED = 'stopped'
@@ -158,6 +159,17 @@ def _validate_instruction(value):
     return value
 
 
+def validate_opening_message(value):
+    """The existing CLI send limit uses UTF-16 units. Preserve the original text."""
+    if value is None:
+        return None
+    if (not isinstance(value, str) or len(value) > 2000 or not value.strip() or '\0' in value
+            or any(0xD800 <= ord(char) <= 0xDFFF for char in value)
+            or len(value.encode('utf-16-le')) > 4000):
+        raise _err('VALIDATION_FAILED', '首次发送消息须为 1–2000 字的非空文本', 400)
+    return value
+
+
 def _validate_sessions(value):
     """会话目标多选：ws1. 稳定 locator 清单，去重保序。"""
     if not isinstance(value, list) or not value or len(value) > SESSIONS_MAX or any(
@@ -240,6 +252,33 @@ def _lock_start(cursor, tenant_id, account):
                    (f'bs_wecom_proxy:start:{tenant_id}:{account}',))
 
 
+def lock_device_group_in_tx(cursor, task):
+    """Fence device admission across processes, after locking the owning task."""
+    cursor.execute(
+        """SELECT pg_advisory_xact_lock(hashtextextended(
+               'bs_wecom_proxy:device-group:' || json_build_array(%s::text,%s::text,%s::text)::text, 0))""",
+        (task['tenant_id'], str(task['device_id']), task['wecom_account_id']))
+
+
+def device_group_busy_in_tx(cursor, task, *, include_pending_opening):
+    """Read persisted occupancy while holding the same device group fence."""
+    group = (task['tenant_id'], str(task['device_id']), task['wecom_account_id'])
+    opening_states = ['pending', 'sending'] if include_pending_opening else ['sending']
+    cursor.execute(
+        '''SELECT 1 FROM bs_wecom_proxy_batches b
+             JOIN bs_wecom_proxy_tasks t ON t.id=b.task_id AND t.tenant_id=b.tenant_id
+                                        AND t.user_id=b.user_id
+            WHERE t.tenant_id=%s AND t.device_id=%s AND t.wecom_account_id=%s AND b.status=%s
+            UNION ALL
+           SELECT 1 FROM bs_wecom_proxy_task_sessions s
+             JOIN bs_wecom_proxy_tasks t ON t.id=s.task_id AND t.tenant_id=s.tenant_id
+                                        AND t.user_id=s.user_id
+            WHERE t.tenant_id=%s AND t.device_id=%s AND t.wecom_account_id=%s
+              AND s.opening_send_status=ANY(%s) LIMIT 1''',
+        (*group, BATCH_RUNNING, *group, opening_states))
+    return cursor.fetchone() is not None
+
+
 def proxy_web_session_id(tenant_id, user_id, task_id, locator):
     """任务＋目标固定 web_session_id（新任务不复用旧智能体会话历史，契约 §6）。"""
     from .plans import business_session_id
@@ -258,10 +297,11 @@ def _register_web_session_in_tx(cursor, tenant_id, user_id, task_id, title, loca
 # ==================== 创建 / 查询 ====================
 
 def create_task(tenant_id, user_id, *, device_id, account, self_user_id, title, agent_id,
-                instruction, sessions, profile_id='main', instance_id=None):
+                instruction, sessions, profile_id='main', instance_id=None, opening_message=None):
     """创建代理任务（固定 Runtime/账号/智能体；初始目标待首次启动建基线）。"""
     title = _validate_title(title)
     instruction = _validate_instruction(instruction)
+    opening_message = validate_opening_message(opening_message)
     agent_id = _validate_agent_id(agent_id)
     locators = _validate_sessions(sessions)
     profile_id = profile_id if isinstance(profile_id, str) and profile_id.strip() else 'main'
@@ -277,10 +317,10 @@ def create_task(tenant_id, user_id, *, device_id, account, self_user_id, title, 
         cursor.execute(
             '''INSERT INTO bs_wecom_proxy_tasks
                    (tenant_id, user_id, profile_id, instance_id, device_id, wecom_account_id,
-                    self_user_id, title, agent_id, instruction, status)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'stopped') RETURNING *''',
+                    self_user_id, title, agent_id, instruction, opening_message, status)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'stopped') RETURNING *''',
             (tenant_id, user_id, profile_id, instance_id, str(device_id), account,
-             self_user_id, title, agent_id, instruction))
+             self_user_id, title, agent_id, instruction, opening_message))
         task = _row(cursor.fetchone())
         for locator in locators:
             cursor.execute(
@@ -539,6 +579,9 @@ def complete_start(tenant_id, user_id, task_id, *, device_id, self_user_id, base
         if self_user_id != task['wecom_account_id']:
             raise _err('PROXY_ACCOUNT_MISMATCH', '设备当前企微账号与任务固定账号不一致，未启动')
         _lock_start(cursor, tenant_id, task['wecom_account_id'])
+        publish_opening = not task['has_started'] and task['opening_message'] is not None
+        if publish_opening:
+            lock_device_group_in_tx(cursor, task)
         targets = _task_targets(cursor, tenant_id, task_id, statuses=(TARGET_ACTIVE,),
                                 for_update=True)
         if not targets:
@@ -584,8 +627,13 @@ def complete_start(tenant_id, user_id, task_id, *, device_id, self_user_id, base
                     '''UPDATE bs_wecom_proxy_task_sessions SET web_session_id=%s,
                            updated_at=CURRENT_TIMESTAMP WHERE id=%s''',
                     (session_id, target['id']))
+        if publish_opening:
+            cursor.execute(
+                '''UPDATE bs_wecom_proxy_task_sessions SET opening_send_status='pending'
+                    WHERE tenant_id=%s AND task_id=%s AND id=ANY(%s)''',
+                (tenant_id, task_id, [item['id'] for item in targets]))
         cursor.execute(
-            '''UPDATE bs_wecom_proxy_tasks SET status='running', stop_requested=FALSE,
+            '''UPDATE bs_wecom_proxy_tasks SET status='running', stop_requested=FALSE, has_started=TRUE,
                    revision=revision+1, updated_at=CURRENT_TIMESTAMP WHERE id=%s RETURNING *''',
             (task_id,))
         task = _row(cursor.fetchone())
@@ -609,6 +657,11 @@ def settle_stop_in_tx(cursor, task):
         (task['tenant_id'], task['id']))
     if cursor.fetchone():
         return False
+    cursor.execute('''SELECT 1 FROM bs_wecom_proxy_task_sessions
+                      WHERE tenant_id=%s AND task_id=%s AND opening_send_status='sending' LIMIT 1''',
+                   (task['tenant_id'], task['id']))
+    if cursor.fetchone():
+        return False
     cursor.execute(
         '''UPDATE bs_wecom_proxy_tasks SET status='stopped', updated_at=CURRENT_TIMESTAMP
            WHERE id=%s''', (task['id'],))
@@ -624,6 +677,23 @@ def request_stop(tenant_id, user_id, task_id):
             raise _err('PROXY_TASK_DELETED', '任务已删除')
         if task['status'] != TASK_RUNNING:
             raise _err('PROXY_STATE_CONFLICT', '任务不在运行中')
+        # This row transition races atomically with the existing /started UPDATE.
+        cursor.execute(
+            '''UPDATE local_tool_invocations i SET state='cancelled', effect='none', finished_at=NOW()
+                 FROM bs_wecom_proxy_task_sessions s
+                WHERE s.tenant_id=%s AND s.user_id=%s AND s.task_id=%s
+                  AND s.opening_send_invocation_id=i.id AND i.tenant_id=s.tenant_id
+                  AND i.user_id=s.user_id AND i.business_kind='wecom_proxy_opening'
+                  AND i.state IN ('queued','claimed')''',
+            (tenant_id, user_id, task_id))
+        cursor.execute(
+            '''UPDATE bs_wecom_proxy_task_sessions s SET opening_send_status='cancelled'
+                WHERE s.tenant_id=%s AND s.user_id=%s AND s.task_id=%s
+                  AND (s.opening_send_status='pending' OR (s.opening_send_status='sending' AND EXISTS (
+                    SELECT 1 FROM local_tool_invocations i
+                    WHERE i.id=s.opening_send_invocation_id AND i.tenant_id=s.tenant_id
+                      AND i.user_id=s.user_id AND i.state='cancelled' AND i.effect='none')))''',
+            (tenant_id, user_id, task_id))
         cursor.execute(
             '''UPDATE bs_wecom_proxy_tasks SET stop_requested=TRUE, updated_at=CURRENT_TIMESTAMP
                WHERE id=%s RETURNING *''', (task_id,))
@@ -665,7 +735,8 @@ def mark_target_halted_in_tx(cursor, tenant_id, task_id, session, reason):
 
 
 def edit_stopped_task(tenant_id, user_id, task_id, *, title=None, instruction=None,
-                      add_sessions=None, add_baselines=None, remove_sessions=None):
+                      add_sessions=None, add_baselines=None, remove_sessions=None,
+                      opening_message=OPENING_MESSAGE_UNSET):
     """已停止编辑：标题/指令直接改；新增目标沿编辑加入水位落行；移除目标结批。
 
     - add_baselines：{locator: {'cursor','generation','watermark'}}，由编辑 API
@@ -675,6 +746,8 @@ def edit_stopped_task(tenant_id, user_id, task_id, *, title=None, instruction=No
     """
     new_title = _validate_title(title) if title is not None else None
     new_instruction = _validate_instruction(instruction) if instruction is not None else None
+    if opening_message is not OPENING_MESSAGE_UNSET:
+        opening_message = validate_opening_message(opening_message)
     add_locators = _validate_sessions(add_sessions) if add_sessions else []
     remove_locators = _validate_sessions(remove_sessions) if remove_sessions else []
     overlap = set(add_locators) & set(remove_locators)
@@ -688,6 +761,8 @@ def edit_stopped_task(tenant_id, user_id, task_id, *, title=None, instruction=No
             raise _err('PROXY_TASK_DELETED', '任务已删除，不可编辑')
         if task['status'] != TASK_STOPPED:
             raise _err('PROXY_STATE_CONFLICT', '任务运行中不可编辑，请先停止')
+        if opening_message is not OPENING_MESSAGE_UNSET and task['has_started']:
+            raise _err('PROXY_STATE_CONFLICT', '任务首次启动后不能修改首次发送消息')
         existing = _task_targets(cursor, tenant_id, task_id, for_update=True)
         existing_by_session = {item['session']: item for item in existing}
         for locator in add_locators:
@@ -734,6 +809,9 @@ def edit_stopped_task(tenant_id, user_id, task_id, *, title=None, instruction=No
         if new_instruction is not None:
             fields.append('instruction=%s')
             params.append(new_instruction)
+        if opening_message is not OPENING_MESSAGE_UNSET:
+            fields.append('opening_message=%s')
+            params.append(opening_message)
         fields.append('revision=revision+1')
         fields.append('updated_at=CURRENT_TIMESTAMP')
         cursor.execute(
