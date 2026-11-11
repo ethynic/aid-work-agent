@@ -6,6 +6,8 @@ WeCom CLI 与 Runtime、BOSS CLI 同轮发布 `1.0.0`，直接接入共同契约
 
 桌面操作由 WeCom CLI 核对窗口、当前账号、操作目标和实际输入条件。本地库命令继续核对账号归属及库的可用性，并按实际执行方式声明能否在后台并行。插件分别报告未登录、目标或窗口异常、数据库不可用等失败及已知进度。迁移验收覆盖桌面不可用时的明确错误，以及具备条件的独立本地库读取在同一 Runtime 上正常运行。[安全切换与插件接管](../../research/runtime-platform-dependency-review-20261111.md#安全切换与插件接管)
 
+并行标记按命令确定。现有输入原语用 `PostMessage` 向目标窗口发送点击和按键。发消息还会复制会话标题、通过系统剪贴板粘贴，隐藏主窗时可能恢复窗口。部分驱动还会按屏幕坐标找窗口或截取屏幕。独立读取本地库的登录与账号探测走只读路径。窗口定向消息是并行候选，具体命令需用完整路径与 BOSS 实际键鼠操作及其他可并行命令同跑，确认焦点、目标窗口、截图和剪贴板各自可用后，由企微标记可并行。[窗口输入与恢复](../../../clients/wecom-cli/drivers/ps1/_common.ps1) · [文本发送](../../../clients/wecom-cli/drivers/ps1/message-send.ps1) · [本地库登录探测](../../../clients/wecom-cli/src/platform/localdb/login.ts)
+
 对外能力清单、业务作业边界和必要的云端服务授权在本设计中确定。新版统一切换安排见共同契约，实施进度统一登记在 Runtime 与插件 1.0.0 计划。[共同契约 3.0 第 12 节](../../system/runner-desktop-runtime-integration-contract.md#12-契约-30-与首轮实施) · [1.0.0 实施计划](../../plans/plan-runtime-plugin-host.md#1610-runtime-与插件-100-实施计划待开发)
 
 ## 历史设计与实施记录
