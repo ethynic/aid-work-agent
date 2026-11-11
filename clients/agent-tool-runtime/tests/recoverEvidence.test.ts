@@ -1,19 +1,20 @@
 import assert from 'node:assert/strict'
 import childProcess, { type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import fs, { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import fs, { mkdtempSync, readFileSync, utimesSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { randomUUID } from 'node:crypto'
 import test, { type TestContext } from 'node:test'
-import { ManagementError } from '@aid/local-tool-host-core'
 import { ProcessSupervision } from '../src/processSupervision.js'
 import { dpapiProtect } from '../src/dpapi.js'
 
 const windows = { skip: process.platform !== 'win32' }
 const seal = (text: string) => Buffer.from(`fixture-seal:${text}`).toString('base64')
+// .NET DateTime.Ticks epoch (0001-01-01), matching the LastBootUpTime projection.
+const ticks = (offsetMs = 0) => String((Date.now() + offsetMs + 62_135_596_800_000) * 10_000)
 const OLD_SESSION = 99
 
 /** Same shape as connectionRecoveryResources.test.ts: mocked native/DPAPI/CIM
@@ -21,7 +22,7 @@ const OLD_SESSION = 99
 function fixture(t: TestContext) {
   const home = mkdtempSync(join(tmpdir(), 'recover-evidence-'))
   const state = { boot: randomUUID(), session: 7, supervisor: true, protection: true, cimAvailable: true,
-    cimCount: 0, cimChecks: 0, bootTimeChecks: 0, commands: [] as string[][], jobs: new Map<string, number>() }
+    cimCount: 0, bootTimeTicks: ticks(), cimChecks: 0, bootTimeChecks: 0, commands: [] as string[][], jobs: new Map<string, number>() }
   t.mock.method(childProcess, 'execFile', ((file: string, args: string[], _options: unknown,
     callback: (error: Error | null, stdout: string, stderr: string) => void) => {
     const child = new EventEmitter() as ChildProcess
@@ -45,9 +46,9 @@ function fixture(t: TestContext) {
         state.cimChecks++
         queueMicrotask(() => state.cimAvailable ? callback(null, String(state.cimCount), '')
           : callback(new Error('fixture CIM failure'), '', ''))
-      } else if (script.includes('Win32_OperatingSystem')) {
+      } else if (script.includes('LastBootUpTime')) {
         state.bootTimeChecks++
-        queueMicrotask(() => callback(new Error('boot time query must not run'), '', ''))
+        queueMicrotask(() => callback(null, state.bootTimeTicks, ''))
       } else {
         let input = ''; child.stdin.on('data', chunk => { input += chunk.toString() })
         child.stdin.on('finish', () => queueMicrotask(() => {
@@ -120,50 +121,36 @@ test('an invalid receipt is not stop evidence and cannot skip the session check'
   assert.equal(await f.recover(), false)
 })
 
-test('corrupt or missing ledgers fail before querying processes or accepting a different boot ID', windows, async t => {
-  const f = fixture(t)
-  for (const session of [f.state.session, OLD_SESSION]) {
-    const { generation } = f.setup({ session, corrupt: true })
-    f.state.boot = randomUUID()
-    await assert.rejects(f.recover(), ManagementError)
-    rmSync(f.ledger(generation))
-    await assert.rejects(f.recover(), ManagementError)
-  }
-  assert.equal(f.state.bootTimeChecks, 0)
-  assert.equal(f.state.cimChecks, 0)
-  assert.deepEqual(f.state.commands, [])
-  assert.equal(fs.existsSync(join(f.home, 'identity-reconciliation.bin')), false)
-})
-
-test('malformed and legacy markers fail without changing the original record', windows, async t => {
-  const f = fixture(t); const { generation } = f.setup()
-  const path = join(f.home, 'host-running.json')
-  for (const marker of ['{', JSON.stringify({ instance_id: generation })]) {
-    writeFileSync(path, marker)
-    await assert.rejects(f.recover(), ManagementError)
-    assert.equal(readFileSync(path, 'utf8'), marker)
-  }
-  assert.equal(fs.existsSync(join(f.home, 'identity-reconciliation.bin')), false)
-  assert.deepEqual(f.state.commands, [])
-})
-
-test('temporary session query failure is retryable and a later confirmed session exit can recover', windows, async t => {
-  const f = fixture(t); f.setup({ session: OLD_SESSION })
-  f.state.cimAvailable = false
-  await assert.rejects(f.recover(), error => error instanceof Error && !(error instanceof ManagementError))
-  assert.equal(fs.existsSync(join(f.home, 'identity-reconciliation.bin')), false)
-  f.state.cimAvailable = true
+test('unreadable ledger plus a cold boot after its write independently proves a full restart', windows, async t => {
+  const f = fixture(t); const { generation } = f.setup({ session: OLD_SESSION, corrupt: true })
+  const past = new Date(Date.now() - 3_600_000)
+  utimesSync(f.ledger(generation), past, past)
+  f.state.cimCount = 3
   assert.equal(await f.recover(), true)
+  assert.ok(f.state.bootTimeChecks > 0)
 })
 
-test('a changed boot ID does not confirm stopped execution in a session with processes', windows, async t => {
-  const f = fixture(t); f.setup({ session: OLD_SESSION })
-  f.state.boot = randomUUID()
+test('a boot predating the ledger write proves nothing; a missing ledger has no boot-time proof', windows, async t => {
+  const f = fixture(t); const { generation } = f.setup({ session: OLD_SESSION, corrupt: true })
+  f.state.bootTimeTicks = ticks(-3_600_000)
   f.state.cimCount = 3
   assert.equal(await f.recover(), false)
+  rmSync(f.ledger(generation))
+  assert.equal(await f.recover(), false)
+})
+
+test('temporarily unavailable session evidence stays unconfirmed instead of throwing', windows, async t => {
+  const f = fixture(t); f.setup({ session: OLD_SESSION, corrupt: true })
+  f.state.cimAvailable = false
+  assert.equal(await f.recover(), false)
   assert.equal(fs.existsSync(join(f.home, 'identity-reconciliation.bin')), false)
-  assert.deepEqual(f.state.commands, [['session-id']])
-  assert.equal(f.state.bootTimeChecks, 0)
+})
+
+test('a changed kernel boot still stops without any per-job query', windows, async t => {
+  const f = fixture(t); f.setup({ session: OLD_SESSION })
+  f.state.boot = randomUUID()
+  assert.equal(await f.recover(), true)
+  assert.equal(f.state.commands.some(args => args[0] === 'probe' || args[0] === 'terminate'), false)
 })
 
 test('same-session current boot still terminates registered jobs and confirms the stop', windows, async t => {

@@ -40,35 +40,28 @@ const RECONCILE_POLL_MS = 2000
 
 /** A single login intent uses the normal Host port; never retries uncertain starts.
  * A reconciling Host confirms the old execution on its own; Main only waits for that
- * confirmation and then starts normally. An explicit stop or quit cancels the intent. */
+ * confirmation and then starts normally. Closing the app ends the wait (no restart). */
 export async function resumeRuntimeAtLogin(request: (value: unknown) => Promise<{ code: number; result: unknown }>,
-  wait: (ms?: number) => Promise<void> = (ms = 500) => new Promise(resolve => setTimeout(resolve, ms)),
-  signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) return
+  wait: (ms?: number) => Promise<void> = (ms = 500) => new Promise(resolve => setTimeout(resolve, ms))): Promise<void> {
   let snapshot = await readState(request)
-  while (!signal?.aborted && snapshot.state === 'reconciling') {
+  while (snapshot.state === 'reconciling') {
     await wait(RECONCILE_POLL_MS)
-    if (signal?.aborted) return
     snapshot = await readState(request)
   }
-  if (signal?.aborted) return
   if (snapshot.state === 'blocked' || snapshot.connection === 'revoked') throw new Error('RuntimeLoginNeedsAttention')
   if (snapshot.state !== 'stopped' || !snapshot.device?.device_id || ['unpaired', 'revoked'].includes(snapshot.connection ?? '')) return
   const started = await request({ request_id: randomUUID(), method: 'start', params: { request_key: randomUUID() } })
-  if (signal?.aborted) return
   if (started.code !== 0) throw new Error('RuntimeLoginStartRejected')
   const operation = started.result as { operation_id?: string; status?: string } | null
   if (!operation?.operation_id) throw new Error('RuntimeLoginOperationInvalid')
-  for (let attempt = 0; attempt < 60 && !signal?.aborted; attempt++) {
+  for (let attempt = 0; attempt < 60; attempt++) {
     const reply = await request({ request_id: randomUUID(), method: 'operations.get', params: { operation_id: operation.operation_id } })
-    if (signal?.aborted) return
     const result = reply.result as { status?: string; code?: number } | null
     if (reply.code !== 0 || !result || ['failed', 'reconciling'].includes(result.status ?? '')) throw new Error('RuntimeLoginStartFailed')
     if (result.status === 'succeeded' && result.code === 0) return
     if (result.status !== 'running') throw new Error('RuntimeLoginOperationInvalid')
     await wait()
   }
-  if (signal?.aborted) return
   throw new Error('RuntimeLoginStartUnconfirmed')
 }
 

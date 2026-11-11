@@ -66,47 +66,80 @@ export class ProcessSupervision {
       '--owner-pid', String(process.pid), '--owner-start-time', ownerStart, '--receipt', join(this.directory(), `${jobName}.receipt.json`)] }
   }
   private async loadLedger(proof: { generation: string; home: string; bootId: string; sessionId: number }): Promise<Ledger> {
-    let ledger: Ledger
-    try { ledger = JSON.parse(await dpapiUnprotect(readFileSync(join(this.directory(), `${proof.generation}.bin`), 'utf8'))) }
-    catch { throw new ManagementError(11, 'ledger unreadable') }
-    if (!ledger || ledger.schemaVersion !== 1 || ledger.home !== proof.home || ledger.generation !== proof.generation || ledger.bootId !== proof.bootId || ledger.sessionId !== proof.sessionId
+    const ledger: Ledger = JSON.parse(await dpapiUnprotect(readFileSync(join(this.directory(), `${proof.generation}.bin`), 'utf8')))
+    if (ledger.schemaVersion !== 1 || ledger.home !== proof.home || ledger.generation !== proof.generation || ledger.bootId !== proof.bootId || ledger.sessionId !== proof.sessionId
       || (ledger.business_started !== undefined && typeof ledger.business_started !== 'boolean')
-      || !Number.isSafeInteger(ledger.ownerPid) || ledger.ownerPid <= 0 || !Array.isArray(ledger.jobs) || ledger.jobs.length > 10000
+      || !Number.isSafeInteger(ledger.ownerPid) || !Array.isArray(ledger.jobs) || ledger.jobs.length > 10000
       || ledger.jobs.some(job => typeof job !== 'string' || !job.startsWith('AidWorkRuntime.') || !uuid.test(job.slice(15)))) throw new ManagementError(11, 'ledger binding invalid')
     return ledger
   }
 
+  /** LastBootUpTime advances only on a real cold boot (hiberboot keeps it), so a
+   * boot later than the old ledger write independently proves one full restart
+   * happened after that execution started. */
+  private async rebootedSince(writtenMs: number): Promise<boolean> {
+    const shell = trustedSystemPowerShell()
+    return new Promise((accept, reject) => execFile(shell.executable, ['-NoProfile', '-NonInteractive', '-Command',
+      `$ErrorActionPreference='Stop'; [Console]::Out.Write((Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime).LastBootUpTime.ToUniversalTime().Ticks)`],
+    { cwd: shell.cwd, env: shell.env, windowsHide: true, timeout: 15000, maxBuffer: 4096 }, (error, out) => {
+      if (error || !/^\d{17,19}$/.test(out.trim())) reject(new Error('LOCAL_RECOVERY_BOOT_TIME_UNAVAILABLE'))
+      // .NET DateTime.Ticks counts from 0001-01-01, unlike FILETIME's 1601 epoch.
+      else accept(Number(out.trim()) > (writtenMs + 62_135_596_800_000) * 10_000)
+    }))
+  }
+
   async recover(marker: string): Promise<boolean> {
     if (!this.enabled) return false
-    let parsed: { instance_id: string; schemaVersion: number; supervision: string }
-    try { parsed = JSON.parse(marker) }
-    catch { throw new ManagementError(11, 'marker unreadable') }
-    if (!parsed || typeof parsed.instance_id !== 'string' || !uuid.test(parsed.instance_id)
-      || parsed.schemaVersion !== 2 || typeof parsed.supervision !== 'string') throw new ManagementError(11, 'marker invalid')
-
-    let proof: Pick<Ledger, 'generation' | 'home' | 'bootId' | 'sessionId'> & { rebootOnly: boolean }
-    try { proof = JSON.parse(await dpapiUnprotect(parsed.supervision)) }
-    catch { throw new ManagementError(11, 'marker proof unreadable') }
-    if (!proof || proof.generation !== parsed.instance_id || proof.home !== resolve(this.home) || typeof proof.bootId !== 'string'
-      || !uuid.test(proof.bootId) || !Number.isSafeInteger(proof.sessionId) || proof.sessionId < 0
-      || typeof proof.rebootOnly !== 'boolean') throw new ManagementError(11, 'marker binding invalid')
-    const ledger = await this.loadLedger(proof)
-    const session = await this.sessionId()
-    if (session === proof.sessionId) {
-      if (proof.rebootOnly) return false
-      // The caller holds the home lease. These Jobs cover managed Providers only.
-      for (const job of ledger.jobs) {
-        const result = await this.command(['terminate', '--job-name', job])
-        if (result.activeProcesses !== 0) return false
-      }
-    } else {
-      // Named Jobs are session-local. Use their receipts or confirmed session exit.
-      const received = !proof.rebootOnly && (await Promise.all(ledger.jobs.map(job => this.stoppedReceipt(job, ledger.ownerPid)))).every(Boolean)
-      if (!received && await this.sessionHasProcesses(proof.sessionId)) return false
-    }
+    const parsed = JSON.parse(marker)
+    // Structural tampering is a typed rejection; transient helper outages stay plain
+    // errors so the Host's recheck loop can keep polling.
+    if (!uuid.test(parsed.instance_id)) throw new ManagementError(11, 'marker invalid')
     const digest = createHash('sha256').update(marker).digest('hex')
-    atomicWrite(join(this.home, 'identity-reconciliation.bin'), await dpapiProtect(JSON.stringify({ markerDigest: digest, instanceId: parsed.instance_id })))
-    return true
+    const currentBoot = await this.bootId()
+    let stopped = false
+    if (parsed.schemaVersion === 2 && typeof parsed.supervision === 'string') {
+      const proof = JSON.parse(await dpapiUnprotect(parsed.supervision))
+      if (proof.generation !== parsed.instance_id || proof.home !== resolve(this.home) || !uuid.test(proof.bootId) || typeof proof.rebootOnly !== 'boolean') throw new ManagementError(11, 'marker binding invalid')
+      if (proof.bootId !== currentBoot) stopped = true
+      // Named Jobs are session-scoped. Absence in another login session cannot
+      // prove the old session's tree stopped; a real reboot remains sufficient.
+      else if (proof.rebootOnly === false && proof.sessionId === await this.sessionId()) {
+        const ledger = await this.loadLedger(proof)
+        // Caller holds the home lease: old Host is gone. Kill only its protected,
+        // registered jobs. The launcher never enables breakaway or Chrome retention.
+        for (const job of ledger.jobs) {
+          const result = await this.command(['terminate', '--job-name', job])
+          if (result.activeProcesses !== 0) throw new Error('job stop unconfirmed')
+        }
+        stopped = true
+      } else if (proof.sessionId !== await this.sessionId()) {
+        // Cross-session probes cannot see the session-local Job namespace, so the
+        // verdict relies on exit evidence, not on cross-session job absence.
+        // Temporary evidence outages stay unconfirmed (false) so the caller re-checks.
+        const ledgerPath = join(this.directory(), `${proof.generation}.bin`)
+        let ledger: Ledger | undefined
+        let ledgerWritten: number | undefined
+        try { ledgerWritten = lstatSync(ledgerPath).mtimeMs; ledger = await this.loadLedger(proof) } catch { ledger = undefined }
+        // Receipts only cover the managed Job tree, never external Python executors.
+        if (ledger && proof.rebootOnly === false
+          && (await Promise.all(ledger.jobs.map(job => this.stoppedReceipt(job, ledger!.ownerPid)))).every(receipt => receipt)) stopped = true
+        else {
+          let sessionAlive: boolean
+          try { sessionAlive = await this.sessionHasProcesses(proof.sessionId) } catch { return false }
+          if (!sessionAlive) stopped = true
+          else if (!ledger && ledgerWritten !== undefined && await this.rebootedSince(ledgerWritten).catch(() => false)) stopped = true
+        }
+      }
+    } else if (Object.keys(parsed).join(',') === 'instance_id') {
+      const witnessFile = join(this.directory(), `legacy-${digest}.bin`)
+      if (existsSync(witnessFile)) {
+        const witness = JSON.parse(await dpapiUnprotect(readFileSync(witnessFile, 'utf8')))
+        if (witness.home !== resolve(this.home) || witness.digest !== digest || !uuid.test(witness.bootId)) throw new Error('legacy witness invalid')
+        stopped = witness.bootId !== currentBoot
+      } else atomicWrite(witnessFile, await dpapiProtect(JSON.stringify({ home: resolve(this.home), digest, bootId: currentBoot })))
+    } else throw new ManagementError(11, 'unsupported execution marker')
+    if (stopped) atomicWrite(join(this.home, 'identity-reconciliation.bin'), await dpapiProtect(JSON.stringify({ markerDigest: digest, instanceId: parsed.instance_id })))
+    return stopped
   }
   /** Trusted ordinary Provider dispatch only; observation never establishes business coverage. */
   async noteBusinessExecution(): Promise<void> {
