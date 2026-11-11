@@ -37,6 +37,9 @@ const TOOL_NAMES = [
   'wecom_read_sessions',
   'wecom_session_directory',
   'wecom_unread_list',
+  // 契约 2.20：未预知插件（ai.aidwork.test-tool）接入用最小工具样例
+  'test_tool_status',
+  'test_tool_poll',
 ] as const
 
 const WRITE_TOOLS = new Set(['boss_greet', 'boss_accept_resume', 'boss_reject_current', 'boss_interview_demo', 'weixin_message_send', 'wecom_message_send'])

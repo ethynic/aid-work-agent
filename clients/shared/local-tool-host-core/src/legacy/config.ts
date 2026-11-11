@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { effectiveManifestFor, manifestDigestOf, TRUSTED_MANIFESTS } from './providers.js'
+import { effectiveManifestFor, manifestDigestOf, TRUSTED_MANIFESTS, type ProviderManifest } from './providers.js'
 
 /** 运行时版本（读 package.json，src/dist 两种布局兜底；不手写字符串防漂移误导排障） */
 export const RUNTIME_VERSION: string = (() => {
@@ -125,16 +125,27 @@ export function machineFingerprint(): string {
  * - protocol_version：Runtime 侧统一操作协议版本（v2 支持按 invocation 级 provider 路由）
  * - provider_manifests：各可用 provider 的 manifest 摘要（provider_id/manifest_digest/protocol_version）
  * - provider_id：第一个可用 provider 的 id（云端 catalog 兼容字段；boss-only 环境与历史一致）
+ * - store（契约 2.20，可选）：商店插件派生 manifest 与调度声明上报——manifests 优先于
+ *   TRUSTED 回退；parallel_tools 仅列声明 parallel 的工具（legacy 直配 entry 不参与）；
+ *   存在任一有效声明时 capabilities 追加 tool_declarations_v1
  *
  * 键序契约：providers 数组与 provider_manifests 键序固定为 boss-recruiting 恒首位、其余
  * 按字典序——首个可用 provider 即旧 provider_id 兼容字段的取值来源，顺序漂移会改变
  * 上报字节与云端 catalog 归属，不可依赖对象插入顺序的隐式行为。
  */
+/** 商店插件声明上报输入（契约 2.20）：派生 manifest、并行工具与存在性，来自 PluginStore */
+export interface StoreDeclarationReport {
+  parallelTools?: Record<string, readonly string[]>
+  hasDeclarations?: boolean
+  manifests?: Record<string, ProviderManifest>
+}
 export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessReady = false, wecomDirectoryReady = false,
-  wecomDirectorySearchReady = false, wecomConfigDoctorReady = false, wecomConfigCalibrateReady = false): Record<string, unknown> {
+  wecomDirectorySearchReady = false, wecomConfigDoctorReady = false, wecomConfigCalibrateReady = false,
+  store?: StoreDeclarationReport): Record<string, unknown> {
   const cfg = config === undefined ? loadConfig() : config
   const entries = resolveProviderEntries(cfg)
-  const available = Object.keys(TRUSTED_MANIFESTS)
+  const storeManifests = store?.manifests ?? {}
+  const available = [...new Set([...Object.keys(TRUSTED_MANIFESTS), ...Object.keys(storeManifests)])]
     .filter((key) => Boolean(entries[key] && existsSync(entries[key]!)))
     // 键序契约：boss 恒首位（provider_id 兼容字段来源），其余字典序稳定
     .sort((a, b) => {
@@ -142,11 +153,13 @@ export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessR
       if (b === 'boss-recruiting') return 1
       return a < b ? -1 : a > b ? 1 : 0
     })
+  // 实际生效 manifest：商店派生 > v2Send 显式协商覆盖 > TRUSTED 回退
+  const currentManifestFor = (key: string) => storeManifests[key] ?? effectiveManifestFor(key) ?? TRUSTED_MANIFESTS[key]!
   const manifests: Record<string, { provider_id: string; manifest_digest: string; protocol_version: number }> = {}
   for (const key of available) {
     // D5：上报/摘要统一读**实际生效** manifest（含 v2Send 显式协商变体）——
     // 运行时校验、能力上报与摘要计算三者同源，显式开启 v2 后不再上报旧 v1 摘要
-    const current = effectiveManifestFor(key) ?? TRUSTED_MANIFESTS[key]!
+    const current = currentManifestFor(key)
     const manifest = key === 'wecom'
       ? { ...current, tools: current.tools.filter(name =>
           (name !== 'wecom_read_sessions' || wecomBusinessReady) &&
@@ -168,8 +181,8 @@ export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessR
     capabilities.push('session_task_v1', 'session_observer_v1')
     // #6/D5 能力真实性：v2 发送能力与实际生效 manifest 的工具集合同源判定——
     // 显式协商（v2Send）使 manifest 升级 v2 变体后才上报；旧 Provider 不得宣称
-    const effectiveWeixin = effectiveManifestFor('weixin')
-    if (effectiveWeixin && effectiveWeixin.tools.includes('weixin_message_send_v2')) {
+    const effectiveWeixin = currentManifestFor('weixin')
+    if (effectiveWeixin.tools.includes('weixin_message_send_v2')) {
       capabilities.push('weixin_message_send_v2')
     }
   }
@@ -177,21 +190,29 @@ export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessR
   // 工具名做发布/分配门禁）——与实际生效 manifest 同源（真实能力上报，未接入的
   // search/select/watch_poll/add_customer 不出现）；Provider 未安装（无 entry）不上报
   if (available.includes('wecom')) {
-    const effectiveWecom = effectiveManifestFor('wecom')
-    if (effectiveWecom) capabilities.push(...effectiveWecom.tools.filter(name =>
+    const effectiveWecom = currentManifestFor('wecom')
+    capabilities.push(...effectiveWecom.tools.filter(name =>
       (name !== 'wecom_read_sessions' || wecomBusinessReady) &&
       (name !== 'wecom_session_directory' || wecomDirectoryReady) &&
       (name !== 'wecom_config_doctor' || wecomConfigDoctorReady) &&
       (name !== 'wecom_config_calibrate' || wecomConfigCalibrateReady)))
-    if (wecomDirectoryReady && wecomDirectorySearchReady && effectiveWecom?.tools.includes('wecom_session_directory')) {
+    if (wecomDirectoryReady && wecomDirectorySearchReady && effectiveWecom.tools.includes('wecom_session_directory')) {
       capabilities.push('wecom_session_directory_search')
     }
+  }
+  if (store?.hasDeclarations) capabilities.push('tool_declarations_v1')
+  // parallel_tools：仅已验签、启用且带有效声明的商店插件（store 来源），且 provider
+  // 实际可用（有 entry）；无并行工具的 provider 不出现键，全空则整个字段省略
+  const parallel: Record<string, string[]> = {}
+  for (const [key, tools] of Object.entries(store?.parallelTools ?? {})) {
+    if (tools.length > 0 && available.includes(key)) parallel[key] = [...tools]
   }
   return {
     providers: available,
     protocol_version: 2,
     provider_manifests: manifests,
     capabilities,
-    ...(first ? { provider_id: TRUSTED_MANIFESTS[first]!.provider_id } : {}),
+    ...(Object.keys(parallel).length > 0 ? { parallel_tools: parallel } : {}),
+    ...(first ? { provider_id: (TRUSTED_MANIFESTS[first] ?? storeManifests[first])!.provider_id } : {}),
   }
 }

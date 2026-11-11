@@ -98,6 +98,25 @@ test('toolDefs ↔ registry 一致性守卫：每个 toolDef 可取到 operation
   assert.throws(() => getOperationEntry('weixin_nonexistent'), /漂移/)
 })
 
+test('注解派生写集合与 runtime 受信写集合一致（v1 写=message_send；v2 发送仅显式协商变体，契约 2.20）', () => {
+  const derived = manifestTools().filter((t) => t.annotations.readOnlyHint !== true).map((t) => t.name).sort()
+  assert.deepEqual(derived, ['weixin_message_send', 'weixin_message_send_v2'].sort(),
+    'runtime v1 受信写集合 = {weixin_message_send}；message_send_v2 仅进入显式协商的 v2 变体写集合')
+})
+
+test('tool_declaration：version 1、与 tools 同源无重复；微信全部串行无 parallel', () => {
+  const m = buildManifest()
+  assert.equal(m.tool_declaration.version, 1)
+  assert.deepEqual(m.tool_declaration.tools.map((t) => t.name), TOOL_NAMES)
+  assert.equal(new Set(m.tool_declaration.tools.map((t) => t.name)).size, m.tool_declaration.tools.length, '声明名不重复')
+  for (const declared of m.tool_declaration.tools) {
+    assert.ok(TOOL_NAMES.includes(declared.name), `${declared.name} 必须出现在清单 tools 内`)
+    assert.equal(declared.parallel, undefined, '微信全部桌面操作，整插件串行')
+  }
+  // 调度声明不计入 schema_digest（digest 沿用旧规则只覆盖 tools 数组）
+  assert.equal(m.schema_digest, computeSchemaDigest())
+})
+
 test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => {
   const cli = path.join(ROOT, 'dist', 'src', 'cli', 'index.js')
   const out = execFileSync(process.execPath, [cli, 'version', '--json'], { encoding: 'utf8' })
@@ -114,4 +133,5 @@ test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => 
     'weixin_name_resolve',
     'weixin_message_send_v2',
   ])
+  assert.deepEqual(parsed.tool_declaration, buildManifest().tool_declaration)
 })

@@ -3,20 +3,20 @@ import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readF
 import { dirname, join, resolve } from 'node:path'
 import semver from 'semver'
 import { ManagementError, type PluginSummary } from '../management.js'
-import { extractVerifiedPackage, FIRST_PARTY_PROVIDERS, PACKAGE_LIMITS, readSignedEnvelope, verifyOfflinePackage, type PackagePlatform, type PublisherTrust, type ReleaseEnvelope, type RuntimeManifest, type VerifiedPackage } from './package.js'
+import { extractVerifiedPackage, FIRST_PARTY_PROVIDERS, PACKAGE_LIMITS, parseToolDeclaration, readSignedEnvelope, verifyOfflinePackage, type PackagePlatform, type PublisherTrust, type ReleaseEnvelope, type RuntimeManifest, type ToolDeclaration, type VerifiedPackage } from './package.js'
+import { providerKeyOfPlugin } from '../legacy/providers.js'
 
 interface Installation {
   installation_id: string; plugin_id: string; release_id: string; version: string
   directory: string; outer_digest: string; package_digest: string; manifest_digest: string; enabled: boolean; uninstalled: boolean
 }
-interface ReleaseState { manifest?: RuntimeManifest; ready: boolean; reason?: string }
+interface ReleaseState { manifest?: RuntimeManifest; declaration?: ToolDeclaration; ready: boolean; reason?: string }
 export interface PluginStoreOptions {
   home: string; trust: PublisherTrust[]; platform: PackagePlatform
   probe: (releaseRoot: string, manifest: RuntimeManifest) => Promise<{ ready: boolean; reason?: string }>
+  /** 可安装 provider_id 允许清单（默认第一方三家；测试用未知插件经此扩容，非逐插件运行时知识） */
+  providers?: readonly string[]
   onChanged?: () => void
-}
-const LEGACY_KEYS: Record<string, string> = {
-  'ai.aidwork.boss-recruiting': 'boss-recruiting', 'ai.aidwork.weixin': 'weixin', 'ai.aidwork.wecom': 'wecom',
 }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const reconcile = (): never => { throw new ManagementError(11, '插件持久状态需要核对，未自动恢复或重放安装') }
@@ -40,6 +40,7 @@ export class PluginStore {
   private readonly releases: string
   private readonly inventory: string
   private readonly pending: string
+  private readonly allowedProviders: readonly string[]
   private records: Installation[] = []
   private states = new Map<string, ReleaseState>()
   private initialized = false
@@ -48,6 +49,7 @@ export class PluginStore {
   private queue: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly options: PluginStoreOptions) {
+    this.allowedProviders = options.providers ?? FIRST_PARTY_PROVIDERS
     const home = resolve(options.home)
     rejectLinks(home)
     mkdirSync(home, { recursive: true })
@@ -65,12 +67,12 @@ export class PluginStore {
       try {
         if (!lstatSync(this.inventory).isFile() || lstatSync(this.inventory).size > 1024 * 1024) reconcile()
         const saved = JSON.parse(readFileSync(this.inventory, 'utf8'))
-        if (!saved || saved.version !== 1 || !Array.isArray(saved.records) || saved.records.length > 3
+        if (!saved || saved.version !== 1 || !Array.isArray(saved.records) || saved.records.length > this.allowedProviders.length
           || Object.keys(saved).some(key => !['version', 'records'].includes(key))) reconcile()
         const ids = new Set<string>(); const providers = new Set<string>()
         for (const record of saved.records) {
           if (!record || !uuid.test(record.installation_id) || !uuid.test(record.directory)
-            || !(FIRST_PARTY_PROVIDERS as readonly string[]).includes(record.plugin_id)
+            || !this.allowedProviders.includes(record.plugin_id)
             || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(record.release_id) || !semver.valid(record.version)
             || !/^[0-9a-f]{64}$/.test(record.outer_digest) || !/^sha256:[0-9a-f]{64}$/.test(record.package_digest)
             || !/^sha256:[0-9a-f]{64}$/.test(record.manifest_digest) || typeof record.enabled !== 'boolean'
@@ -95,14 +97,30 @@ export class PluginStore {
     this.assertAvailable()
     return this.records.filter(record => !record.uninstalled).map(record => {
       const state = this.states.get(record.installation_id)
-      const reason = [state?.reason, this.pendingWarning, this.cleanupWarning].filter(Boolean).join('；')
+      // 契约 2.20 门禁：验签安装但无有效调度声明 = 旧 CLI，显示「需要升级插件」且不进入执行解析
+      const missingDeclaration = Boolean(record.enabled && state?.manifest && !state.declaration)
+      const reason = [missingDeclaration ? '需要升级插件（缺少调度声明）' : undefined, state?.reason, this.pendingWarning, this.cleanupWarning]
+        .filter(Boolean).join('；')
       return {
         installation_id: record.installation_id, plugin_id: record.plugin_id,
         display_name: state?.manifest?.display_name ?? record.plugin_id, release_id: record.release_id,
-        version: record.version, enabled: record.enabled, ready: state?.ready ?? false,
+        version: record.version, enabled: record.enabled, ready: (state?.ready ?? false) && !missingDeclaration,
         ...(reason ? { reason } : {}),
       }
     })
+  }
+
+  /** 启用且带有效调度声明的已验签插件（派生 manifest 与并行上报的唯一来源） */
+  declaredPlugins(): Array<{ plugin_id: string; provider_key: string; manifest: RuntimeManifest; declaration: ToolDeclaration }> {
+    this.assertAvailable()
+    const declared: Array<{ plugin_id: string; provider_key: string; manifest: RuntimeManifest; declaration: ToolDeclaration }> = []
+    for (const record of this.records) {
+      const state = this.states.get(record.installation_id)
+      if (!record.uninstalled && record.enabled && state?.manifest && state.declaration) {
+        declared.push({ plugin_id: record.plugin_id, provider_key: providerKeyOfPlugin(record.plugin_id), manifest: state.manifest, declaration: state.declaration })
+      }
+    }
+    return declared
   }
 
   async refresh(): Promise<void> {
@@ -123,12 +141,13 @@ export class PluginStore {
     this.assertAvailable()
     const entries = { ...legacy }
     for (const record of this.records) {
-      const key = LEGACY_KEYS[record.plugin_id]!
+      const key = providerKeyOfPlugin(record.plugin_id)
       delete entries[key]
       const state = this.states.get(record.installation_id)
       // App login/window readiness is diagnostic. Verified installed tools remain
       // discoverable so a call can explain how to restore the business app.
-      if (!record.uninstalled && record.enabled && state?.manifest) {
+      // 契约 2.20：无有效调度声明（旧 CLI）不进入执行解析；其他插件照常。
+      if (!record.uninstalled && record.enabled && state?.manifest && state.declaration) {
         entries[key] = join(this.releases, record.directory, 'payload', state.manifest.entrypoint[0]!)
       }
     }
@@ -140,7 +159,7 @@ export class PluginStore {
     const snapshot = Buffer.from(bytes)
     return this.serialize(async () => {
       this.clearPending()
-      const pkg = await verifyOfflinePackage(snapshot, this.options.trust, this.options.platform)
+      const pkg = await verifyOfflinePackage(snapshot, this.options.trust, this.options.platform, this.allowedProviders)
       await this.assertRetainedRelease(pkg)
       const previous = this.records.find(record => record.plugin_id === pkg.envelope.provider_id)
       if (previous) {
@@ -174,7 +193,7 @@ export class PluginStore {
         const readiness = await this.options.probe(payload, pkg.manifest)
         const next = this.records.filter(record => record.plugin_id !== installation.plugin_id).concat(installation)
         this.commit(next)
-        this.states.set(installation.installation_id, { manifest: pkg.manifest, ...readiness })
+        this.states.set(installation.installation_id, { manifest: pkg.manifest, declaration: pkg.declaration, ...readiness })
         this.options.onChanged?.()
       })
       await this.cleanupOldReleases(installation.plugin_id, previous?.directory)
@@ -240,7 +259,7 @@ export class PluginStore {
         const file = join(this.releases, entry.name, 'archive.zip'); rejectLinks(file)
         const stat = lstatSync(file)
         if (!stat.isFile() || stat.size > PACKAGE_LIMITS.archive) continue
-        envelope = await readSignedEnvelope(file, this.options.trust)
+        envelope = await readSignedEnvelope(file, this.options.trust, this.allowedProviders)
       } catch { continue } // Damage to an inactive archive cannot block other installs.
       if (envelope.provider_id === pkg.envelope.provider_id && envelope.provider_release_id === pkg.envelope.provider_release_id
         && (envelope.package_digest !== pkg.envelope.package_digest || envelope.manifest_digest !== pkg.envelope.manifest_digest)) {
@@ -262,7 +281,7 @@ export class PluginStore {
         let envelope: ReleaseEnvelope | undefined
         try {
           const archive = join(directory, 'archive.zip'); rejectLinks(archive)
-          if (lstatSync(archive).size <= PACKAGE_LIMITS.archive) envelope = await readSignedEnvelope(archive, this.options.trust)
+          if (lstatSync(archive).size <= PACKAGE_LIMITS.archive) envelope = await readSignedEnvelope(archive, this.options.trust, this.allowedProviders)
         } catch { /* An unreferenced incomplete staging directory is also reclaimable. */ }
         if (envelope && envelope.provider_id !== provider) continue
         rejectLinks(directory)
@@ -276,12 +295,12 @@ export class PluginStore {
       const release = join(this.releases, record.directory)
       const archive = join(release, 'archive.zip'); rejectLinks(archive)
       if (!lstatSync(archive).isFile() || lstatSync(archive).size > PACKAGE_LIMITS.archive) throw new Error()
-      const pkg = await verifyOfflinePackage(readFileSync(archive), this.options.trust, this.options.platform)
+      const pkg = await verifyOfflinePackage(readFileSync(archive), this.options.trust, this.options.platform, this.allowedProviders)
       if (pkg.outer_digest !== record.outer_digest || pkg.envelope.provider_id !== record.plugin_id
         || pkg.envelope.provider_release_id !== record.release_id || pkg.envelope.provider_version !== record.version
         || pkg.envelope.package_digest !== record.package_digest || pkg.envelope.manifest_digest !== record.manifest_digest) throw new Error()
       const payload = join(release, 'payload'); this.checkFiles(payload, pkg)
-      return { manifest: pkg.manifest, ...await this.options.probe(payload, pkg.manifest) }
+      return { manifest: pkg.manifest, declaration: pkg.declaration, ...await this.options.probe(payload, pkg.manifest) }
     } catch { return { ready: false, reason: '插件文件、发布信任或运行依赖需要重新核对' } }
   }
   private checkFiles(root: string, pkg: VerifiedPackage): void {

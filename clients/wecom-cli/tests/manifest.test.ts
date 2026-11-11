@@ -189,6 +189,29 @@ test('toolDefs ↔ registry 一致性守卫：每个 toolDef 可取到 operation
   assert.throws(() => getOperationEntry('wecom_nonexistent'), /漂移/)
 })
 
+test('注解派生写集合 == runtime 受信写集合（WECOM_WRITE_TOOLS 4，契约 2.20 注解审计防回归）', () => {
+  const runtimeWriteTools = ['wecom_message_send', 'wecom_send_image', 'wecom_send_file', 'wecom_config_calibrate']
+  const derived = manifestTools().filter((t) => t.annotations.readOnlyHint !== true).map((t) => t.name).sort()
+  assert.deepEqual(derived, [...runtimeWriteTools].sort())
+})
+
+test('tool_declaration：version 1、与 tools 同源无重复；并行标记恰为企微两个本地库读工具', () => {
+  const m = buildManifest()
+  assert.equal(m.tool_declaration.version, 1)
+  assert.deepEqual(m.tool_declaration.tools.map((t) => t.name), TOOL_NAMES)
+  assert.equal(new Set(m.tool_declaration.tools.map((t) => t.name)).size, m.tool_declaration.tools.length, '声明名不重复')
+  for (const declared of m.tool_declaration.tools) {
+    assert.ok(TOOL_NAMES.includes(declared.name), `${declared.name} 必须出现在清单 tools 内`)
+    if (declared.name === 'wecom_read_session' || declared.name === 'wecom_read_sessions') {
+      assert.equal(declared.parallel, true, `${declared.name} 为纯本地库读，声明并行`)
+    } else {
+      assert.equal(declared.parallel, undefined, `${declared.name} 串行（缺省不带 parallel）`)
+    }
+  }
+  // 调度声明不计入 schema_digest（digest 沿用旧规则只覆盖 tools 数组）
+  assert.equal(m.schema_digest, computeSchemaDigest())
+})
+
 test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => {
   const cli = path.join(ROOT, 'dist', 'src', 'cli', 'index.js')
   const out = execFileSync(process.execPath, [cli, 'version', '--json'], { encoding: 'utf8' })
@@ -199,4 +222,5 @@ test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => 
     parsed.tools.map((t: { name: string }) => t.name),
     TOOL_NAMES,
   )
+  assert.deepEqual(parsed.tool_declaration, buildManifest().tool_declaration)
 })

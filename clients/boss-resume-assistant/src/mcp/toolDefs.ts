@@ -155,7 +155,8 @@ const TOOL_DEFINITIONS: BossToolDef[] = [
     zodShape: {
       remark: z.string().min(1).max(140).optional().describe('备注内容（缺省用默认文案，表单上限 140 字）'),
     },
-    annotations: { title: '约面试表单填充演示', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    // 注解与 runtime 受信写集合（BOSS_WRITE_TOOLS）对齐：interview_demo 沿用历史归类为写（契约 2.20 注解审计）
+    annotations: { title: '约面试表单填充演示', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: 'boss_send_to',
@@ -304,7 +305,8 @@ const TOOL_DEFINITIONS: BossToolDef[] = [
       ),
       save_image_to: z.string().min(1).optional().describe('可选：拼接长图保存路径（PNG）；缺省不保留图片'),
     },
-    annotations: { title: '读取候选人简历详情入库', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    // 入库为外部写（runtime 受信写集合含 resume_detail，契约 2.20 注解审计对齐）
+    annotations: { title: '读取候选人简历详情入库', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: 'boss_resume_batch',
@@ -324,7 +326,8 @@ const TOOL_DEFINITIONS: BossToolDef[] = [
       limit: z.number().int().min(1).max(3).default(1).describe('本次调用最多读取1～3份，省略为1；不是整项任务总量，实际成功数可能更少'),
       save_dir: z.string().min(1).optional().describe('可选：拼接长图保存目录（每份存 <姓名>.png）；缺省不保留图片'),
     },
-    annotations: { title: '批量读取牛人简历入库', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    // 入库为外部写（runtime 受信写集合含 resume_batch，契约 2.20 注解审计对齐）
+    annotations: { title: '批量读取牛人简历入库', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: 'boss_resume_next',
@@ -339,7 +342,8 @@ const TOOL_DEFINITIONS: BossToolDef[] = [
       expected_job_name: z.string().trim().min(1).max(100).describe('原页面职位的精确名称；与当前页面不符时拒绝读取'),
       continue_from: z.string().uuid().optional().describe('云端历史引用，仅用于可信历史关联'),
     },
-    annotations: { title: '继续读取未处理简历', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    // 入库为外部写（runtime 受信写集合含 resume_next，契约 2.20 注解审计对齐）
+    annotations: { title: '继续读取未处理简历', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: 'boss_open_detail',
@@ -353,7 +357,8 @@ const TOOL_DEFINITIONS: BossToolDef[] = [
     zodShape: {
       name: z.string().min(1).max(30).describe('候选人姓名（精确，与推荐列表卡片姓名 trim 全等）'),
     },
-    annotations: { title: '打开候选人简历详情', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    // 只切换显示的详情页，无外部写副作用（runtime 受信写集合不含 open_detail，契约 2.20 注解审计对齐）
+    annotations: { title: '打开候选人简历详情', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: 'boss_greet_detail',

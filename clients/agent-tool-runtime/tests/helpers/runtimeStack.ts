@@ -54,6 +54,8 @@ export interface TestStackOptions {
   cloud?: FakeCloud
   /** stop() 不关闭自有 cloud（重启重投测试：栈1 停止后 cloud 供栈2 复用，由测试负责关闭） */
   keepCloudOnStop?: boolean
+  /** 心跳能力闭包（契约 2.20：模拟 runtimeHost 装配的 deviceCapabilities 输出；缺省走 deviceCapabilities() 默认） */
+  capabilities?: () => Record<string, unknown>
 }
 
 export interface TestStack {
@@ -111,6 +113,7 @@ export async function startTestStack(opts: TestStackOptions = {}): Promise<TestS
     backoffMaxMs: opts.backoffMaxMs ?? 400,
     onHeartbeatAttempt: opts.onHeartbeatAttempt,
     onEvent: opts.onEvent,
+    capabilities: opts.capabilities,
   })
   const runPromise = loop.run()
   const stop = async () => {

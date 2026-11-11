@@ -8,6 +8,7 @@ import yazl from 'yazl'
 import { PluginStore } from '../dist/plugins/store.js'
 import { canonicalJson, sha256 } from '../dist/plugins/package.js'
 import { deviceCapabilities } from '../dist/legacy/config.js'
+import { deriveProviderManifest, isToolAllowedFor, isWriteToolFor } from '../dist/legacy/providers.js'
 
 const keys = generateKeyPairSync('ed25519')
 const platform = { platform: 'win32', arch: 'x64', node_version: '22.23.3', node_abi: '127', runtime_version: '0.2.14' }
@@ -18,9 +19,12 @@ const zip = entries => new Promise((resolve, reject) => {
   for (const [name, bytes] of entries) file.addBuffer(Buffer.from(bytes), name)
   file.end()
 })
-async function pack({ version = '1.0.0', release = 'release-1', provider = 'ai.aidwork.weixin', content = 'export {}' } = {}) {
+// declared：默认带有效调度声明（新 CLI 形态）；false = 旧 CLI 无声明；对象 = 自定义（损坏声明用例）
+async function pack({ version = '1.0.0', release = 'release-1', provider = 'ai.aidwork.weixin', content = 'export {}',
+  tools = [{ name: 'weixin_status', inputSchema: { type: 'object' } }], declared = true } = {}) {
   const entry = Buffer.from(content)
-  const manifest = { manifest_version: 1, provider_id: provider, provider_version: version, display_name: '测试微信', description: 'isolated', execution_target: 'local_required', entrypoint: ['dist/cli.js', 'mcp', '--stdio'], tools: [{ name: 'weixin_status', inputSchema: { type: 'object' } }], schema_digest: 'existing',
+  const manifest = { manifest_version: 1, provider_id: provider, provider_version: version, display_name: '测试微信', description: 'isolated', execution_target: 'local_required', entrypoint: ['dist/cli.js', 'mcp', '--stdio'], tools, schema_digest: 'existing',
+    ...(declared === false ? {} : { tool_declaration: declared === true ? { version: 1, tools: tools.map(tool => ({ name: tool.name })) } : declared }),
     distribution: { platform: 'win32', arch: 'x64', node: { version: '22.23.3', modules_abi: '127' }, required_files: [{ path: 'dist/cli.js', size: entry.length, sha256: sha256(entry) }] } }
   const payload = await zip([['runtime-manifest.json', canonicalJson(manifest)], ['dist/cli.js', entry]])
   const unsigned = { envelope_version: 1, provider_release_id: release, provider_id: provider, provider_version: version, platform: 'win32', arch: 'x64', package_format: 'zip', package_size: payload.length,
@@ -28,10 +32,11 @@ async function pack({ version = '1.0.0', release = 'release-1', provider = 'ai.a
   const envelope = { ...unsigned, signature: 'base64:' + sign(null, Buffer.from(canonicalJson(unsigned)), keys.privateKey).toString('base64') }
   return zip([['envelope.json', JSON.stringify(envelope)], ['payload.zip', payload]])
 }
-function fixture(t, probe = async () => ({ ready: true })) {
+function fixture(t, probe = async () => ({ ready: true }), extraProviders = null) {
   const home = mkdtempSync(join(tmpdir(), 'aid-store-test-'))
   t.after(() => { assert.equal(dirname(resolve(home)), resolve(tmpdir())); assert.ok(home.includes('aid-store-test-')); rmSync(home, { recursive: true, force: true }) })
-  const options = { home, platform, trust, probe }
+  const trustList = extraProviders ? [{ ...trust[0], providers: [...trust[0].providers, ...extraProviders] }] : trust
+  const options = { home, platform, trust: trustList, ...(extraProviders ? { providers: [...trust[0].providers, ...extraProviders] } : {}), probe }
   return { home, options, store: new PluginStore(options) }
 }
 
@@ -268,4 +273,50 @@ test('listing an installed plugin is a cached metadata read without repeating do
     assert.ok(store.resolveEntries({}).weixin)
   }
   assert.equal(probes, 1, 'Opening the plugin list cannot launch diagnostic processes repeatedly')
+})
+test('old CLI without a scheduling declaration shows 需要升级插件 and is excluded from execution resolution', async t => {
+  const { store } = fixture(t)
+  await store.initialize()
+  await store.import(await pack({ declared: false }))
+  const summary = store.list()[0]
+  assert.equal(summary.enabled, true)
+  assert.equal(summary.ready, false)
+  assert.match(summary.reason, /需要升级插件（缺少调度声明）/)
+  assert.deepEqual(store.resolveEntries({ weixin: 'legacy' }), {}, '无声明插件不进入执行解析，其他插件照常（legacy 直配也不复活）')
+  assert.deepEqual(store.declaredPlugins(), [], '无声明插件不参与派生装配与并行上报')
+  // 声明版本损坏的更高版本包照常验签安装，仍按无声明门禁显示
+  await store.import(await pack({ version: '1.1.0', release: 'release-broken', declared: { version: 2, tools: [{ name: 'weixin_status' }] } }))
+  assert.match(store.list()[0].reason, /需要升级插件（缺少调度声明）/)
+  await store.import(await pack({ version: '1.2.0', release: 'release-2' }))
+  assert.equal(store.list()[0].ready, true, '升级到带声明版本即恢复接入')
+  assert.equal(store.list()[0].reason, undefined)
+  assert.ok(store.resolveEntries({}).weixin)
+  assert.deepEqual(store.declaredPlugins().map(plugin => plugin.plugin_id), ['ai.aidwork.weixin'])
+})
+test('damaged declaration is treated as no declaration, not a rejection', async t => {
+  const { store } = fixture(t)
+  await store.initialize()
+  // 声明引用未知工具名：验签不拒包（宽松解析），但按无声明处理
+  await store.import(await pack({ declared: { version: 1, tools: [{ name: 'weixin_missing' }] } }))
+  assert.match(store.list()[0].reason, /需要升级插件（缺少调度声明）/)
+  assert.deepEqual(store.resolveEntries({}), {})
+})
+test('runtime-unknown plugin joins execution from its own declaration without runtime source knowledge', async t => {
+  const { store } = fixture(t, async () => ({ ready: true }), ['ai.aidwork.test-tool'])
+  await store.initialize()
+  await store.import(await pack({ provider: 'ai.aidwork.test-tool', tools: [
+    { name: 'test_tool_status', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
+  ] }))
+  assert.equal(store.list()[0].plugin_id, 'ai.aidwork.test-tool')
+  assert.equal(store.list()[0].ready, true)
+  const entry = store.resolveEntries({})['test-tool']
+  assert.ok(entry, '未知插件按前缀派生 provider key 并进入执行解析')
+  const declared = store.declaredPlugins()
+  assert.deepEqual(declared.map(plugin => plugin.provider_key), ['test-tool'])
+  const derived = deriveProviderManifest(declared[0].manifest)
+  assert.equal(derived.provider_id, 'ai.aidwork.test-tool')
+  assert.deepEqual([...derived.tools], ['test_tool_status'])
+  assert.equal(isToolAllowedFor(derived, 'test_tool_status'), true, '派生 manifest 可路由调用')
+  assert.equal(isWriteToolFor(derived, 'test_tool_status'), false, '注解只读派生为读工具')
+  assert.ok(entry, 'entry 指向签名包 payload 入口')
 })

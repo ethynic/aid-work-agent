@@ -34,6 +34,14 @@ export interface ProviderManifest {
   schema_digest: string
   execution_target: 'local_required'
   min_mcp_protocol_version: string
+  /** 调度声明（契约 2.20）：工具名单 + 并行标记；不计入 schema_digest（digest 沿用旧规则只覆盖 tools） */
+  tool_declaration: { version: 1; tools: Array<{ name: string; parallel?: true }> }
+}
+
+/** 调度声明：每个清单工具一项 {name}，并行工具加 parallel:true（与 manifestTools 同源）。
+ * 微信全部工具为桌面操作，整插件串行（无 parallel 标记） */
+export function buildToolDeclaration(): ProviderManifest['tool_declaration'] {
+  return { version: 1, tools: TOOL_DEFS.map((def) => ({ name: def.name })) }
 }
 
 /** 包根 provider-manifest.json 的静态身份字段（digest/tools/version 不入文件，避免漂移） */
@@ -103,5 +111,6 @@ export function buildManifest(): ProviderManifest {
     provider_version: providerVersion(),
     tools: manifestTools(),
     schema_digest: computeSchemaDigest(),
+    tool_declaration: buildToolDeclaration(),
   }
 }

@@ -43,7 +43,8 @@ test('manifest 字段完整（标准 §6）', () => {
   assert.equal(m.execution_target, 'local_required')
   assert.equal(m.min_mcp_protocol_version, '2024-11-05')
   assert.equal(m.schema_digest, computeSchemaDigest())
-  // 22 个 tool，名称与设计 §10.2 / §10.6 / §10.7 / §10.8 / §10.9 一致（boss_open_chat 2026-08-27；overlay_inspect/dismiss 2026-08-31；详情页打招呼三件套 2026-09-28）
+  // tool 名单与 runtime TRUSTED_MANIFESTS['boss-recruiting'] 一致（含 boss_recovery_probe，
+  // 2026-10-20 本地恢复；详情页打招呼三件套 2026-09-28）
   assert.deepEqual(
     m.tools.map((t) => t.name).sort(),
     [
@@ -57,6 +58,7 @@ test('manifest 字段完整（标准 §6）', () => {
       'boss_interview_demo',
       'boss_list_jobs',
       'boss_read_chat',
+      'boss_recovery_probe',
       'boss_open_chat',
       'boss_overlay_inspect',
       'boss_overlay_dismiss',
@@ -73,12 +75,48 @@ test('manifest 字段完整（标准 §6）', () => {
       'boss_close_detail',
     ].sort(),
   )
-  assert.equal(m.tools.length, 24)
+  assert.equal(m.tools.length, 25)
   for (const tool of m.tools) {
     assert.ok(tool.title.length > 0 && tool.description.length > 0)
     assert.equal(tool.inputSchema.type, 'object')
     assert.ok(tool.annotations)
   }
+})
+
+test('注解派生写集合 == runtime 受信写集合（BOSS_WRITE_TOOLS 14，契约 2.20 注解审计防回归）', () => {
+  const runtimeWriteTools = [
+    'boss_filter',
+    'boss_clear_filter',
+    'boss_greet',
+    'boss_greet_selected',
+    'boss_greet_detail',
+    'boss_accept_resume',
+    'boss_reject_current',
+    'boss_interview_demo',
+    'boss_send_to',
+    'boss_send_current',
+    'boss_select_job',
+    'boss_resume_detail',
+    'boss_resume_batch',
+    'boss_resume_next',
+  ]
+  const derived = manifestTools().filter((t) => t.annotations.readOnlyHint !== true).map((t) => t.name).sort()
+  assert.deepEqual(derived, [...runtimeWriteTools].sort())
+})
+
+test('tool_declaration：version 1、名字与 tools 一一对应、无重复；BOSS 全串行无 parallel', () => {
+  const m = buildManifest()
+  assert.equal(m.tool_declaration.version, 1)
+  assert.equal(m.tool_declaration.tools.length, m.tools.length)
+  const names = m.tools.map((t) => t.name)
+  assert.deepEqual(m.tool_declaration.tools.map((t) => t.name), names, '声明顺序与清单 tools 同源')
+  assert.equal(new Set(names).size, m.tool_declaration.tools.length, '声明名不重复')
+  for (const declared of m.tool_declaration.tools) {
+    assert.ok(names.includes(declared.name), `${declared.name} 必须出现在清单 tools 内`)
+    assert.equal(declared.parallel, undefined, 'BOSS 全部桌面操作，整插件串行')
+  }
+  // 调度声明不计入 schema_digest（digest 沿用旧规则只覆盖 tools 数组）
+  assert.equal(m.schema_digest, computeSchemaDigest())
 })
 
 test('写动作硬上限进入 schema（设计 §14）：greet 最大 3 / accept 最大 1 / reject 无 limit 字段', () => {
@@ -98,7 +136,7 @@ test('写动作硬上限进入 schema（设计 §14）：greet 最大 3 / accept
   assert.equal(contactBinding?.type, 'string')
   assert.equal((reject.inputSchema.required as string[] | undefined)?.includes('_boss_expected_contact_ref') ?? false, false)
   assert.equal((reject.inputSchema.required as string[] | undefined)?.includes('_boss_target_ref') ?? false, false)
-  assert.equal(TOOL_NAMES.length, 24)
+  assert.equal(TOOL_NAMES.length, 25)
 })
 
 test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => {
@@ -107,5 +145,6 @@ test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => 
   const parsed = JSON.parse(out)
   assert.equal(parsed.schema_digest, computeSchemaDigest())
   assert.equal(parsed.provider_id, 'ai.aidwork.boss-recruiting')
-  assert.equal(parsed.tools.length, 24)
+  assert.equal(parsed.tools.length, 25)
+  assert.deepEqual(parsed.tool_declaration, buildManifest().tool_declaration)
 })

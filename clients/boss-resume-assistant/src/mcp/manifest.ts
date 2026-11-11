@@ -30,6 +30,14 @@ export interface ProviderManifest {
   schema_digest: string
   execution_target: 'local_required'
   min_mcp_protocol_version: string
+  /** 调度声明（契约 2.20）：工具名单 + 并行标记；不计入 schema_digest（digest 沿用旧规则只覆盖 tools） */
+  tool_declaration: { version: 1; tools: Array<{ name: string; parallel?: true }> }
+}
+
+/** 调度声明：每个清单工具一项 {name}，并行工具加 parallel:true（与 manifestTools 同源）。
+ * BOSS 全部为桌面操作，整插件串行（无 parallel 标记） */
+export function buildToolDeclaration(): ProviderManifest['tool_declaration'] {
+  return { version: 1, tools: TOOL_DEFS.map((def) => ({ name: def.name })) }
 }
 
 /** 规范序列化：对象 key 递归排序后 JSON.stringify（数组保持顺序），同一输入恒定输出 */
@@ -88,5 +96,6 @@ export function buildManifest(): ProviderManifest {
     schema_digest: computeSchemaDigest(),
     execution_target: 'local_required',
     min_mcp_protocol_version: '2024-11-05',
+    tool_declaration: buildToolDeclaration(),
   }
 }

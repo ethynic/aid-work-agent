@@ -20,6 +20,7 @@ const DIST_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const CLI = path.join(DIST_ROOT, 'src', 'cli', 'index.js')
 
 const EXPECTED_TOOLS = [
+  'boss_recovery_probe',
   'boss_filter',
   'boss_clear_filter',
   'boss_goto',
@@ -109,7 +110,7 @@ test('initialize：serverInfo + instructions（含关键前提与写动作上限
   }
 })
 
-test('list_tools：24 个 tool，名称与 annotations 正确', async () => {
+test('list_tools：25 个 tool，名称与 annotations 正确', async () => {
   const client = await startClient([CLI, 'mcp', '--stdio', '--cdp-port', String(await freePort())])
   try {
     const { tools } = await client.listTools()
@@ -117,7 +118,8 @@ test('list_tools：24 个 tool，名称与 annotations 正确', async () => {
     const byName = new Map(tools.map((t) => [t.name, t]))
     // annotations 语义抽查（规格 m02 §6）
     assert.equal(byName.get('boss_goto')!.annotations?.readOnlyHint, true)
-    assert.equal(byName.get('boss_interview_demo')!.annotations?.readOnlyHint, true)
+    // interview_demo 沿用 runtime 受信写集合的历史归类为写（契约 2.20 注解审计对齐）
+    assert.equal(byName.get('boss_interview_demo')!.annotations?.readOnlyHint, false)
     assert.equal(byName.get('boss_greet')!.annotations?.readOnlyHint, false)
     assert.equal(byName.get('boss_greet')!.annotations?.openWorldHint, true)
     assert.equal(byName.get('boss_greet')!.annotations?.idempotentHint, false)

@@ -30,7 +30,37 @@ export interface ReleaseEnvelope {
   manifest_digest: string; min_runtime_version: string; max_runtime_version: string | null
   publisher_key_id: string; signature_algorithm: string; signature: string; created_at: string
 }
-export interface VerifiedPackage { envelope: ReleaseEnvelope; manifest: RuntimeManifest; files: Map<string, Buffer>; outer_digest: string }
+export interface VerifiedPackage { envelope: ReleaseEnvelope; manifest: RuntimeManifest; files: Map<string, Buffer>; outer_digest: string; declaration: ToolDeclaration | undefined }
+
+/** 调度声明（契约 2.20）：签名清单可选字段 tool_declaration 的宽松解析结果 */
+export interface ToolDeclaration { version: 1; tools: Array<{ name: string; parallel?: true }> }
+
+/**
+ * 宽松解析清单 tool_declaration：缺失/格式无效/version≠1/名字未知或重复 → 视为无声明
+ * （返回 undefined，不报错不拒包——旧 CLI 兼容路径）。name 必须出现在同清单 tools 内。
+ */
+export function parseToolDeclaration(manifest: RuntimeManifest): ToolDeclaration | undefined {
+  const raw = (manifest as { tool_declaration?: unknown }).tool_declaration
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const record = raw as Record<string, unknown>
+  if (record.version !== 1 || !Array.isArray(record.tools) || !record.tools.length) return undefined
+  const known = new Set<string>()
+  for (const tool of manifest.tools ?? []) {
+    const name = (tool as { name?: unknown } | null)?.name
+    if (typeof name === 'string' && name) known.add(name)
+  }
+  const tools: ToolDeclaration['tools'] = []
+  for (const entry of record.tools) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return undefined
+    const name = (entry as Record<string, unknown>).name
+    if (typeof name !== 'string' || !known.has(name)) return undefined
+    const parallel = (entry as Record<string, unknown>).parallel
+    if (parallel !== undefined && typeof parallel !== 'boolean') return undefined
+    if (tools.some(tool => tool.name === name)) return undefined
+    tools.push(parallel === true ? { name, parallel: true } : { name })
+  }
+  return { version: 1, tools }
+}
 export const PACKAGE_LIMITS = { archive: 512 * 1024 ** 2, expanded: 2 * 1024 ** 3, file: 256 * 1024 ** 2, entries: 50_000, ratio: 1000 }
 export const sha256 = (value: Buffer | string): string => createHash('sha256').update(value).digest('hex')
 function invalid(message = '插件包格式、内容或签名无效'): never { throw new ManagementError(8, message) }
@@ -120,11 +150,11 @@ export async function readSafeZip(bytes: Buffer, limits = PACKAGE_LIMITS): Promi
   return files
 }
 
-function verifyEnvelope(bytes: Buffer, trust: PublisherTrust[]): ReleaseEnvelope {
+function verifyEnvelope(bytes: Buffer, trust: PublisherTrust[], providers: readonly string[]): ReleaseEnvelope {
   const envelope = json(bytes) as ReleaseEnvelope
   if (!envelope || typeof envelope !== 'object' || envelope.envelope_version !== 1 || envelope.package_format !== 'zip'
     || envelope.signature_algorithm !== 'Ed25519' || typeof envelope.provider_id !== 'string') invalid()
-  if (!(FIRST_PARTY_PROVIDERS as readonly string[]).includes(envelope.provider_id)) throw new ManagementError(3, '当前仅支持第一方CLI离线插件包')
+  if (!providers.includes(envelope.provider_id)) throw new ManagementError(3, '当前仅支持第一方CLI离线插件包')
   const trusted = trust.find(key => key.key_id === envelope.publisher_key_id && key.providers.includes(envelope.provider_id))
   if (!trusted || typeof envelope.signature !== 'string' || !/^base64:[A-Za-z0-9+/]{86}==$/.test(envelope.signature)) invalid('插件发布者不受信任或签名无效')
   const publicKey = publisherPublicKey(trusted.public_key)
@@ -140,7 +170,7 @@ function verifyEnvelope(bytes: Buffer, trust: PublisherTrust[]): ReleaseEnvelope
 }
 
 /** Read only the signed identity of a retained release; never inflate its large payload. */
-export async function readSignedEnvelope(file: string, trust: PublisherTrust[]): Promise<ReleaseEnvelope> {
+export async function readSignedEnvelope(file: string, trust: PublisherTrust[], providers: readonly string[] = FIRST_PARTY_PROVIDERS): Promise<ReleaseEnvelope> {
   const archive = await new Promise<yauzl.ZipFile>((resolve, reject) => yauzl.open(file,
     { lazyEntries: true, validateEntrySizes: true, strictFileNames: true }, (error, zip) => error ? reject(error) : resolve(zip!)))
   let envelope: Buffer | undefined
@@ -175,15 +205,16 @@ export async function readSignedEnvelope(file: string, trust: PublisherTrust[]):
       archive.readEntry()
     })
     if (names.size !== 2 || !envelope) invalid()
-    return verifyEnvelope(envelope, trust)
+    return verifyEnvelope(envelope, trust, providers)
   } finally { archive.close() }
 }
 
-export async function verifyOfflinePackage(bytes: Buffer, trust: PublisherTrust[], platform: PackagePlatform): Promise<VerifiedPackage> {
+export async function verifyOfflinePackage(bytes: Buffer, trust: PublisherTrust[], platform: PackagePlatform,
+  providers: readonly string[] = FIRST_PARTY_PROVIDERS): Promise<VerifiedPackage> {
   try {
     const outer = await readSafeZip(bytes, { ...PACKAGE_LIMITS, entries: 2, expanded: PACKAGE_LIMITS.archive + 65536, file: PACKAGE_LIMITS.archive })
     if (outer.size !== 2 || !outer.has('envelope.json') || !outer.has('payload.zip') || outer.get('envelope.json')!.length > 65536) invalid()
-    const envelope = verifyEnvelope(outer.get('envelope.json')!, trust)
+    const envelope = verifyEnvelope(outer.get('envelope.json')!, trust, providers)
     if (envelope.platform !== platform.platform || envelope.arch !== platform.arch
       || semver.lt(platform.runtime_version, envelope.min_runtime_version)
       || (envelope.max_runtime_version !== null && semver.gt(platform.runtime_version, envelope.max_runtime_version))) invalid('插件平台或Runtime版本不兼容')
@@ -212,7 +243,7 @@ export async function verifyOfflinePackage(bytes: Buffer, trust: PublisherTrust[
       if (!contents || file.size !== contents.length || !/^[0-9a-f]{64}$/.test(file.sha256) || sha256(contents) !== file.sha256) invalid('插件发行依赖缺失或损坏')
     }
     if (required.size !== files.size - 1) invalid('插件包含未登记文件')
-    return { envelope, manifest, files, outer_digest: sha256(bytes) }
+    return { envelope, manifest, files, outer_digest: sha256(bytes), declaration: parseToolDeclaration(manifest) }
   } catch (error) { if (error instanceof ManagementError) throw error; invalid() }
 }
 

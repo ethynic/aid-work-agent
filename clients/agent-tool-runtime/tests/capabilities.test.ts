@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 const existingEntry = fileURLToPath(new URL('./helpers/fakeProvider.js', import.meta.url))
 import { deviceCapabilities, resolveProviderEntries, type RuntimeConfig } from '../src/config.js'
-import { manifestDigestFor, manifestDigestOf, TRUSTED_MANIFESTS } from '../src/providers.js'
+import { deriveProviderManifest, manifestDigestFor, manifestDigestOf, TRUSTED_MANIFESTS, type ProviderManifest } from '../src/providers.js'
 
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return { server: 'http://127.0.0.1:1', device_id: 'dev-1', bossCliEntry: existingEntry, ...overrides }
@@ -152,4 +152,48 @@ test('空Host与缺失entry不上报业务能力，避免领取无法执行的�
     assert.equal(caps.provider_id, undefined)
     assert.ok(!(caps.capabilities as string[]).includes('session_task_v1'))
   }
+})
+
+// ----- 契约 2.20：商店插件派生 manifest 与并行声明上报 -----
+
+/** 商店验签清单 fixture（未预知插件：一串行一并行，注解只读） */
+const TEST_TOOL_MANIFEST = {
+  manifest_version: 1, provider_id: 'ai.aidwork.test-tool', provider_version: '1.0.0',
+  entrypoint: ['dist/cli.js', 'mcp', '--stdio'], execution_target: 'local_required',
+  tools: [
+    { name: 'test_tool_status', annotations: { readOnlyHint: true } },
+    { name: 'test_tool_poll', annotations: { readOnlyHint: true } },
+  ],
+  tool_declaration: { version: 1, tools: [{ name: 'test_tool_status' }, { name: 'test_tool_poll', parallel: true }] },
+} as unknown as Parameters<typeof deriveProviderManifest>[0]
+
+test('商店声明上报：派生 manifest 进 provider_manifests，parallel_tools 仅并行工具，legacy 直配不参与', () => {
+  const derived = deriveProviderManifest(TEST_TOOL_MANIFEST)
+  const caps = deviceCapabilities(makeConfig({
+    providers: { 'test-tool': { entry: existingEntry }, 'boss-recruiting': { entry: existingEntry } },
+  }), false, false, false, false, false, {
+    parallelTools: { 'test-tool': ['test_tool_poll'] }, hasDeclarations: true, manifests: { 'test-tool': derived },
+  })
+  assert.deepEqual(caps['providers'], ['boss-recruiting', 'test-tool'], 'boss 恒首位键序契约保持')
+  assert.equal(caps['provider_id'], 'ai.aidwork.boss-recruiting')
+  const manifests = caps['provider_manifests'] as Record<string, Record<string, unknown>>
+  assert.equal(manifests['test-tool']!['provider_id'], 'ai.aidwork.test-tool')
+  assert.equal(manifests['test-tool']!['manifest_digest'], manifestDigestOf(derived as ProviderManifest))
+  assert.equal(manifests['test-tool']!['protocol_version'], 1)
+  assert.deepEqual(caps['parallel_tools'], { 'test-tool': ['test_tool_poll'] })
+  assert.ok((caps['capabilities'] as string[]).includes('tool_declarations_v1'))
+  // 未预知插件不产生工具名能力串（云端投影按既有能力协商，Phase 2 才消费 parallel_tools）
+  assert.ok(!(caps['capabilities'] as string[]).includes('test_tool_status'))
+})
+
+test('商店派生 manifest 优先于 TRUSTED 回退（同 key 摘要随派生结果变化）', () => {
+  const narrowed: ProviderManifest = { ...TRUSTED_MANIFESTS.wecom!, tools: TRUSTED_MANIFESTS.wecom!.tools.filter(name => name !== 'wecom_unread_list') }
+  // 业务就绪布尔全真：wecom 业务条件过滤为恒等，摘要差异完全来自派生 manifest
+  const caps = deviceCapabilities(makeConfig({ providers: { wecom: { entry: existingEntry } } }),
+    true, true, false, true, true, { hasDeclarations: true, manifests: { wecom: narrowed } })
+  const manifests = caps['provider_manifests'] as Record<string, Record<string, unknown>>
+  assert.equal(manifests['wecom']!['manifest_digest'], manifestDigestOf(narrowed))
+  assert.notEqual(manifests['wecom']!['manifest_digest'], manifestDigestFor('wecom'), '派生结果优先于 TRUSTED 回退')
+  assert.ok((caps['capabilities'] as string[]).includes('tool_declarations_v1'))
+  assert.equal(caps['parallel_tools'], undefined, '无并行工具时整个字段省略')
 })

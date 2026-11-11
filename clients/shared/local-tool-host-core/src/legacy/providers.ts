@@ -10,6 +10,7 @@
  *   操作协议：v2 invocation 在能力门禁处拒绝（PROTOCOL_NOT_SUPPORTED），不降级旧发送。
  */
 import { createHash } from 'node:crypto'
+import type { RuntimeManifest, ToolDeclaration } from '../plugins/package.js'
 
 export interface ProviderManifest {
   readonly provider_key: string
@@ -220,4 +221,69 @@ export function manifestDigestFor(key: string): string {
     execution_target: manifest.execution_target,
   })
   return createHash('sha256').update(stable).digest('hex')
+}
+
+// ----- 商店插件声明派生（契约 2.20：签名清单声明 → Runtime 通用接入） -----
+
+/** 商店插件 plugin_id → provider key：去除 `ai.aidwork.` 前缀（已交付三插件与 legacy key 一致） */
+export function providerKeyOfPlugin(pluginId: string): string {
+  return pluginId.startsWith('ai.aidwork.') ? pluginId.slice('ai.aidwork.'.length) : pluginId
+}
+
+/**
+ * 验签清单 → 通用 ProviderManifest 派生（Runtime 消费端唯一入口）。
+ *
+ * - tools = 清单 tools 名单；write_tools = annotations.readOnlyHint !== true（缺省按写，保守）
+ * - protocol_version=1 / shared_lock_capable=false / execution_target=local_required（验签已固定）
+ * - 已交付三插件的受信面仍由 TRUSTED_MANIFESTS 锚定（清单与受信清单取交集）：现状签名清单
+ *   多列 runtime 不接入的内部工具（wecom 清单 17 项、受信 12 项），不交集会扩大受信面与
+ *   能力上报（云端 W14 自动装配按 capabilities 增删 Agent 工具）；Runtime 未预知的 key
+ *   无锚点，工具名单完全由清单决定（解耦通用接入）。
+ */
+export function deriveProviderManifest(manifest: RuntimeManifest): ProviderManifest {
+  const provider_id = String(manifest.provider_id ?? '')
+  const key = providerKeyOfPlugin(provider_id)
+  const anchor = TRUSTED_MANIFESTS[key]
+  const defs = (Array.isArray(manifest.tools) ? manifest.tools : [])
+    .map(tool => tool as { name?: unknown; annotations?: { readOnlyHint?: unknown } } | null)
+    .filter((def): def is { name: string; annotations?: { readOnlyHint?: unknown } } => typeof def?.name === 'string' && def.name !== '')
+  const names = [...new Set(defs.map(def => def.name))]
+  const tools = anchor ? names.filter(name => (anchor.tools as readonly string[]).includes(name)) : names
+  const write_tools = new Set(defs.filter(def => tools.includes(def.name) && def.annotations?.readOnlyHint !== true).map(def => def.name))
+  return {
+    provider_key: key,
+    provider_id,
+    tools,
+    execution_target: 'local_required',
+    protocol_version: 1,
+    shared_lock_capable: false,
+    write_tools,
+  }
+}
+
+/** PluginStore 启动装配输入：启用且带有效调度声明的已验签插件 */
+export interface PluginDeclaration {
+  readonly plugin_id: string
+  readonly provider_key: string
+  readonly manifest: RuntimeManifest
+  readonly declaration: ToolDeclaration
+}
+
+/**
+ * 商店声明插件 → 派生 manifest 与并行工具上报记录（Runtime 启动装配一次，runner 门禁
+ * 与能力上报同源）。parallel_tools 仅列声明 parallel:true 的工具；全串行插件不出现键。
+ */
+export function assembleStoreManifests(declared: readonly PluginDeclaration[]): {
+  manifests: Record<string, ProviderManifest>
+  parallelTools: Record<string, string[]>
+} {
+  const manifests: Record<string, ProviderManifest> = {}
+  const parallelTools: Record<string, string[]> = {}
+  for (const item of declared) {
+    const key = providerKeyOfPlugin(item.plugin_id)
+    manifests[key] = deriveProviderManifest(item.manifest)
+    const parallel = item.declaration.tools.filter(tool => tool.parallel === true).map(tool => tool.name)
+    if (parallel.length > 0) parallelTools[key] = parallel
+  }
+  return { manifests, parallelTools }
 }

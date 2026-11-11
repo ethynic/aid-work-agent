@@ -15,6 +15,8 @@ interface FakeDevice {
   device_id: string
   token: string
   heartbeats: number[]
+  /** 心跳请求体捕获（契约 2.20：断言 capabilities_json.parallel_tools 等能力上报用） */
+  heartbeatBodies: Array<Record<string, unknown>>
 }
 
 export interface FakeInvocation {
@@ -98,7 +100,7 @@ export class FakeCloud {
 
   /** 直接造一个已配对设备（跳过 HTTP pair，非 pair 测试用） */
   createDeviceDirectly(): { device_id: string; token: string } {
-    const device: FakeDevice = { device_id: randomUUID(), token: randomUUID().replace(/-/g, ''), heartbeats: [] }
+    const device: FakeDevice = { device_id: randomUUID(), token: randomUUID().replace(/-/g, ''), heartbeats: [], heartbeatBodies: [] }
     this.devices.set(device.token, device)
     return { device_id: device.device_id, token: device.token }
   }
@@ -143,6 +145,12 @@ export class FakeCloud {
 
   heartbeatCount(token: string): number {
     return this.devices.get(token)?.heartbeats.length ?? 0
+  }
+
+  /** 最近一次心跳请求体（能力上报断言用；无心跳返回 undefined） */
+  lastHeartbeatBody(token: string): Record<string, unknown> | undefined {
+    const bodies = this.devices.get(token)?.heartbeatBodies ?? []
+    return bodies[bodies.length - 1]
   }
 
   /** 等待条件满足（轮询），超时抛错 */
@@ -213,6 +221,7 @@ export class FakeCloud {
 
     if (path === '/api/local-tools/runtime/heartbeat' && req.method === 'POST') {
       device.heartbeats.push(Date.now())
+      device.heartbeatBodies.push(await this.readBody(req))
       this.sendJson(res, 200, { success: true, selected: true, server_time: new Date().toISOString() })
       return
     }

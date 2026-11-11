@@ -64,7 +64,8 @@ export interface RunnerDeps {
   resultOutbox?: ResultOutbox
   /** 本地许可有效期上限 ms（默认 writeAuthorize LOCAL_PERMIT_CAP_MS=90s；测试注入短值） */
   permitLocalCapMs?: number
-  /** 测试注入的 Provider manifest 覆盖（v2 契约样例专用；生产不传，走 TRUSTED_MANIFESTS） */
+  /** 实际生效 Provider manifest：生产为 Runtime 启动装配的商店派生 manifest（契约 2.20），
+   * 测试为 v2 契约样例覆盖；缺失 key 回退 getProviderManifest（override → TRUSTED） */
   manifests?: Record<string, ProviderManifest>
   /** 会话任务专用锁内复核（设计 §7 顺序 4）：写许可申请**之前**在桌面锁内重新
    * 观察目标会话并比对决策水位——有新消息/人工回复/身份漂移/观察失败时抛出
