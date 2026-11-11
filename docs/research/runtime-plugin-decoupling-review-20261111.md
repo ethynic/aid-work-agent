@@ -1,6 +1,6 @@
 # Runtime 1.0.0 与业务插件解耦评审
 
-2026-11-11，基于 `codex/runtime-recovery` 的 `2a582ddd` 做设计和源码静态评审。依据为[共同契约 3.0](../system/runner-desktop-runtime-integration-contract.md#12-契约-30-与首轮实施)及[实施计划](../plans/plan-runtime-plugin-host.md#1610-runtime-与-boss-cli-100-实施计划待开发)。评审覆盖第一方受信插件、企微兼容入口，以及安装、能力发布、派发、执行控制和回执进入 Agent 的链路。以下五项为待逐条确认的实施边界。
+2026-11-11，基于 `codex/runtime-recovery` 的 `2a582ddd` 做设计和源码静态评审。依据为[共同契约 3.0](../system/runner-desktop-runtime-integration-contract.md#12-契约-30-与首轮实施)及[实施计划](../plans/plan-runtime-plugin-host.md#1610-runtime-与-boss-cli-100-实施计划待开发)。评审覆盖第一方受信插件、企微兼容入口，以及安装、能力发布、派发、执行控制和回执进入 Agent 的链路。第 1 项已确认，第 2～5 项待逐条确认。
 
 契约已明确业务归插件，Runtime 负责插件生命周期、通用调度、进程监督、状态和结果传输，Agent 按开放能力调用。已有授权、版本和发布信任是通用承载职责。当前代码仍有插件专用路径，计划需要落实各路径在首轮新版中的归属及验收方式。
 
@@ -8,13 +8,13 @@
 
 - 现状。离线包校验和安装清单读取依赖 `FIRST_PARTY_PROVIDERS`，已安装入口经 `LEGACY_KEYS` 转换。产品读取的发布信任配置已经包含发布者可签发的插件标识。Agent 工具装配还从静态目录和逐工具代理类注册本机能力。[离线验包](../../clients/shared/local-tool-host-core/src/plugins/package.ts) · [安装存储](../../clients/shared/local-tool-host-core/src/plugins/store.ts) · [发布信任配置](../../clients/agent-desktop/electron/productConfiguration.ts) · [Agent 工具装配](../../src/tools/assembly.py)
 - 影响。只替换心跳能力清单，安装和 Agent 装配仍可能拒绝一个已有发行授权且遵循新契约的插件。新增业务命令也可能仍需增加服务端代理类。
-- 待确认。已获发行授权的第一方插件，按统一协议安装、发现并执行。安装身份沿原签名和发布信任核定，运行入口使用已验证的插件标识和声明。首轮用一个不同标识、已有测试发行授权的插件，经过真实导入、Agent 工具发现、派发和回执，验证两端通用代码无须增加插件名和专用工具类。
+- 已确认。用户明确要求 Runtime 禁止写死具体插件名称、标识、工具清单等业务事实，一律从插件自身的受信声明获取。已获发行授权的第一方插件按统一协议安装、发现并执行。安装身份沿原签名和发布信任核定，运行入口使用已验证的插件标识和声明。首轮用一个不同标识、已有测试发行授权的插件，经过真实导入、Agent 工具发现、派发和回执，验证两端通用接入。决议已并入共同契约和实施计划。
 
 ## 2. 企微兼容入口的隔离范围需要写清楚
 
 - 现状。Runtime 启动、能力上报和领任务前直接判断 `wecom`、`boss-recruiting`、恢复探测工具以及少数企微数据库工具。服务端的设备准入也按旧桌面资源范围和工具名筛选。旧调用缺省插件身份时还有 BOSS 回退。[Runtime 启动](../../clients/agent-tool-runtime/src/runtimeHost.ts) · [旧调用执行](../../clients/shared/local-tool-host-core/src/legacy/invocationRunner.ts) · [服务端准入](../../src/local_tools/catalog.py)
 - 影响。即使入口加了企微适配，若新版接单仍经过这些分支，老插件特例会继续决定新版作业能否领取、排队和停止。
-- 待确认。兼容入口承担旧工具映射、旧能力探测和旧回执转换。旧命令的并行标记在兼容入口确定后交给同一个调度器。新版路径从签名声明、作业绑定和实际进程状态取得调度信息。已交付旧客户端保留原服务端入口。
+- 待确认。企微侧的兼容适配承担旧工具映射、旧能力探测和旧回执转换，并向 Runtime 上报工具及其并行标记。Runtime 按统一声明接入同一个调度器。已交付旧客户端保留原服务端入口。
 
 ## 3. BOSS 的云端业务与调用授权需要明确归属
 
