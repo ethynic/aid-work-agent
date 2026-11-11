@@ -151,9 +151,12 @@ class DurableControl:
                 self.envelope['business_plan'] = plan.model_dump(mode='json') if plan is not None else None
                 state.plan_ref = plan.plan_id if plan is not None else None
             checkpoint, snapshot = self._capture(state)
+            from .load_class import state_uses_heavy
+            heavy_used = state_uses_heavy(state)
             row = await asyncio.to_thread(self.repository.save_checkpoint, self.attempt,
                 self.revision, checkpoint, snapshot,
-                dispatch=boundary in {'before_model', 'before_tool'})
+                dispatch=boundary in {'before_model', 'before_tool'},
+                heavy_used=heavy_used)
         except StopRequested as error:
             self.pause_requested = error.command == 'pause'
             self.cancel_requested = error.command == 'cancel'

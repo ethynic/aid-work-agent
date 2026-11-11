@@ -769,6 +769,10 @@ class AgentRunnerConfig(BaseModel):
     cancel_grace_seconds: int = Field(default=1200, ge=60)
     poll_seconds: float = Field(default=1.0, gt=0)
     concurrency: int = Field(default=1, ge=1, le=1)
+    # 轻重负载分离判型清单（设计 §4.2）：本地 CPU/内存密集为重。
+    # heavy_skills 按技能基础名（去版本后缀）匹配，heavy_tools 按工具注册 name 匹配。
+    heavy_tools: List[str] = Field(default_factory=list)
+    heavy_skills: List[str] = Field(default_factory=list)
     browser_owner: AgentRunnerBrowserOwnerConfig = Field(default_factory=AgentRunnerBrowserOwnerConfig)
     limits: AgentRunnerLimitsConfig = Field(default_factory=AgentRunnerLimitsConfig)
 

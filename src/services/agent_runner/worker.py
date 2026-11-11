@@ -250,6 +250,11 @@ class RunnerWorker:
                  tool_recovery=None, slot_state=None):
         self.config = config
         self.worker_id = worker_id or 'worker_' + uuid.uuid4().hex
+        # 轻重负载分离（设计 §4.3）：领取角色由容器环境变量声明，
+        # 非 light/general 的值一律归 general（不过滤），避免配置笔误静默缩容。
+        self.role = os.environ.get('AGENT_RUNNER_ROLE', 'general')
+        if self.role not in ('light', 'general'):
+            self.role = 'general'
         self.slot_state = slot_state
         self.boot_id=uuid.uuid4().hex
         self.executions = execution_repository or ExecutionRepository()
@@ -875,7 +880,7 @@ class RunnerWorker:
             return await self._acquire_controls() or await self._acquire_queued()
         priority=getattr(self.executions,'acquire_priority',None)
         if priority is not None:
-            urgent=await asyncio.to_thread(priority,self.worker_id,self.config.lease_seconds)
+            urgent=await asyncio.to_thread(priority,self.worker_id,self.config.lease_seconds,role=self.role)
             if urgent is not None:
                 return urgent
         sources=(self._acquire_controls,self._acquire_timers,self._acquire_continuous,self._acquire_queued)
@@ -889,7 +894,7 @@ class RunnerWorker:
         return None
 
     async def _acquire_queued(self):
-        return await asyncio.to_thread(self.executions.acquire,self.worker_id,self.config.lease_seconds)
+        return await asyncio.to_thread(self.executions.acquire,self.worker_id,self.config.lease_seconds,role=self.role)
 
     async def _acquire_continuous(self):
         from .continuous import interrupted_candidate
@@ -897,7 +902,7 @@ class RunnerWorker:
         from .recovery_repository import RecoveryRepository
         recovery=RecoveryRepository(self.repository.connection_factory)
         candidates=await asyncio.to_thread(recovery.next_continuous_candidates,
-            after_queue_order=self._continuous_scan_after)
+            after_queue_order=self._continuous_scan_after,role=self.role)
         self._continuous_scan_after=candidates[-1]['queue_order'] if candidates else 0
         for row in candidates:
             if not interrupted_candidate(row):
@@ -928,7 +933,8 @@ class RunnerWorker:
         from .recovery import RecoveryCoordinator
         from .recovery_repository import RecoveryRepository
         recovery = RecoveryRepository(self.repository.connection_factory)
-        candidates=await asyncio.to_thread(recovery.next_candidates,after_queue_order=self._recovery_scan_after)
+        candidates=await asyncio.to_thread(recovery.next_candidates,after_queue_order=self._recovery_scan_after,
+            role=self.role)
         self._recovery_scan_after=candidates[-1]['queue_order'] if candidates else 0
         for row in candidates:
             try:
@@ -968,7 +974,8 @@ class RunnerWorker:
         if getattr(self.config,'durable_sleep_enabled',False):
             from .timer_repository import TimerRepository
             timers=TimerRepository(self.repository.connection_factory)
-            candidates=await asyncio.to_thread(timers.next_candidates,after_queue_order=self._timer_scan_after)
+            candidates=await asyncio.to_thread(timers.next_candidates,after_queue_order=self._timer_scan_after,
+                role=self.role)
             self._timer_scan_after=candidates[-1]['queue_order'] if candidates else 0
             for row in candidates:
                 try:
