@@ -581,6 +581,64 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     expect(external.legacy).not.toHaveBeenCalled()
   })
 
+  it('a release-interrupted runner with a verification wait resumes from plain text and yields the play button', async () => {
+    await discoverParked(runnerView({ status:'interrupted',
+      snapshot:{ waiting:{ kind:'verification', question:'执行服务正在停止，已保留原任务进度；本机操作仍按原回执核对。' } } }))
+    // 中断不再视为处理中：停止按钮让位给播放按钮，任务卡承载停止/继续入口
+    expect(agent.isProcessing.value).toBe(false)
+    expect(agent.canStop.value).toBe(false)
+    expect(agent.resumableTask.value?.runner_id).toBe('runner-A')
+    expect(agent.durableTask.value?.runner_id).toBe('runner-A')
+    const sending = agent.sendMessage('继续执行', null, 'A'); await flush()
+    const control = request('/runners/runner-A/controls', 'POST')
+    const body = JSON.parse(control.body!)
+    expect(body).toEqual({ client_request_id:expect.any(String), action:'resume', answer:'继续执行' })
+    control.respond({ success:true, created:false, control:{ control_id:'interrupt-resume', runner_id:'runner-A',
+        action:'resume', client_request_id:body.client_request_id, status:'accepted' },
+      runner: runnerView({ status:'interrupted', resume_requested:true, view_revision:2 }) }, 202)
+    await sending; await flush()
+    expect(agent.error.value).toBeFalsy()
+    expect(agent.canStop.value).toBe(true)
+    expect(agent.resumableTask.value).toBeUndefined()
+    expect(network.requests.filter(item => item.method === 'POST' && item.url.endsWith('/runners'))).toEqual([])
+    expect(external.legacy).not.toHaveBeenCalled()
+  })
+
+  it('a release-interrupted runner still rejects plain text while the resume control is in flight', async () => {
+    await discoverParked(runnerView({ status:'interrupted', resume_requested:true,
+      snapshot:{ waiting:{ kind:'verification', question:'执行服务正在停止，已保留原任务进度；本机操作仍按原回执核对。' } } }))
+    expect(agent.isProcessing.value).toBe(true)
+    expect(agent.resumableTask.value).toBeUndefined()
+    const before = network.requests.length
+    expect(await agent.sendMessage('继续执行', null, 'A')).toMatchObject({ restoreInput:true })
+    expect(network.requests).toHaveLength(before)
+    expect(agent.error.value).toContain('原任务需要恢复核对')
+    expect(external.legacy).not.toHaveBeenCalled()
+  })
+
+  it('the resume play button anchors the resumable parked row even when another runner owns the task card', async () => {
+    const interrupted = runnerView({ runner_id:'runner-B', client_request_id:'request-B', queue_order:1, status:'interrupted',
+      snapshot:{ waiting:{ kind:'verification', question:'执行服务正在停止，已保留原任务进度；本机操作仍按原回执核对。' } } })
+    const sleeping = runnerView({ runner_id:'runner-A', queue_order:2, status:'waiting', execution_mode:'continuous',
+      snapshot:{ waiting:{ kind:'timer', wait_id:'timer-wait', target_execution_id:'leaf-a', wake_at:'2026-11-12T00:00:00Z', seconds:10 } } })
+    const loading = agent.switchSession('A')
+    await flush(); capability(false, true); await flush()
+    request('/sessions/A/runners').respond({ runners:[sleeping, interrupted], active_runners:[sleeping], has_more:false, next_cursor:null })
+    await loading; await flush()
+    expect(agent.durableTask.value?.runner_id).toBe('runner-A')
+    expect(agent.resumableTask.value?.runner_id).toBe('runner-B')
+    agent.resumeResumableTask(); await flush()
+    const posted = request('/runners/runner-B/controls', 'POST')
+    const body = JSON.parse(posted.body!)
+    expect(body).toEqual({ client_request_id:expect.any(String), action:'resume' })
+    posted.respond({ success:true, created:false, control:{ control_id:'b-resume', runner_id:'runner-B',
+        action:'resume', client_request_id:body.client_request_id, status:'accepted' },
+      runner: runnerView({ runner_id:'runner-B', client_request_id:'request-B', queue_order:1, status:'interrupted', resume_requested:true, view_revision:2 }) }, 202)
+    await flush()
+    expect(network.requests.filter(item => item.method === 'POST' && item.url.includes('runner-A/controls'))).toEqual([])
+    expect(agent.error.value).toBeFalsy()
+  })
+
   it('a browser assistance wait preserves input and does not pretend to reply to a clarification', async () => {
     await discoverParked(runnerView({ status: 'waiting', snapshot: { waiting: { kind: 'browser', wait_id: 'browser-wait' } } }))
     const before = network.requests.length

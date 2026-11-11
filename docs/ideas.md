@@ -114,6 +114,7 @@
 |---|------|------|------|---------|---------|
 | 20260714-1912 | Agent 跨平台桌面客户端 | 🔧 部分完成（H3待人工验收） | 共用 Runner 与 Runtime，UI竞态修复后的首期验收包已重建验证。 | [桌面设计 v3](system/desktop-agent-client-design.md) / [Runner 架构](system/agent-application-architecture-design.md) / [共同契约](system/runner-desktop-runtime-integration-contract.md) | [开发计划](plans/plan-desktop-agent-client.md) |
 | 20261105-1416 | UI 内嵌帮助文字（P0+P1 批次） | ✅ 已完成开发 | 将《智能体后台操作指引》中的规则性帮助文字内嵌到页面 UI：新建 HelpExpand 组件。P0：定制页扩展提示词（8 维度指引表）+模板文件、访问授权三态规则、客服账号表单逐字段说明、防滥用三层策略。P1：复制副本 4 场景、顶级栏目移动限制原因、回复风格预置说明、通知规则 5 事件含义+Webhook 入口（工作日报积分提示页面已有，无需新增；回复风格按产品澄清口径写入「自定义风格暂无法关联数字员工使用」）。同步规范与覆盖位置台账见 frontend_dev.md「UI 内嵌帮助文字同步规范」，功能改版须同步修改帮助文字。 | — | — |
+| 20261112-1000 | Runner 中断后前端自动停止与播放按钮恢复 | 🔧 部分完成 | 发版中断（interrupted+verification）后停止按钮自动消失并变为播放按钮，点击或直接发送文本均以 resume control 接续原任务；任务卡扩展到非持续任务的暂停/中断行。 | — | [计划](plans/plan-runner-interrupt-frontend-auto-resume.md) |
 
 ---
 
