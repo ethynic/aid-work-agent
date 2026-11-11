@@ -50,4 +50,19 @@ describe('Durable task controls use server state', () => {
     expect(unidentified.text()).not.toContain('立即继续')
     unidentified.unmount()
   })
+  it('offers continuation for a release-interrupted task with a verification wait', async () => {
+    const wrapper = mount(DurableTaskStatus, { props: { busy:false, row:runnerView({ status:'interrupted',
+      snapshot:{ waiting:{ kind:'verification', question:'执行服务正在停止，已保留原任务进度；本机操作仍按原回执核对。' } } }) } })
+    expect(wrapper.text()).toContain('任务已中断，请核对执行记录')
+    await wrapper.findAll('button').find(button => button.text() === '继续任务')!.trigger('click')
+    expect(wrapper.emitted('control')).toEqual([['resume']])
+    wrapper.unmount()
+  })
+  it('keeps a local recovery interruption on its own card without a resume shortcut', () => {
+    const wrapper = mount(DurableTaskStatus, { props: { busy:false, row:runnerView({ status:'interrupted', local_recovery:true,
+      local_recovery_kind:'dispatch_unconfirmed', local_recovery_actions:['resume','end'] }) } })
+    expect(wrapper.text()).not.toContain('继续任务')
+    expect(wrapper.findAll('button').some(button => button.text() === '停止任务')).toBe(true)
+    wrapper.unmount()
+  })
 })

@@ -71,6 +71,19 @@ export function runnerWaitLeaf(wait?: RunnerWait): RunnerWait | undefined {
   while (wait?.kind === 'child_wait' && depth-- > 0) wait = wait.child_wait
   return wait?.kind === 'child_wait' ? undefined : wait
 }
+/** parked 行是否可显式 resume（服务端 controls 接受 paused/interrupted 的 resume；
+ *  verification 等待即发版/心跳中断文案，不阻断恢复）。resume 在途、已请求取消、
+ *  local_recovery 行排除——后者必须走「核对并继续」卡片。 */
+export function runnerResumable(row: RunnerView): boolean {
+  if (row.cancel_requested || row.resume_requested || row.local_recovery) return false
+  const wait = runnerWaitLeaf(row.snapshot.waiting)
+  const timerResume = wait?.kind === 'timer' && !!wait.wait_id && !!wait.target_execution_id
+  const guardResume = wait?.kind === 'continuous_guard' && !!wait.wait_id && !!wait.target_execution_id
+    && ['waiting', 'paused'].includes(row.status)
+  const bareResume = ['paused', 'interrupted'].includes(row.status)
+    && (!wait || wait.kind === 'verification' && row.status === 'interrupted')
+  return bareResume || timerResume || guardResume
+}
 export interface RunnerPage { runners: RunnerView[]; active_runners: RunnerView[]; has_more: boolean; next_cursor: string | null }
 export class RunnerRequestError extends Error {
   /** 422 表单校验的逐题明细（设计 §5.7），经 BFF 原样透传；其余错误为 undefined */
