@@ -12,6 +12,14 @@
 
 故障恢复现仅允许网页/绑定窗口的鼠标关闭，Escape建议、输入和window-escape实验入口删除；此前已验证的普通关闭详情/附件等业务Escape保留。旧恢复按键声明/回执只可读、不可执行，详见[恢复设计V](boss-overlay-heal-design.md)。
 
+## 1.0.0 业务命令设计范围（2026-11-11，待开发）
+
+首轮 BOSS CLI 的产品发布目标为 `1.0.0`，与 Runtime 共同遵循[共同契约 3.0 第 12 节](../../system/runner-desktop-runtime-integration-contract.md#12-契约-30-与首轮实施)。向 Agent 开放哪些完整业务命令、参数、内部小 CLI 的组合以及业务过程和结果结构，由本独立设计确定，实施状态见[Runtime 与 BOSS CLI 1.0.0 计划](../../plans/plan-runtime-plugin-host.md#1610-runtime-与-boss-cli-100-实施计划待开发)。
+
+业务中断后由用户决定是否继续。Agent 按用户要求调用插件开放的继续能力，插件判断能否使用保存的进度，以及从哪里继续。已完成及已尝试但结果未知的记录保留。
+
+现有 `boss_resume_next`／CLI `resume-next` 可作为继续筛选入口的参考。当前服务端 `prepare_next` 要求父批次 `succeeded`、`effect=none` 且具备有效续筛结果；该事实尚不覆盖任意中断批次的恢复。1.0.0 设计需要明确可保留的进度、续接条件和对用户的结果说明，具体命令清单仍待业务设计。
+
 ## 1. 结论
 
 新建 CLI 工具 `clients/boss-resume-assistant/`，与现有 Agent、租户、渠道、服务端 Browser Runtime 和服务端数据库完全解耦。用户自己用日常 Chrome 带 `--remote-debugging-port=9222` 启动并扫码登录、关闭弹窗、进入推荐牛人页面；CLI attach 调试端点并在终端回车确认后，才通过 Chrome DevTools Protocol 的 browser WebSocket 建立连接（attach-only，程序绝不 spawn/kill 用户 Chrome，见 §16 决策 7）。
