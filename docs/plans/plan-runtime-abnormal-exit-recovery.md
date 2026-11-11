@@ -6,7 +6,7 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 | --- | --- | --- | --- |
-| 1 | 异常退出后自动恢复接单 | 📋 待开发 | 见[设计](../system/runtime-abnormal-exit-recovery-design.md) |
+| 1 | 异常退出后自动恢复接单 | 🔧 进行中（待真机验收） | 代码完成，commit 1970f062（分支 runtime-optimization）：recover 跨会话退出证据链 + Host 10s 复查 + Main 等待确认后自动启动。新增 recoverEvidence 10 例、management 循环用例、agent-desktop 105 全绿；三包 typecheck 0；2 个基线既有失败与本次无关。CR 修正 1 个 P1（ticks 纪元常数）。见[设计](../system/runtime-abnormal-exit-recovery-design.md) |
 
 复用现在的启动入口和进程检查。启动时核实上次的执行进程，确认退出就继续启动，暂时无法确认就自动再查。
 
