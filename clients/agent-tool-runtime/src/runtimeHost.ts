@@ -4,7 +4,6 @@ import { randomUUID, randomBytes } from 'node:crypto'
 import { ApiClient } from './apiClient.js'
 import { registrationBlocksExecution } from './connectionRegistration.js'
 import {
-  defaultSkillsDir,
   deviceCapabilities,
   loadConfig,
   machineFingerprint,
@@ -13,7 +12,6 @@ import {
   RUNTIME_VERSION,
   runtimeHomeDir,
 } from './config.js'
-import { SkillRunnerHandler } from './skillRunner.js'
 import { loadDeviceToken } from './credentials.js'
 import { checkDesktopInteractive } from './desktopCheck.js'
 import { deriveResourceKey } from './desktopLock.js'
@@ -212,7 +210,10 @@ export class LegacyExecution implements HostAdapter {
       const failure = connectionFailure(error, true)
       throw new ManagementError(failure.category === 'PAIRING_CODE_INVALID' ? 1 : 11, [failure.summary, ...failure.steps].join('。'))
     }
-    const next: RuntimeConfig = { ...config, server: params.server, device_id: result.device_id, name: params.device_name }
+    // 历史 config 可能仍携带已移除的 skills 键：解构丢弃，新配对事务从源头干净
+    // （白名单外的键会让存量 pending 在 recoverPairing 被拒，卡住下一次启动）。
+    const { skills: _legacySkills, ...carried } = { ...config } as RuntimeConfig & { skills?: unknown }
+    const next: RuntimeConfig = { ...carried, server: params.server, device_id: result.device_id, name: params.device_name }
     const pending = join(runtimeHomeDir(), 'pairing.pending.json')
     atomicWrite(pending, JSON.stringify({ config: next, encrypted_token: await dpapiProtect(result.device_token) }))
     await recoverPairing()
@@ -242,15 +243,6 @@ export class LegacyExecution implements HostAdapter {
     this.runFailure = null
     this.stopping = false
     const nameBridge = new NameSessionBridge(providers, api, bridgeKey)
-    // skill-runner（M2）：config.skills.python 配置且存在才构造 handler（能力真实性——
-    // 未配置/解释器缺失不上报能力、不注入 runner，行级 claim 天然不派发该设备）
-    const skillsCfg = config.skills
-    const skillRunner = skillsCfg?.python && existsSync(skillsCfg.python)
-      ? new SkillRunnerHandler({ skillsDir: skillsCfg.dir ?? defaultSkillsDir(), pythonPath: skillsCfg.python })
-      : undefined
-    if (skillRunner) {
-      logInfo(`[runtime] skill-runner 已启用：skills 目录=${skillsCfg!.dir ?? defaultSkillsDir()} 解释器=${skillsCfg!.python}`)
-    }
     // #6 能力真实性：v2 会话 manifest 变体仅经 config.providers.weixin.v2Send 显式
     // 协商（隔离测试 / 真实 v2 Provider 交付后）；未协商保持真实 v1 受信形态
     const { setManifestOverride, weixinV2Manifest } = await import('./providers.js')
@@ -292,7 +284,6 @@ export class LegacyExecution implements HostAdapter {
             await this.supervision.noteBusinessExecution()
           }
         },
-        ...(skillRunner ? { skillRunner } : {}),
         ...(recoveryReady ? { recoveryObservation: recoveryObservation(providers, this.supervision) } : {}),
         desktopCheck: async () => (await checkDesktopInteractive()).interactive,
         desktopResourceKey: deriveResourceKey(),
@@ -304,7 +295,7 @@ export class LegacyExecution implements HostAdapter {
       // logInfo = stderr + %APPDATA% 文件双写，前缀格式不变。
       onEvent: (msg) => logInfo(msg),
       capabilities,
-      canClaim: () => Object.values(this.resolveEntries(config)).some(entry => existsSync(entry)) || Boolean(skillRunner),
+      canClaim: () => Object.values(this.resolveEntries(config)).some(entry => existsSync(entry)),
       onConnection: connection,
     })
 
@@ -335,7 +326,6 @@ export class LegacyExecution implements HostAdapter {
             runInvocation(inv, {
               api,
               providers,
-              ...(skillRunner ? { skillRunner } : {}),
               desktopCheck: async () => (await checkDesktopInteractive()).interactive,
               desktopResourceKey: deriveResourceKey(),
               runtimeDataDir: dataDir,

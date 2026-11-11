@@ -56,6 +56,24 @@ test('corrupt DPAPI payload cannot overwrite the old credential despite syntacti
   assert.equal(existsSync(join(home, 'pairing.pending.json')), true)
 })
 
+test('存量 pending 事务允许携带历史 skills 键：可应用，落盘 config 不再含该键', async () => {
+  const cipher = Buffer.from('test encrypted bytes').toString('base64')
+  atomicWrite(join(home, 'pairing.pending.json'), JSON.stringify({
+    config: { server: 'https://new.example', device_id: 'new-device', skills: { python: 'C:\\py\\python.exe', dir: 'C:\\skills' } },
+    encrypted_token: cipher }))
+  await recoverPairing(async () => 'test credential')
+  const saved = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'))
+  assert.equal(saved.skills, undefined, '落盘的新 config 不再携带已移除的 skills 键')
+  assert.equal(saved.device_id, 'new-device')
+  assert.equal(existsSync(join(home, 'pairing.pending.json')), false)
+  // 子结构非法（非字符串值）仍拒绝：白名单不为任意形态开门。
+  atomicWrite(join(home, 'pairing.pending.json'), JSON.stringify({
+    config: { server: 'https://new.example', device_id: 'new-device', skills: { python: 42 } },
+    encrypted_token: cipher }))
+  await assert.rejects(recoverPairing(async () => 'test credential'), /事务格式无效/)
+  assert.equal(JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')).device_id, 'new-device')
+})
+
 test('interrupted unpair resumes deletion instead of leaving a half-cleared identity', async () => {
   atomicWrite(join(home, 'pairing.pending.json'), JSON.stringify({ action: 'unpair' }))
   rmSync(join(home, 'credentials.bin'))

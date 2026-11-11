@@ -133,6 +133,24 @@ test('startup error stays associated with caller describe instead of being infer
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
+test('a canceled automatic start never reaches the Host even if bootstrap finishes after a manual stop', async () => {
+  const { child, respond } = controlledHost()
+  const supervisor = new RuntimeSupervisor({ nodeExecutable: process.execPath, hostEntry: 'controlled', home: os.tmpdir(), supervisor: 'runtime_app', spawnChild: () => child,
+    takeSelectedPackage: async () => { throw new Error('no selection') }, onEvent: () => {}, onDisconnect: () => {} })
+  const autoStart = new AbortController()
+  try {
+    const automatic = supervisor.request({ request_id: 'auto', method: 'start', params: { request_key: 'auto' } }, autoStart.signal)
+    autoStart.abort()
+    const manual = supervisor.request({ request_id: 'user', method: 'stop', params: { request_key: 'user' } })
+    respond(description)
+    await assert.rejects(automatic, { name: 'AbortError' })
+    await flush()
+    assert.deepEqual(child.sent.map(request => request.method), ['describe', 'stop'])
+    respond({ operation_id: 'stop', operation: 'stop', status: 'succeeded', code: 0, error: '' })
+    assert.equal((await manual).code, 0)
+  } finally { child.disconnect() }
+})
+
 test('renderer cannot turn the management channel into shell or filesystem access', () => {
   for (const value of [
     { request_id: 'r', method: 'spawn', params: { command: 'anything' } },

@@ -12,10 +12,12 @@ test('installer rendezvous only applies to installed Windows Runtime', () => {
   assert.equal(runtimeUpdateExit({ ...input, argv: ['--aidwork-exit-for-uninstall'] }), true)
 })
 test('explicit stop wins over recovery and login while a running update resumes once', () => {
-  for (const recovered of [false, true]) for (const login of [false, true]) assert.equal(shouldResumeRuntime({ intent: false, recovered, login }), false)
+  for (const recovered of [false, true]) for (const login of [false, true]) for (const reconciling of [false, true]) assert.equal(shouldResumeRuntime({ intent: false, recovered, login, reconciling }), false)
   assert.equal(shouldResumeRuntime({ intent: true, recovered: false, login: false }), true)
   assert.equal(shouldResumeRuntime({ intent: undefined, recovered: true, login: false }), true)
   assert.equal(shouldResumeRuntime({ intent: undefined, recovered: false, login: false }), false)
+  assert.equal(shouldResumeRuntime({ intent: undefined, recovered: false, login: false, reconciling: true }), true)
+  assert.equal(shouldResumeRuntime({ intent: undefined, recovered: false, login: true, reconciling: false }), true)
 })
 test('protected update intent preserves explicit stop and rejects another product/home', async () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'aid-update-intent-'))

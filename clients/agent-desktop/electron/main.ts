@@ -68,6 +68,7 @@ app.setName(product.productName)
 app.setPath('userData', product.userDataPath ?? legacyUserDataPath)
 if (process.platform === 'win32') app.setAppUserModelId(product.appId)
 const loginLaunch = runtimeLoginLaunch({ kind: product.kind, packaged: app.isPackaged, platform: process.platform, smoke: smokeMode, argv: process.argv })
+const runtimeStartupAbort = new AbortController()
 const maintenanceLaunch = runtimeUpdateExit({ kind: product.kind, packaged: app.isPackaged, platform: process.platform, smoke: smokeMode, argv: process.argv })
 let updateRequested = false
 let maintenanceRequested = false
@@ -214,11 +215,13 @@ function registerDesktopIpc(): void {
   ipcMain.handle('desktop:runtime:request', async (event, request: unknown) => {
     assertTrustedSender(event)
     if (!runtimeSupervisor) throw new Error('当前产品没有本机Runtime管理能力')
+    const method = (request as { method?: string })?.method ?? ''
+    if (method === 'stop') runtimeStartupAbort.abort()
     if (runtimeConnectionRecovery?.busy) throw new Error('连接恢复正在进行，请等待处理完成')
-    if (product.kind === 'runtime' && (request as { method?: string })?.method === 'pair') throw new Error('请使用一次配对连接入口')
-    if (['start', 'pair'].includes((request as { method?: string })?.method ?? '') && await runtimeConnectionRecovery?.registrationBlocksExecution()) throw new Error('正在自动完成设备连接，请等待网络恢复；可停止执行或退出')
+    if (product.kind === 'runtime' && method === 'pair') throw new Error('请使用一次配对连接入口')
+    if (['start', 'pair'].includes(method) && await runtimeConnectionRecovery?.registrationBlocksExecution()) throw new Error('正在自动完成设备连接，请等待网络恢复；可停止执行或退出')
     const reply = await runtimeSupervisor.request(request)
-    if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && reply.code === 0 && ['start', 'stop'].includes((request as { method: string }).method)) {
+    if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && reply.code === 0 && ['start', 'stop'].includes(method)) {
       // A new explicit user intent supersedes a cancelled upgrade's resume intent.
       try { await updateIntent?.clear() } catch { logLifecycle('runtime-update-intent-clear-failed') }
     }
@@ -558,19 +561,24 @@ if (!hasSingleInstanceLock) {
       refreshTrayMenu()
       runtimeTray.on('double-click', () => { if (mainWindow) revealWindow(mainWindow) })
       if (runtimeSupervisor) {
+        const signal = runtimeStartupAbort.signal
         void (async () => {
           // Old installation resume records are not new-generation startup prerequisites.
           const intent = await updateIntent?.read().catch(() => undefined)
-          if (maintenanceRequested || runtimeConnectionRecovery?.busy || await runtimeConnectionRecovery?.registrationBlocksExecution()) return
-          const reply = await runtimeSupervisor!.request({ request_id: randomUUID(), method: 'getState', params: {} })
+          if (signal.aborted || maintenanceRequested || runtimeConnectionRecovery?.busy || await runtimeConnectionRecovery?.registrationBlocksExecution()) return
+          const reply = await runtimeSupervisor!.request({ request_id: randomUUID(), method: 'getState', params: {} }, signal)
+          if (signal.aborted) return
           if (reply.code !== 0) throw new Error('RuntimeStartupStateRejected')
           const recovered = runtimeSupervisor!.recoveredAfterInterruption
-          if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && (cleanInstallation?.fresh && cleanInstallation.migrated || shouldResumeRuntime({ intent, recovered, login: loginLaunch }))) await resumeRuntimeAtLogin(value => {
+          const startupState = reply.result as { state?: string } | null
+          const reconciling = startupState?.state === 'reconciling'
+          if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && (cleanInstallation?.fresh && cleanInstallation.migrated || shouldResumeRuntime({ intent, recovered, login: loginLaunch, reconciling }))) await resumeRuntimeAtLogin(value => {
             if (maintenanceRequested || runtimeConnectionRecovery?.busy) throw new Error('RuntimeMaintenanceInProgress')
-            return runtimeSupervisor!.request(value)
-          })
-          if (intent !== undefined && !maintenanceRequested && !runtimeConnectionRecovery?.busy) await updateIntent?.clear()
+            return runtimeSupervisor!.request(value, signal)
+          }, undefined, signal)
+          if (intent !== undefined && !signal.aborted && !maintenanceRequested && !runtimeConnectionRecovery?.busy) await updateIntent?.clear()
         })().catch(() => {
+          if (signal.aborted) return
           logLifecycle('runtime-login-resume-failed')
           if (mainWindow) revealWindow(mainWindow)
         })
@@ -600,6 +608,7 @@ if (!hasSingleInstanceLock) {
   })
 
   app.on('before-quit', (event) => {
+    runtimeStartupAbort.abort()
     desktopUpdater?.stop()
     if (runtimeConnectionRecovery instanceof RuntimeCleanConnection) runtimeConnectionRecovery.dispose()
     if (!runtimeSupervisor || exitAllowed) { runtimeTray?.destroy(); return }

@@ -197,7 +197,7 @@ test('白名单：跨 Provider 工具不串道，未知 provider 无 manifest', 
   assert.ok(!isToolAllowedFor(weixin, 'wecom_message_send'), 'weixin manifest 不得放行 wecom 工具')
   assert.ok(!isToolAllowed('weixin_message_send'), '兼容 isToolAllowed 仍按 boss 白名单判断')
   assert.equal(getProviderManifest('nope-unknown'), undefined)
-  assert.deepEqual(Object.keys(TRUSTED_MANIFESTS).sort(), ['boss-recruiting', 'runtime-recovery', 'skill-runner', 'wecom', 'weixin'])
+  assert.deepEqual(Object.keys(TRUSTED_MANIFESTS).sort(), ['boss-recruiting', 'runtime-recovery', 'wecom', 'weixin'])
   const recovery = getProviderManifest('runtime-recovery')!
   assert.ok(isToolAllowedFor(recovery, 'runtime_recovery_observe'))
   assert.equal(isWriteToolFor(recovery, 'runtime_recovery_observe'), false)

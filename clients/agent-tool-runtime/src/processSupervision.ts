@@ -45,12 +45,11 @@ export class ProcessSupervision {
   async marker(instanceId: string): Promise<Record<string, unknown>> {
     if (process.platform !== 'win32') return {}
     if (!this.enabled) throw new Error('required process supervisor missing')
-    const config = JSON.parse(readFileSync(join(this.home, 'config.json'), 'utf8').replace(/^\uFEFF/, ''))
-    // External Python skill executors have not joined the Provider Job boundary.
-    const rebootOnly = Boolean(config.skills?.python)
     this.ledger = { schemaVersion: 1, generation: instanceId, home: resolve(this.home), bootId: await this.bootId(), sessionId: await this.sessionId(), ownerPid: process.pid, jobs: [], business_started: false }
     await this.write(this.ledger)
-    return { schemaVersion: 2, supervision: await dpapiProtect(JSON.stringify({ generation: instanceId, home: resolve(this.home), bootId: this.ledger.bootId, sessionId: this.ledger.sessionId, rebootOnly })) }
+    // rebootOnly 恒为 false：外部 Python 技能执行器能力已移除；字段保留是为兼容
+    // 读取历史标记数据（recover 仍按旧语义处理 true 的存量标记）。
+    return { schemaVersion: 2, supervision: await dpapiProtect(JSON.stringify({ generation: instanceId, home: resolve(this.home), bootId: this.ledger.bootId, sessionId: this.ledger.sessionId, rebootOnly: false })) }
   }
   async prepareLaunch(entry: string): Promise<{ command: string; args: string[] }> {
     if (!this.ledger) throw new Error('execution supervision not initialized')
@@ -65,43 +64,75 @@ export class ProcessSupervision {
     return { command: this.executable, args: ['run', '--job-name', jobName, '--node', this.node, '--entry', entry,
       '--owner-pid', String(process.pid), '--owner-start-time', ownerStart, '--receipt', join(this.directory(), `${jobName}.receipt.json`)] }
   }
+  /** 历史台账只提供受管 Job 清单：读不出或绑定不符视为「jobs 未知」，继续走
+   * 会话/回执证据链，不产生阻断恢复的记录类错误。 */
+  private async tryReadLedger(proof: { generation: string; home: string; bootId: string; sessionId: number }): Promise<Ledger | undefined> {
+    let ledger: Ledger
+    try { ledger = JSON.parse(await dpapiUnprotect(readFileSync(join(this.directory(), `${proof.generation}.bin`), 'utf8'))) } catch { return undefined }
+    if (!ledger || ledger.schemaVersion !== 1 || ledger.home !== proof.home || ledger.generation !== proof.generation || ledger.bootId !== proof.bootId || ledger.sessionId !== proof.sessionId
+      || (ledger.business_started !== undefined && typeof ledger.business_started !== 'boolean')
+      || !Number.isSafeInteger(ledger.ownerPid) || ledger.ownerPid <= 0 || !Array.isArray(ledger.jobs) || ledger.jobs.length > 10000
+      || ledger.jobs.some(job => typeof job !== 'string' || !job.startsWith('AidWorkRuntime.') || !uuid.test(job.slice(15)))) return undefined
+    return ledger
+  }
+
+  /** 恢复判据（产品原则）：不用 Windows 重启状态证明本软件的状态；不能核实的旧
+   * 记录不得阻碍恢复接单；能确认原会话已无进程即可恢复。只用进程退出证据——
+   * 受管 Job 终止、退出回执或原登录会话已无进程。返回值：true = 旧执行已退出
+   * （或旧记录读不出且不会自愈，归档放行）；false = 可能仍在运行、系统查询暂时
+   * 失败或解密助手超时，等待复查。记录类异常不再抛出。 */
   async recover(marker: string): Promise<boolean> {
     if (!this.enabled) return false
-    const parsed = JSON.parse(marker)
-    if (!uuid.test(parsed.instance_id)) throw new Error('marker invalid')
     const digest = createHash('sha256').update(marker).digest('hex')
-    const currentBoot = await this.bootId()
-    let stopped = false
-    if (parsed.schemaVersion === 2 && typeof parsed.supervision === 'string') {
-      const proof = JSON.parse(await dpapiUnprotect(parsed.supervision))
-      if (proof.generation !== parsed.instance_id || proof.home !== resolve(this.home) || !uuid.test(proof.bootId) || typeof proof.rebootOnly !== 'boolean') throw new Error('marker binding invalid')
-      if (proof.bootId !== currentBoot) stopped = true
-      // Named Jobs are session-scoped. Absence in another login session cannot
-      // prove the old session's tree stopped; a real reboot remains sufficient.
-      else if (proof.rebootOnly === false && proof.sessionId === await this.sessionId()) {
-        const ledger: Ledger = JSON.parse(await dpapiUnprotect(readFileSync(join(this.directory(), `${proof.generation}.bin`), 'utf8')))
-        if (ledger.schemaVersion !== 1 || ledger.home !== proof.home || ledger.generation !== proof.generation || ledger.bootId !== proof.bootId || ledger.sessionId !== proof.sessionId
-          || (ledger.business_started !== undefined && typeof ledger.business_started !== 'boolean')
-          || !Number.isSafeInteger(ledger.ownerPid) || !Array.isArray(ledger.jobs) || ledger.jobs.length > 10000
-          || ledger.jobs.some(job => typeof job !== 'string' || !job.startsWith('AidWorkRuntime.') || !uuid.test(job.slice(15)))) throw new Error('ledger binding invalid')
-        // Caller holds the home lease: old Host is gone. Kill only its protected,
-        // registered jobs. The launcher never enables breakaway or Chrome retention.
-        for (const job of ledger.jobs) {
-          const result = await this.command(['terminate', '--job-name', job])
-          if (result.activeProcesses !== 0) throw new Error('job stop unconfirmed')
-        }
-        stopped = true
+    // 标记与监督凭据是本机原子写入：标记本体读不出、凭据被确定性拒绝或解密后
+    // 明文损坏，即外部损坏且不会自愈，归档为历史并放行（identity-reconciliation.bin
+    // 照常写入），不用它阻碍设备恢复接单；只有解密助手超时或不可用保持等待复查。
+    let parsed: { instance_id?: unknown; schemaVersion?: unknown; supervision?: unknown }
+    try { parsed = JSON.parse(marker) } catch { return this.retireExecution(digest) }
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.instance_id !== 'string' || !uuid.test(parsed.instance_id)
+      || parsed.schemaVersion !== 2 || typeof parsed.supervision !== 'string') return this.retireExecution(digest)
+    let proofText: string
+    try { proofText = await dpapiUnprotect(parsed.supervision) }
+    catch (error) {
+      // 确定性拒绝（格式非法/DPAPI 拒绝/输出损坏）= 记录本身坏、永远不会核验
+      // 通过 → 归档放行；只有助手超时或不可用保持临时（false），留给 10 秒复查。
+      return error instanceof Error && ['DPAPI_INPUT_INVALID', 'DPAPI_DECRYPT_FAILED', 'DPAPI_OUTPUT_INVALID'].includes(error.message)
+        ? this.retireExecution(digest) : false
+    }
+    let proof: Pick<Ledger, 'generation' | 'home' | 'bootId' | 'sessionId'> & { rebootOnly: boolean }
+    try { proof = JSON.parse(proofText) } catch { return this.retireExecution(digest) }
+    if (!proof || proof.generation !== parsed.instance_id || proof.home !== resolve(this.home) || typeof proof.bootId !== 'string'
+      || !uuid.test(proof.bootId) || !Number.isSafeInteger(proof.sessionId) || proof.sessionId < 0
+      || typeof proof.rebootOnly !== 'boolean') return this.retireExecution(digest)
+    const ledger = await this.tryReadLedger(proof)
+    if (proof.sessionId === await this.sessionId()) {
+      // Caller holds the home lease. These Jobs cover managed Providers only; the
+      // launcher never enables breakaway or Chrome retention. rebootOnly markers
+      // predate the Job boundary for external executors and stay wait-only.
+      if (proof.rebootOnly || !ledger) return false
+      for (const job of ledger.jobs) {
+        const result = await this.command(['terminate', '--job-name', job])
+        if (result.activeProcesses !== 0) return false
       }
-    } else if (Object.keys(parsed).join(',') === 'instance_id') {
-      const witnessFile = join(this.directory(), `legacy-${digest}.bin`)
-      if (existsSync(witnessFile)) {
-        const witness = JSON.parse(await dpapiUnprotect(readFileSync(witnessFile, 'utf8')))
-        if (witness.home !== resolve(this.home) || witness.digest !== digest || !uuid.test(witness.bootId)) throw new Error('legacy witness invalid')
-        stopped = witness.bootId !== currentBoot
-      } else atomicWrite(witnessFile, await dpapiProtect(JSON.stringify({ home: resolve(this.home), digest, bootId: currentBoot })))
-    } else throw new Error('unsupported execution marker')
-    if (stopped) atomicWrite(join(this.home, 'identity-reconciliation.bin'), await dpapiProtect(JSON.stringify({ markerDigest: digest, instanceId: parsed.instance_id })))
-    return stopped
+    } else {
+      // Named Jobs are session-local; cross-session probes cannot see that
+      // namespace, so the verdict relies on exit receipts or a confirmed session
+      // exit. Temporary evidence outages stay unconfirmed (false) for recheck.
+      const receipts = !proof.rebootOnly && !!ledger
+        && (await Promise.all(ledger.jobs.map(job => this.stoppedReceipt(job, ledger.ownerPid)))).every(Boolean)
+      if (!receipts) {
+        let sessionAlive: boolean
+        try { sessionAlive = await this.sessionHasProcesses(proof.sessionId) } catch { return false }
+        if (sessionAlive) return false
+      }
+    }
+    return this.retireExecution(digest, parsed.instance_id)
+  }
+
+  /** 旧执行已确认退出（或旧记录不可核实且不会自愈）：写入核对凭据，放行恢复。 */
+  private async retireExecution(digest: string, instanceId?: string): Promise<true> {
+    atomicWrite(join(this.home, 'identity-reconciliation.bin'), await dpapiProtect(JSON.stringify({ markerDigest: digest, ...(instanceId ? { instanceId } : {}) })))
+    return true
   }
   /** Trusted ordinary Provider dispatch only; observation never establishes business coverage. */
   async noteBusinessExecution(): Promise<void> {
