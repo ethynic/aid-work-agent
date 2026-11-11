@@ -127,6 +127,7 @@ import { useSubagentList } from '@/composables/useSubagentList'
 import { useMobile } from '@/composables/useMobile'
 import { useToast } from 'vue-toastification'
 import type { AgentItem } from '@/api/saasPermissions'
+import type { UploadedFile } from '@/api/agent'
 const router = useRouter()
 const toast = useToast()
 const { isMobile } = useMobile()
@@ -147,6 +148,7 @@ const {
   precacheNewSession,
   uploadAttachment,
   removeAttachment,
+  cancelUpload,
   clearAttachments,
   abortStreaming,
   sessionId: agentSessionId,
@@ -674,6 +676,7 @@ async function handleUpload(file: File) {
   try {
     await uploadAttachment(file)
   } catch (error: any) {
+    if (error?.name === 'AbortError') return
     console.error('前端日志：文件上传失败', error)
     const errorMsg = error?.message || error?.toString?.() || '文件上传失败'
     console.error('前端日志：错误消息', errorMsg)
@@ -681,8 +684,13 @@ async function handleUpload(file: File) {
   }
 }
 
-function handleRemoveFile(file_id: string) {
-  removeAttachment(file_id)
+function handleRemoveFile(file: UploadedFile) {
+  // 有 file_id 为已完成附件，按 id 移除；无 file_id 为上传中占位，走取消上传（中止请求）
+  if (file.file_id) {
+    removeAttachment(file.file_id)
+  } else {
+    cancelUpload(file)
+  }
 }
 
 // 处理侧边栏切换

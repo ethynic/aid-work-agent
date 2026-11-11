@@ -133,6 +133,9 @@ function recoveryControlMessage(code?: string | null) {
 // 当前附件列表（输入框草稿，跨会话共享，与现状一致）
 const currentFiles = ref<UploadedFile[]>([])
 
+// 进行中上传的占位 -> AbortController 映射（cancelUpload 依据它中止请求）
+const uploadAbortControllers = new WeakMap<UploadedFile, AbortController>()
+
 function generateSessionId(): string {
   return 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9)
 }
@@ -1085,7 +1088,8 @@ export function useAgent() {
 
   /**
    * 上传单个文件
-   * 先插入无 file_id 的占位（ChatInput 显示"上传中"转圈），成功后替换为真实结果，失败则移除
+   * 先插入无 file_id 的占位（ChatInput 显示"上传中"转圈），成功后替换为真实结果，失败则移除。
+   * 每个占位绑定一个 AbortController：请求悬挂（网络僵死等）时用户可手动取消，占位不会永久卡死
    */
   async function uploadAttachment(file: File): Promise<UploadedFile> {
     const placeholder: UploadedFile = {
@@ -1096,8 +1100,10 @@ export function useAgent() {
       type: file.type.startsWith('image/') ? 'image' : 'file'
     }
     currentFiles.value.push(placeholder)
+    const controller = new AbortController()
+    uploadAbortControllers.set(placeholder, controller)
     try {
-      const uploaded = await uploadFile(file, getEffectiveAuthHeader())
+      const uploaded = await uploadFile(file, getEffectiveAuthHeader(), controller.signal)
       const idx = currentFiles.value.indexOf(placeholder)
       if (idx !== -1) {
         currentFiles.value.splice(idx, 1, uploaded)
@@ -1106,6 +1112,8 @@ export function useAgent() {
     } catch (error) {
       currentFiles.value = currentFiles.value.filter(f => f !== placeholder)
       throw error
+    } finally {
+      uploadAbortControllers.delete(placeholder)
     }
   }
 
@@ -1116,6 +1124,20 @@ export function useAgent() {
   function removeAttachment(file_id: string) {
     if (!file_id) return
     currentFiles.value = currentFiles.value.filter(f => f.file_id !== file_id)
+  }
+
+  /**
+   * 取消上传中的占位附件（请求悬挂/用户主动放弃）。
+   * 中止进行中的请求，fetch 异步 reject 后由 uploadAttachment 统一移除占位；
+   * 无进行中请求（异常残留的孤儿占位）时直接移除
+   */
+  function cancelUpload(placeholder: UploadedFile) {
+    const controller = uploadAbortControllers.get(placeholder)
+    if (controller) {
+      controller.abort()
+    } else {
+      currentFiles.value = currentFiles.value.filter(f => f !== placeholder)
+    }
   }
 
   /**
@@ -1780,6 +1802,7 @@ export function useAgent() {
     precacheNewSession,
     uploadAttachment,
     removeAttachment,
+    cancelUpload,
     clearAttachments,
     abortStreaming,
     removeStreamState,

@@ -12,7 +12,7 @@ export interface UploadedFile {
 /**
  * 上传文件到服务器
  */
-export async function uploadFile(file: File, authHeaders?: Record<string, string>): Promise<UploadedFile> {
+export async function uploadFile(file: File, authHeaders?: Record<string, string>, signal?: AbortSignal): Promise<UploadedFile> {
   try {
     const formData = new FormData()
     formData.append('file', file)
@@ -27,6 +27,7 @@ export async function uploadFile(file: File, authHeaders?: Record<string, string
       method: 'POST',
       headers,
       body: formData,
+      signal,
     })
 
     if (!response.ok) {

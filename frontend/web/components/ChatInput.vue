@@ -45,10 +45,9 @@
           </span>
           <button
             type="button"
-            :disabled="!file.file_id"
-            @click.stop="emit('remove', file.file_id)"
-            class="flex w-7 h-7 self-center mr-1 items-center justify-center rounded text-gray-400 hover:text-danger-500 hover:bg-danger-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-gray-400 disabled:hover:bg-transparent"
-            title="移除附件"
+            @click.stop="emit('remove', file)"
+            class="flex w-7 h-7 self-center mr-1 items-center justify-center rounded text-gray-400 hover:text-danger-500 hover:bg-danger-50 transition-colors"
+            :title="file.file_id ? '移除附件' : '取消上传'"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -197,7 +196,7 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'send', content: string, executionMode?: 'continuous'): void
   (e: 'upload', file: File): void
-  (e: 'remove', file_id: string): void
+  (e: 'remove', file: UploadedFile): void
   (e: 'stop'): void
 }>()
 
