@@ -7,6 +7,7 @@
 
 | 故障主题 | 文档 | 摘要 |
 |---------|------|------|
+| 国腾 Runtime 断联与重复配对 | [事故调查报告](guoteng-runtime-disconnect-20261110.md) | 11-10：隔离失败配对事务并核验旧执行已停稳后，原设备恢复连续心跳，未重新配对。 |
 | Excel全文读取阻塞正式服共享Runner事件循环 | [excel-process-shared-runner-blocking-20261105.md](excel-process-shared-runner-blocking-20261105.md) | 11-05：百万样式尾行触发同步全表读取，13执行跨12用户5租户积压约50分钟（触发方：宏陶陶瓷企微客服TPG80509查询，宏盟荟产品VR图表格.xlsx），人工重启恢复；P0已修待部署、看门狗待裁决。 |
 | 企微客服 95003 新客户回复全失败（未验证企业累计接待 100 客户上限） | [wecom-kf-send-95003-unverified-quota-20261105.md](wecom-kf-send-95003-unverified-quota-20261105.md) | 2026-11-05 宏陶租户 13 次 95003：未验证企业微信客服累计只能接待 100 个客户咨询，15:26:30 接待满后新客户回复全失败、老客户不受影响；与租户核实未验证（未缴 300 元认证费）；根解=企业验证，需人工跟进撞线后约 10 个新客户 |
 | Runner 终态事务永久失败致 30 秒重试风暴（243 生产） | [runner-finalize-orphan-retry-storm-20261030.md](runner-finalize-orphan-retry-storm-20261030.md) | 2026-10-30 周巡检发现：会话与 chat_records 被删致 `write_history` 抛 `FINALIZE_SESSION_OWNER_CHANGED`，finalizing 行的异常分支只调 no-op 的 `interrupt_attempt`，租约过期后被反复领取、每 30 秒重试一次累计 1809 次；当日 14:00 事务终结止血，修复 = finalizer 有限重试（5 次）+ 孤儿放弃（释放 claim/回执/租约），待发版 |
