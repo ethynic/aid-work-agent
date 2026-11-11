@@ -1,6 +1,7 @@
 """Logical claims and renewable execution attempts are separate durable owners."""
 from loguru import logger
 import copy
+import psycopg2
 
 from src.db.database import get_db_connection
 from .ownership import Attempt, LeaseLost, StopRequested, lock_runner
@@ -141,6 +142,19 @@ class ExecutionRepository:
             return row
 
     def heartbeat(self, attempt, lease_seconds):
+        import time as _time
+        last_error = None
+        for _retry in range(4):
+            try:
+                return self._heartbeat_once(attempt, lease_seconds)
+            except psycopg2.errors.LockNotAvailable as error:
+                # P0②：行锁竞争（save_checkpoint/监督扫描并发持有 agent_runners 行）
+                # 是瞬时状况，短退避重试；不把锁等待当租约丢失向上抛。
+                last_error = error
+                _time.sleep(0.5)
+        raise last_error
+
+    def _heartbeat_once(self, attempt, lease_seconds):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
             row = lock_runner(cursor, attempt.runner_id)
@@ -174,6 +188,15 @@ class ExecutionRepository:
                 (attempt.runner_id,))
             row = cursor.fetchone()
             return row is not None and released_by(decoded(row), attempt)
+
+    def peek_cancel_requested(self, runner_id):
+        """Plain MVCC read (no row lock) for supervision bounds; never blocks on contention."""
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT cancel_requested FROM agent_runners WHERE runner_id=%s',
+                           (runner_id,))
+            row = cursor.fetchone()
+            return bool(row and row['cancel_requested'])
 
     def assert_dispatch(self, attempt, *, source_prepared=None):
         with self.connection_factory() as conn:

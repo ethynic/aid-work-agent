@@ -763,6 +763,10 @@ class AgentRunnerConfig(BaseModel):
     port: int = Field(default=8091, ge=1, le=65535)
     lease_seconds: int = Field(default=30, ge=5)
     heartbeat_seconds: int = Field(default=10, ge=1)
+    # P0① 自愈边界：cancel_requested 已置位但执行进程超过该宽限仍未提交终态
+    # （挂死），监督进程强制回收槽位。默认高于实测合法取消延迟（to_thread 长调用
+    # 下 10~17 分钟），避免误杀正常的取消核对流程。
+    cancel_grace_seconds: int = Field(default=1200, ge=60)
     poll_seconds: float = Field(default=1.0, gt=0)
     concurrency: int = Field(default=1, ge=1, le=1)
     browser_owner: AgentRunnerBrowserOwnerConfig = Field(default_factory=AgentRunnerBrowserOwnerConfig)

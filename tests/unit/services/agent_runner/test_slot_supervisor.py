@@ -1,5 +1,6 @@
 """One blocked execution must keep its lease without making a finished slot reusable."""
 
+import psycopg2
 import pytest
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ class MemoryRepository:
         self.finished = set()
         self.renewed = []
         self.finish_checks = []
+        self.cancel_requested = set()
 
     def owned_attempts(self, worker_id):
         return [attempt for attempt in self.active.values() if attempt.worker_id == worker_id]
@@ -26,8 +28,13 @@ class MemoryRepository:
         self.finish_checks.append(attempt)
         return attempt in self.finished
 
+    def peek_cancel_requested(self, runner_id):
+        return runner_id in self.cancel_requested
+
 
 class Process:
+    pid = 12345
+
     def __init__(self):
         self.exited = False
 
@@ -161,6 +168,65 @@ def test_owner_scan_filters_worker_status_and_database_lease():
     assert repository.owned_attempts('worker-a') == [Attempt('runner', 'worker-a', 4)]
 
 
+def test_heartbeat_retries_transient_row_lock_contention(monkeypatch):
+    """P0②：行锁竞争（save_checkpoint 并发持行）是瞬时状况，短退避重试后成功。"""
+    from unittest.mock import patch
+    calls = []
+    def once(attempt, lease_seconds):
+        calls.append(lease_seconds)
+        if len(calls) < 3:
+            raise psycopg2.errors.LockNotAvailable('fixture contention')
+        return {'closed': False, 'cancel_requested': False}
+    repository = ExecutionRepository(connection_factory=lambda: None)
+    monkeypatch.setattr(repository, '_heartbeat_once', once)
+    with patch('time.sleep') as slept:
+        flags = repository.heartbeat(Attempt('runner', 'worker', 1), 30)
+    assert flags == {'closed': False, 'cancel_requested': False}
+    assert len(calls) == 3
+    assert slept.call_count == 2, 'retry backoff happens between contended beats'
+
+
+def test_heartbeat_contention_exhaustion_propagates_without_renaming():
+    """重试耗尽后原样抛出 LockNotAvailable，不得改判为租约丢失。"""
+    from unittest.mock import patch
+    def once(attempt, lease_seconds):
+        raise psycopg2.errors.LockNotAvailable('fixture contention')
+    repository = ExecutionRepository(connection_factory=lambda: None)
+    monkeypatch_safe = once
+    repository._heartbeat_once = monkeypatch_safe
+    with patch('time.sleep'):
+        with pytest.raises(psycopg2.errors.LockNotAvailable):
+            repository.heartbeat(Attempt('runner', 'worker', 1), 30)
+
+
+def test_peek_cancel_requested_is_plain_mvcc_read():
+    class Cursor:
+        def execute(self, sql, params):
+            assert 'FOR UPDATE' not in sql, 'supervision bound must never block on the row lock'
+            assert sql.count('SELECT') == 1
+            assert params == ('runner',)
+        def fetchone(self):
+            return {'cancel_requested': True}
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def cursor(self): return Cursor()
+    repository = ExecutionRepository(connection_factory=Connection)
+    assert repository.peek_cancel_requested('runner') is True
+
+
+def test_peek_cancel_requested_tolerates_missing_row():
+    class Cursor:
+        def execute(self, sql, params): pass
+        def fetchone(self): return None
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def cursor(self): return Cursor()
+    repository = ExecutionRepository(connection_factory=Connection)
+    assert repository.peek_cancel_requested('gone') is False
+
+
 def test_dead_worker_exits_slot_container_before_any_new_child(monkeypatch):
     from src.config.settings import settings
     calls = []
@@ -169,7 +235,7 @@ def test_dead_worker_exits_slot_container_before_any_new_child(monkeypatch):
         def poll(self): return 1
     monkeypatch.setattr(settings, 'agent_runner', SimpleNamespace(
         enabled=True, peers={'bridge': object()}, web_service_token='fixture',
-        concurrency=1, lease_seconds=30))
+        concurrency=1, lease_seconds=30, cancel_grace_seconds=1200))
     monkeypatch.setattr('src.db.database.init_postgres_pool',
                         lambda **kwargs: calls.append(('pool', kwargs)))
     monkeypatch.setattr('src.db.database.close_postgres_pool', lambda: None)
@@ -193,3 +259,103 @@ def test_linux_entrypoint_requires_pid_one_before_spawning(monkeypatch):
     monkeypatch.setattr(supervisor.os, 'getpid', lambda: 42)
     with pytest.raises(RuntimeError, match='AGENT_RUNNER_SLOT_REQUIRES_CONTAINER_PID_ONE'):
         supervisor.main()
+
+
+def _busy_slot(tmp_path, attempt):
+    slot = SlotState(tmp_path / 'slot')
+    slot.reset(attempt.worker_id)
+    slot.busy(attempt)
+    return slot
+
+
+def test_cancel_grace_forces_recovery_after_bound(tmp_path, monkeypatch):
+    repository = MemoryRepository()
+    attempt = Attempt('runner', 'worker', 3)
+    slot = _busy_slot(tmp_path, attempt)
+    repository.cancel_requested.add('runner')
+    clock = [0]
+    supervisor = RunnerSlotSupervisor(repository, cancel_grace_seconds=1200,
+                                      clock=lambda: clock[0])
+    supervisor.lease_seconds = 30
+    process = Process()
+    killed = []
+    monkeypatch.setattr('src.services.agent_runner.supervisor.os.killpg',
+                        lambda pid, signum: killed.append(pid), raising=False)
+    monkeypatch.setattr('src.services.agent_runner.supervisor._bounded_wait',
+                        lambda process, **kwargs: None)
+
+    supervisor._observe(process, slot, 'worker', None)
+    assert killed == [], 'cancel within grace must not be killed'
+    clock[0] = 1201
+    supervisor._observe(process, slot, 'worker', None)
+    assert killed == [process.pid], 'stuck cancel beyond grace must be force recovered'
+    assert supervisor._cancel_since == {}, 'bound state resets after recovery'
+
+
+def test_cancel_grace_resets_when_request_cleared(tmp_path, monkeypatch):
+    repository = MemoryRepository()
+    attempt = Attempt('runner', 'worker', 3)
+    slot = _busy_slot(tmp_path, attempt)
+    repository.cancel_requested.add('runner')
+    clock = [0]
+    supervisor = RunnerSlotSupervisor(repository, cancel_grace_seconds=1200,
+                                      clock=lambda: clock[0])
+    supervisor.lease_seconds = 30
+    process = Process()
+    monkeypatch.setattr('src.services.agent_runner.supervisor.os.killpg',
+                        lambda pid, signum: pytest.fail('must not kill'), raising=False)
+
+    supervisor._observe(process, slot, 'worker', None)
+    clock[0] = 1300
+    repository.cancel_requested.clear()
+    supervisor._observe(process, slot, 'worker', None)
+    clock[0] = 2600
+    repository.cancel_requested.add('runner')
+    supervisor._observe(process, slot, 'worker', None)
+    assert slot.read()['state'] == 'BUSY', 'fresh cancel observation restarts the bound'
+
+
+def test_lock_contention_skips_renewal_but_keeps_recovery_reachable(tmp_path, monkeypatch):
+    repository = MemoryRepository()
+    attempt = Attempt('runner', 'worker', 3)
+    slot = _busy_slot(tmp_path, attempt)
+    repository.finished.add(attempt)
+
+    def contended_heartbeat(a, lease_seconds):
+        raise psycopg2.errors.LockNotAvailable()
+    repository.heartbeat = contended_heartbeat
+
+    clock = [0]
+    supervisor = RunnerSlotSupervisor(repository, cleanup_seconds=120,
+                                      clock=lambda: clock[0])
+    supervisor.lease_seconds = 30
+    supervisor.cancel_grace_seconds = 1200
+    process = Process()
+    monkeypatch.setattr('src.services.agent_runner.supervisor.os.killpg',
+                        lambda pid, signum: process.__setattr__('exited', True),
+                        raising=False)
+    monkeypatch.setattr('src.services.agent_runner.supervisor._bounded_wait',
+                        lambda process, **kwargs: None)
+
+    timer = supervisor._observe(process, slot, 'worker', None)
+    assert timer == (('runner', 3), 0), 'contention must not abort the scan before the timer'
+    clock[0] = 121
+    supervisor._observe(process, slot, 'worker', timer)
+    assert process.exited is True, 'bounded cleanup must stay reachable under lock contention'
+
+
+def test_cancel_grace_read_failure_never_kills(tmp_path, monkeypatch):
+    repository = MemoryRepository()
+    attempt = Attempt('runner', 'worker', 3)
+    slot = _busy_slot(tmp_path, attempt)
+
+    def broken_peek(runner_id):
+        raise RuntimeError('db unavailable')
+    repository.peek_cancel_requested = broken_peek
+    supervisor = RunnerSlotSupervisor(repository, cancel_grace_seconds=1200)
+    supervisor.lease_seconds = 30
+    process = Process()
+    monkeypatch.setattr('src.services.agent_runner.supervisor.os.killpg',
+                        lambda pid, signum: pytest.fail('must not kill'), raising=False)
+    supervisor._observe(process, slot, 'worker', None)
+    assert slot.read()['state'] == 'BUSY'

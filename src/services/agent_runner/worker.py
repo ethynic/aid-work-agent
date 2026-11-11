@@ -295,10 +295,12 @@ class RunnerWorker:
             task.cancel()
 
     async def _heartbeat(self, attempt, control, owner_task):
+        transient_failures = 0
         while True:
             await asyncio.sleep(self.config.heartbeat_seconds)
             try:
                 flags = await asyncio.to_thread(self.executions.heartbeat,attempt,self.config.lease_seconds)
+                transient_failures = 0
                 if flags.get('closed',False):
                     return
                 control.cancel_requested = flags['cancel_requested']
@@ -307,6 +309,16 @@ class RunnerWorker:
                 if isinstance(error, asyncio.CancelledError):
                     raise
                 import psycopg2
+                # P0②：行锁竞争（LockNotAvailable/55P03）是瞬时状况。租约自上次
+                # 成功续租起仍有余量，下一拍重试即可，不得把锁等待当存储不可用
+                # 而打断运行中任务；连续失败逼近租约到期才按原路径停止推进。
+                if (isinstance(error, psycopg2.errors.LockNotAvailable)
+                        and transient_failures < max(1, self.config.lease_seconds // self.config.heartbeat_seconds - 1)):
+                    transient_failures += 1
+                    logger.warning('AgentRunner heartbeat lock contention runner={} retry={}/{}',
+                        attempt.runner_id, transient_failures,
+                        max(1, self.config.lease_seconds // self.config.heartbeat_seconds - 1))
+                    continue
                 kind = 'lease_lost' if isinstance(error, LeaseLost) else 'storage_unavailable' if isinstance(error, psycopg2.Error) else 'heartbeat_failed'
                 control.interruption_reason = {
                     'lease_lost': '原执行租约已失效，已停止推进；请在原会话核对进度后继续。',

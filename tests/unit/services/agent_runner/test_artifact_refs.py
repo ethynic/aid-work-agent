@@ -235,3 +235,45 @@ class TestArtifactCleanup:
         assert not inside.exists()
         # 命名空间外文件不可证为执行产物，保留
         assert foreign.exists()
+
+    def test_cleanup_survives_undeletable_items_and_reports_incomplete(self, tmp_path, monkeypatch):
+        """P0①：单项删除失败（NFS stale handle 等）不得中断收尾清理，只记未清完。"""
+        import shutil
+        execution_id = "runner_clean_2"
+        owner = workspace_directory(tmp_path, _IDENTITY, execution_id)
+        workspace = owner / "skill_ws_a"
+        workspace.mkdir(parents=True)
+        artifact = owner / "image_x.png"
+        artifact.write_bytes(_PNG_BYTES)
+        checkpoint = {"execution_id": execution_id, "resources": {
+            "workspace": str(workspace),
+            "image_artifacts": [{"sha256": "x", "path": str(artifact)}]}}
+
+        failures = []
+        def failing_rmtree(path, onerror=None):
+            failures.append(Path(path).name)
+            if onerror is not None:
+                onerror(shutil.rmtree, path,
+                        (OSError, OSError(16, 'Device or resource busy'), None))
+            raise OSError(16, 'fixture stale handle')
+        monkeypatch.setattr(shutil, 'rmtree', failing_rmtree)
+
+        complete = cleanup_workspaces(tmp_path, _IDENTITY, checkpoint)
+
+        assert complete is False, 'failed items must mark cleanup incomplete'
+        assert failures == ['skill_ws_a']
+        assert not artifact.exists(), 'one failed item must not block other deletions'
+
+    def test_strict_cleanup_removes_owner_directory_when_complete(self, tmp_path):
+        execution_id = "runner_clean_3"
+        owner = workspace_directory(tmp_path, _IDENTITY, execution_id)
+        workspace = owner / "skill_ws_b"
+        workspace.mkdir(parents=True)
+        (workspace / "note.txt").write_text("x")
+        checkpoint = {"execution_id": execution_id,
+                      "resources": {"workspace": str(workspace)}}
+
+        complete = cleanup_workspaces(tmp_path, _IDENTITY, checkpoint, strict=True)
+
+        assert complete is True
+        assert not owner.exists()
