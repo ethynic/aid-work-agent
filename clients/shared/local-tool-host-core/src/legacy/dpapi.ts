@@ -80,6 +80,11 @@ function runPowerShell(script: string, stdinBase64: string, allowEmptyOutput = f
       ['-NoProfile', '-NonInteractive', '-Command', script],
       { timeout: 30_000, maxBuffer: MAX_BASE64_LENGTH, windowsHide: true, cwd, env },
       (err, stdout, stderr) => {
+        // 超时杀进程与拉起失败是助手暂态；脚本跑完但 .NET Protect/Unprotect 抛错
+        //（COMMAND_SUFFIX 把 'DPAPI_CALL_FAILED' 写进 stderr 后 exit 1）是确定性
+        // 拒绝，分类为 DPAPI_DECRYPT_FAILED，供调用方区分「等待重试」与「记录损坏」。
+        if (err?.killed === true) { failed(); return }
+        if (stderr === 'DPAPI_CALL_FAILED') { reject(new Error('DPAPI_DECRYPT_FAILED')); return }
         if (err || stderr.length > 0) { failed(); return }
         if (!canonicalBase64(stdout, allowEmptyOutput)) { reject(new Error('DPAPI_OUTPUT_INVALID')); return }
         resolve(stdout)

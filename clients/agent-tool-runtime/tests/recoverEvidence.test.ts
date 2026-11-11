@@ -19,7 +19,7 @@ const OLD_SESSION = 99
  * around a real temp home, exercising ProcessSupervision.recover evidence. */
 function fixture(t: TestContext) {
   const home = mkdtempSync(join(tmpdir(), 'recover-evidence-'))
-  const state = { boot: randomUUID(), session: 7, supervisor: true, protection: true, cimAvailable: true,
+  const state = { boot: randomUUID(), session: 7, supervisor: true, protection: true, cimAvailable: true, decryptFailure: undefined as undefined | 'timeout' | 'rejected',
     cimCount: 0, cimChecks: 0, commands: [] as string[][], jobs: new Map<string, number>() }
   t.mock.method(childProcess, 'execFile', ((file: string, args: string[], _options: unknown,
     callback: (error: Error | null, stdout: string, stderr: string) => void) => {
@@ -47,6 +47,10 @@ function fixture(t: TestContext) {
       } else if (script.includes(']::Protect(') || script.includes(']::Unprotect(')) {
         let input = ''; child.stdin.on('data', chunk => { input += chunk.toString() })
         child.stdin.on('finish', () => queueMicrotask(() => {
+          // 拦截只作用于 Unprotect：retire 落盘走 Protect，不得被故障开关误伤。
+          const unprotect = script.includes(']::Unprotect(')
+          if (unprotect && state.decryptFailure === 'timeout') { callback(Object.assign(new Error('fixture timeout'), { killed: true }), '', ''); return }
+          if (unprotect && state.decryptFailure === 'rejected') { callback(new Error('fixture exit 1'), '', 'DPAPI_CALL_FAILED'); return }
           if (!state.protection) callback(new Error('fixture DPAPI failure'), '', '')
           else if (script.includes(']::Protect(')) callback(null, seal(Buffer.from(input, 'base64').toString('utf8')), '')
           else {
@@ -140,10 +144,23 @@ test('an unreadable marker or a decrypted-but-garbage proof retires the old exec
   assert.equal(await f.recover(), true)
 })
 
-test('a failing proof decryption waits for the recheck instead of retiring the record', windows, async t => {
+test('a structurally invalid proof blob or a definitive DPAPI rejection retires the record', windows, async t => {
   const f = fixture(t); const { generation } = f.setup({ session: OLD_SESSION })
-  writeFileSync(join(f.home, 'host-running.json'), JSON.stringify({ instance_id: generation, schemaVersion: 2,
-    supervision: Buffer.from('externally damaged blob').toString('base64') }))
+  // 格式非法：非规范 base64 在解密入口即被拒，记录不会自愈，归档放行。
+  writeFileSync(join(f.home, 'host-running.json'), JSON.stringify({ instance_id: generation, schemaVersion: 2, supervision: 'bad!!' }))
+  assert.equal(await f.recover(), true)
+  assert.equal(fs.existsSync(join(f.home, 'identity-reconciliation.bin')), true)
+  // 格式合法但被 DPAPI 确定性拒绝：同样永远不会核验通过，归档放行。
+  f.state.decryptFailure = 'rejected'
+  writeFileSync(join(f.home, 'host-running.json'), JSON.stringify({ instance_id: generation, schemaVersion: 2, supervision: 'AAAA' }))
+  assert.equal(await f.recover(), true)
+  assert.equal(fs.existsSync(join(f.home, 'identity-reconciliation.bin')), true)
+})
+
+test('a timed-out proof decryption waits for the recheck instead of retiring the record', windows, async t => {
+  const f = fixture(t); const { generation } = f.setup({ session: OLD_SESSION })
+  f.state.decryptFailure = 'timeout'
+  writeFileSync(join(f.home, 'host-running.json'), JSON.stringify({ instance_id: generation, schemaVersion: 2, supervision: 'AAAA' }))
   assert.equal(await f.recover(), false)
   assert.equal(fs.existsSync(join(f.home, 'identity-reconciliation.bin')), false)
 })

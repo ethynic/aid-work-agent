@@ -68,7 +68,7 @@ test('DPAPI retains the existing CurrentUser/no-entropy ciphertext format', wind
 })
 
 test('DPAPI rejects a syntactically valid corrupt blob with a fixed redacted error', windows, async () => {
-  await assert.rejects(dpapiUnprotect('AAAA'), { message: 'DPAPI_CALL_FAILED' })
+  await assert.rejects(dpapiUnprotect('AAAA'), { message: 'DPAPI_DECRYPT_FAILED' })
 })
 
 test('DPAPI accepts legacy ASCII whitespace and folded ciphertext without accepting other characters', windows, async () => {
