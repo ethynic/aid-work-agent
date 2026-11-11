@@ -112,7 +112,28 @@
 
 **权威源 = 工具/技能级轻重清单**（2026-11-11 用户决策）：
 
-1. **存量一次性判定**：由 AI 在本方案开发首项执行全量扫描（`src/tools/` 各分类 + `src/skills/` 技能脚本），按"本地 CPU/内存密集计算（转换/渲染/大文件解析）为重、网络等待/小文本操作为轻"标准判定，产出初始清单写入 `configs/config.yaml`（`agent_runner.heavy_tools` / `heavy_skills`）。初始候选（预判，开发时全量核对）：excel_process、md_to_word、ppt_process 渲染、pdf_process 渲染、x_to_image、interior-render、视频生成、数据分析大文件路径（to_md / upload_data）。
+1. **存量一次性判定**：由 AI 在本方案开发首项执行全量扫描（`src/tools/` 各分类 + `src/skills/` 技能脚本），按"本地 CPU/内存密集计算（转换/渲染/大文件解析）为重、网络等待/小文本操作为轻"标准判定，产出初始清单写入 `configs/config.yaml`（`agent_runner.heavy_tools` / `heavy_skills`）。**2026-11-11 全量判定已完成**（heavy_skills 按技能基础名匹配，去版本后缀）：
+
+   | 项 | 判定依据 |
+   |---|---|
+   | excel_process | openpyxl 全量加载/模板填充，to_thread 本地计算 |
+   | word_process | python-docx 全量读写，含 md_to_word/word_to_md handler（无独立工具注册名） |
+   | ppt_process | Node 渲染器 HTML 转 PPT + python-pptx 生成 |
+   | pdf_process | poppler/PyMuPDF 全页解析渲染、合并拆分 |
+   | x_to_image | HTML/Markdown 本地渲染长图（真实浏览器渲染器） |
+   | image_render | AI 生图 + 参考图本地解析处理 |
+   | paddleocr_doc_parsing | PaddleOCR 全页文档识别，大文件处理 |
+   | analyze_data / upload_data_file | 数据分析：本地大数据表加载与计算 |
+   | interior-render | 依赖 image_render 图生图渲染 |
+   | paddleocr-doc-parsing | OCR 全页识别 |
+   | pptx-vi-gen | python-pptx PPT 渲染生成 |
+   | excel-to-template | openpyxl Excel 合并填充 |
+   | bid-doc-generator | Word/Excel/PDF 标书文档生成 |
+   | supplier-qualification-review | 营业执照 OCR 与资质文件解析 |
+   | spec-to-quotation-list | PyMuPDF 解析 + openpyxl 报价单生成 |
+   | quote-price-comparison | 多格式文档比对（openpyxl/docx/PyMuPDF/Pillow） |
+
+   其余工具分类（search/email/browser/llm/channel/network/phone/knowledge/file/scheduler 等）与技能（约 28 个）均为轻负载（网络等待/小文本/DB 查询）。待观察：travel-quote 标注 `long_running: true` 但主体为网络 API + Excel 导出，判轻，上线后按判型准确率数据复核。
 2. **增量强制声明**：新增工具/技能**必须**声明负载等级，作为流程门禁落地到 `.claude/rules/architecture.md`「添加工具」「添加技能」节（实施顺序第 5 步）。
 
 **判型链路**：

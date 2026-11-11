@@ -550,6 +550,30 @@ agent_runner:
     request_bytes: 2097152
     checkpoint_bytes: 8388608
     snapshot_bytes: 2097152
+  # 轻重负载分离判型清单（设计 §4.2，docs/system/runner-capacity-and-load-separation-design.md）。
+  # 标准：本地 CPU/内存密集计算（转换/渲染/大文件解析）为重，网络等待/小文本操作为轻。
+  # heavy_skills 按技能基础名（去版本后缀）匹配；heavy_tools 按工具注册 name 匹配。
+  # 2026-11-11 AI 全量扫描判定；上线后按判型准确率数据校准，新增重工具须在
+  # architecture.md「添加工具」同步声明负载等级（Phase 4 规范）。
+  heavy_tools:
+    - excel_process        # openpyxl 全量加载/模板填充，to_thread 本地计算
+    - word_process         # python-docx 全量读写，含 md_to_word/word_to_md 转换
+    - ppt_process          # Node 渲染器 HTML 转 PPT + python-pptx 生成
+    - pdf_process          # poppler/PyMuPDF 全页解析渲染、合并拆分
+    - x_to_image           # HTML/Markdown 本地渲染长图（真实浏览器渲染器）
+    - image_render         # AI 生图 + 参考图本地解析处理
+    - paddleocr_doc_parsing # PaddleOCR 全页文档识别，大文件处理
+    - analyze_data         # 数据分析：本地大数据表加载与计算
+    - upload_data_file     # 数据表注册：大文件全量解析
+  heavy_skills:
+    - interior-render                  # 依赖 image_render 图生图渲染
+    - paddleocr-doc-parsing            # OCR 全页识别
+    - pptx-vi-gen                      # python-pptx PPT 渲染生成
+    - excel-to-template                # openpyxl Excel 合并填充
+    - bid-doc-generator                # Word/Excel/PDF 标书文档生成
+    - supplier-qualification-review    # 营业执照 OCR 与资质文件解析
+    - spec-to-quotation-list           # PyMuPDF 解析 + openpyxl 报价单生成
+    - quote-price-comparison           # 多格式文档比对（openpyxl/docx/PyMuPDF/Pillow）
   # Server-only KF migration; text admission is opt-in, delivery remains separate.
   browser_owner:
     enabled: false
