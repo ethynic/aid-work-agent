@@ -76,6 +76,8 @@ export interface CleanPairRequest {
 export interface HeartbeatResponse {
   selected: boolean
   server_time?: string
+  /** 契约 2.20 支持协商：服务端实现 parallel_only 领取时返回 true；旧服务端缺省 → 视为不支持 */
+  parallel_claim?: boolean
 }
 
 export interface ClaimedInvocation {
@@ -326,7 +328,11 @@ export class ApiClient {
 
   async heartbeat(req: { runtime_version: string; capabilities: Record<string, unknown>; manifest_digest: string }, signal?: AbortSignal): Promise<HeartbeatResponse> {
     const res = (await this.post('/api/local-tools/runtime/heartbeat', req, { signal })) as Record<string, unknown>
-    return { selected: Boolean(res['selected']), server_time: res['server_time'] as string | undefined }
+    return {
+      selected: Boolean(res['selected']),
+      server_time: res['server_time'] as string | undefined,
+      parallel_claim: res['parallel_claim'] === true,
+    }
   }
 
   /** Existing heartbeat with optional metadata omitted: no claim or capability overwrite. */
@@ -336,9 +342,12 @@ export class ApiClient {
     return { selected: res.selected }
   }
 
-  /** 长轮询领取 invocation（服务端最长 wait 秒；超时返回 null） */
-  async claim(waitSeconds: number, signal?: AbortSignal): Promise<ClaimedInvocation | null> {
-    const res = (await this.post(`/api/local-tools/runtime/claim?wait=${waitSeconds}`, {}, {
+  /** 长轮询领取 invocation（服务端最长 wait 秒；超时返回 null）。
+   *  parallelOnly（契约 2.20）：true 时仅领取并行可领作业——仅在心跳读到服务端
+   *  parallel_claim 支持标记后才由调用方传入；旧服务端不传该参数（行为不变）。 */
+  async claim(waitSeconds: number, parallelOnly?: boolean, signal?: AbortSignal): Promise<ClaimedInvocation | null> {
+    const query = `wait=${waitSeconds}${parallelOnly ? '&parallel_only=true' : ''}`
+    const res = (await this.post(`/api/local-tools/runtime/claim?${query}`, {}, {
       timeoutMs: (waitSeconds + 15) * 1000,
       signal,
     })) as Record<string, unknown>

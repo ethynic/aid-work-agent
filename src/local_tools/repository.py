@@ -1029,6 +1029,8 @@ def claim_next(
     provider_keys: Optional[List[str]] = None,
     execution_lane: Optional[str] = "standard",
     expected_invocation_id: Optional[str] = None,
+    parallel_only: bool = False,
+    parallel_tools: Optional[Dict[str, List[str]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """领取下一条 queued invocation（事务 + FOR UPDATE SKIP LOCKED 防重复领取）。
 
@@ -1040,6 +1042,13 @@ def claim_next(
     SQL 层排除 session_task 道会话任务 invocation（老客户端不抢新道）；'session_task'
     需配合 expected_invocation_id 定向领取该行（不领取任意 invocation）。COALESCE 兼容
     迁移前 NULL 旧行（视作 standard）。
+
+    parallel_only（契约 2.20）：True 时仅选取「并行可领」的作业——provider_key 非 NULL
+    且 tool_name 属于该设备心跳上报 parallel_tools[provider_key]（jsonb 过滤，映射取自
+    设备 capabilities_json，api 层归一后传入）。为 True 但映射缺省/为空时匹配不到任何行。
+    缺省 False 时 SQL 与现状逐字节一致，既有调用方（session_tasks 定向领取等）零影响。
+    其余行为（advisory 锁、FOR UPDATE SKIP LOCKED、recovery 优先、created_at FIFO、
+    租约、事务）完全不变。
     """
     lane_filter = ""
     params: List[Any] = [device_id, tenant_id]
@@ -1053,6 +1062,14 @@ def claim_next(
     if provider_keys is not None:
         provider_filter = " AND (provider_key IS NULL OR provider_key = ANY(%s))"
         params.append(list(provider_keys))
+    parallel_filter = ""
+    if parallel_only:
+        parallel_filter = (
+            " AND provider_key IS NOT NULL"
+            " AND local_tool_invocations.tool_name = ANY (SELECT jsonb_array_elements_text("
+            "COALESCE(%s::jsonb -> local_tool_invocations.provider_key, '[]'::jsonb)))"
+        )
+        params.append(json.dumps(parallel_tools or {}))
     with get_db_connection() as conn:
         cursor = conn.cursor()
         lock_operation_admission(cursor, tenant_id)
@@ -1062,7 +1079,7 @@ def claim_next(
             f"""
             SELECT * FROM local_tool_invocations
             WHERE state = 'queued' AND device_id = %s AND tenant_id = %s
-              {lane_filter}{provider_filter}
+              {lane_filter}{provider_filter}{parallel_filter}
               AND (business_kind IS DISTINCT FROM 'agent_runner_recovery' OR business_ref->>'version' IS DISTINCT FROM '3'
                 OR (deadline_at>NOW() AND EXISTS (SELECT 1 FROM agent_runners r
                   WHERE r.runner_id=local_tool_invocations.business_ref->>'runner_id' AND r.tenant_id=local_tool_invocations.tenant_id

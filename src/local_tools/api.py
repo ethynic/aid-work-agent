@@ -13,7 +13,7 @@ import binascii
 import json
 import uuid as _uuid
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from loguru import logger
@@ -115,6 +115,26 @@ def _require_device(request: Request) -> Dict[str, Any]:
 
 def _iso(value: Any) -> Optional[str]:
     return value.isoformat() if hasattr(value, "isoformat") else (str(value) if value else None)
+
+
+def _device_parallel_tools(capabilities_json: Any) -> Dict[str, List[str]]:
+    """设备心跳上报的并行工具映射（契约 2.20）：{provider_key: [tool,...]}。
+
+    只做最小形态归一（防止异常上报形态让 jsonb 过滤在 SQL 端抛 500）：非 dict 或
+    值非字符串列表的键丢弃；结果为空时调用方匹配不到任何并行作业。
+    """
+    if not isinstance(capabilities_json, dict):
+        return {}
+    raw = capabilities_json.get("parallel_tools")
+    if not isinstance(raw, dict):
+        return {}
+    tools_map: Dict[str, List[str]] = {}
+    for key, tools in raw.items():
+        if isinstance(key, str) and isinstance(tools, list):
+            names = [tool for tool in tools if isinstance(tool, str)]
+            if names:
+                tools_map[key] = names
+    return tools_map
 
 
 def _valid_uuid(value: str) -> bool:
@@ -336,6 +356,9 @@ async def runtime_heartbeat(body: HeartbeatRequest, device: Dict = Depends(_requ
             "success": True,
             "selected": bool(row.get("selected")),
             "server_time": datetime.now().isoformat(),
+            # 契约 2.20 支持协商：服务端实现 parallel_only 领取即恒回 True；
+            # 旧客户端忽略该字段，新版 Runtime 读到后才发送 parallel_only
+            "parallel_claim": True,
         }
     except HTTPException:
         raise
@@ -345,18 +368,26 @@ async def runtime_heartbeat(body: HeartbeatRequest, device: Dict = Depends(_requ
 
 
 @router.post("/runtime/claim")
-async def runtime_claim(wait: int = 20, device: Dict = Depends(_require_device)):
+async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dict = Depends(_require_device)):
     """长轮询领取 invocation（claim_token 明文仅此一次返回）。
     超时返回 {"success": true, "invocation": null}（200，简化客户端）。
 
     provider 语义（契约补充）：响应 provider = invocation 行 provider_key；
     旧行 NULL 时回退设备 capabilities 解析的默认 provider。领取过滤：
     行 provider_key NULL 任意设备可领（旧行为），非 NULL 须设备能力包含该 provider。
+
+    parallel_only（契约 2.20）：True 时仅领取「并行可领」作业（provider_key 非 NULL 且
+    tool_name 属于该设备心跳上报 parallel_tools[provider_key]）。映射取自设备行
+    capabilities_json 并做最小形态归一（非 dict/值非 list 的键丢弃），异常形态退化为
+    空映射（匹配不到任何行，不抛 500）。缺省 False 时选取规则完全不变。
     """
     device_id = str(device["id"])
     tenant_id = device["tenant_id"]
     default_provider_key = catalog.get_provider_key_for_device(device.get("capabilities_json"))
     provider_keys = catalog.get_provider_keys_for_device(device.get("capabilities_json"))
+    parallel_tools: Optional[Dict[str, List[str]]] = None
+    if parallel_only:
+        parallel_tools = _device_parallel_tools(device.get("capabilities_json"))
     wait = max(0, min(wait, CLAIM_MAX_WAIT))
 
     try:
@@ -373,6 +404,8 @@ async def runtime_claim(wait: int = 20, device: Dict = Depends(_require_device))
                 sha256_hex(claim_token),
                 LEASE_SECONDS,
                 provider_keys,
+                parallel_only=parallel_only,
+                parallel_tools=parallel_tools,
             )
             if invocation:
                 # 校验 tool_name 在该 invocation Provider（行 provider_key 优先）批准的 tools 内

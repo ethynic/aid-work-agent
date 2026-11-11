@@ -56,6 +56,8 @@ export interface TestStackOptions {
   keepCloudOnStop?: boolean
   /** 心跳能力闭包（契约 2.20：模拟 runtimeHost 装配的 deviceCapabilities 输出；缺省走 deviceCapabilities() 默认） */
   capabilities?: () => Record<string, unknown>
+  /** 契约 2.20：本设备已上报的并行工具映射（PollLoop 串行/并行判定；缺省全部串行=现状） */
+  parallelTools?: Record<string, readonly string[]>
 }
 
 export interface TestStack {
@@ -114,6 +116,7 @@ export async function startTestStack(opts: TestStackOptions = {}): Promise<TestS
     onHeartbeatAttempt: opts.onHeartbeatAttempt,
     onEvent: opts.onEvent,
     capabilities: opts.capabilities,
+    parallelTools: opts.parallelTools,
   })
   const runPromise = loop.run()
   const stop = async () => {

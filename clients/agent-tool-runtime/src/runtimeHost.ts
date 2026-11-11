@@ -306,6 +306,9 @@ export class LegacyExecution implements HostAdapter {
       capabilities,
       canClaim: () => Object.values(this.resolveEntries(config)).some(entry => existsSync(entry)),
       onConnection: connection,
+      // 契约 2.20：并行接单——与能力上报同源（assembleStoreManifests 派生），PollLoop
+      // 据此判定领到的作业是否后台并行执行；无声明插件 parallel_tools 为空 → 行为与现状一致
+      parallelTools,
     })
 
     // ----- 端侧会话任务引擎（C2）：与 pollLoop 共存，共享 Provider 与桌面锁 -----

@@ -30,10 +30,18 @@ export interface FakeInvocation {
   result: Record<string, unknown> | null
   /** invocation 级 provider_key：undefined → claim 回包带 'boss-recruiting'（现状）；null → 回包省略该字段（旧服务端） */
   provider?: string | null
+  /** 契约 2.20：并行可领作业（服务端按设备上报声明判定后的镜像标记） */
+  parallel?: boolean
   /** v2 write-authorize 已签发的许可（同 invocation 重复申请 → 409，对齐服务端一次性语义） */
   permit?: { permit_id: string; permit_token: string; deadline_at: string; state?: 'issued' | 'expired' }
   /** 迟到回执接纳时许可已过期（R21 服务端 audit permit_expired_late 的镜像标记，断言用） */
   permit_expired_late?: boolean
+}
+
+/** claim 长轮询请求记录（契约 2.20：断言 parallel_only 参数跟随串行占用状态） */
+export interface FakeClaimRequest {
+  parallel_only: boolean
+  at: number
 }
 
 export interface CallLogEntry {
@@ -68,6 +76,10 @@ export class FakeCloud {
   writeAuthorizeDeadlineAt: string | null = null
   /** v2 operation-result 逐次拦截：'destroy'=断连、数字=返回该状态、undefined=正常处理 */
   operationResultInterceptor?: (body: Record<string, unknown>) => 'destroy' | number | undefined
+  /** 契约 2.20 支持协商：true → 心跳响应携带 parallel_claim=true 且 claim 接受 parallel_only 过滤 */
+  parallelClaimSupported = false
+  /** claim 长轮询请求记录（按到达顺序） */
+  readonly claimLog: FakeClaimRequest[] = []
 
   get baseUrl(): string {
     const addr = this.server!.address() as AddressInfo
@@ -105,7 +117,7 @@ export class FakeCloud {
     return { device_id: device.device_id, token: device.token }
   }
 
-  enqueueInvocation(toolName: string, args: Record<string, unknown> = {}, opts: { provider?: string | null } = {}): string {
+  enqueueInvocation(toolName: string, args: Record<string, unknown> = {}, opts: { provider?: string | null; parallel?: boolean } = {}): string {
     const inv: FakeInvocation = {
       invocation_id: randomUUID(),
       tool_name: toolName,
@@ -116,9 +128,15 @@ export class FakeCloud {
       cancel_requested: false,
       result: null,
       provider: opts.provider,
+      parallel: opts.parallel,
     }
     this.invocations.set(inv.invocation_id, inv)
     return inv.invocation_id
+  }
+
+  /** 最近一次 claim 长轮询请求（parallel_only 参数断言用；无请求返回 undefined） */
+  lastClaim(): FakeClaimRequest | undefined {
+    return this.claimLog[this.claimLog.length - 1]
   }
 
   cancelInvocation(id: string): void {
@@ -222,16 +240,24 @@ export class FakeCloud {
     if (path === '/api/local-tools/runtime/heartbeat' && req.method === 'POST') {
       device.heartbeats.push(Date.now())
       device.heartbeatBodies.push(await this.readBody(req))
-      this.sendJson(res, 200, { success: true, selected: true, server_time: new Date().toISOString() })
+      this.sendJson(res, 200, {
+        success: true,
+        selected: true,
+        server_time: new Date().toISOString(),
+        ...(this.parallelClaimSupported ? { parallel_claim: true } : {}),
+      })
       return
     }
 
     if (path === '/api/local-tools/runtime/claim' && req.method === 'POST') {
       const wait = Math.min(Number(url.searchParams.get('wait') ?? '20'), 30)
+      // 契约 2.20：parallel_only=true 仅选取并行可领作业（同一队列同一 FIFO 顺序内过滤）
+      const parallelOnly = url.searchParams.get('parallel_only') === 'true'
+      this.claimLog.push({ parallel_only: parallelOnly, at: Date.now() })
       const deadline = Date.now() + wait * 1000
       for (;;) {
         for (const inv of this.invocations.values()) {
-          if (inv.state === 'queued') {
+          if (inv.state === 'queued' && (!parallelOnly || inv.parallel === true)) {
             inv.state = 'claimed'
             inv.claim_token = randomUUID().replace(/-/g, '')
             const response: Record<string, unknown> = {
