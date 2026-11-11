@@ -4,8 +4,8 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 | --- | --- | --- | --- |
-| Phase 1 | 插件工具声明与 Runtime 通用接入 | 🔧 进行中 | 代码完成（commit 8e47bd54）：三 CLI buildManifest 输出 tool_declaration（仅企微两本地库读工具 parallel）、boss 注解审计修正 5 处对齐写集合；Runtime 宽松解析 +「需要升级插件」门禁 + 派生清单与 TRUSTED 取交集锚定保持现网受信面 + parallel_tools/tool_declarations_v1 心跳上报；未知插件零改动接入有端到端测试。五包 typecheck 0，定向+回归绿（基线失败 stash 对照一致）；CR 4 项记录不阻断 |
-| Phase 2 | 服务端按类型派发和 Runtime 并行执行 | 📋 待开发 | 设计待评审 |
+| Phase 1 | 插件工具声明与 Runtime 通用接入 | ✅ 完成（2026-11-12） | commit 8e47bd54：三 CLI buildManifest 输出 tool_declaration（仅企微两本地库读工具 parallel）、boss 注解审计修正 5 处对齐写集合；Runtime 宽松解析 +「需要升级插件」门禁 + 派生清单与 TRUSTED 取交集锚定保持现网受信面 + parallel_tools/tool_declarations_v1 心跳上报；未知插件零改动接入有端到端测试。五包 typecheck 0，定向+回归绿（基线失败 stash 对照一致）；CR 4 项记录不阻断 |
+| Phase 2 | 服务端按类型派发和 Runtime 并行执行 | ✅ 完成（2026-11-12） | commit 503774f2：claim 可选 parallel_only（jsonb 过滤，缺省 SQL 逐字节不变）+ 心跳 parallel_claim 协商 + 领取状态机（串行占用/后台并行/全部在途 drain）+ 并行跳桌面锁与 Provider 并发 lane。真实 PG 16 集成 8/8（scratch 最小 DDL）、服务端单测 743 过、runtime parallelClaim 7/7、五包 typecheck 0；CR 无 P0/P1，2 P2 记录（支持标记翻转窗口锁兜底、parallel 限只读已补契约）；fail-loud 提前返回判可接受（租约 unknown 兜底不变） |
 
 ## 实施
 
