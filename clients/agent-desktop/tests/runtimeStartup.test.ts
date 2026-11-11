@@ -62,8 +62,45 @@ test('unpaired or already running hosts never start or perform business actions'
   }
 })
 
-test('recovery and revoked states surface attention without starting', async () => {
-  for (const result of [{ state: 'reconciling' }, { state: 'blocked' }, { state: 'stopped', connection: 'revoked' }]) await assert.rejects(resumeRuntimeAtLogin(async () => ({ code: 0, result })), /NeedsAttention/)
+test('blocked and revoked states surface attention without starting', async () => {
+  for (const result of [{ state: 'blocked' }, { state: 'stopped', connection: 'revoked' }]) await assert.rejects(resumeRuntimeAtLogin(async () => ({ code: 0, result })), /NeedsAttention/)
+})
+
+test('reconciling waits for the host-side confirmation and then starts once', async () => {
+  const calls: any[] = []
+  const states = [
+    { state: 'reconciling', connection: 'offline', device: { device_id: 'device' } },
+    { state: 'reconciling', connection: 'offline', device: { device_id: 'device' } },
+    { state: 'stopped', connection: 'offline', device: { device_id: 'device' } },
+  ]
+  await resumeRuntimeAtLogin(async value => {
+    const request = value as { method: string; params?: { request_key?: string } }
+    calls.push(request)
+    return { code: 0, result: request.method === 'getState' ? states.shift() : { operation_id: 'op', status: 'succeeded', code: 0 } }
+  }, async () => {})
+  assert.deepEqual(calls.map(call => call.method), ['getState', 'getState', 'getState', 'start', 'operations.get'])
+  assert.ok(calls[3].params.request_key)
+})
+
+test('reconciling that turns blocked or revoked needs attention instead of starting', async () => {
+  for (const next of [{ state: 'blocked' }, { state: 'stopped', connection: 'revoked', device: { device_id: 'device' } }]) {
+    const calls: any[] = []
+    await assert.rejects(resumeRuntimeAtLogin(async value => {
+      const request = value as { method: string }
+      calls.push(request)
+      return { code: 0, result: request.method === 'getState' && calls.length === 1 ? { state: 'reconciling', device: { device_id: 'device' } } : next }
+    }, async () => {}), /NeedsAttention/)
+    assert.equal(calls.filter(call => call.method === 'start').length, 0)
+  }
+})
+
+test('reconciling that turns running returns without starting', async () => {
+  const calls: any[] = []
+  await resumeRuntimeAtLogin(async request => {
+    calls.push(request)
+    return { code: 0, result: calls.length === 1 ? { state: 'reconciling', device: { device_id: 'device' } } : { state: 'running', device: { device_id: 'device' } } }
+  }, async () => {})
+  assert.deepEqual(calls.map(call => call.method), ['getState', 'getState'])
 })
 
 test('conflict or uncertain start is not retried', async () => {

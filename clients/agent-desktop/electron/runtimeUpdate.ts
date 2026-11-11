@@ -3,8 +3,8 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 export const RUNTIME_UPDATE_EXIT_ARGUMENT = '--aidwork-exit-for-update'
-export function shouldResumeRuntime(input: { intent: boolean | undefined; recovered: boolean; login: boolean }): boolean {
-  return input.intent !== false && (input.intent === true || input.recovered || input.login)
+export function shouldResumeRuntime(input: { intent: boolean | undefined; recovered: boolean; login: boolean; reconciling?: boolean }): boolean {
+  return input.intent !== false && (input.intent === true || input.recovered || input.login || input.reconciling === true)
 }
 export function runtimeUpdateExit(input: { kind: string; packaged: boolean; platform: string; smoke: boolean; argv: readonly string[] }): boolean {
   return input.kind === 'runtime' && input.packaged && input.platform === 'win32' && !input.smoke && input.argv.some(arg => [RUNTIME_UPDATE_EXIT_ARGUMENT, '--aidwork-exit-for-uninstall'].includes(arg))

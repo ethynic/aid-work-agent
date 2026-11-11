@@ -35,13 +35,20 @@ export class RuntimeStartup {
   }
 }
 
-/** A single login intent uses the normal Host port; never retries uncertain starts. */
-export async function resumeRuntimeAtLogin(request: (value: unknown) => Promise<{ code: number; result: unknown }>, wait: () => Promise<void> = () => new Promise(resolve => setTimeout(resolve, 500))): Promise<void> {
-  const state = await request({ request_id: randomUUID(), method: 'getState', params: {} })
-  if (state.code !== 0) throw new Error('RuntimeLoginStateRejected')
-  if (!state.result || typeof state.result !== 'object') throw new Error('RuntimeLoginStateInvalid')
-  const snapshot = state.result as { state?: string; device?: { device_id?: string }; connection?: string }
-  if (['reconciling', 'blocked'].includes(snapshot.state ?? '') || snapshot.connection === 'revoked') throw new Error('RuntimeLoginNeedsAttention')
+/** Poll cadence while the Host confirms the last execution's exit. */
+const RECONCILE_POLL_MS = 2000
+
+/** A single login intent uses the normal Host port; never retries uncertain starts.
+ * A reconciling Host confirms the old execution on its own; Main only waits for that
+ * confirmation and then starts normally. Closing the app ends the wait (no restart). */
+export async function resumeRuntimeAtLogin(request: (value: unknown) => Promise<{ code: number; result: unknown }>,
+  wait: (ms?: number) => Promise<void> = (ms = 500) => new Promise(resolve => setTimeout(resolve, ms))): Promise<void> {
+  let snapshot = await readState(request)
+  while (snapshot.state === 'reconciling') {
+    await wait(RECONCILE_POLL_MS)
+    snapshot = await readState(request)
+  }
+  if (snapshot.state === 'blocked' || snapshot.connection === 'revoked') throw new Error('RuntimeLoginNeedsAttention')
   if (snapshot.state !== 'stopped' || !snapshot.device?.device_id || ['unpaired', 'revoked'].includes(snapshot.connection ?? '')) return
   const started = await request({ request_id: randomUUID(), method: 'start', params: { request_key: randomUUID() } })
   if (started.code !== 0) throw new Error('RuntimeLoginStartRejected')
@@ -56,4 +63,11 @@ export async function resumeRuntimeAtLogin(request: (value: unknown) => Promise<
     await wait()
   }
   throw new Error('RuntimeLoginStartUnconfirmed')
+}
+
+async function readState(request: (value: unknown) => Promise<{ code: number; result: unknown }>): Promise<{ state?: string; device?: { device_id?: string }; connection?: string }> {
+  const state = await request({ request_id: randomUUID(), method: 'getState', params: {} })
+  if (state.code !== 0) throw new Error('RuntimeLoginStateRejected')
+  if (!state.result || typeof state.result !== 'object') throw new Error('RuntimeLoginStateInvalid')
+  return state.result as { state?: string; device?: { device_id?: string }; connection?: string }
 }

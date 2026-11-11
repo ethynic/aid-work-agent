@@ -65,25 +65,46 @@ export class ProcessSupervision {
     return { command: this.executable, args: ['run', '--job-name', jobName, '--node', this.node, '--entry', entry,
       '--owner-pid', String(process.pid), '--owner-start-time', ownerStart, '--receipt', join(this.directory(), `${jobName}.receipt.json`)] }
   }
+  private async loadLedger(proof: { generation: string; home: string; bootId: string; sessionId: number }): Promise<Ledger> {
+    const ledger: Ledger = JSON.parse(await dpapiUnprotect(readFileSync(join(this.directory(), `${proof.generation}.bin`), 'utf8')))
+    if (ledger.schemaVersion !== 1 || ledger.home !== proof.home || ledger.generation !== proof.generation || ledger.bootId !== proof.bootId || ledger.sessionId !== proof.sessionId
+      || (ledger.business_started !== undefined && typeof ledger.business_started !== 'boolean')
+      || !Number.isSafeInteger(ledger.ownerPid) || !Array.isArray(ledger.jobs) || ledger.jobs.length > 10000
+      || ledger.jobs.some(job => typeof job !== 'string' || !job.startsWith('AidWorkRuntime.') || !uuid.test(job.slice(15)))) throw new ManagementError(11, 'ledger binding invalid')
+    return ledger
+  }
+
+  /** LastBootUpTime advances only on a real cold boot (hiberboot keeps it), so a
+   * boot later than the old ledger write independently proves one full restart
+   * happened after that execution started. */
+  private async rebootedSince(writtenMs: number): Promise<boolean> {
+    const shell = trustedSystemPowerShell()
+    return new Promise((accept, reject) => execFile(shell.executable, ['-NoProfile', '-NonInteractive', '-Command',
+      `$ErrorActionPreference='Stop'; [Console]::Out.Write((Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime).LastBootUpTime.ToUniversalTime().Ticks)`],
+    { cwd: shell.cwd, env: shell.env, windowsHide: true, timeout: 15000, maxBuffer: 4096 }, (error, out) => {
+      if (error || !/^\d{17,19}$/.test(out.trim())) reject(new Error('LOCAL_RECOVERY_BOOT_TIME_UNAVAILABLE'))
+      // .NET DateTime.Ticks counts from 0001-01-01, unlike FILETIME's 1601 epoch.
+      else accept(Number(out.trim()) > (writtenMs + 62_135_596_800_000) * 10_000)
+    }))
+  }
+
   async recover(marker: string): Promise<boolean> {
     if (!this.enabled) return false
     const parsed = JSON.parse(marker)
-    if (!uuid.test(parsed.instance_id)) throw new Error('marker invalid')
+    // Structural tampering is a typed rejection; transient helper outages stay plain
+    // errors so the Host's recheck loop can keep polling.
+    if (!uuid.test(parsed.instance_id)) throw new ManagementError(11, 'marker invalid')
     const digest = createHash('sha256').update(marker).digest('hex')
     const currentBoot = await this.bootId()
     let stopped = false
     if (parsed.schemaVersion === 2 && typeof parsed.supervision === 'string') {
       const proof = JSON.parse(await dpapiUnprotect(parsed.supervision))
-      if (proof.generation !== parsed.instance_id || proof.home !== resolve(this.home) || !uuid.test(proof.bootId) || typeof proof.rebootOnly !== 'boolean') throw new Error('marker binding invalid')
+      if (proof.generation !== parsed.instance_id || proof.home !== resolve(this.home) || !uuid.test(proof.bootId) || typeof proof.rebootOnly !== 'boolean') throw new ManagementError(11, 'marker binding invalid')
       if (proof.bootId !== currentBoot) stopped = true
       // Named Jobs are session-scoped. Absence in another login session cannot
       // prove the old session's tree stopped; a real reboot remains sufficient.
       else if (proof.rebootOnly === false && proof.sessionId === await this.sessionId()) {
-        const ledger: Ledger = JSON.parse(await dpapiUnprotect(readFileSync(join(this.directory(), `${proof.generation}.bin`), 'utf8')))
-        if (ledger.schemaVersion !== 1 || ledger.home !== proof.home || ledger.generation !== proof.generation || ledger.bootId !== proof.bootId || ledger.sessionId !== proof.sessionId
-          || (ledger.business_started !== undefined && typeof ledger.business_started !== 'boolean')
-          || !Number.isSafeInteger(ledger.ownerPid) || !Array.isArray(ledger.jobs) || ledger.jobs.length > 10000
-          || ledger.jobs.some(job => typeof job !== 'string' || !job.startsWith('AidWorkRuntime.') || !uuid.test(job.slice(15)))) throw new Error('ledger binding invalid')
+        const ledger = await this.loadLedger(proof)
         // Caller holds the home lease: old Host is gone. Kill only its protected,
         // registered jobs. The launcher never enables breakaway or Chrome retention.
         for (const job of ledger.jobs) {
@@ -91,6 +112,23 @@ export class ProcessSupervision {
           if (result.activeProcesses !== 0) throw new Error('job stop unconfirmed')
         }
         stopped = true
+      } else if (proof.sessionId !== await this.sessionId()) {
+        // Cross-session probes cannot see the session-local Job namespace, so the
+        // verdict relies on exit evidence, not on cross-session job absence.
+        // Temporary evidence outages stay unconfirmed (false) so the caller re-checks.
+        const ledgerPath = join(this.directory(), `${proof.generation}.bin`)
+        let ledger: Ledger | undefined
+        let ledgerWritten: number | undefined
+        try { ledgerWritten = lstatSync(ledgerPath).mtimeMs; ledger = await this.loadLedger(proof) } catch { ledger = undefined }
+        // Receipts only cover the managed Job tree, never external Python executors.
+        if (ledger && proof.rebootOnly === false
+          && (await Promise.all(ledger.jobs.map(job => this.stoppedReceipt(job, ledger!.ownerPid)))).every(receipt => receipt)) stopped = true
+        else {
+          let sessionAlive: boolean
+          try { sessionAlive = await this.sessionHasProcesses(proof.sessionId) } catch { return false }
+          if (!sessionAlive) stopped = true
+          else if (!ledger && ledgerWritten !== undefined && await this.rebootedSince(ledgerWritten).catch(() => false)) stopped = true
+        }
       }
     } else if (Object.keys(parsed).join(',') === 'instance_id') {
       const witnessFile = join(this.directory(), `legacy-${digest}.bin`)
@@ -99,7 +137,7 @@ export class ProcessSupervision {
         if (witness.home !== resolve(this.home) || witness.digest !== digest || !uuid.test(witness.bootId)) throw new Error('legacy witness invalid')
         stopped = witness.bootId !== currentBoot
       } else atomicWrite(witnessFile, await dpapiProtect(JSON.stringify({ home: resolve(this.home), digest, bootId: currentBoot })))
-    } else throw new Error('unsupported execution marker')
+    } else throw new ManagementError(11, 'unsupported execution marker')
     if (stopped) atomicWrite(join(this.home, 'identity-reconciliation.bin'), await dpapiProtect(JSON.stringify({ markerDigest: digest, instanceId: parsed.instance_id })))
     return stopped
   }

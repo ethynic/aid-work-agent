@@ -42,6 +42,8 @@ export interface HostAdapter {
 }
 interface StoredOperation { digest: string; operation: ManagementOperation; prepared_import?: PreparedPluginImport }
 interface Request { request_id: string; method: string; params: Record<string, string> }
+/** Interrupted-execution recheck cadence; the adapter decides when evidence suffices. */
+const RECOVERY_POLL_MS = 10_000
 
 function readOperations(file: string): Record<string, StoredOperation> {
   const operations: Record<string, StoredOperation> = Object.create(null)
@@ -130,6 +132,8 @@ export class RuntimeHost {
   private recoveryDevice?: DeviceSummary
   private retiredKeys = new Set<string>()
   private recoveryRegistered = false
+  private recoveryPoll?: ReturnType<typeof setTimeout>
+  private confirmingRecovery = false
 
   private constructor(private lease: InstanceLease, private adapter: HostAdapter,
     private secret: Buffer, private version: string, private supervisor: 'cli' | 'desktop' | 'runtime_app', private startupFailure?: ManagementError) {
@@ -198,9 +202,13 @@ export class RuntimeHost {
         host.state = 'blocked'
       }
       failureMessage = '旧执行的停止证明无法读取，原设备和任务记录已保留'
-      if (!host.startupFailure && existsSync(host.markerFile) && await options.adapter.recoverPreviousExecution?.(readFileSync(host.markerFile, 'utf8'))) {
-        renameSync(host.markerFile, join(lease.home, `host-interrupted-${randomUUID()}.json`))
-        host.state = 'stopped'; host.recovered = true
+      if (!host.startupFailure && existsSync(host.markerFile)) {
+        try {
+          if (await options.adapter.recoverPreviousExecution?.(readFileSync(host.markerFile, 'utf8'))) host.archiveInterruptedExecution()
+          // Cross-session evidence may only become available later (logout, receipts).
+          // runtime_app rechecks on its own; Main then resumes admission once stopped.
+          else if (options.supervisor === 'runtime_app' && typeof options.adapter.recoverPreviousExecution === 'function') host.beginRecoveryRecheck()
+        } catch { throw new ManagementError(11, failureMessage) }
       }
       await host.cleanupPluginImports()
       return host
@@ -230,10 +238,53 @@ export class RuntimeHost {
     const device = this.startupFailure ? this.recoveryDevice : this.adapter.device()
     return { instance_id: this.instanceId, revision: this.revision, supervisor: this.supervisor,
       state: this.state, connection: this.connection, ...(device ? { device } : {}),
-      ...(['reconciling', 'blocked'].includes(this.state) ? { blocked_reason: this.startupFailure?.message ?? '旧执行尚未确认停止，请停止 Runtime 后重试；原配对和任务结果保留，不会重复执行。' } : {}) }
+      ...(['reconciling', 'blocked'].includes(this.state) ? { blocked_reason: this.startupFailure?.message ?? (this.state === 'reconciling' && this.confirmingRecovery
+        ? '正在确认上次的执行是否已退出；确认后将自动恢复，原配对和任务结果保留，不会重复执行。'
+        : '旧执行尚未确认停止，请停止 Runtime 后重试；原配对和任务结果保留，不会重复执行。') } : {}) }
   }
   /** Local composition metadata; deliberately absent from strict H1 state schema. */
   get recoveredAfterInterruption(): boolean { return this.recovered }
+  /** Caller just obtained fresh stop proof; the old execution becomes history. */
+  private archiveInterruptedExecution(): void {
+    renameSync(this.markerFile, join(this.lease.home, `host-interrupted-${randomUUID()}.json`))
+    this.state = 'stopped'; this.recovered = true; this.changed()
+  }
+  /** runtime_app only: recheck old-execution stop evidence while reconciling, until
+   * it is confirmed (archive), structurally rejected (keep reason), or the marker
+   * disappears. Never starts execution; Main resumes admission after 'stopped'. */
+  private beginRecoveryRecheck(): void {
+    this.confirmingRecovery = true
+    this.changed()
+    this.scheduleRecoveryCheck()
+  }
+  private scheduleRecoveryCheck(): void {
+    this.recoveryPoll = setTimeout(() => { this.recoveryPoll = undefined; this.queueRecoveryCheck() }, RECOVERY_POLL_MS)
+    this.recoveryPoll.unref?.()
+  }
+  private endRecoveryRecheck(): void {
+    if (this.recoveryPoll) { clearTimeout(this.recoveryPoll); this.recoveryPoll = undefined }
+    if (this.confirmingRecovery) { this.confirmingRecovery = false; this.changed() }
+  }
+  private queueRecoveryCheck(): void {
+    const work = this.queue.then(async () => {
+      // Serialized with user stop/start; every condition is re-read inside the queue.
+      if (this.closed || this.closing || this.state !== 'reconciling' || this.ownsExecution || !existsSync(this.markerFile)) return this.endRecoveryRecheck()
+      let confirmed = false
+      try { confirmed = await this.adapter.recoverPreviousExecution?.(readFileSync(this.markerFile, 'utf8')) === true }
+      catch (error) {
+        // Typed rejections are structural (stop retrying); transient helper outages
+        // keep the cadence so a later round can still confirm the stop.
+        if (error instanceof ManagementError) return this.endRecoveryRecheck()
+        return this.scheduleRecoveryCheck()
+      }
+      if (!confirmed) return this.scheduleRecoveryCheck()
+      // An archive rename failure (e.g. a transient file lock) retries on the next
+      // round; stopping here would strand the confirming wording with a dead loop.
+      try { this.archiveInterruptedExecution() } catch { return this.scheduleRecoveryCheck() }
+      this.endRecoveryRecheck()
+    })
+    this.queue = work.catch(() => {})
+  }
   private persist(): void { atomicWrite(this.operationsFile, JSON.stringify(this.operations)) }
 
   private async cleanupPluginImports(): Promise<void> {
@@ -431,6 +482,7 @@ export class RuntimeHost {
   async dispose(): Promise<void> {
     if (this.closed) return
     this.closing = true
+    this.endRecoveryRecheck()
     await Promise.allSettled([...this.accepting.values()].map(item => item.promise))
     await this.queue
     // Closing this management process does not settle an older execution. A Host

@@ -565,7 +565,9 @@ if (!hasSingleInstanceLock) {
           const reply = await runtimeSupervisor!.request({ request_id: randomUUID(), method: 'getState', params: {} })
           if (reply.code !== 0) throw new Error('RuntimeStartupStateRejected')
           const recovered = runtimeSupervisor!.recoveredAfterInterruption
-          if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && (cleanInstallation?.fresh && cleanInstallation.migrated || shouldResumeRuntime({ intent, recovered, login: loginLaunch }))) await resumeRuntimeAtLogin(value => {
+          const startupState = reply.result as { state?: string } | null
+          const reconciling = startupState?.state === 'reconciling'
+          if (!maintenanceRequested && !runtimeConnectionRecovery?.busy && (cleanInstallation?.fresh && cleanInstallation.migrated || shouldResumeRuntime({ intent, recovered, login: loginLaunch, reconciling }))) await resumeRuntimeAtLogin(value => {
             if (maintenanceRequested || runtimeConnectionRecovery?.busy) throw new Error('RuntimeMaintenanceInProgress')
             return runtimeSupervisor!.request(value)
           })

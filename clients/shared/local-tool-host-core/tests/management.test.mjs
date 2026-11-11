@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import fs, { mkdtempSync, readFileSync, readdirSync, existsSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
@@ -32,6 +33,130 @@ async function open(t, a = adapter(), home = mkdtempSync(join(tmpdir(), 'aid-cor
 let sequence = 0
 function request(host, method, params = {}) { return host.request({ request_id: `r-${++sequence}`, method, params }) }
 function lifecycleDeferred() { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
+async function drain() { for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve)) }
+
+// Interrupted-execution confirmation (runtime_app): marker present, recover false at
+// open, and a Host-side recheck loop that archives once the adapter confirms stop.
+const OLD_MARKER = JSON.stringify({ instance_id: '8dd360ac-bcda-4d25-9280-b9659e91cd65' })
+const IDLE_REASON = '旧执行尚未确认停止，请停止 Runtime 后重试；原配对和任务结果保留，不会重复执行。'
+const CONFIRMING = '正在确认上次的执行是否已退出'
+async function recheckHost(t, supervisor, recover, home = mkdtempSync(join(tmpdir(), 'aid-core-recheck-'))) {
+  writeFileSync(join(home, 'host-running.json'), OLD_MARKER)
+  const a = adapter()
+  let checks = 0
+  a.recoverPreviousExecution = async value => { assert.equal(value, OLD_MARKER); const n = ++checks; return recover(n) }
+  const host = await RuntimeHost.open({ home, version: 'test', supervisor, adapter: a, readOnlyOnFailure: supervisor === 'runtime_app' })
+  t.after(async () => { t.mock.timers.reset(); await host.dispose().catch(() => {}); rmSync(home, { recursive: true, force: true }) })
+  return { host, a, home, count: () => checks }
+}
+
+test('runtime_app confirms interrupted execution later and archives it without starting', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let confirmed = false
+  const f = await recheckHost(t, 'runtime_app', () => confirmed)
+  assert.equal(f.host.getState().state, 'reconciling')
+  assert.ok(String(f.host.getState().blocked_reason).includes(CONFIRMING))
+  assert.equal(f.count(), 1, 'only the open-time check ran before the interval')
+  await t.mock.timers.tick(10_000); await drain()
+  assert.equal(f.count(), 2, 'the recheck loop polls after its interval')
+  assert.equal(f.host.getState().state, 'reconciling')
+  confirmed = true
+  const revision = f.host.getState().revision
+  await t.mock.timers.tick(10_000); await drain()
+  assert.equal(f.count(), 3)
+  assert.equal(f.host.getState().state, 'stopped')
+  assert.equal(f.host.recoveredAfterInterruption, true)
+  assert.ok(f.host.getState().revision > revision, 'archive is observed as a state change')
+  assert.equal(existsSync(join(f.home, 'host-running.json')), false)
+  assert.ok(readdirSync(f.home).some(name => name.startsWith('host-interrupted-')))
+  assert.equal(f.a.starts, 0, 'confirmation alone must never start execution')
+})
+
+test('a typed structural recovery failure stops rechecking and restores the plain reconciling reason', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = await recheckHost(t, 'runtime_app', n => { if (n === 1) return false; throw new ManagementError(11, 'marker binding invalid') })
+  assert.ok(String(f.host.getState().blocked_reason).includes(CONFIRMING))
+  await t.mock.timers.tick(10_000); await drain()
+  assert.equal(f.count(), 2)
+  assert.equal(f.host.getState().state, 'reconciling')
+  assert.equal(f.host.getState().blocked_reason, IDLE_REASON)
+  await t.mock.timers.tick(120_000); await drain()
+  assert.equal(f.count(), 2, 'no retries after a structural failure')
+})
+
+test('a transient recovery failure keeps the confirmation loop running', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let outages = 0
+  const f = await recheckHost(t, 'runtime_app', n => { if (n > 1) { outages++; throw new Error('process supervision unavailable') } return false })
+  await t.mock.timers.tick(10_000); await drain()
+  assert.equal(f.count(), 2)
+  assert.equal(outages, 1)
+  assert.ok(String(f.host.getState().blocked_reason).includes(CONFIRMING), 'a transient outage stays in the confirming wording')
+  await t.mock.timers.tick(10_000); await drain()
+  assert.equal(f.count(), 3, 'the loop keeps its cadence after a transient failure')
+  assert.equal(f.host.getState().state, 'reconciling')
+})
+
+test('only runtime_app supervisors keep a recheck loop; others keep the single open check', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = await recheckHost(t, 'cli', () => false)
+  assert.equal(f.host.getState().blocked_reason, IDLE_REASON)
+  await t.mock.timers.tick(120_000); await drain()
+  assert.equal(f.count(), 1, 'open-time check only, no loop')
+})
+
+test('user stop during confirmation serializes with the loop and cannot bypass old evidence', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let confirmed = false
+  const f = await recheckHost(t, 'runtime_app', () => confirmed)
+  const stop = await request(f.host, 'stop', { request_key: 'stop-while-confirming' })
+  await drain()
+  let op = stop.result
+  for (let i = 0; i < 50 && op.status === 'running'; i++) {
+    await drain()
+    op = (await request(f.host, 'operations.get', { operation_id: op.operation_id })).result
+  }
+  assert.equal(op.status, 'reconciling')
+  assert.equal(existsSync(join(f.home, 'host-running.json')), true, 'unconfirmed stop keeps the marker')
+  assert.ok(String(f.host.getState().blocked_reason).includes(CONFIRMING), 'the loop survives a refused user stop')
+  await t.mock.timers.tick(10_000); await drain()
+  assert.equal(f.count(), 3, 'rechecks continue after the refused stop')
+  confirmed = true
+  await t.mock.timers.tick(10_000); await drain()
+  assert.equal(f.host.getState().state, 'stopped', 'a later confirmation still archives')
+})
+
+test('closing the host ends confirmation rechecks', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = await recheckHost(t, 'runtime_app', () => false)
+  await t.mock.timers.tick(10_000); await drain()
+  assert.equal(f.count(), 2)
+  await f.host.dispose()
+  await t.mock.timers.tick(120_000); await drain()
+  assert.equal(f.count(), 2, 'disposed host never rechecks again')
+})
+
+test('a transient archive rename failure retries and archives on a later round', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = await recheckHost(t, 'runtime_app', n => n > 1)
+  const originalRename = fs.renameSync
+  let failures = 0
+  t.mock.method(fs, 'renameSync', (...args) => {
+    if (++failures === 1) throw new Error('fixture rename lock')
+    return Reflect.apply(originalRename, fs, args)
+  })
+  syncBuiltinESMExports()
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports() })
+  await t.mock.timers.tick(10_000); await drain()
+  assert.equal(f.count(), 2)
+  assert.equal(existsSync(join(f.home, 'host-running.json')), true, 'a failed rename keeps the marker')
+  assert.equal(f.host.getState().state, 'reconciling')
+  await t.mock.timers.tick(10_000); await drain()
+  assert.equal(failures, 2, 'the archive attempt is retried on the next round')
+  assert.equal(f.host.getState().state, 'stopped')
+  assert.equal(existsSync(join(f.home, 'host-running.json')), false)
+  assert.equal(f.a.starts, 0)
+})
 async function done(host, response) {
   assert.equal(response.code, 0)
   let op = response.result
