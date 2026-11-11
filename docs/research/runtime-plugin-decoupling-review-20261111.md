@@ -32,4 +32,6 @@
 
 - 现状。契约规定服务端固定作业编号，插件记录接单并处理重复派发，Runtime 保存并补传原回执，服务端按结果编号去重。计划第 16.10 节第 2 项把“接单和结果去重”合写在 Runtime 实施项中，职责表述有歧义。[共同契约](../system/runner-desktop-runtime-integration-contract.md#123-作业派发接单与关联n03n09n12) · [实施计划](../plans/plan-runtime-plugin-host.md#1610-runtime-与插件-100-实施计划待开发)
 - 影响。若据此让 Runtime 再持有一套业务完成记录，遇到断网、崩溃或重复请求时，插件进度、Runtime 推断与服务端结果可能不一致。
-- 待确认。插件负责业务接单记录、进度和结果。Runtime 校验通用消息、管理进程、保存与补传原回执，按实际进程与消息事实生成通用异常和问题编号。服务端固定作业身份、按结果标识去重、归档并向 Agent 展示。用户要求继续时由插件判断保存的业务进度是否可续。
+- 已核实 Agent 调用编号。模型接入层读取 `tool_calls[].id`。有效工具调用进入 Agent 时，`normalize_calls` 沿用模型编号或补生成编号。启用新版调用标识的 Runner 按执行 ID、模型调用 ID 与该轮工具序号生成可重复得到的 `tool_call_id`，并在派发前持久保存。该编号用于关联原工具调用及结果。[工具调用归一化](../../src/core/agent_engine/engine.py)
+- 已核实 Runtime 调用编号。Runner 按 `runner_id`、执行 ID、`tool_call_id` 及调用阶段关联或复用已持久的 `invocation_id`。后台直调绕过 Runner，经统一入口入队，由数据库生成 UUID 主键。已有幂等键的同一后台请求重投时复用原记录。Runtime 领取的调用编号是 `invocation_id`。[Runner 调用绑定](../../src/services/agent_runner/local_invocations.py) · [后台直调实例](../../src/desktop_automation/executor.py) · [数据库编号](../../deploy/init-postgres.sql) · [设备领取接口](../../src/local_tools/api.py)
+- 待确认。复用 `invocation_id` 作为发给 Runtime 的作业编号。Agent 调用保留服务端与 `tool_call_id` 的关联，后台直调使用自身受理的 `invocation_id`。同一次派发重送沿原编号。插件负责接单记录、进度及业务结果。Runtime 校验通用消息、管理进程、保存与补传原回执，按实际执行事实生成通用异常及问题编号。服务端按结果标识去重并归档。用户要求继续时由插件判断保存的业务进度是否可续。
