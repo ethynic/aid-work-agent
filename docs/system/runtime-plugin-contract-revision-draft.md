@@ -2,7 +2,7 @@
 
 2026-11-11，N01～N13 已全部确认，已并入共同契约 3.0。
 
-本文保存逐条确认时的决议及示例。[共同契约第 12 节](runner-desktop-runtime-integration-contract.md#12-契约-30-与首轮实施)是整合后的规范正文，包含适用范围、旧条款处置和新增约定。实施与发行状态见[统一计划](../plans/plan-runtime-plugin-host.md#1610-runtime-与插件-100-实施计划待开发)。
+本文保存逐条确认时的决议及示例。定稿正文、旧条款处置和当前实施进度分别见[1.0.0 共同设计](runtime-plugin-1.0.0-design.md)、[条款变更对照](runner-desktop-runtime-integration-contract.md#12-契约-30-与首轮实施)及[独立实施计划](../plans/plan-runtime-plugin-1.0.0.md)。
 
 ## 确认登记
 
@@ -165,8 +165,8 @@ Runtime 重启后按原身份自动恢复上线和通信，补传已保存的原
 
 ## 原契约整合登记
 
-[共同契约第 12.6 节](runner-desktop-runtime-integration-contract.md#126-原条款处置)逐项列出 C01～C12 和具体旧机制的保留、细化、替代或废弃。[第 12.7 节](runner-desktop-runtime-integration-contract.md#127-新增约定与实施状态)列出本次新增约定。首轮切换范围以共同契约第 12.1 节为准。
+[共同契约第 12.6 节](runner-desktop-runtime-integration-contract.md#126-原条款处置)逐项列出 C01～C12 和具体旧机制的保留、细化、替代或废弃。[第 12.7 节](runner-desktop-runtime-integration-contract.md#127-新增约定与实施状态)列出本次新增约定。首轮切换范围见[1.0.0 共同设计](runtime-plugin-1.0.0-design.md)。
 
 ## 文档与实施安排
 
-本轮讨论与整合已登记在[统一计划第 16.11 节](../plans/plan-runtime-plugin-host.md#1611-新版插件契约逐条确认与整合)。[第 16.10 节](../plans/plan-runtime-plugin-host.md#1610-runtime-与插件-100-实施计划待开发)维护 Runtime、BOSS CLI 与 WeCom CLI 1.0.0 的实施和验收安排。
+本轮讨论与整合已登记在[统一计划第 16.11 节](../plans/plan-runtime-plugin-host.md#1611-新版插件契约逐条确认与整合)。[独立实施计划](../plans/plan-runtime-plugin-1.0.0.md)维护 Runtime、BOSS CLI 与 WeCom CLI 1.0.0 的实施和验收安排。

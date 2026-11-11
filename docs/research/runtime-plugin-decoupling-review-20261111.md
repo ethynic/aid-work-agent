@@ -1,6 +1,6 @@
 # Runtime 1.0.0 与业务插件解耦评审
 
-2026-11-11，基于 `codex/runtime-recovery` 的 `2a582ddd` 做设计和源码静态评审。评审覆盖第一方受信插件，以及安装、能力发布、派发、执行控制和回执进入 Agent 的链路。第 1～5 项全部确认，决议已并入共同契约和实施计划。[共同契约 3.0](../system/runner-desktop-runtime-integration-contract.md#12-契约-30-与首轮实施) · [实施计划](../plans/plan-runtime-plugin-host.md#1610-runtime-与插件-100-实施计划待开发)
+2026-11-11，基于 `codex/runtime-recovery` 的 `2a582ddd` 做设计和源码静态评审。评审覆盖第一方受信插件，以及安装、能力发布、派发、执行控制和回执进入 Agent 的链路。第 1～5 项全部确认，决议已并入共同契约和实施计划。[共同契约 3.0](../system/runtime-plugin-1.0.0-design.md) · [实施计划](../plans/plan-runtime-plugin-1.0.0.md)
 
 契约已明确业务归插件，Runtime 负责插件生命周期、通用调度、进程监督、状态和结果传输，Agent 按开放能力调用。已有授权、版本和发布信任是通用承载职责。当前代码仍有插件专用路径，计划需要落实各路径在首轮新版中的归属及验收方式。
 
@@ -14,7 +14,7 @@
 
 - 现状。Runtime 启动、能力上报和领任务前直接判断 `wecom`、`boss-recruiting`、恢复探测工具以及少数企微数据库工具。服务端的设备准入也按旧桌面资源范围和工具名筛选。旧调用缺省插件身份时还有 BOSS 回退。[Runtime 启动](../../clients/agent-tool-runtime/src/runtimeHost.ts) · [旧调用执行](../../clients/shared/local-tool-host-core/src/legacy/invocationRunner.ts) · [服务端准入](../../src/local_tools/catalog.py)
 - 影响。即使入口加了企微适配，若新版接单仍经过这些分支，老插件特例会继续决定新版作业能否领取、排队和停止。
-- 已确认。用户决定将 WeCom CLI 纳入首轮，与 Runtime 和 BOSS CLI 一起重构至 1.0.0。企微直接上报自身的工具及并行标记，按统一协议执行和回传。上线后统一升级，原拟议的企微兼容入口和旧作业协议随切换退役。决议已并入共同契约与实施计划。[WeCom CLI 设计](../design/wecom/wecom-cli-design.md#100-重构范围2026-11-11待开发)
+- 已确认。用户决定将 WeCom CLI 纳入首轮，与 Runtime 和 BOSS CLI 一起重构至 1.0.0。企微直接上报自身的工具及并行标记，按统一协议执行和回传。上线后统一升级，原拟议的企微兼容入口和旧作业协议随切换退役。决议已并入共同契约与实施计划。[WeCom CLI 设计](../design/wecom/wecom-cli-1.0.0-design.md)
 
 ## 3. BOSS 的云端业务与调用授权需要明确归属
 
@@ -30,7 +30,7 @@
 
 ## 5. 接单、结果和诊断的写入职责需要在计划中对齐
 
-- 评审发现。契约规定服务端固定作业编号，插件记录接单并处理重复派发，Runtime 保存并补传原回执，服务端按结果编号去重。原计划曾把“接单和结果去重”合写在 Runtime 实施项中，职责表述有歧义。[共同契约](../system/runner-desktop-runtime-integration-contract.md#123-作业派发接单与关联n03n09n12) · [实施计划](../plans/plan-runtime-plugin-host.md#1610-runtime-与插件-100-实施计划待开发)
+- 评审发现。契约规定服务端固定作业编号，插件记录接单并处理重复派发，Runtime 保存并补传原回执，服务端按结果编号去重。原计划曾把“接单和结果去重”合写在 Runtime 实施项中，职责表述有歧义。[共同契约](../system/runtime-plugin-1.0.0-design.md#3-作业编号与调度) · [实施计划](../plans/plan-runtime-plugin-1.0.0.md)
 - 影响。若据此让 Runtime 再持有一套业务完成记录，遇到断网、崩溃或重复请求时，插件进度、Runtime 推断与服务端结果可能不一致。
 - 已核实 Agent 调用编号。模型接入层读取 `tool_calls[].id`。有效工具调用进入 Agent 时，`normalize_calls` 沿用模型编号或补生成编号。启用新版调用标识的 Runner 按执行 ID、模型调用 ID 与该轮工具序号生成可重复得到的 `tool_call_id`，并在派发前持久保存。该编号用于关联原工具调用及结果。[工具调用归一化](../../src/core/agent_engine/engine.py)
 - 已核实 Runtime 调用编号。Runner 按 `runner_id`、执行 ID、`tool_call_id` 及调用阶段关联或复用已持久的 `invocation_id`。后台直调绕过 Runner，经统一入口入队，由数据库生成 UUID 主键。已有幂等键的同一后台请求重投时复用原记录。Runtime 领取的调用编号是 `invocation_id`。[Runner 调用绑定](../../src/services/agent_runner/local_invocations.py) · [后台直调实例](../../src/desktop_automation/executor.py) · [数据库编号](../../deploy/init-postgres.sql) · [设备领取接口](../../src/local_tools/api.py)
