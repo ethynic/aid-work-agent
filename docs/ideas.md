@@ -49,7 +49,7 @@
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 20261110-2030 | 采购比价助手（quote-price-comparison 技能移植 + 薄壳子智能体） | 🔧 部分完成（开发+单测完成，待提交部署） | 移植 workbuddy quote-price-comparison 技能 v1.0.0（任意格式报价单抽取→知识库/网络价补充→口径归一化→红绿判定→源单副本标色→横向对比 Excel）并新建采购比价助手薄壳子智能体（含 quote-price-comparison + supplier-qualification-review 两技能）。SKILL.md/sourcing.md 适配我方工具（knowledge_base_search/web_search/cp），脚本原样合并零改动。5 单测绿：xlsx 冒烟 + 上游样例 5 来源全链路回归（判定/标色 11/11 与上游期望逐项一致），待真机对话验收。 | — | — |
-| 20261111-0945 | 项目进度管家（project-progress-tracker 技能移植 + 薄壳子智能体） | 🔧 部分完成（开发+单测完成，待提交部署） | 移植 workbuddy 同名技能 v1.2.0（多源归集→三态研判→离线单文件看板→增量闭环）+ 薄壳子智能体；9 单测绿，待真机验收。 | — | — |
+| 20261111-0945 | 项目进度管家（project-progress-tracker 技能移植 + 薄壳子智能体） | 🔧 部分完成（已合并 master 1608eda6，待部署真机验收） | 移植 workbuddy 同名技能 v1.2.0（多源归集→三态研判→离线单文件看板→增量闭环）+ 薄壳子智能体；9 单测绿，待真机验收。 | — | — |
 | 20261110-1440 | AI标书助手（bid-doc-generator 技能移植 + 薄壳子智能体） | 🔧 部分完成（待提交部署与真机对话验收） | 移植 workbuddy bid-doc-generator 技能（v1.0.1，招标要求提取→版式→符合性矩阵→脚本报价→多册投标 DOCX）+ 薄壳子智能体；11-10 兰香园测试包三层实测全对齐上游验收值，回灌 3 项质量改进，测试基准入库 tests/fixtures/bid_doc_lxy/。 | [测试基准与实测记录](tests/fixtures/bid_doc_lxy/README.md) | — |
 | 20261110-1100 | 供应商资质审查（技能移植 + 薄壳子智能体） | 🔧 部分完成（开发+单测完成，待提交部署） | 移植 workbuddy supplier-qualification-review 技能 v1.1.0（四阶段：视觉抽取→真实性审查→外部核查→两份 Word 交付）并新建同名薄壳子智能体；USCC 校验脚本修上游 REG_DEPT「9=金融」错标为「市场监管（工商）」。8 单测绿，待部署真机对话验收。 | — | — |
 | 20261110-1003 | BOSS 简历读取链路提速（一期：等待参数与校验精简） | 🔧 部分完成（0.3.30 试用包已交付，待真机验收） | 单份简历端到端 46.6s→目标 37-39s：等待参数区间随机化（jitter）、轮询间隔收紧、首段后快照校验精简；快照算法升级与评分并行化留二期。 | [设计](system/boss-resume-read-speedup-design.md) | [计划](plans/plan-boss-resume-read-speedup.md) |
