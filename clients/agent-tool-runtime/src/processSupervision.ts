@@ -79,19 +79,22 @@ export class ProcessSupervision {
   /** 恢复判据（产品原则）：不用 Windows 重启状态证明本软件的状态；不能核实的旧
    * 记录不得阻碍恢复接单；能确认原会话已无进程即可恢复。只用进程退出证据——
    * 受管 Job 终止、退出回执或原登录会话已无进程。返回值：true = 旧执行已退出
-   * （或旧记录读不出且不会自愈，归档放行）；false = 可能仍在运行或系统查询暂时
-   * 失败，等待复查。记录类异常不再抛出；只有系统查询类瞬态错误向上传播。 */
+   * （或旧记录读不出且不会自愈，归档放行）；false = 可能仍在运行、系统查询暂时
+   * 失败或凭据解密瞬时失败，等待复查。记录类异常不再抛出。 */
   async recover(marker: string): Promise<boolean> {
     if (!this.enabled) return false
     const digest = createHash('sha256').update(marker).digest('hex')
-    // 标记与监督凭据都是本机原子写入：读不出即外部损坏且不会自愈，归档为历史并
-    // 放行（identity-reconciliation.bin 照常写入），不用它阻碍设备恢复接单。
+    // 标记与监督凭据是本机原子写入：标记本体读不出、或凭据能解密但明文损坏，即
+    // 外部损坏且不会自愈，归档为历史并放行（identity-reconciliation.bin 照常写入），
+    // 不用它阻碍设备恢复接单；凭据解密调用本身失败（PowerShell 瞬态）则等待复查。
     let parsed: { instance_id?: unknown; schemaVersion?: unknown; supervision?: unknown }
     try { parsed = JSON.parse(marker) } catch { return this.retireExecution(digest) }
     if (!parsed || typeof parsed !== 'object' || typeof parsed.instance_id !== 'string' || !uuid.test(parsed.instance_id)
       || parsed.schemaVersion !== 2 || typeof parsed.supervision !== 'string') return this.retireExecution(digest)
+    let proofText: string
+    try { proofText = await dpapiUnprotect(parsed.supervision) } catch { return false }
     let proof: Pick<Ledger, 'generation' | 'home' | 'bootId' | 'sessionId'> & { rebootOnly: boolean }
-    try { proof = JSON.parse(await dpapiUnprotect(parsed.supervision)) } catch { return this.retireExecution(digest) }
+    try { proof = JSON.parse(proofText) } catch { return this.retireExecution(digest) }
     if (!proof || proof.generation !== parsed.instance_id || proof.home !== resolve(this.home) || typeof proof.bootId !== 'string'
       || !uuid.test(proof.bootId) || !Number.isSafeInteger(proof.sessionId) || proof.sessionId < 0
       || typeof proof.rebootOnly !== 'boolean') return this.retireExecution(digest)

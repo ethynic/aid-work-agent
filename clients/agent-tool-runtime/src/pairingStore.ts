@@ -25,7 +25,7 @@ function exactKeys(value: Record<string, unknown>, allowed: string[]): boolean {
   return Object.keys(value).every(key => allowed.includes(key))
 }
 function validConfig(value: unknown): value is RuntimeConfig {
-  if (!isRecord(value) || !exactKeys(value, ['server', 'device_id', 'name', 'bossCliEntry', 'providers', 'sessionTasks'])
+  if (!isRecord(value) || !exactKeys(value, ['server', 'device_id', 'name', 'bossCliEntry', 'providers', 'sessionTasks', 'skills'])
     || typeof value.server !== 'string' || !value.server || typeof value.device_id !== 'string' || !value.device_id) return false
   try {
     const url = new URL(value.server)
@@ -36,6 +36,10 @@ function validConfig(value: unknown): value is RuntimeConfig {
   if (value.providers !== undefined && (!isRecord(value.providers) || Object.values(value.providers).some(provider =>
     !isRecord(provider) || !exactKeys(provider, ['entry', 'v2Send']) || typeof provider.entry !== 'string'
     || (provider.v2Send !== undefined && typeof provider.v2Send !== 'boolean')))) return false
+  // 历史 pending 事务兼容：skills 配置已从产品移除，仅按既有原子结构读取存量事务，
+  // 落盘前由 recoverPairing 剥离；子结构非法仍拒绝。
+  if (value.skills !== undefined && (!isRecord(value.skills) || !exactKeys(value.skills, ['dir', 'python'])
+    || Object.values(value.skills).some(item => typeof item !== 'string'))) return false
   return true
 }
 
@@ -59,8 +63,10 @@ export async function recoverPairing(unprotect: (value: string) => Promise<strin
     try {
       if (!(await unprotect(transaction.encrypted_token))) throw new Error('empty credential')
     } catch { throw new Error('配对事务凭证无法解密，保留旧身份并等待本机核对') }
+    // 存量事务允许携带历史 skills 键（仅用于通过校验）；落盘的新 config 剥离该键。
+    const { skills: _legacySkills, ...applied } = transaction.config as RuntimeConfig & { skills?: unknown }
     atomicWrite(credentialsPath(), transaction.encrypted_token)
-    atomicWrite(configPath(), JSON.stringify(transaction.config, null, 2))
+    atomicWrite(configPath(), JSON.stringify(applied, null, 2))
   }
   rmSync(pending)
 }

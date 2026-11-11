@@ -210,7 +210,10 @@ export class LegacyExecution implements HostAdapter {
       const failure = connectionFailure(error, true)
       throw new ManagementError(failure.category === 'PAIRING_CODE_INVALID' ? 1 : 11, [failure.summary, ...failure.steps].join('。'))
     }
-    const next: RuntimeConfig = { ...config, server: params.server, device_id: result.device_id, name: params.device_name }
+    // 历史 config 可能仍携带已移除的 skills 键：解构丢弃，新配对事务从源头干净
+    // （白名单外的键会让存量 pending 在 recoverPairing 被拒，卡住下一次启动）。
+    const { skills: _legacySkills, ...carried } = { ...config } as RuntimeConfig & { skills?: unknown }
+    const next: RuntimeConfig = { ...carried, server: params.server, device_id: result.device_id, name: params.device_name }
     const pending = join(runtimeHomeDir(), 'pairing.pending.json')
     atomicWrite(pending, JSON.stringify({ config: next, encrypted_token: await dpapiProtect(result.device_token) }))
     await recoverPairing()

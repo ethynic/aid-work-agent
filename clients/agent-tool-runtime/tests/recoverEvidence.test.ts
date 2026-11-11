@@ -129,14 +129,23 @@ test('same-session recovery terminates registered jobs and confirms the stop', w
   assert.deepEqual(f.state.commands.filter(args => args[0] === 'terminate').map(args => args[2]), [job])
 })
 
-test('an unreadable marker or proof retires the old execution and releases admission', windows, async t => {
+test('an unreadable marker or a decrypted-but-garbage proof retires the old execution', windows, async t => {
   const f = fixture(t); const { generation } = f.setup({ session: OLD_SESSION })
   writeFileSync(join(f.home, 'host-running.json'), '{oops')
   assert.equal(await f.recover(), true)
   assert.equal(fs.existsSync(join(f.home, 'identity-reconciliation.bin')), true)
+  // 解密成功但明文不是 JSON：记录本体损坏（原子写入被外部改坏），归档放行。
+  writeFileSync(join(f.home, 'host-running.json'), JSON.stringify({ instance_id: generation, schemaVersion: 2,
+    supervision: seal('not even json') }))
+  assert.equal(await f.recover(), true)
+})
+
+test('a failing proof decryption waits for the recheck instead of retiring the record', windows, async t => {
+  const f = fixture(t); const { generation } = f.setup({ session: OLD_SESSION })
   writeFileSync(join(f.home, 'host-running.json'), JSON.stringify({ instance_id: generation, schemaVersion: 2,
     supervision: Buffer.from('externally damaged blob').toString('base64') }))
-  assert.equal(await f.recover(), true)
+  assert.equal(await f.recover(), false)
+  assert.equal(fs.existsSync(join(f.home, 'identity-reconciliation.bin')), false)
 })
 
 test('a corrupt ledger with the old session gone still recovers on session evidence', windows, async t => {

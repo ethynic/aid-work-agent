@@ -8,6 +8,7 @@
 | --- | --- | --- | --- |
 | 1 | 异常退出后自动恢复接单 | ✅ 完成（2026-11-11） | 代码 commit 1970f062（分支 runtime-optimization）：recover 跨会话退出证据链 + Host 10s 复查 + Main 等待确认后自动启动。见[设计](../system/runtime-abnormal-exit-recovery-design.md) |
 | 2 | 评审修正：恢复判据与取消自动启动 | ✅ 完成（2026-11-11） | 恢复依据只用进程退出证据（删除 Windows 重启放行）；旧标记/凭据读不出归档放行；首次查询临时失败进入 10s 复查；用户停止/退出取消自动启动。同轮删除无人使用的 skills.python/skill-runner 设备能力（登记一句话，不另立文档）。recoverEvidence 10 例、management 29 例、desktop 108 例全绿，三包 typecheck 0；host-core 2 例 WeCom 环境基线失败与本次无关 |
+| 3 | 复审修复：配对回归与解密误归档 | ✅ 完成（2026-11-11） | 旧 config 残留 skills 不再卡死重新配对（pair 剔除、存量 pending 容忍、落盘剥离）；proof 解密瞬时失败改走 10s 复查不再误归档（真损坏仍归档放行）；服务端 skill_runner_proxy 失效文案已更新（在 master 工作区，随服务端发布流程提交）。定向 27/27 绿、服务端 31 通过，typecheck 0 |
 
 复用现在的启动入口和进程检查。启动时核实上次的执行进程，确认退出就继续启动，暂时无法确认就自动再查。
 

@@ -8,7 +8,7 @@ import path from 'node:path'
 import { test, beforeEach, afterEach } from 'node:test'
 import { main } from '../src/cli.js'
 import { loadDeviceToken, hasDeviceToken } from '../src/credentials.js'
-import { loadConfig, saveConfig } from '../src/config.js'
+import { loadConfig, saveConfig, type RuntimeConfig } from '../src/config.js'
 import { openRuntimeHost } from '../src/runtimeHost.js'
 import { FakeCloud } from './helpers/fakeCloud.js'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -80,6 +80,16 @@ test('重新配对保留管理员显式配置，避免身份替换顺带丢失 P
   assert.equal(config.name, 'legacy-name')
   assert.equal(config.bossCliEntry, 'C:\\local\\boss.js')
   assert.deepEqual(config.providers, { weixin: { entry: 'C:\\local\\weixin.js', v2Send: true } })
+})
+
+test('旧 config 含历史 skills 键时重新配对成功，新配置与 pending 均不再携带 skills', async () => {
+  saveConfig({ server: cloud.baseUrl, device_id: 'old-device', skills: { python: 'C:\\py\\python.exe' } } as unknown as RuntimeConfig)
+  cloud.issueCode('REPAIR02')
+  assert.equal(await main(['pair', '--code', 'REPAIR02']), 0)
+  const raw = JSON.parse(readFileSync(path.join(home, 'config.json'), 'utf8'))
+  assert.equal(raw.skills, undefined, '重新配对后的 config.json 不得再携带已移除的 skills 键')
+  assert.notEqual(raw.device_id, 'old-device')
+  assert.equal(existsSync(path.join(home, 'pairing.pending.json')), false, '事务必须应用完成，不残留 pending')
 })
 
 test('unpair refuses a leased Host before touching old identity, then clears safely once released', async () => {
