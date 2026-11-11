@@ -107,8 +107,10 @@ class TestBaiduProxyAndWarmCookies:
         import efficiency
         self.ws = web_search
         self.monkeypatch = monkeypatch
-        monkeypatch.setattr(web_search, "_baidu_warm_cookies", None)
-        monkeypatch.setattr(web_search, "BAIDU_PROXY", "http://u:p@127.0.0.1:18080")
+        monkeypatch.setattr(web_search, "_baidu_warm_cookies", {})
+        monkeypatch.setattr(web_search, "BAIDU_PROXIES", ["http://u:p@127.0.0.1:18080"])
+        monkeypatch.setattr(web_search, "_proxy_failures", {})
+        monkeypatch.setattr(web_search, "_proxy_cursor", 0)
         # efficiency 节流/冷却状态落盘（throttle.json）：隔离到 tmp，
         # 防止污染仓库目录与用例间互扰（缓存映射保留在进程内即可）
         import tempfile
@@ -124,8 +126,8 @@ class TestBaiduProxyAndWarmCookies:
 
     def test_channel_proxy_scope(self):
         ws = self.ws
-        assert ws._channel_proxy("baidu") == ws.BAIDU_PROXY
-        assert ws._channel_proxy("baidu_m") == ws.BAIDU_PROXY
+        assert ws._channel_proxy("baidu") == ws.BAIDU_PROXIES[0]
+        assert ws._channel_proxy("baidu_m") == ws.BAIDU_PROXIES[0]
         assert ws._channel_proxy("bing") is None
         assert ws._channel_proxy("sogou") is None
 
@@ -151,13 +153,13 @@ class TestBaiduProxyAndWarmCookies:
         assert ws._warm_baidu_cookies() == {"BAIDUID": "abc123"}
 
         # 预热失败不抛异常，返回空 dict
-        self.monkeypatch.setattr(ws, "_baidu_warm_cookies", None)
+        self.monkeypatch.setattr(ws, "_baidu_warm_cookies", {})
 
         def boom(*a, **k):
             raise RuntimeError("down")
 
         self.monkeypatch.setattr(ws, "_client", boom)
-        self.monkeypatch.setattr(ws, "_baidu_warm_cookies", None)
+        self.monkeypatch.setattr(ws, "_baidu_warm_cookies", {})
         assert ws._warm_baidu_cookies() == {}
 
     def test_proxy_fallback_to_direct_on_proxy_error(self):
@@ -194,10 +196,14 @@ class TestBaiduProxyAndWarmCookies:
         self.monkeypatch.setattr(ws, "time", _T)
         res = ws.search("测试关键词", limit=3, engine="baidu")
         # 至少一次走代理（抛错）+ 一次直连
-        assert any(c["proxy"] == ws.BAIDU_PROXY for c in calls)
+        assert any(c["proxy"] == ws.BAIDU_PROXIES[0] for c in calls)
         assert any(c["proxy"] is None for c in calls)
-        # 回落有记录
+        # 回落有记录，且只记 host:port、不带 BasicAuth 凭据
         assert any("回落直连" in e for e in res.get("errors", []))
+        assert any("127.0.0.1:18080" in e for e in res.get("errors", []))
+        assert all("u:p" not in e for e in res.get("errors", []))
+        # 失败出口进入进程级熔断
+        assert ws._proxy_failures.get(ws.BAIDU_PROXIES[0], 0) > ws.time.time()
         # 百度通道请求携带预热 cookie
         assert all(c["cookies"] for c in calls)
 
@@ -218,3 +224,60 @@ class TestBaiduProxyAndWarmCookies:
         self.monkeypatch.setattr(ws, "time", _T)
         ws.search("test keyword", limit=3, engine="bing")
         assert calls and all(c["proxy"] is None and c["cookies"] is None for c in calls)
+
+    def test_multi_proxy_rotation_round_robin(self):
+        """多出口逐次轮换：顺序取、循环往复。"""
+        ws = self.ws
+        proxies = ["http://u:p@a:1", "http://u:p@b:2"]
+        self.monkeypatch.setattr(ws, "BAIDU_PROXIES", proxies)
+        picked = [ws._next_baidu_proxy() for _ in range(4)]
+        assert picked == [proxies[0], proxies[1], proxies[0], proxies[1]]
+        # 无配置回直连
+        self.monkeypatch.setattr(ws, "BAIDU_PROXIES", [])
+        assert ws._next_baidu_proxy() is None
+
+    def test_failed_proxy_circuit_breaks(self):
+        """熔断中的出口被轮换避开；全部熔断中回直连。"""
+        ws = self.ws
+        proxies = ["http://u:p@a:1", "http://u:p@b:2"]
+        self.monkeypatch.setattr(ws, "BAIDU_PROXIES", proxies)
+        self.monkeypatch.setattr(ws, "_proxy_failures", {proxies[0]: ws.time.time() + 600})
+        assert ws._next_baidu_proxy() == proxies[1]
+        assert ws._next_baidu_proxy() == proxies[1]
+        self.monkeypatch.setattr(ws, "_proxy_failures",
+                                 {p: ws.time.time() + 600 for p in proxies})
+        assert ws._next_baidu_proxy() is None
+        # 熔断过期后恢复可用
+        self.monkeypatch.setattr(ws, "_proxy_failures",
+                                 {p: ws.time.time() - 1 for p in proxies})
+        assert ws._next_baidu_proxy() in proxies
+
+    def test_proxy_label_strips_credentials(self):
+        ws = self.ws
+        assert ws._proxy_label("http://u:p@1.2.3.4:18080") == "1.2.3.4:18080"
+        assert ws._proxy_label("not-a-url") == "proxy"
+
+    def test_warm_cookies_isolated_per_proxy(self):
+        """预热缓存按出口隔离：不同出口各预热一次，同出口走缓存。"""
+        ws = self.ws
+        client_args = []
+
+        class FakeClient:
+            def __init__(self, *a, **k):
+                client_args.append(k.get("proxy"))
+                self.cookies = {"BAIDUID": f"id-{len(client_args)}"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def get(self, *a, **k):
+                return None
+
+        self.monkeypatch.setattr(ws, "_client", FakeClient)
+        assert ws._warm_baidu_cookies(proxy="http://u:p@a:1") == {"BAIDUID": "id-1"}
+        assert ws._warm_baidu_cookies(proxy="http://u:p@a:1") == {"BAIDUID": "id-1"}
+        assert ws._warm_baidu_cookies(proxy="http://u:p@b:2") == {"BAIDUID": "id-2"}
+        assert client_args == ["http://u:p@a:1", "http://u:p@b:2"]

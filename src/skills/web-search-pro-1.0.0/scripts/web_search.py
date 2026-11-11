@@ -128,27 +128,61 @@ CHANNEL_POLICY = {
 
 # ---------------------------------------------------------------- 网络基础
 
-# 渠道级代理：百度通道可经办公网出口代理执行（服务器 IP 被百度风控标记时使用）。
-# 环境变量 WEBSEARCH_BAIDU_PROXY 形如 http://user:pass@host:port，未设置则直连。
-# 其他引擎不受影响；代理连接失败自动回落直连并在 errors 中如实记录。
-BAIDU_PROXY = os.environ.get("WEBSEARCH_BAIDU_PROXY", "").strip() or None
+# 渠道级代理：百度通道可经外部出口代理执行（服务器 IP 被百度风控标记时使用）。
+# 环境变量 WEBSEARCH_BAIDU_PROXY 形如 http://user:pass@host:port，支持逗号分隔多个
+# 出口逐次轮换（单值完全兼容）；未设置则直连。其他引擎不受影响。
+# 代理连接失败自动回落直连并在 errors 中如实记录（只记 host:port，不带凭据），
+# 失败出口进入进程级 10 分钟熔断，轮换时自动避开；全部出口熔断中则回直连。
+BAIDU_PROXIES = [p.strip() for p in os.environ.get("WEBSEARCH_BAIDU_PROXY", "").split(",") if p.strip()]
 PROXY_CHANNELS = ("baidu", "baidu_m")
+_PROXY_COOLDOWN_SECONDS = 600
+_proxy_cursor = 0
+_proxy_failures = {}  # proxy -> 熔断截止时间戳（进程级，量级仅代理数个）
 
 # 百度 cookie 预热缓存（进程级）：先访问首页获取 BAIDUID 再搜索，
 # 无 cookie 裸搜会显著提高被风控概率（实测裸搜直接导 wappass 验证码页）。
-_baidu_warm_cookies = None
+_baidu_warm_cookies = {}  # proxy -> 预热 cookie（key=None 为直连路径）
+
+
+def _proxy_label(proxy):
+    """errors 展示用代理标识：去 BasicAuth 凭据，仅保留 host:port。"""
+    try:
+        netloc = urllib.parse.urlparse(proxy).netloc.rsplit("@", 1)[-1]
+        return netloc or "proxy"
+    except Exception:
+        return "proxy"
+
+
+def _next_baidu_proxy():
+    """轮换返回一个未熔断的百度代理；无配置或全部熔断中返回 None（直连）。"""
+    global _proxy_cursor
+    if not BAIDU_PROXIES:
+        return None
+    now = time.time()
+    alive = [p for p in BAIDU_PROXIES if _proxy_failures.get(p, 0) <= now]
+    if not alive:
+        return None
+    proxy = alive[_proxy_cursor % len(alive)]
+    _proxy_cursor += 1
+    return proxy
+
+
+def _mark_proxy_failed(proxy):
+    """代理连接失败：进程级熔断 10 分钟，轮换自动避开。"""
+    if proxy:
+        _proxy_failures[proxy] = time.time() + _PROXY_COOLDOWN_SECONDS
 
 
 def _channel_proxy(name):
-    """返回该通道应使用的代理（未配置则 None=直连）。"""
-    return BAIDU_PROXY if name in PROXY_CHANNELS else None
+    """返回该通道应使用的代理（未配置/全部熔断中则 None=直连）。"""
+    return _next_baidu_proxy() if name in PROXY_CHANNELS else None
 
 
 def _warm_baidu_cookies(verify=True, proxy=None):
-    """预热百度 cookie（BAIDUID 等）。失败不抛异常，返回空 dict 走原行为。"""
-    global _baidu_warm_cookies
-    if _baidu_warm_cookies is not None:
-        return _baidu_warm_cookies
+    """预热百度 cookie（BAIDUID 等）。失败不抛异常，返回空 dict 走原行为。
+    缓存按代理隔离（key=proxy，直连为 None），保证预热与后续搜索同出口。"""
+    if proxy in _baidu_warm_cookies:
+        return _baidu_warm_cookies[proxy]
     cookies = {}
     try:
         with _client(verify, proxy=proxy) as c:
@@ -156,8 +190,8 @@ def _warm_baidu_cookies(verify=True, proxy=None):
             cookies = dict(c.cookies)
     except Exception:
         cookies = {}
-    _baidu_warm_cookies = cookies
-    return _baidu_warm_cookies
+    _baidu_warm_cookies[proxy] = cookies
+    return cookies
 
 
 def _client(verify=True, proxy=None, cookies=None):
@@ -1396,8 +1430,11 @@ def search(query, limit=8, engine="auto", verify=True, companies_only=False):
                         httpx.ConnectTimeout) as pe:
                     if not ch_proxy:
                         raise
-                    # 代理不可达：如实记录后回落直连（本次搜索内不再走代理）
-                    errors.append(f"{name}: 代理连接失败（{type(pe).__name__}），回落直连")
+                    # 代理不可达：如实记录（只记 host:port）+ 熔断 10 分钟，回落直连
+                    # （本次搜索内不再走代理；后续搜索轮换自动避开该出口）
+                    errors.append(f"{name}: 代理连接失败"
+                                  f"（{type(pe).__name__}, {_proxy_label(ch_proxy)}），回落直连")
+                    _mark_proxy_failed(ch_proxy)
                     ch_proxy = None
                     html = fetch_raw(url, verify=verify, headers=hdrs,
                                      cookies=warm_cookies)

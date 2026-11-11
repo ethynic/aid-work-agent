@@ -48,10 +48,12 @@ metadata:
   然后失败降级，不影响 `search` / `fetch` / `extract` 和管线的非渲染路径。
   不要主动走渲染兜底；JS 站改由平台 web_fetch 或浏览器工具处理。
 - **百度通道代理（可选）**：环境变量 `WEBSEARCH_BAIDU_PROXY`
-  （形如 `http://user:pass@host:port`）设置后，baidu / baidu_m 通道经该代理执行
-  （用于服务器 IP 被百度风控标记时改走办公网出口）；代理连接失败自动回落直连
-  并在 errors 中如实记录，未设置时直连。百度通道已内置 cookie 预热
-  （先取 BAIDUID 再搜索），降低无 cookie 裸搜被风控的概率。
+  （形如 `http://user:pass@host:port`，支持逗号分隔多个出口）设置后，baidu / baidu_m
+  通道经代理执行并逐次轮换出口（用于服务器 IP 被百度风控标记时改走外部宽带/办公网出口）；
+  代理连接失败自动回落直连并在 errors 中如实记录（只记 host:port，不带凭据），
+  失败出口进程级熔断 10 分钟，轮换自动避开，未设置或全部熔断中则直连。
+  百度通道已内置 cookie 预热（先取 BAIDUID 再搜索，缓存按出口隔离），
+  降低无 cookie 裸搜被风控的概率。
 
 ## 本环境引擎可用性（2026-10-27 服务器实测）
 
@@ -160,8 +162,8 @@ python scripts/pipeline.py urls "https://a.com,https://b.com" --extract --json
   降级通道照常可用。`baidu_m` 是唯一例外：有**一次冷静重试**——等冷却自然走完
   （期间零请求）后再试，上限 25s 且受搜索总预算约束。`WSP_BLOCK_COOLDOWN=0`
   可关闭冷却。冷却只作用于搜索引擎通道，不误伤用户明确指定的目标 URL 抓取。
-- **代理通道与冷却共存**：百度代理（`WEBSEARCH_BAIDU_PROXY`）执行时命中风控
-  同样触发整组冷却；代理连接失败回落直连的行为不变。
+- **代理通道与冷却共存**：百度代理（`WEBSEARCH_BAIDU_PROXY`，多出口轮换）执行时
+  命中风控同样触发整组冷却；代理连接失败熔断 10 分钟 + 回落直连的行为不变。
 - **编码修复**：响应头声明 iso-8859-1 或未声明 charset 的 GBK/GB18030 中文页
   不再整页乱码（HTML meta 覆盖 → strict 失败回退 GB18030 → replace 兜底）。
 - **长单行电话抽取修复**：搜索引擎 snippet 常是整段无换行，旧逻辑对 >200 字的
