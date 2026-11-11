@@ -38,3 +38,25 @@ LLM 用 `LLMGateway(provider_name='deepseek', model_codes={'deepseek': 'deepseek
 1. requirements 首轮提取漏细则类条款（保证金到账细节、代理服务费承诺书否决条款等 8-9 条）-> Step 2 增加二轮「细则扫描」
 2. layout 历史标书**视觉**范式（页眉/表头底纹/表格字号）纯文本解析抓不到 -> Step 3.5 要求从 docx 样式 XML 读取
 3. content 跨文件口径不统一（「2 年/2年」、正文缺项目名；注意 make_package 自检只读正文不读页眉）-> Step 6 增加口径统一要求
+
+## 已知运行发现（2026-11-11，agent2 真机首验，已回灌 SKILL.md v1.0.2）
+
+真机 trace `tr_runner_b7df01083b0346b0a9ba4e1856c42392:1`（agent2，aid_work_logs2）：
+**ITERATION_LIMIT**，50 轮 / 107 次工具调用 / 517 万 token / 88.84 积分（deepseek-flash），
+7.5 分钟后在内容 JSON 写完、render_docs/make_package 未执行的收尾一步撞限失败。
+
+轮次消耗分解（50 轮）：
+
+| 阶段 | 轮次 | 定性 |
+|---|---|---|
+| use_skill → check_inputs → extract_tender 解析招标书 | ~6 | 正常 |
+| 分块 read tender_text.md（2000 行/次连续 10 次） | ~10 | 浪费 |
+| 直接 read 原始 docx/xlsx（资质/历史标书/报价表/参数清单） | ~5 | 浪费（二进制不可读，应脚本提取） |
+| sed 通读技能脚本源码（render_docs 905 行分 6 段等） | ~14 | 浪费（预习行为） |
+| 写产出 JSON（layout/price_input 重复写两份 + requirements/matrix/p1~p7/checks/merge.py） | ~13 | 实质产出，含分片合并自创流程 |
+
+修复（SKILL.md v1.0.2 新增「轮次预算纪律」5 条，纯提示词层、脚本零改动）：
+禁读脚本源码 / 禁 read 原始二进制改脚本提取 / 大文本 wc -l 先行+同轮并行多区段+二轮扫描 grep 定位 /
+中间产物只写一次 / content 分片命名约定（content_p1..pN + 一行合并，禁现写 merge.py）。
+
+待部署 agent2 后用同一组四要素输入复测，预期轮次降至 30 以内完成全流程。
