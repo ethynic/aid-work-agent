@@ -14,7 +14,7 @@
 
 ## 1.0.0 业务命令设计范围（2026-11-11，待开发）
 
-首轮 BOSS CLI 的产品发布目标为 `1.0.0`，与 Runtime 共同遵循[共同契约 3.0 第 12 节](../../system/runner-desktop-runtime-integration-contract.md#12-契约-30-与首轮实施)。向 Agent 开放哪些完整业务命令、参数、内部小 CLI 的组合以及业务过程和结果结构，由本独立设计确定，实施状态见[Runtime 与 BOSS CLI 1.0.0 计划](../../plans/plan-runtime-plugin-host.md#1610-runtime-与-boss-cli-100-实施计划待开发)。
+首轮 BOSS CLI 的产品发布目标为 `1.0.0`，与 Runtime 和 WeCom CLI 同轮切换，共同遵循契约 3.0。向 Agent 开放哪些完整业务命令、参数、内部小 CLI 的组合以及业务过程和结果结构，由本独立设计确定。[共同契约 3.0 第 12 节](../../system/runner-desktop-runtime-integration-contract.md#12-契约-30-与首轮实施) · [1.0.0 实施计划](../../plans/plan-runtime-plugin-host.md#1610-runtime-与插件-100-实施计划待开发)
 
 业务中断后由用户决定是否继续。Agent 按用户要求调用插件开放的继续能力，插件判断能否使用保存的进度，以及从哪里继续。已完成及已尝试但结果未知的记录保留。
 

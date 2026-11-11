@@ -1,6 +1,6 @@
 # Runtime 执行环境与插件宿主架构
 
-2026-11-11，Runtime 与 BOSS CLI 1.0.0 的职责、作业与兼容基线按[共同契约 3.0 第 12 节](runner-desktop-runtime-integration-contract.md#12-契约-30-与首轮实施)实施。企微走兼容入口，微信排除首轮兼容和验收。此前章节的实现记录按其版本范围保留。
+2026-11-11，Runtime、BOSS CLI 与 WeCom CLI 同轮重构至 1.0.0，按[共同契约 3.0 第 12 节](runner-desktop-runtime-integration-contract.md#12-契约-30-与首轮实施)统一声明能力、调度与回传。正式切换后统一升级并退役旧作业协议。微信排除首轮范围。此前章节记录各自版本的实现。
 
 > 更新：2026-10-09；代码基线：`f1087289`。
 >
@@ -414,9 +414,10 @@ ZIP至少包含可读摘要、manifest和选定时段的结构化证据；manife
 
 ### 16.4 无人值守任务按条目继续执行（2026-11-11，待开发）
 
-本节后续实施按[共同契约 3.0 第 12 节](runner-desktop-runtime-integration-contract.md#12-契约-30-与首轮实施)及[1.0.0 计划](../plans/plan-runtime-plugin-host.md#1610-runtime-与-boss-cli-100-实施计划待开发)。插件维护完整业务作业和内部 CLI，Runtime 维护通用承载。首轮 Runtime 与 BOSS CLI 发布目标均为 `1.0.0`，企微走兼容入口，微信排除首轮兼容和验收。
+首轮 Runtime、BOSS CLI 与 WeCom CLI 发布目标均为 `1.0.0`。插件维护完整业务作业和内部 CLI，Runtime 维护通用承载。两个插件直接接入同一作业协议。微信排除首轮范围。[共同契约 3.0 第 12 节](runner-desktop-runtime-integration-contract.md#12-契约-30-与首轮实施) · [1.0.0 计划](../plans/plan-runtime-plugin-host.md#1610-runtime-与插件-100-实施计划待开发)
 
 - BOSS 对外业务命令及内部拆分由 [BOSS CLI 独立设计](../design/recruiting/boss-resume-assistant-native-cdp-design.md#100-业务命令设计范围2026-11-11待开发)确定，批次进度和单项失败由 BOSS 维护。业务中断后由用户要求继续，BOSS 判断能否续接及具体位置。Runtime 通用接单、回执、诊断与控制接口按已确认条款实施。
+- 企微的业务命令、可并行标记和受信配置入口由 WeCom CLI 自行声明。Runtime 按同一协议安装、发现、调度与转发。[WeCom CLI 独立设计](../design/wecom/wecom-cli-design.md#100-重构范围2026-11-11待开发)
 - Agent 从插件开放能力中选择工具，同一会话按结果依赖逐次调用。Runtime 汇集多个用户和会话的作业，按插件提供方人工标记的 CLI 并行声明调度。所有插件的串行作业共用一个队列，可并行后台作业直接执行，能与一项 BOSS 串行作业同跑。原恢复 1B～1D 的身份和直接停稳能力作为实施基础。
 - 当前 `boss_resume_batch` 云端最多三份、本地读取最多十份，续筛依赖父批成功回执。完整作业需复用既有授权云端识别、评分、入库及计费，并按新作业边界改造。
 - 进程异常退出或长时间没有插件过程消息时，Runtime 结束对应受管执行、报告问题编号，并在停稳后释放串行执行资格。插件消息静默与设备心跳、Runtime 续租分别计时。重启后自动恢复原身份、未领取的有效作业及原回执补传；已中断业务等待用户决定继续。
