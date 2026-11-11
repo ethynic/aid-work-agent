@@ -4,7 +4,7 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 | --- | --- | --- | --- |
-| Phase 1 | 插件工具声明与 Runtime 通用接入 | 📋 待开发 | 设计待评审 |
+| Phase 1 | 插件工具声明与 Runtime 通用接入 | 🔧 进行中 | 代码完成（commit 8e47bd54）：三 CLI buildManifest 输出 tool_declaration（仅企微两本地库读工具 parallel）、boss 注解审计修正 5 处对齐写集合；Runtime 宽松解析 +「需要升级插件」门禁 + 派生清单与 TRUSTED 取交集锚定保持现网受信面 + parallel_tools/tool_declarations_v1 心跳上报；未知插件零改动接入有端到端测试。五包 typecheck 0，定向+回归绿（基线失败 stash 对照一致）；CR 4 项记录不阻断 |
 | Phase 2 | 服务端按类型派发和 Runtime 并行执行 | 📋 待开发 | 设计待评审 |
 
 ## 实施
