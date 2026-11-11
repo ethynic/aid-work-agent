@@ -69,6 +69,7 @@ qrcode>=7.4.2  # 客服账号引流二维码生成
 
 # Task Scheduling
 APScheduler>=3.10.0  # Background task scheduling
+psutil>=5.9.0  # 系统健康监控采集器（src/services/system_health/collector.py）与浏览器进程清理（process_guard）
 
 # Database
 psycopg2-binary>=2.9.0  # PostgreSQL database driver

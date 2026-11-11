@@ -389,6 +389,7 @@ async def list_emails(
                        ct.name AS contact_name, ct.email AS contact_email,
                        e.subject_a, e.subject_b, e.ab_group, LEFT(e.body, 200) AS body_preview,
                        e.status, e.message_id, e.sent_at, e.error, e.retry_count,
+                       e.open_count, e.opens_at,
                        e.created_at, e.updated_at
                 FROM bs_ai_lead_gen_emails e
                 LEFT JOIN bs_ai_lead_gen_campaigns c ON c.id = e.campaign_id
@@ -423,6 +424,7 @@ async def get_email_detail(
                        ct.name AS contact_name, ct.email AS contact_email,
                        e.subject_a, e.subject_b, e.ab_group, e.body, e.status,
                        e.message_id, e.sent_at, e.error, e.retry_count,
+                       e.open_count, e.opens_at,
                        e.created_at, e.updated_at
                 FROM bs_ai_lead_gen_emails e
                 LEFT JOIN bs_ai_lead_gen_campaigns c ON c.id = e.campaign_id

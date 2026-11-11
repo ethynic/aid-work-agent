@@ -94,6 +94,8 @@ export interface EmailRecord {
   sent_at?: string
   error?: string
   retry_count?: number
+  open_count?: number
+  opens_at?: string
   created_at?: string
   updated_at?: string
 }

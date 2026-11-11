@@ -1,121 +1,122 @@
-# Runtime 与 CLI 插件构建及 ZIP 交付手册
+# Runtime、BOSS 与 WeCom 统一打包手册
 
-> 维护日期：2026-11-05。当前入口是 [release-batch.ps1](../../clients/agent-desktop/scripts/release-batch.ps1)。
-> 本文覆盖源码出包，不授予安装、部署或提交权限。旧批次报告是历史证据，不拼接成新发布步骤。
+从仓库根目录使用 [release-batch.ps1](../../clients/agent-desktop/scripts/release-batch.ps1)。三件一起出包用 `-Component All`，只更新一个组件用 `Runtime`、`Boss` 或 `Wecom`。先带 `-Plan` 核对组件、源码引用和交付位置，确认后去掉 `-Plan` 执行。
 
-## 1. 交付形态和目录
+## 1. 选组件与交付格式
 
-Runtime 与 BOSS 独立发布。Runtime 安装器包含 UI、Host、Core、固定 Node 与监管程序；BOSS 是另行导入的签名插件。只更新 BOSS 不需要重建 Runtime，只更新 Runtime 不需要给 BOSS 升版本。旧客户端满足原需求即可继续使用，不随服务端发布强制升级。
+| `-Component` | 本批交付 |
+|---|---|
+| `All` | 1 个 Runtime 安装器、BOSS 和 WeCom 各 1 个可导入插件 |
+| `Runtime` | 仅 Runtime Windows x64 安装器 `.exe` |
+| `Boss` | 仅 `boss-<版本>.aidplugin.zip` |
+| `Wecom` | 仅 `wecom-<版本>.aidplugin.zip` |
+| `Both`（旧默认） | Runtime＋BOSS |
+| `RuntimeWecom` | Runtime＋WeCom |
 
-最终交付默认位于 `%LOCALAPPDATA%/AidWorkBuild/deliveries/<批次>/`，旁边生成组合 ZIP 及 `.sha256`，可用 `-OutputDirectory` 指定其他外部目录。所选组件的安装器/插件、公开信任根、验包报告、build-info、说明和 SHA256SUMS 一并保存；未选择的组件不构建、不复制，也不标记为验证通过。
+交付给收件人的是外层 `AID-Work-<组件和版本>-<时间>.zip`，旁边有同名 `.zip.sha256`。收件人解开外层 ZIP，按“先读我.md”运行选配的 Runtime 安装器，并在 Runtime 的离线包入口逐个选择原样的 `.aidplugin.zip`。已经安装兼容 Runtime 的用户可只导入插件。独立 npm CLI 的 `.tgz` 使用第 6 节的流程。
 
 ## 2. 构建机条件
 
-Windows 10/11 x64，Node/npm、Git、Windows 自带 tar.exe、PowerShell 5.1、现有离线验包器所需 Python 3。Runtime 编译监管程序使用 Windows .NET Framework csc.exe。包内 Node 仍固定 **22.23.3 / win-x64 / ABI127**；不是任意 PATH Node。客户机无需安装这些构建工具。
+Windows 10/11 x64，PowerShell 5.1、Git、Node/npm、Python 3 和系统 `tar.exe`。Runtime 编译监管程序使用 Windows .NET Framework 的 `csc.exe`。脚本准备并验用包内固定 Node 22.23.3 / win-x64 / ABI127。客户机直接安装成品。
 
-入口默认将 `-SourceRef`（默认 HEAD）的已提交源码归档到 `%TEMP%/aid-release-<批次>/workspace` 独立工作区，仅覆盖当前入口、插件验包辅助脚本/测试、Runtime打包与验包脚本、签名策略及测试、品牌ICO这11个打包文件；不复制业务代码的未提交修改。需要把新业务功能出包时，先确认其已在指定提交中。显式版本参数仅修改隔离副本。shared 是 npm workspace 根，脚本从该根一次安装，避免逐成员安装破坏 hoisted 依赖；保留受管构建输出与压缩占用重试。
-
-WeCom 还需要 `-LocaldbPythonDirectory` 指向独立构建且已验证的 `localdb-python-final`；省略时使用仓库默认资产目录，不存在则在构建前报错。复制时过滤 `__pycache__`、`.pyc`、`.pyo`，保留嵌入式 Python 必需的 `python312.zip`，不修改原资产目录。构建副本使用 Temp：本机实测 AidWorkBuild 下的 npm junction 无法被 Node 跟随，而 Temp 下同样链接正常；最终交付文件仍集中在 AidWorkBuild，不添加链接修复框架。
-
-## 3. 选择组件与独立版本
-
-以下先用 `-Plan` 查看步骤：它只读取公开版本信息并输出计划，不运行 npm、读取私钥、修改版本/信任根或创建交付产物。
+需要 WeCom 时，便携 Python 按显式 `-LocaldbPythonDirectory`、仓库内 `clients/runtime-plugin-packaging/assets/localdb-python-final`、`%LOCALAPPDATA%\AidWorkBuild\assets\localdb-python-final` 定位。首次准备到外部固定目录，可跨 checkout 复用：
 
 ```powershell
-# 仅检查将发布的 BOSS；此路径只是签名者配置路径，Plan 不会读取它。
-powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Boss -Signer C:\secure-build\boss-signer.json -BossVersion 0.3.28 -Plan
-
-# 仅更新 Runtime，保留当前 BOSS。版本按实际变更填写。
-powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Runtime -RuntimeVersion 0.0.32 -Plan
+$buildRoot = Join-Path $env:LOCALAPPDATA 'AidWorkBuild'
+python.exe clients/runtime-plugin-packaging/prepare-localdb.py --output (Join-Path $buildRoot 'assets/localdb-python-final') --cache (Join-Path $buildRoot 'assets/downloads')
 ```
 
-确认需要出包后删除 `-Plan`。`-Component` 可选 `Runtime`、`Boss`、`Both`（Runtime＋BOSS，默认）、`Wecom`、`RuntimeWecom`（Runtime＋WeCom）。`-RuntimeVersion` / `-BossVersion` / `-WecomVersion` 仅修改所选组件；省略时使用 SourceRef 中的版本，不自动 patch，不创建 Git tag/commit。Plan 不执行 Git，未显式指定的版本留空并说明其来源。新代码内容不能冒充已交付同版本包；Host/Core 等版本按真实源码变更维护，不与 UI/插件绑在一起。
+准备脚本要求输出目录尚未创建，按锁文件核对下载并检查 SQLite、AES、上海时区。打包保留标准库 `python312.zip`，过滤 Python 字节码缓存。BOSS-only 和 Runtime-only 无需准备这项资产。
 
-同版本重建用于修复分发时，发行ID与内容仍须一致；确需不同发行内容应使用新的版本/发行ID。脚本不覆盖已有批次目录和交付文件。
+## 3. 出包前核对源码与版本
+
+- 一个批次使用同一个 Git `-SourceRef`（默认 `HEAD`）。先确认该提交已包含所有所选组件的改动。若各组件还在不同分支，使用已包含所需改动的集成提交，或分别指定来源出包。
+- 脚本在 `%TEMP%\aid-release-…\workspace` 归档已提交源码，仅叠加入口列明的打包相关文件。未提交的业务源码不会进入包。仓库工作区中的版本和锁文件由各自开发任务维护。
+- `-RuntimeVersion`、`-BossVersion`、`-WecomVersion` 可分别设置，省略时取源码提交中的版本。显式版本只写隔离副本，不会把旧源码变成新版本的实现。新内容应使用新版本与发行 ID，已经交付的版本及摘要保留用于追溯。
+- `-Plan` 只查看计划，不运行 Git 或 npm，不读签名配置，不生成文件。未显式指定的版本和相应发行 ID 在计划里留空，实际出包时从隔离源码解析。
 
 ## 4. 稳定签名者与公开信任
 
-BOSS、WeCom 正常发布要求 `-Signer`，复用现有 `package.mjs --signer`。外部配置包含稳定 `key_id` 和指向私钥的 `private_key_path`；私钥存构建机安全位置，不入库、不复制到发行目录、不打印。`-ReleaseId` 指定不可变发行ID，省略时为 `boss-<BOSS版本>` 或 `wecom-<WeCom版本>`，插件封装仍使用现有 Provider 后缀规则。
+验收 BOSS 和 WeCom 共用已登记的 `aidwork-acceptance-cli-v1`。本机构建配置在 `%LOCALAPPDATA%\AidWorkBuild\signers\acceptance-cli-v1\signer.json`，可用 `-Signer` 显式覆盖。换机构建由构建机管理员配置已登记的签名者。该配置指向的私钥只供签名进程使用。交付包保存公开根和签名报告。
 
-普通补丁继续使用同一发布者，不每批生成随机key、不每批追加永久信任根或历史快照。初次采用稳定签名者时，沿既有[信任登记脚本](../../clients/runtime-plugin-packaging/register-publisher-trust.mjs)明确登记公开根一次，权限范围只包含实际负责的Provider。脚本本身不替你登记新发布者。
+### Windows 换会话找不到验收签名者
 
-`-TrustRoots` 指向已有公开配置：acceptance 省略时读取仓库已登记集合，并保持已有历史交付根完整；production 必须显式提供正式根，且拒绝任何 `test_only` 根。该插件信任要求与Windows应用是否签名无关。本轮不删除或改写任何已登记历史根。历史快照供审计和已交付兼容核对，不把未交付试验批次变成新的永久依赖。
+Windows 安装版 Codex 可能将 `%LOCALAPPDATA%\AidWorkBuild` 重定向到自己的 `LocalCache\Local`。资源管理器或另一个 agent 看不到默认目录时，先检查本机已验证的 Codex 实际配置路径。在执行打包的同一个 PowerShell 会话运行：
 
-旧 Runtime 能继续运行其已交付的旧 BOSS；这不意味着它认识任意新发布者。要使用新包的客户应有信任该发布者且协议兼容的 Runtime；没有选择新包的客户无需升级。密钥轮换/真实撤销另行明确处理，不按普通补丁自动换根。
+```powershell
+$local = [Environment]::GetFolderPath('LocalApplicationData')
+$relative = 'AidWorkBuild\signers\acceptance-cli-v1\signer.json'
+$signer = Join-Path $local $relative
+if (-not (Test-Path -LiteralPath $signer -PathType Leaf)) {
+    $signer = Join-Path $local "Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\Local\$relative"
+}
+if (-not (Test-Path -LiteralPath $signer -PathType Leaf)) {
+    throw "验收签名配置在当前会话不可访问：$signer。请切回原构建会话或由构建机管理员恢复。"
+}
+$meta = Get-Content -LiteralPath $signer -Raw -Encoding UTF8 | ConvertFrom-Json
+$keyFile = $meta.private_key_path
+if ($meta.key_id -ne 'aidwork-acceptance-cli-v1' -or -not $keyFile) { throw '验收签名配置与预期发布者不符' }
+if (-not [IO.Path]::IsPathRooted($keyFile)) { $keyFile = Join-Path (Split-Path -Parent $signer) $keyFile }
+if (-not (Test-Path -LiteralPath $keyFile -PathType Leaf)) { throw '配置引用的密钥文件在当前会话不可访问' }
+Write-Output "可用签名配置：$signer"
+```
+
+从仓库根目录用 `-Signer $signer` 显式出包。例如 `powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Boss -SourceRef HEAD -Signer $signer`。`HEAD` 应替换为已核对的源码提交，WeCom 同理使用 `-Component Wecom`。`-Plan` 不读取签名配置，能运行 `-Plan` 只代表参数和构建计划可用。检查时仅输出配置文件路径和必要的通过状态，密钥内容、配置正文和密钥路径留在构建机。
+
+两个位置都不可访问时，先找原构建会话或由管理员恢复既有签名者。确认确实无法恢复时再安排发布者轮换与 Runtime 配套验证。第 6 节的随机测试根只用于隔离试验，现有客户 Runtime 需要信任发布者才能导入。
+
+验收公开根默认用仓库的 `clients/runtime-plugin-packaging/trust/acceptance-roots.json`。普通补丁复用稳定发布者和现有公开根。新增或轮换发布者按[公开根登记工具](../../clients/runtime-plugin-packaging/register-publisher-trust.mjs)单独处理。历史公钥、范围和已交付兼容性需要保留。
+
+`-ReleaseId` 缺省前缀分别为 `boss-<版本>`、`wecom-<版本>`，封装会追加对应 Provider 后缀。显式提供时作为本批所选插件的公共前缀，后缀仍分别绑定各自 Provider。
+
+正式出包使用 `-Profile production` 和 `-TrustRoots` 指定正式公开根文件（其中 `profile` 为 `production`，各根 `test_only` 为 `false`）。涉及插件时另传 `-Signer` 指定正式签名配置，涉及 Runtime 时按正式 Windows 代码签名配置打包。只有明确选择未签名 Windows 安装器时才加 `-Unsigned`，插件仍需签名和验签。默认验收安装器不做 Windows 代码签名。
 
 ## 5. 常用出包命令
 
 ```powershell
-# 只发 BOSS，使用已登记稳定签名者；不重建 Runtime。
-powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Boss -Signer C:\secure-build\boss-signer.json -ReleaseId boss-0.3.28 -BossVersion 0.3.28
+$release = 'clients/agent-desktop/scripts/release-batch.ps1'
 
-# 只发 Runtime，使用当前已登记公开根；不改 BOSS 版本。
-powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Runtime -RuntimeVersion 0.0.32
+# 三件一起出，先核对计划
+powershell.exe -NoProfile -File $release -Component All -SourceRef HEAD -Plan
+powershell.exe -NoProfile -File $release -Component All -SourceRef HEAD
 
-# 本次两者确实都更新，仍分别指定版本。
-powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Both -Signer C:\secure-build\boss-signer.json -RuntimeVersion 0.0.32 -BossVersion 0.3.28
+# 只出指定组件
+powershell.exe -NoProfile -File $release -Component Runtime -SourceRef HEAD
+powershell.exe -NoProfile -File $release -Component Boss -SourceRef HEAD
+powershell.exe -NoProfile -File $release -Component Wecom -SourceRef HEAD
 
-# WeCom 配套交付：实际生成的 Runtime 必须信任该插件，并支持四项必需工具；不构建 BOSS。
-powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component RuntimeWecom -Signer C:\secure-build\cli-signer.json -RuntimeVersion 0.0.38 -WecomVersion 0.2.5 -LocaldbPythonDirectory C:\build-assets\localdb-python-final
-
-# 已有 Runtime 满足要求时，只更新 WeCom；目标目录只读核验，不安装或改写信任根。
-powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Wecom -Signer C:\secure-build\cli-signer.json -WecomVersion 0.2.5 -LocaldbPythonDirectory C:\build-assets\localdb-python-final -TargetRuntimeResources C:\target-runtime\resources
-
-# 正式产品沿生产身份与正式公开根；默认签名。用户明确选择未签名时加 -Unsigned。
-powershell.exe -NoProfile -File clients/agent-desktop/scripts/release-batch.ps1 -Component Both -Profile production -Signer C:\secure-build\boss-signer.json -TrustRoots C:\secure-build\production-roots.json -RuntimeVersion 0.0.32 -BossVersion 0.3.28
+# 单插件核对指定 Runtime 的实际 resources 或 resources/runtime 目录
+powershell.exe -NoProfile -File $release -Component Boss -SourceRef HEAD -TargetRuntimeResources 'C:\target-runtime\resources'
+powershell.exe -NoProfile -File $release -Component Wecom -SourceRef HEAD -TargetRuntimeResources 'C:\target-runtime\resources'
 ```
 
-acceptance Windows 安装器仍为未正式代码签名的验收产品，插件仍有Ed25519签名。2026-11-02用户明确选择Runtime应用不签名：production可显式传`-Unsigned`，或使用`npm run runtime:package:production:unsigned`（已prepare后），安装器文件名带unsigned、manifest记录signingMode并实际验证NotSigned；构建子进程不继承CSC签名凭据。省略参数时保留原签名要求与旧manifest含义，不改变production/acceptance的身份、home与插件根，也不因缺证书暗降为acceptance。是否发行安装器由组件选择决定，和当前客户必须升级是两件事。
+用前请将 `HEAD` 换成需要的已提交源码（若当前 HEAD 正确可原样使用）。可用 `git show HEAD:clients/wecom-cli/package.json` 核对源码版本，BOSS 和 Runtime 分别查看 `clients/boss-resume-assistant/package.json` 与 `clients/agent-desktop/package.json`。
 
-## 6. 显式隔离试验包
+默认交付到当前 Windows 用户的「下载」→ `AID-Work-Releases`，可用 `explorer.exe shell:Downloads` 打开下载目录，或用 `-OutputDirectory` 覆盖位置。成功时脚本输出批次目录和 ZIP 的完整路径。构建临时文件在 Temp，签名配置及便携 Python 仍在构建目录。
 
-需要随机测试签名者时继续使用原独立入口，不通过普通发布脚本：
+## 6. 其他包形态
 
-```powershell
-node clients/runtime-plugin-packaging/package.mjs --test --test-key-id aid-isolated-local-example --provider boss --node <固定Node路径> --npm-cli <npm-cli.js路径> --output <自有隔离目录>
-```
-
-测试输出含 `ISOLATED-TEST-TRUST-ROOT.json`，只能在明确隔离的受信测试环境使用；该命令不会登记到共享根/历史快照，不使已有 Runtime 自动认识这个随机根。测试公钥ID不能复用已经登记的交付ID，避免同ID异密钥。不给随机测试包配套强制客户升级。
+- **BOSS 独立 npm CLI**供 `npm install -g` 和外部 MCP Host 使用。先在 Windows x64 构建机执行 `npm --prefix clients/shared ci --ignore-scripts` 和 `npm --prefix clients/boss-resume-assistant ci --ignore-scripts`，再从仓库根用 Git Bash 执行 `bash clients/boss-resume-assistant/scripts/pack-release.sh`。该入口输出 `clients/boss-resume-assistant/boss-resume-assistant-<版本>.tgz`。它会随包带上共享 Win32 模块及 koffi 原生依赖。直接运行 `npm pack` 会留下客户机无法解析的仓库相对依赖。独立包交付前在空目录安装，验证 `createKoffiApi()` 可实例化，不能只跑 `version --json`。客户机需 Node ≥ 22 且可访问 npm registry。
+- **WeCom**走表中的签名离线插件入口。当前未维护独立 npm 交付流程。
+- **隔离试验**可在独立输出目录显式运行 `package.mjs --test --test-key-id aid-isolated-<唯一值>`，传入所需 Provider 和固定 Node 等参数。随机测试根随该次实验产物单独保存，仅供隔离测试环境。容器格式与低层参数见[插件打包说明](../../clients/runtime-plugin-packaging/README.md)。
 
 ## 7. 验包与证据
 
-正常脚本只对所选组件执行原验证：插件签名与完整清单、重定位后的 version/doctor、原生模块加载，以及 Runtime 安装器资源/签名配置和源码输入核对。离线插件验包可显式选择稳定公开根：
-
-```powershell
-python clients/runtime-plugin-packaging/verify-offline.py --directory <插件目录> --node <固定Node路径> --trust-roots <公开信任根.json>
-```
-
-省略 `--trust-roots` 仍兼容旧隔离包目录中的 `ISOLATED-TEST-TRUST-ROOT.json`。production 公开根不能带测试签名者。验签不等于业务登录或实际安装通过。
-
-build-info 分别记录所选组件验证与 `not_selected` / `not_run`。运行 NSIS、客户机升级、配对和真实招聘动作应另有授权与独立证据；普通出包脚本不会运行安装器、后台部署或业务调用。
-
-WeCom 增加安装前提核验：从目标 Runtime 的实际资源读取公开根，调用其现有 Core `verifyOfflinePackage`，使用目标 Core 配置导出的实际运行版本及嵌入式 Node 事实（与 Host 的 PluginStore 调用一致，Host/Core 包版本另列），并核对 `wecom_read_session`、`wecom_read_sessions`、`wecom_message_send`、`wecom_session_directory`。配套模式使用本批 `win-unpacked/resources`，单插件模式使用指定资源或本机默认已安装资源；没有目标时明确标记未核验。目标不兼容则停止交付并建议配套出包，不注入根、不放宽工具清单、不影响旧 BOSS。此检查不等同于已执行安装。既有迁移代码另取 Host 包版本，与运行时消费点不一致；本轮沿实际 PluginStore 语义，不顺带改迁移产品行为。
+- 每个所选插件独立签名、验签、核对清单及搬迁后的只读 version/doctor。BOSS 另验证原生输入模块可加载，WeCom 验证其便携 Python。组合包直接使用同批安装器的实际 Runtime Core、公开根、Node/ABI 逐个核验；WeCom 还核对四项必需工具。
+- 单插件用 `-TargetRuntimeResources` 指定客户机对应版本的 Runtime 资源。WeCom 省略参数时会尝试本机已安装的 Runtime。没有目标时，报告明确写 `not_run_no_target`。目标不兼容时先核对该版本的信任根、Runtime 版本和工具能力，必要时用配套模式出包。
+- `build-info.json` 记录实际源码 SHA、组件版本和验证范围，逐包结果见 `plugin-verification.json` 及 `*-runtime-verification.json`。脚本验证 `SHA256SUMS.txt`、外层 ZIP 内各文件和 `.zip.sha256`，不会覆盖已有批次。
+- 出包是构建和离线检查。真实安装、导入升级、配对、业务调用和后台部署分别验收。只升级服务端时仍须兼容已交付的旧客户端。
 
 ## 8. 安装和升级说明
 
-包内说明根据所选组件生成。Runtime安装器不自动更新BOSS；插件从现有离线包入口安装，不解压。兼容覆盖安装沿用配置/身份；确有损坏再选择干净重装，实际安装行为以安装设计与验收为准。
+以每批 ZIP 内的“先读我.md”为准。组合包先安装或升级 Runtime，再导入本批选择的插件。只更新插件时，直接在已验证兼容的 Runtime 中导入对应 `.aidplugin.zip`。Runtime 安装器与插件分别升级，客户已有配对和配置按安装器的既有迁移规则处理。
 
-服务端单独发布仍需保持 Runtime **0.0.29＋BOSS0.3.27** 原功能与原任务恢复可用。新签名/新功能的包没有改变这条已交付兼容要求。
+## 9. 排查入口
 
-## 9. SHA-256与交付检查
-
-构建与验收临时文件不放主工作区：沿已有脚本在仓库外Temp独立副本构建，最终安装文件、JSON清单/脱敏报告及ZIP校验和集中保存至`%LOCALAPPDATA%/AidWorkBuild/deliveries/`，不提交生成产物。主仓库保留脚本、设计/计划与必要公开发行根；不要按`.json`扩展名批量删除配置或凭据。S5已按此归档，产物摘要及证据见[统一计划12.8](../plans/plan-runtime-plugin-host.md#128-s5打包与隔离安装验收2026-10-30)。
-
-脚本仍为交付文件生成 SHA256SUMS，压缩后逐项核对 ZIP 内容长度/摘要，再生成 ZIP 的 `.sha256`。文件短暂占用时仅诊断与重试自己的输出，不终止编辑器或客户应用。checksum/验包通过不能替代真实安装与业务验证。
-
-## 10. 常见问题
-
-| 情况 | 处理 |
+| 表现 | 处理 |
 |---|---|
-| 缺少Signer | 普通插件发布提供已有稳定签名者；仅隔离试验才显式用--test，不自动生成永久新根 |
-| 新包无法导入目标Runtime | 核对实际目标的发布者信任和工具能力；WeCom可选择RuntimeWecom生成配套包，不能只用构建机根宣称客户机可导入；原旧Runtime＋BOSS继续可用 |
-| production含test_only | 使用正式插件根，不静默降级或把测试根改称正式根；App显式不签名不放宽插件验签 |
-| npm ci锁文件不一致 | 只在受影响消费工程同步lockfile并审阅，不删除整份锁 |
-| GNU tar误处理C盘路径 | 脚本优先Windows System32 tar；不替换包格式 |
-| Compress-Archive文件占用 | 保持现有Restart Manager只读诊断和有限退避重试 |
-| 只更新插件 | 选择Component Boss或Wecom，不重建/升版Runtime；只使用目标Runtime已支持的协议与发布者 |
-
-
-## 11. U1界面与日志源码验收边界（2026-11-02）
-
-本轮新增客户端内安全日志查看/导出、静默刷新与简化连接界面，实际进度见[统一计划15](../plans/plan-runtime-plugin-host.md#15-runtime界面简化与正式发行准备2026-11-02)。构建脚本只叠加打包文件，不会把这些尚未提交的Core/Main/UI业务源码自动装进HEAD归档。要交付U1安装包，SourceRef必须包含其源码，或在明确的独立验收副本中只复制本任务审查通过的文件；不得复制整个脏工作区或把此前0.0.33包称为含U1。2026-11-02用户随后授权出Runtime-only0.0.34：以明确36份U1/元数据/打包文件叠加冻结副本完成构建，实际EXE日志/图标及现有两插件验签通过；source-overlay与独测报告随verified交付ZIP提供。未安装或执行真实连接/业务，详细产物摘要见统一计划15.2。
+| 找不到 Signer 或看不到 AidWorkBuild | 按第 4 节检查默认位置和 Codex 重定向位置，在当前会话核对后显式传 `-Signer` |
+| 找不到 WeCom 便携 Python | 按第 2 节准备资产或指定现有资产目录 |
+| 版本对了但功能没进包 | 对照 `build-info.json` 的 `baseCommit`，检查该功能是否在 `-SourceRef` 中 |
+| 插件验签通过，目标机仍拒绝 | 传该目标的 `-TargetRuntimeResources` 做兼容预检，必要时重新配套出包 |
+| 找不到交付 ZIP | 在资源管理器侧栏打开「下载」→ `AID-Work-Releases`，或核对脚本打印的最终路径 |

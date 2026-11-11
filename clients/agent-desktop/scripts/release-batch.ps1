@@ -3,7 +3,7 @@
 # （2026-10-21 实跑两次复现，RM API 实证占用者为 VS Code 文件 watcher）会导致
 # Compress-Archive PermissionDenied——失败时用 Restart Manager 诊断占用者并退避重试。
 param(
-    [ValidateSet('Both', 'Runtime', 'Boss', 'Wecom', 'RuntimeWecom')][string]$Component = 'Both',
+    [ValidateSet('All', 'Both', 'Runtime', 'Boss', 'Wecom', 'RuntimeWecom')][string]$Component = 'Both',
     [Alias('Profile')][ValidateSet('acceptance', 'production')][string]$ReleaseProfile = 'acceptance',
     [string]$Signer,
     [string]$TrustRoots,
@@ -14,7 +14,7 @@ param(
     [string]$LocaldbPythonDirectory,
     [string]$TargetRuntimeResources,
     [string]$SourceRef = 'HEAD',
-    [string]$OutputDirectory = (Join-Path $env:LOCALAPPDATA 'AidWorkBuild/deliveries'),
+    [string]$OutputDirectory,
     [switch]$WorkspacePrepared,
     [string]$SourceCommit,
     [switch]$Unsigned,
@@ -22,11 +22,21 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
-$includeRuntime = $Component -in @('Both', 'Runtime', 'RuntimeWecom')
-$includeBoss = $Component -in @('Both', 'Boss')
-$includeWecom = $Component -in @('Wecom', 'RuntimeWecom')
+$includeRuntime = $Component -in @('All', 'Both', 'Runtime', 'RuntimeWecom')
+$includeBoss = $Component -in @('All', 'Both', 'Boss')
+$includeWecom = $Component -in @('All', 'Wecom', 'RuntimeWecom')
 $includePlugin = $includeBoss -or $includeWecom
-if ($includePlugin -and [string]::IsNullOrWhiteSpace($Signer)) { throw '插件发布需要 -Signer 指定稳定外部签名者；隔离随机测试包请使用 package.mjs --test' }
+$localBuildRoot = Join-Path $env:LOCALAPPDATA 'AidWorkBuild'
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $downloads = [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders', '{374DE290-123F-4565-9164-39C4925E467B}', $null)
+    if (!$downloads) { $downloads = Join-Path $env:USERPROFILE 'Downloads' }
+    $OutputDirectory = Join-Path ([Environment]::ExpandEnvironmentVariables($downloads)) 'AID-Work-Releases'
+}
+$OutputDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
+if ($includePlugin -and [string]::IsNullOrWhiteSpace($Signer)) {
+    if ($ReleaseProfile -eq 'production') { throw '生产插件发布需要 -Signer 指定正式签名配置' }
+    $Signer = Join-Path $localBuildRoot 'signers/acceptance-cli-v1/signer.json'
+}
 if ([string]::IsNullOrWhiteSpace($TrustRoots)) {
     if ($ReleaseProfile -eq 'production') { throw '生产构建需要 -TrustRoots 指定正式公开信任根' }
     $TrustRoots = Join-Path $repo 'clients/runtime-plugin-packaging/trust/acceptance-roots.json'
@@ -44,38 +54,57 @@ function Expand-SourceArchive {
     if ($LASTEXITCODE -ne 0) { throw '源码归档展开失败' }
 }
 $uiVersion = if ($includeRuntime -and $RuntimeVersion) { $RuntimeVersion } else { Read-Version 'clients/agent-desktop' }
-$bossVersion = if ($includeBoss -and $BossVersion) { $BossVersion } else { Read-Version 'clients/boss-resume-assistant' }
+$selectedBossVersion = if ($includeBoss -and $BossVersion) { $BossVersion } else { Read-Version 'clients/boss-resume-assistant' }
 $selectedWecomVersion = if ($includeWecom -and $WecomVersion) { $WecomVersion } else { Read-Version 'clients/wecom-cli' }
-if ($includeBoss -and [string]::IsNullOrWhiteSpace($ReleaseId)) { $ReleaseId = "boss-$bossVersion" }
-if ($includeWecom -and [string]::IsNullOrWhiteSpace($ReleaseId)) { $ReleaseId = "wecom-$selectedWecomVersion" }
+$pluginVersions = [ordered]@{}
+if ($includeBoss) { $pluginVersions['boss'] = $selectedBossVersion }
+if ($includeWecom) { $pluginVersions['wecom'] = $selectedWecomVersion }
+$releaseIds = [ordered]@{}
+foreach ($provider in $pluginVersions.Keys) {
+    $releaseIds[$provider] = if (![string]::IsNullOrWhiteSpace($ReleaseId)) { $ReleaseId } else { "$provider-$($pluginVersions[$provider])" }
+}
 if ($Plan) {
+    if ($includeBoss -and !$BossVersion -and !$ReleaseId) { $releaseIds['boss'] = $null }
+    if ($includeWecom -and !$WecomVersion -and !$ReleaseId) { $releaseIds['wecom'] = $null }
     [ordered]@{
         component = $Component; profile = $ReleaseProfile; runtime = $includeRuntime; boss = $includeBoss
-        versions = [ordered]@{ runtime = if ($includeRuntime -and !$RuntimeVersion) { $null } else { $uiVersion }; boss = if ($includeBoss -and !$BossVersion) { $null } else { $bossVersion } }
+        versions = [ordered]@{ runtime = if ($includeRuntime -and !$RuntimeVersion) { $null } else { $uiVersion }; boss = if ($includeBoss -and !$BossVersion) { $null } else { $selectedBossVersion } }
         wecom = $includeWecom; wecomVersion = if ($includeWecom -and $WecomVersion) { $selectedWecomVersion } else { $null }
         runtimeSigning = if (!$includeRuntime) { 'not_selected' } elseif ($Unsigned -or $ReleaseProfile -eq 'acceptance') { 'unsigned' } else { 'signed' }
         versionDefaults = 'Unspecified selected versions come from SourceRef and are resolved during isolation; Plan does not execute git.'
         sourceRef = $SourceRef; isolated = $true; outputDirectory = $OutputDirectory
         signing = if ($includePlugin) { 'external-stable' } else { 'not_selected' }
-        releaseId = if (!$PSBoundParameters.ContainsKey('ReleaseId') -and (($includeWecom -and !$WecomVersion) -or ($includeBoss -and !$BossVersion))) { $null } else { $ReleaseId }; trustRoots = $TrustRoots
-        steps = @('isolate-source', 'shared-build', 'fixed-node') + $(if ($includeBoss) { @('boss-build') } else { @() }) + $(if ($includeWecom) { @('wecom-build') } else { @() }) + $(if ($includePlugin) { @('sign-plugin', 'verify-plugin') } else { @() }) + $(if ($includeRuntime) { @('runtime-build', 'package-installer', 'verify-runtime') } else { @() }) + $(if ($includeWecom) { @('verify-target-runtime') } else { @() }) + @('delivery-zip')
+        releaseId = if ($releaseIds.Count -eq 1) { @($releaseIds.Values)[0] } else { $ReleaseId }; releaseIds = $releaseIds; trustRoots = $TrustRoots
+        steps = @('isolate-source', 'shared-build', 'fixed-node') + $(if ($includeBoss) { @('boss-build') } else { @() }) + $(if ($includeWecom) { @('wecom-build') } else { @() }) + $(if ($includePlugin) { @('sign-plugin', 'verify-plugin') } else { @() }) + $(if ($includeRuntime) { @('runtime-build', 'package-installer', 'verify-runtime') } else { @() }) + $(if ($includeWecom -or ($includeBoss -and ($includeRuntime -or $TargetRuntimeResources))) { @('verify-target-runtime') } else { @() }) + @('delivery-zip')
     } | ConvertTo-Json -Depth 5
     return
 }
 # Plan returns before external tools, version writes, output creation or private-key access.
+if ($includePlugin -and !(Test-Path -LiteralPath $Signer -PathType Leaf)) {
+    throw "Signer 配置不存在：$Signer。请由构建机管理员配置已登记的签名者，或使用 -Signer 指定已有配置。"
+}
 if (!$WorkspacePrepared) {
     if ($includeWecom) {
-        if (!$LocaldbPythonDirectory) { $LocaldbPythonDirectory = Join-Path $repo 'clients/runtime-plugin-packaging/assets/localdb-python-final' }
+        $defaultLocaldbPython = Join-Path $localBuildRoot 'assets/localdb-python-final'
+        if (!$LocaldbPythonDirectory) {
+            $LocaldbPythonDirectory = Join-Path $repo 'clients/runtime-plugin-packaging/assets/localdb-python-final'
+            if (!(Test-Path -LiteralPath (Join-Path $LocaldbPythonDirectory 'python.exe') -PathType Leaf)) {
+                $LocaldbPythonDirectory = $defaultLocaldbPython
+            }
+        }
         $LocaldbPythonDirectory = [IO.Path]::GetFullPath($LocaldbPythonDirectory)
-        if (!(Test-Path -LiteralPath (Join-Path $LocaldbPythonDirectory 'python.exe'))) { throw '缺少嵌入式本地库 Python；请用 -LocaldbPythonDirectory 指定已验证的 localdb-python-final 目录' }
+        if (!(Test-Path -LiteralPath (Join-Path $LocaldbPythonDirectory 'python.exe') -PathType Leaf)) {
+            throw "缺少 WeCom 便携 Python：$LocaldbPythonDirectory。请运行 python.exe clients/runtime-plugin-packaging/prepare-localdb.py --output `"$defaultLocaldbPython`"，或用 -LocaldbPythonDirectory 指定已准备的目录。"
+        }
         # WeCom date/IANA capability must be present in the independent local database Python.
         if ($includeWecom) {
             $dayProbe = & (Join-Path $LocaldbPythonDirectory 'python.exe') -I -B -c "from zoneinfo import ZoneInfo; ZoneInfo('Asia/Shanghai'); print('TZDATA_OK')"
             if ($LASTEXITCODE -ne 0 -or $dayProbe -notmatch 'TZDATA_OK') { throw '嵌入式 Python 缺少日期/IANA 能力（tzdata）；请先运行 clients/runtime-plugin-packaging/prepare-localdb.py 刷新 localdb-python-final 资产后重试' }
         }
     }
-    $commit = (& git -C $repo rev-parse --verify "$SourceRef^{commit}").Trim()
+    $commit = & git -C $repo rev-parse --verify "$SourceRef^{commit}"
     if ($LASTEXITCODE -ne 0) { throw 'SourceRef 无法解析为源码提交' }
+    $commit = $commit.Trim()
     # Keep dependency junctions in the tested Temp build area; deliveries remain persistent outside it.
     $isolatedRoot = Join-Path $env:TEMP ("aid-release-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
     $workspace = Join-Path $isolatedRoot 'workspace'
@@ -89,15 +118,16 @@ if (!$WorkspacePrepared) {
         New-Item -ItemType Directory -Path (Split-Path -Parent (Join-Path $workspace $relative)) -Force | Out-Null
         Copy-Item -LiteralPath (Join-Path $repo $relative) -Destination (Join-Path $workspace $relative) -Force
     }
-    $forward = @('-NoProfile', '-NonInteractive', '-File', (Join-Path $workspace 'clients/agent-desktop/scripts/release-batch.ps1'), '-WorkspacePrepared', '-SourceCommit', $commit)
+    $forward = @('-NoProfile', '-NonInteractive', '-File', (Join-Path $workspace 'clients/agent-desktop/scripts/release-batch.ps1'), '-WorkspacePrepared', '-SourceCommit', $commit, '-OutputDirectory', $OutputDirectory)
     foreach ($key in $PSBoundParameters.Keys) {
-        if ($key -in @('Plan', 'WorkspacePrepared', 'SourceCommit')) { continue }
+        if ($key -in @('Plan', 'WorkspacePrepared', 'SourceCommit', 'Signer', 'LocaldbPythonDirectory', 'OutputDirectory')) { continue }
         if ($key -eq 'Unsigned') { if ($Unsigned) { $forward += '-Unsigned' }; continue }
         $value = $PSBoundParameters[$key]
-        if ($key -in @('Signer', 'TrustRoots', 'LocaldbPythonDirectory', 'TargetRuntimeResources', 'OutputDirectory')) { $value = [IO.Path]::GetFullPath($value) }
+        if ($key -in @('TrustRoots', 'TargetRuntimeResources')) { $value = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($value) }
         $forward += @("-$key", [string]$value)
     }
-    if ($includeWecom -and !$PSBoundParameters.ContainsKey('LocaldbPythonDirectory')) { $forward += @('-LocaldbPythonDirectory', $LocaldbPythonDirectory) }
+    if ($includePlugin) { $forward += @('-Signer', $Signer) }
+    if ($includeWecom) { $forward += @('-LocaldbPythonDirectory', $LocaldbPythonDirectory) }
     & powershell.exe @forward
     if ($LASTEXITCODE -ne 0) { throw '隔离打包失败；保留隔离目录供诊断' }
     return
@@ -258,7 +288,7 @@ $nativeVersion = Read-Version 'clients/shared/win32-native-input'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $parts = @('AID-Work')
 if ($includeRuntime) { $parts += "Runtime-$uiVersion" }
-if ($includeBoss) { $parts += "BOSS-$bossVersion" }
+if ($includeBoss) { $parts += "BOSS-$selectedBossVersion" }
 if ($includeWecom) { $parts += "WeCom-$selectedWecomVersion" }
 $batchName = ($parts + $stamp) -join '-'
 $buildRoot = Join-Path $repo "clients/agent-desktop/build/$batchName"
@@ -299,19 +329,19 @@ $nodeSpec = Get-Content -LiteralPath (Join-Path $repo 'clients/agent-desktop/scr
 $fixedNode = Join-Path $repo "clients/agent-desktop/build/runtime-cache/node-v$($nodeSpec.version)-win-x64/node.exe"
 Invoke-Checked $fixedNode @('--version')
 $deliveryFilesToCopy = @()
+$pluginPaths = @{}
 
-if ($includePlugin) {
-    $provider = if ($includeWecom) { 'wecom' } else { 'boss' }
-    $providerVersion = if ($includeWecom) { $selectedWecomVersion } else { $bossVersion }
+foreach ($provider in $pluginVersions.Keys) {
     Write-Host "[stage 4] 使用稳定发布者签署 $provider 插件"
     $packageArgs = @(
         'clients/runtime-plugin-packaging/package.mjs', '--provider', $provider,
-        '--signer', $Signer, '--release-id', $ReleaseId, '--node', $fixedNode,
+        '--signer', $Signer, '--release-id', $releaseIds[$provider], '--node', $fixedNode,
         '--npm-cli', $npmCli, '--output', $pluginDir
     )
-    if ($LocaldbPythonDirectory) { $packageArgs += @('--localdb-python', $LocaldbPythonDirectory) }
+    if ($provider -eq 'wecom') { $packageArgs += @('--localdb-python', $LocaldbPythonDirectory) }
     Invoke-Checked $nodeExe $packageArgs
-    $pluginPath = Join-Path $pluginDir "$provider-$providerVersion.aidplugin.zip"
+    $pluginPath = Join-Path $pluginDir "$provider-$($pluginVersions[$provider]).aidplugin.zip"
+    $pluginPaths[$provider] = $pluginPath
     $deliveryFilesToCopy += @($pluginPath, "$pluginPath.manifest.json")
 }
 
@@ -348,7 +378,7 @@ if ($includePlugin) {
     if ($includeBoss) {
         $outerCheck = Join-Path $buildRoot 'plugin-check/outer'
         $payloadCheck = Join-Path $buildRoot 'plugin-check/payload'
-        Expand-Archive -LiteralPath $pluginPath -DestinationPath $outerCheck
+        Expand-Archive -LiteralPath $pluginPaths['boss'] -DestinationPath $outerCheck
         Expand-Archive -LiteralPath (Join-Path $outerCheck 'payload.zip') -DestinationPath $payloadCheck
         $nativeModuleUri = ([Uri](Join-Path $payloadCheck 'node_modules/@aid/win32-native-input/dist/index.js')).AbsoluteUri
         Invoke-Checked $fixedNode @('--input-type=module', '-e',
@@ -357,28 +387,30 @@ if ($includePlugin) {
     $deliveryFilesToCopy += $pluginReportPath
 }
 
-$targetVerification = 'not_selected'
-if ($includeWecom) {
+$targetVerification = @{}
+if ($includePlugin) {
     if ($includeRuntime) { $TargetRuntimeResources = Join-Path $runtimeOutput 'win-unpacked/resources/runtime' }
-    elseif (!$TargetRuntimeResources) {
+    elseif ($includeWecom -and !$TargetRuntimeResources) {
         $installedResources = Join-Path $env:LOCALAPPDATA 'Programs/aid-agent-desktop/resources/runtime'
         if (Test-Path -LiteralPath $installedResources) { $TargetRuntimeResources = $installedResources }
     }
-    if ($TargetRuntimeResources) {
-        $targetReport = Join-Path $buildRoot 'wecom-runtime-verification.json'
-        Invoke-Checked $fixedNode @('clients/agent-desktop/scripts/verify-plugin-runtime.mjs', '--resources', $TargetRuntimeResources, '--package', $pluginPath, '--output', $targetReport)
-        $deliveryFilesToCopy += $targetReport
-        $targetVerification = 'passed'
-    } else {
-        $targetVerification = 'not_run_no_target'
-        Write-Warning '未提供目标 Runtime，只完成插件验包，不代表已能在客户机导入；使用 -TargetRuntimeResources 核验或 -Component RuntimeWecom 配套出包。'
+    foreach ($provider in $pluginVersions.Keys) {
+        if ($TargetRuntimeResources) {
+            $targetReport = Join-Path $buildRoot "$provider-runtime-verification.json"
+            Invoke-Checked $fixedNode @('clients/agent-desktop/scripts/verify-plugin-runtime.mjs', '--provider', $provider, '--resources', $TargetRuntimeResources, '--package', $pluginPaths[$provider], '--output', $targetReport)
+            $deliveryFilesToCopy += $targetReport
+            $targetVerification[$provider] = 'passed'
+        } else {
+            $targetVerification[$provider] = 'not_run_no_target'
+            Write-Warning "未提供 $provider 的目标 Runtime，只完成插件验包；可用 -TargetRuntimeResources 核验指定 Runtime。"
+        }
     }
 }
 
 Write-Host '[stage 7] 所选组件打包定向测试'
 if ($includePlugin) { Invoke-NpmAt 'clients/runtime-plugin-packaging' @('test') }
 Invoke-Checked $nodeExe @('--test', 'clients/agent-desktop/scripts/tests/release-batch.test.mjs')
-if ($includeWecom) { Invoke-Checked $nodeExe @('--test', 'clients/agent-desktop/scripts/tests/plugin-runtime.test.mjs') }
+if ($TargetRuntimeResources -and $includePlugin) { Invoke-Checked $nodeExe @('--test', 'clients/agent-desktop/scripts/tests/plugin-runtime.test.mjs') }
 if ($includeRuntime) { Invoke-NpmAt 'clients/agent-desktop' @('run', 'runtime:test:packaging') }
 
 Write-Host '[stage 8] 交付文件与公开说明'
@@ -389,14 +421,15 @@ $sourceState = @('isolated git archive; packaging-only working tree overlay; exp
 $buildInfo = [ordered]@{
     schemaVersion = 1; batch = $batchName; profile = $ReleaseProfile; component = $Component
     builtAt = (Get-Date).ToString('o'); baseCommit = $sourceBaseCommit; workingTree = $sourceState
-    versions = [ordered]@{ ui = $uiVersion; host = $hostVersion; core = $coreVersion; nativeInput = $nativeVersion; boss = $bossVersion; wecom = $selectedWecomVersion; node = $nodeSpec.version }
+    versions = [ordered]@{ ui = $uiVersion; host = $hostVersion; core = $coreVersion; nativeInput = $nativeVersion; boss = $selectedBossVersion; wecom = $selectedWecomVersion; node = $nodeSpec.version }
     hostPackageSha256 = $hostSha; buildInputSha256 = if ($runtimeManifest) { $runtimeManifest.buildInputSha256 } else { $null }
     verification = [ordered]@{
         runtimePackage = if ($includeRuntime) { 'passed' } else { 'not_selected' }
         runtimeVerify = if ($includeRuntime) { 'passed' } else { 'not_selected' }
         pluginOffline = if ($includePlugin) { 'passed' } else { 'not_selected' }
         nativeInputLoad = if ($includeBoss) { 'passed' } else { 'not_selected' }
-        wecomTargetRuntime = $targetVerification
+        bossTargetRuntime = if ($includeBoss) { $targetVerification['boss'] } else { 'not_selected' }
+        wecomTargetRuntime = if ($includeWecom) { $targetVerification['wecom'] } else { 'not_selected' }
         nsisInstallation = 'not_run'; oldInventoryUpgrade = 'not_run'; runtimeUiSmoke = 'not_run'; bossBusiness = 'not_run'; visualRecovery = 'not_run'
     }
 }
@@ -405,12 +438,10 @@ $instructions = @()
 if ($includeRuntime) {
     $instructions += '1. 正常退出自己正在使用的 Runtime 后，运行本包 EXE；兼容配置与配对沿用，安装器不自动更新 BOSS 插件。'
 }
-if ($includeBoss) {
-    $instructions += "通过 Runtime 的离线包安装入口导入 boss-$bossVersion.aidplugin.zip，不要解压插件。只更新插件时无需重装已满足要求且信任该发布者的 Runtime。"
-}
-if ($includeWecom) {
-    $instructions += "通过 Runtime 离线包入口导入 wecom-$selectedWecomVersion.aidplugin.zip，不要解压插件。"
-    $instructions += if ($targetVerification -eq 'passed') { '已核对目标 Runtime 的公开信任根、签名及四项必需工具静态兼容前提；实际导入和调用待安装联调。' } else { '未指定目标 Runtime，本插件未验证特定客户机可导入；先用 -TargetRuntimeResources 核验，或用 -Component RuntimeWecom 生成配套安装器。' }
+foreach ($provider in $pluginVersions.Keys) {
+    $packageName = [IO.Path]::GetFileName($pluginPaths[$provider])
+    $instructions += "通过 Runtime 离线包入口导入 $packageName，保留插件 ZIP 原样。"
+    $instructions += if ($targetVerification[$provider] -eq 'passed') { '已通过目标 Runtime 的离线包验证，实际导入和业务调用待安装联调。' } else { '本插件未核验特定客户机，使用 -TargetRuntimeResources 核对目标 Runtime。' }
 }
 $readme = @"
 # Runtime / CLI 离线交付说明
@@ -467,4 +498,6 @@ try {
 $zipSha = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 Write-Utf8 "$zipPath.sha256" ("$zipSha  $([IO.Path]::GetFileName($zipPath))`n")
 Write-Host '=== ALL DONE ==='
+Write-Host "交付目录：$deliveryRoot"
+Write-Host "交付 ZIP：$zipPath"
 Get-Item -LiteralPath $zipPath, "$zipPath.sha256" | Select-Object FullName, Length

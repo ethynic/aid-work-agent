@@ -120,14 +120,30 @@ ROUTING_PROMPT_SUFFIX = """
 
 # 修改类意图触发词：命中即跳过规则路由的 to_md 短路，交给 LLM 路由判定
 # （修改/查找替换/删行等指令常含"内容""文本"等词，曾被误劫持为 to_md 只读操作）
+# "modify"/"填写"/"填入"/"设置"：2026-11-10 报价单事故（tr_runner_96fc4bec）回归——
+# LLM 照 fill_template 引导措辞写 "modify：…B4 单元格 = …"，旧词表全未命中，
+# 指令又含"内容"，连续两次被劫持成 to_md 只读却报 success，Agent 误判已写入后
+# 放弃模板用 markdown 重建文件，最终交付物丢失模板样式
 _MODIFY_INTENT_TOKENS = (
     "修改", "替换", "改为", "改成", "改一下", "改下", "删除", "去掉", "清除",
     "插入", "新增一行", "加一行", "写入", "更新", "重命名", "查找替换",
+    "modify", "填写", "填入", "设置",
 )
+
+# 单元格坐标引用（如 B4、AA12、R1C1）；前后不得紧跟字母/数字，避免命中
+# file_90ec1c11ef49 这类文件 ID 内部的字母数字段
+_CELL_REF_RE = re.compile(r"(?<![a-z0-9])[a-z]{1,3}\d{1,7}(?![a-z0-9])")
 
 
 def _is_modify_intent(lower_ctx: str) -> bool:
-    return any(token in lower_ctx for token in _MODIFY_INTENT_TOKENS)
+    if any(token in lower_ctx for token in _MODIFY_INTENT_TOKENS):
+        return True
+    # 坐标兜底："B4 单元格填写…" 这类表述词表永远追不上——凡"单元格/cell"与
+    # 坐标引用同现即按修改意图处理。误判方向安全：只是跳过 to_md 短路多走一轮
+    # LLM 路由（LLM 路由仍可判 read/to_md），不会把只读指令劫持成写操作
+    if ("单元格" in lower_ctx or "cell" in lower_ctx) and _CELL_REF_RE.search(lower_ctx):
+        return True
+    return False
 
 
 class ExcelRouter:

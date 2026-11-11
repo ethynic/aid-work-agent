@@ -22,6 +22,13 @@ vi.mock('@/api/subagentTemplates', () => ({
   getTemplateDownloadUrl: (fileId: string) => `/api/files/${fileId}/download`,
 }))
 
+// 打开弹框时会预查上一版（回退入口显隐），默认无可回退
+const getPreviousExtraMock = vi.fn()
+vi.mock('@/api/subagentExtra', () => ({
+  getPreviousExtra: (...args: any[]) => getPreviousExtraMock(...args),
+  rollbackExtra: vi.fn(),
+}))
+
 vi.mock('vue-router', () => ({
   useRouter: () => ({ resolve: () => ({ href: '/t/t1/knowledge' }) }),
 }))
@@ -80,5 +87,41 @@ describe('TenantAgentCustomizeDialog', () => {
     expect((wrapper.find('textarea').element as HTMLTextAreaElement).value).toBe('')
     expect(wrapper.find('input[placeholder="留空则使用默认描述"]').element).toHaveProperty('value', '')
     expect(wrapper.find('input[placeholder="按钮文案，≤6 字"]').element).toHaveProperty('value', '')
+  })
+
+  it('上一版为空（清空态）仍显示回退入口，确认框提示回退后使用默认配置', async () => {
+    // 独立评审 P1：清空是生效状态，链上记录为空版本；回退入口显隐以 version 为准，
+    // 空串上一版与「无可回退」区分，确认框明确提示回退后使用默认配置
+    getInstanceMock.mockResolvedValue(instanceA)
+    getPreviousExtraMock.mockResolvedValue({ success: true, content: '', version: 2 })
+    const wrapper = mountDialog()
+
+    await wrapper.setProps({ modelValue: true })
+    await flushPromises()
+
+    const rollbackBtn = wrapper.findAll('button').find(b => b.text().includes('回退上一版'))
+    expect(rollbackBtn).toBeTruthy()
+
+    await rollbackBtn!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('使用默认配置')
+    expect(wrapper.text()).not.toContain('内容预览如下')
+  })
+
+  it('上一版有内容时确认框展示全文预览', async () => {
+    getInstanceMock.mockResolvedValue(instanceA)
+    getPreviousExtraMock.mockResolvedValue({ success: true, content: '上一版提示词全文', version: 3 })
+    const wrapper = mountDialog()
+
+    await wrapper.setProps({ modelValue: true })
+    await flushPromises()
+
+    const rollbackBtn = wrapper.findAll('button').find(b => b.text().includes('回退上一版'))
+    await rollbackBtn!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('内容预览如下')
+    expect(wrapper.text()).toContain('上一版提示词全文')
   })
 })

@@ -23,7 +23,12 @@ import shutil
 import sys
 from pathlib import Path
 
-TENANTS_ROOT = Path("storage/tenants").resolve()
+def _project_root() -> Path:
+    # skill_execute 的 CWD 是 /tmp 工作目录，路径必须基于 PROJECT_ROOT（skill_executor 注入）解析
+    return Path(os.environ.get("PROJECT_ROOT") or Path.cwd()).resolve()
+
+
+TENANTS_ROOT = (_project_root() / "storage/tenants").resolve()
 
 
 def _resolve_file_id(file_id: str) -> Path:
@@ -39,7 +44,10 @@ def _resolve_file_id(file_id: str) -> Path:
 
 
 def _validate_src(src: str) -> Path:
-    p = Path(src).resolve()
+    p = Path(src)
+    if not p.is_absolute():
+        p = _project_root() / p
+    p = p.resolve()
     if TENANTS_ROOT not in p.parents:
         raise PermissionError(f"拒绝访问租户存储目录之外的路径: {src}")
     if not p.is_file():

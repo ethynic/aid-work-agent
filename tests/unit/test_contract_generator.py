@@ -17,7 +17,7 @@ SKILL_DIR = PROJECT_ROOT / "src" / "skills" / "contract-generator-1.0.0"
 SCRIPTS = SKILL_DIR / "scripts"
 
 
-def _run(cmd, cwd, stdin_data=None):
+def _run(cmd, cwd, stdin_data=None, env_extra=None):
     env = {
         "PATH": "/usr/local/bin:/usr/bin:/bin",
         "PROJECT_ROOT": str(PROJECT_ROOT),
@@ -25,6 +25,7 @@ def _run(cmd, cwd, stdin_data=None):
         "PYTHONUTF8": "1",
         "HOME": "/tmp",
     }
+    env.update(env_extra or {})
     proc = subprocess.run(
         [sys.executable] + [str(c) for c in cmd], cwd=str(cwd), env=env,
         capture_output=True, text=True, input=stdin_data, timeout=120,
@@ -197,7 +198,9 @@ class TestFetchFileGlue(unittest.TestCase):
     """fetch_file.py 胶水：租户路径放行 + 越界拒绝。"""
 
     def _run_fetch(self, args, cwd):
-        return _run([SCRIPTS / "fetch_file.py"] + args, cwd=cwd)
+        # fetch_file 的租户根基于 PROJECT_ROOT 解析；这里模拟独立环境，指向临时目录
+        return _run([SCRIPTS / "fetch_file.py"] + args, cwd=cwd,
+                    env_extra={"PROJECT_ROOT": str(cwd)})
 
     def test_src_inside_tenant_storage_allowed(self):
         import tempfile

@@ -47,7 +47,6 @@ export interface AgentDefinition {
   // 关联的 prompt 信息
   prompt_id?: string
   latest_version?: number
-  production_version?: number
 }
 
 export interface DefinitionListResult {
@@ -67,16 +66,6 @@ export interface PromptVersion {
   parent_version: number | null
   created_by: string | null
   created_at: string
-}
-
-export interface PromptLabel {
-  label: string
-  version_id: string
-  version: number | null
-  created_by: string | null
-  updated_by: string | null
-  created_at: string
-  updated_at: string
 }
 
 export interface DiffResult {
@@ -173,43 +162,10 @@ export async function diffVersions(agentId: string, v1: number, v2: number): Pro
   return handleResponse(response)
 }
 
-export async function getDraft(agentId: string): Promise<{ success: boolean; data: any }> {
-  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/draft`, { headers: getAuthHeaders() })
-  return handleResponse(response)
-}
-
-export async function saveDraft(agentId: string, data: {
-  content: string; base_version?: number
-}): Promise<{ success: boolean; data: any }> {
-  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/draft`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(data),
-  })
-  return handleResponse(response)
-}
-
-export async function commitDraft(agentId: string, data: {
-  commit_message?: string
-}): Promise<{ success: boolean; data: any }> {
-  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/draft/commit`, {
+export async function rollbackSystemPrompt(agentId: string): Promise<{ success: boolean; data: { version: number; content: string } }> {
+  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/system-prompt/rollback`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(data),
-  })
-  return handleResponse(response)
-}
-
-export async function listLabels(agentId: string): Promise<{ success: boolean; data: PromptLabel[] }> {
-  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/labels`, { headers: getAuthHeaders() })
-  return handleResponse(response)
-}
-
-export async function setLabel(agentId: string, label: string, version: number): Promise<{ success: boolean; data: PromptLabel }> {
-  const response = await fetch(`${API_BASE}/${encodeURIComponent(agentId)}/labels/${encodeURIComponent(label)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ version }),
+    headers: getAuthHeaders(),
   })
   return handleResponse(response)
 }

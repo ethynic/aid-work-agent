@@ -46,7 +46,7 @@
 cd clients/boss-resume-assistant
 npm run build:main      # 编译（tsc -p tsconfig.main.json）→ dist/
 npm run typecheck       # 类型检查（0 错误才能提交）
-bash scripts/test-bounded.sh   # 测试：逐文件 90s 超时、8 并行，默认排除挂死文件（可加文件名子串过滤）
+bash scripts/test-bounded.sh   # 测试：逐文件 90s 超时、8 并行，默认排除挂死文件；可加多个关键词按「或」过滤（文件名含任一即选中）；退出码 0=全过 / 1=有失败 / 2=零匹配（未执行≠通过）
 node dist/src/cli/index.js <command> [--cdp-port 9222]   # 跑 CLI
 ```
 
@@ -104,7 +104,9 @@ const gw = new CdpGateway(); await gw.connect('http://127.0.0.1:9222')
 
 ## 9. 部署
 
-以 npm 全局包形式分发：`npm pack` 出 tgz，用户 `npm install -g` 后用 `boss-cli` 命令；同时作为 MCP Provider 可 `boss-cli mcp --stdio` 供 Codex/WorkBuddy 等 Host 调用（设计文档 §1、`docs/ideas.md` 条目 51 第一方 CLI/MCP Provider 架构）。
+Runtime 导入的 `.aidplugin.zip` 与独立 npm `.tgz` 的命令、用途和验证都见[统一打包手册](../../docs/ops/runtime-boss-release-guide.md)。
+
+**禁裸 `npm pack`（2026-11-10 洁净房验证）**：`@aid/win32-native-input` 依赖声明为 `file:../shared/...`，客户机安装时按安装机路径解析 → 悬空符号链接、koffi 缺失，所有点击/输入 native 动作崩溃（`version --json` 不触 native，不会暴露）。`pack-release.sh` 会把 shared 构建产物同步为包内 `vendor/win32-native-input`、依赖改写 `file:./vendor/...`，并把 koffi + `@koromix/koffi-win32-x64`（原生二进制，koffi 的 optionalDependencies）一并打入 vendor 包内 node_modules。交付前务必洁净房验证：装进全新目录后 `import('@aid/win32-native-input')` 能加载且 `createKoffiApi()` 可实例化。客户机前提：Node ≥ 22、可访问 npm registry（sdk/ws/zod 仍走公网）。
 
 ## 10. 核心机制速查：CDP 定位 → 坐标换算 → Win32 点击 → 输入模拟（完整链路）
 

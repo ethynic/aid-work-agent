@@ -45,7 +45,7 @@ class TestBidDocGeneratorSkillRegistry(unittest.TestCase):
         self.assertIn("bid-doc-generator", registry.list_skills())
         skill = registry.get("bid-doc-generator")
         self.assertIsNotNone(skill)
-        self.assertEqual(skill.version, "1.0.0")
+        self.assertEqual(skill.version, "1.0.1")
 
     def test_skill_requires_tools_declared(self):
         from src.core.skill_registry import SkillRegistry

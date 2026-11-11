@@ -1854,11 +1854,6 @@ app.include_router(admin_subagent.router)
 app.include_router(admin_redis.router)
 app.include_router(subagent_extra.router)
 
-# Prompt 版本管理 API
-from src.api import prompt_management
-app.include_router(prompt_management.admin_router)
-app.include_router(prompt_management.tenant_router)
-
 # 子智能体定义管理 API
 from src.api import agent_definitions
 app.include_router(agent_definitions.router)
@@ -1897,6 +1892,11 @@ app.include_router(tenant_agent_instances.router)
 # 平台管理报表 API
 from src.api import admin_reports
 app.include_router(admin_reports.router)
+
+# 系统健康监控 API（/portal/system-health，platform_admin；数据源为 background
+# 容器采集器写入的 Redis 快照，见 src/services/system_health/collector.py）
+from src.api import admin_monitor
+app.include_router(admin_monitor.router)
 
 # 平台错误日志管理 API
 from src.api import admin_error_logs

@@ -323,6 +323,41 @@ def test_rule_route_to_md_still_works_for_read_intent():
     assert res["task"] == "to_md"
 
 
+def test_rule_route_modify_intent_20261110_quote_incident_regression():
+    """2026-11-10 报价单事故回归（tr_runner_96fc4bec）：LLM 照 fill_template 引导
+    措辞发起的修改指令（英文 modify / 填写 / 设置 / 单元格坐标）不得被 to_md 劫持。
+    事故链：两次修改指令都含"内容"且未命中旧词表 → 被劫持成 to_md 只读却报
+    success → Agent 误判已写入，放弃模板用 markdown 重建文件交付。"""
+    from src.tools.excel.excel_router import ExcelRouter
+
+    router = ExcelRouter()
+    modify_contexts = [
+        # 事故原文 1：英文 modify + 设置，旧词表全未命中
+        "modify：仅设置两个单元格，其余内容与格式保持不变。B4 单元格 = 2026年11月10日；B5 单元格 = BOSS招聘助手（招聘AI员工）。保存为新文件。",
+        # 事故原文 2：中文"填写"，旧词表未命中
+        "在模板的 B4 单元格填写“2026年11月10日”，在 B5 单元格填写“XX”，其它所有单元格内容和样式保持不变，另存为新文件输出",
+        # 仅靠坐标兜底命中（无任何动词触发词）
+        "把 B4 和 B5 两个单元格的内容都设为今天的日期",
+        # 英文整句
+        "modify the template: fill cell B4 with today's date, keep other content unchanged",
+    ]
+    for ctx in modify_contexts:
+        res = router._rule_based_route(ctx, ["tpl.xlsx"])
+        assert res.get("task") == "", f"修改指令被规则路由劫持: {ctx} -> {res}"
+
+
+def test_modify_intent_cell_ref_regex_not_confused_by_file_id():
+    """坐标兜底正则不得命中文件 ID 内部的字母数字段（如 file_90ec1c11ef49）"""
+    from src.tools.excel.excel_router import _is_modify_intent
+
+    # 含文件 ID 但无修改意图：不触发坐标兜底
+    assert _is_modify_intent("读取该模板内容 file_90ec1c11ef49") is False
+    # 纯坐标 + 单元格：触发
+    assert _is_modify_intent("把 b4 单元格的内容清空") is True
+    # 独立坐标但无"单元格/cell"语境：不触发（避免误伤普通指令）
+    assert _is_modify_intent("导出附件 abc123 的内容") is False
+
+
 # ============================================================
 # fill_template 平铺 data 事故回归（2026-09-23 报价单，tr_26e2c23499dc4441）
 # ============================================================
