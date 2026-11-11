@@ -16,6 +16,8 @@
 
 首轮 BOSS CLI 的产品发布目标为 `1.0.0`，与 Runtime 和 WeCom CLI 同轮切换，共同遵循契约 3.0。向 Agent 开放哪些完整业务命令、参数、内部小 CLI 的组合以及业务过程和结果结构，由本独立设计确定。[共同契约 3.0 第 12 节](../../system/runner-desktop-runtime-integration-contract.md#12-契约-30-与首轮实施) · [1.0.0 实施计划](../../plans/plan-runtime-plugin-host.md#1610-runtime-与插件-100-实施计划待开发)
 
+业务命令由 BOSS CLI 检查 Chrome 调试连接、目标 BOSS 页面及登录状态。需要桌面输入的命令检查实际输入条件，复用已有页面、身份与动作确认。运行条件不满足时由插件返回明确原因及已确认的业务进度。迁移验收覆盖 Chrome 不可用、页面不符、未登录和输入条件不足，确认未开始的业务动作保持未执行。用户打开的 Chrome 按现有连接方式使用，Runtime 停止范围限于受管执行。[安全切换与插件接管](../../research/runtime-platform-dependency-review-20261111.md#安全切换与插件接管)
+
 业务中断后由用户决定是否继续。Agent 按用户要求调用插件开放的继续能力，插件判断能否使用保存的进度，以及从哪里继续。已完成及已尝试但结果未知的记录保留。
 
 现有 `boss_resume_next`／CLI `resume-next` 可作为继续筛选入口的参考。当前服务端 `prepare_next` 要求父批次 `succeeded`、`effect=none` 且具备有效续筛结果；该事实尚不覆盖任意中断批次的恢复。1.0.0 设计需要明确可保留的进度、续接条件和对用户的结果说明，具体命令清单仍待业务设计。
