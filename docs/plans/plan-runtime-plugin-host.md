@@ -749,4 +749,4 @@ D1和D2形成同一交付闭环：既不能只有按钮没有故障关联字段�
 | 已开始调用丢失 | [设备 API](../../src/local_tools/api.py)领取租约为 60 秒；[expire_stale_claims](../../src/local_tools/repository.py)将到期的已领取/运行/取消中调用转为 unknown，尚未领取的 queued 记录保留。[proxy 观察](../../src/local_tools/proxy_tool.py)与 [Runner 终态](../../src/core/agent_engine/engine.py)在当前恢复契约分支中把原执行未知收敛为本机操作中断，普通原 Runner 按失败结束。 |
 | 插件无消息 | [ProgressForwarder](../../clients/shared/local-tool-host-core/src/legacy/invocationRunner.ts)当前约 60 秒无业务语义进展仅告警，仍每 2 秒自行续租；[ProviderManager](../../clients/shared/local-tool-host-core/src/legacy/providerManager.ts)另有默认 10 分钟调用超时，收到插件进度可重置。调用超时与实际进程停止分别验证，1.0.0 需接上静默异常的实际停止与问题报告。 |
 
-[解耦评审](../research/runtime-plugin-decoupling-review-20261111.md)第 1、2 项已确认。新版 Runtime 按插件自身的受信声明安装、发现和执行，企微与 BOSS 同轮重构。原拟议的企微兼容入口退役，1.0.0 切换后统一升级。通用接入及升级验收已登记在第 16.10 节。
+[解耦评审](../research/runtime-plugin-decoupling-review-20261111.md)第 1～3 项已确认。新版 Runtime 按插件自身的受信声明安装、发现和执行，企微与 BOSS 同轮重构，1.0.0 切换后统一升级。插件发起其业务所需的云端调用，云端业务接口核验授权、处理数据和计费。BOSS 和企微分别在独立设计中登记其接口和授权，随第 16.10 节验收实际生产消费链路。

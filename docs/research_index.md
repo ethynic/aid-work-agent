@@ -6,7 +6,7 @@
 
 | 调研主题 | 文档 | 关联功能 |
 |---------|------|---------|
-| Runtime 1.0.0 与业务插件解耦 | [独立评审](research/runtime-plugin-decoupling-review-20261111.md) | [Runtime 1.0.0](plans/plan-runtime-plugin-host.md#1610-runtime-与插件-100-实施计划待开发)，第 1、2 项已确认，其余待逐条确认。 |
+| Runtime 1.0.0 与业务插件解耦 | [独立评审](research/runtime-plugin-decoupling-review-20261111.md) | [Runtime 1.0.0](plans/plan-runtime-plugin-host.md#1610-runtime-与插件-100-实施计划待开发)，第 1～3 项已确认，其余待逐条确认。 |
 | agent3 Runner 端到端混合负载实验 | [实测报告](research/agent3-runner-end-to-end-load-test-20261106.md) | Runner 执行槽隔离 Phase 4：三档 8/8 任务完成结算，双槽并行已验；同步阻塞、告警与旧客户端仍待验。 |
 | WeCom CLI OCR 使用点清单 | [调研](research/wecom-cli-ocr-inventory-20261106.md) | 2026-11-06：9 组原使用场景，区分仍运行的入口、退役脚本与发行包 OCR 依赖。 |
 | 「社会治理智能体」技术要求评估 | [评估](research/social-governance-agent-requirement-assessment.md) | 2026-11-03：高校采购标书 vs 本项目能力对照；约 60% 吻合可投，缺口为工作流编排与知识空间，投标前需定应对策略。 |
