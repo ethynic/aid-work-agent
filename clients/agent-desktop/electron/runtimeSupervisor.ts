@@ -134,10 +134,12 @@ export class RuntimeSupervisor {
     })
   }
 
-  async request(value: unknown): Promise<Reply> {
+  async request(value: unknown, signal?: AbortSignal): Promise<Reply> {
     const request = parseRuntimeRequest(value)
+    signal?.throwIfAborted()
     if (!this.accepting) throw new Error('Runtime正在退出，请等待执行收尾')
     const startup = await this.ensure()
+    signal?.throwIfAborted()
     if (!this.accepting) throw new Error('Runtime正在退出，请等待执行收尾')
     if (startup.code !== 0) return { ...startup, request_id: request.request_id, method: request.method }
     const reply = await this.send(request.method, request.params)

@@ -72,16 +72,39 @@ test('runtime_app confirms interrupted execution later and archives it without s
   assert.equal(f.a.starts, 0, 'confirmation alone must never start execution')
 })
 
-test('a typed structural recovery failure stops rechecking and restores the plain reconciling reason', async t => {
+test('a typed structural recovery failure stops rechecking and reports blocked without archiving', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = await recheckHost(t, 'runtime_app', n => { if (n === 1) return false; throw new ManagementError(11, 'marker binding invalid') })
   assert.ok(String(f.host.getState().blocked_reason).includes(CONFIRMING))
   await t.mock.timers.tick(10_000); await drain()
   assert.equal(f.count(), 2)
-  assert.equal(f.host.getState().state, 'reconciling')
-  assert.equal(f.host.getState().blocked_reason, IDLE_REASON)
+  assert.equal(f.host.getState().state, 'blocked')
+  assert.match(f.host.getState().blocked_reason, /旧执行记录无法读取或无效/)
+  assert.equal(readFileSync(join(f.home, 'host-running.json'), 'utf8'), OLD_MARKER)
   await t.mock.timers.tick(120_000); await drain()
   assert.equal(f.count(), 2, 'no retries after a structural failure')
+})
+
+test('structural failure in the initial check reports blocked without starting a recheck', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = await recheckHost(t, 'runtime_app', () => { throw new ManagementError(11, 'marker unreadable') })
+  assert.equal(f.host.getState().state, 'blocked')
+  assert.match(f.host.getState().blocked_reason, /旧执行记录无法读取或无效/)
+  assert.equal(readFileSync(join(f.home, 'host-running.json'), 'utf8'), OLD_MARKER)
+  await t.mock.timers.tick(30_000); await drain()
+  assert.equal(f.count(), 1)
+})
+
+test('a temporary failure in the initial check resumes when the next query confirms exit', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = await recheckHost(t, 'runtime_app', n => { if (n === 1) throw new Error('process supervision unavailable'); return true })
+  assert.equal(f.host.getState().state, 'reconciling')
+  assert.match(f.host.getState().blocked_reason, new RegExp(CONFIRMING))
+  assert.equal(existsSync(join(f.home, 'host-running.json')), true)
+  await t.mock.timers.tick(10_000); await drain()
+  assert.equal(f.count(), 2)
+  assert.equal(f.host.getState().state, 'stopped')
+  assert.equal(f.host.recoveredAfterInterruption, true)
 })
 
 test('a transient recovery failure keeps the confirmation loop running', async t => {
