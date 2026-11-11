@@ -85,7 +85,7 @@
 
 | 项 | 状态 | 依据 | 是否必须 |
 |---|---|---|---|
-| Excel 读取算法修复（used range 膨胀防御 + excel_process 8 handler 全量 to_thread） | ✅ 已完成开发，**待部署**（TPG80509，ideas.md 20261105-1540） | [计划](../plans/plan-excel-read-performance.md)：宽表完整读取约 1s，270 相关测试通过 | 部署即生效，随本方案同一窗口上线；它是 11-05 事故根因的直接修复，也是重负载典型内存回到数百 MiB 的前提 |
+| Excel 读取算法修复（used range 膨胀防御 + excel_process 8 handler 全量 to_thread） | ✅ 已部署生产（TPG80509，2026-11-11 核对 243 四容器均含修复代码，ideas.md 20261105-1540） | [计划](../plans/plan-excel-read-performance.md)：宽表完整读取约 1s，270 相关测试通过 | 已生效；它是 11-05 事故根因的直接修复，也是重负载典型内存回到数百 MiB 的前提 |
 | P0③ upload_data_tool 假异步 | ✅ 已在 master 修复 | `src/tools/data_analysis/upload_data_tool.py` 已改 `await extract_schema(...)`，含原缺陷注释 | 不阻塞 |
 | P0① 取消/中断后槽位进程挂死（2/2 复现，须人工重启容器） | ❌ **待整改，无修复计划** | [执行槽隔离计划 Phase 4](../plans/plan-runner-execution-slot-isolation-and-alerts.md) | **必须前置（2026-11-11 用户确认）**：挂死 = 永久损失执行体且无自愈（PID 活着、healthcheck 只 pgrep、监督补租把 attempt 维持在 active，两分钟回收永不触发）；挂死进程持有 ~870MB 不释放且随取消累积 |
 | P0② 长工具期间心跳/监督报 LockNotAvailable，运行中任务被误判 interrupted（2/2 复现） | ❌ **待整改，无修复计划** | 同上 | **必须前置（2026-11-11 用户确认）**：正确性缺陷（误中断）；扩容放大锁竞争面，整改须涵盖监督补租扫描路径 |
