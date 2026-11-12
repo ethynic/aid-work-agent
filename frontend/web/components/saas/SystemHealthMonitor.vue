@@ -53,16 +53,18 @@
           </div>
           <div class="space-y-2 text-sm">
             <div class="flex justify-between">
-              <span class="text-muted">轻槽（运行+收尾）</span>
+              <span class="text-muted">轻槽</span>
               <span class="text-default font-medium" :title="lightSlotTitle">
                 {{ lightOccupied ?? '-' }} / {{ lightCapacity ?? '-' }}
+                <span v-if="lightCapacity != null" class="text-muted text-xs">({{ lightConcurrency }} * {{ runner?.light_slots ?? '-' }})</span>
               </span>
             </div>
             <div class="flex justify-between">
-              <span class="text-muted">通用槽（运行+收尾）</span>
+              <span class="text-muted">通用槽</span>
               <span class="text-default font-medium"
-                :title="`通用槽容量 = AGENT_RUNNER_GENERAL_SLOTS（部署配置口径）；通用池可兜领轻任务，占用按判型近似`">
+                :title="generalSlotTitle">
                 {{ heavyOccupied ?? '-' }} / {{ runner?.general_slots ?? '-' }}
+                <span v-if="runner?.general_slots != null" class="text-muted text-xs">(1 * {{ runner?.general_slots }})</span>
               </span>
             </div>
             <div class="flex justify-between">
@@ -391,8 +393,11 @@ const heavyOccupied = computed(() =>
 const lightSlotTitle = computed(() => {
   const slots = runner.value?.light_slots ?? '-'
   const c = lightConcurrency.value
-  const base = `轻槽容量 = AGENT_RUNNER_LIGHT_SLOTS（部署配置口径）；轻池只领轻任务，通用池可兜领，占用按判型近似`
-  return c > 1 ? `${base}；每槽 ${c} 并发，容量已按 ${slots} 槽 × ${c} 并发换算为执行体` : base
+  return `占用/容量为运行+收尾合并计数；容量 = 每槽并发 ${c} × 轻槽副本 ${slots}（AGENT_RUNNER_SLOT_CONCURRENCY × AGENT_RUNNER_LIGHT_SLOTS，部署配置口径）；轻池只领轻任务，通用池可兜领，占用按判型近似`
+})
+const generalSlotTitle = computed(() => {
+  const slots = runner.value?.general_slots ?? '-'
+  return `占用/容量为运行+收尾合并计数；容量 = 通用槽副本 ${slots}（AGENT_RUNNER_GENERAL_SLOTS，部署配置口径），每槽 1 执行体；通用池可兜领轻任务，占用按判型近似`
 })
 const business = computed(() => overview.value?.snapshot?.business)
 const middleware = computed(() => overview.value?.snapshot?.middleware)
