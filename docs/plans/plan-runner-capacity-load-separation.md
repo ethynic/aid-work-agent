@@ -88,6 +88,7 @@
 ### 2.5 可观测性
 
 - `load_class` 入 Trace/监控/告警维度（设计 §5.3 第 3 条），支撑轻池排队/通用池空转两个校准信号的观察。
+- **实现状态（2026-11-12，提交 10c6ac28）**：① Trace 维度——worker 创建 TraceCollector 时写 `trace.metadata['load_class']`（随 obs_traces 落库）；② 告警维度——长任务告警参数模型加 `load_class` 字段、外发文本渲染「负载池：轻专用池/通用池」标签、告警详情视图透出（same_attempt 条件下）；③ 池校准信号观测口径 = 领取/入队 tlog（`log/temp/runner轻重分离.log`）的 load_class + Trace metadata 过滤，未新增独立监控端点（agent_runner_alerts 表不加列，零迁移）。
 
 ### 2.6 测试
 
