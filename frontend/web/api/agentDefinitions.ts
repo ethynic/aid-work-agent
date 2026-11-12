@@ -33,6 +33,7 @@ export interface AgentDefinition {
   allow_delegation: boolean
   llm_provider: string | null
   llm_model_codes: Record<string, string> | null
+  enable_thinking: boolean | null
   reply_style: string | null
   business_pages: any[] | null
   knowledge_sources: { source_type: string; display_name: string }[]
@@ -103,6 +104,7 @@ export async function createDefinition(data: {
   context?: Record<string, any>
   llm_provider?: string
   llm_model_codes?: Record<string, string>
+  enable_thinking?: boolean | null
   reply_style?: string
   chat_toolbar?: string[]
   upload_accept?: string

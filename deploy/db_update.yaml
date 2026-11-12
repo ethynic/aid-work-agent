@@ -4819,3 +4819,8 @@
         ON bs_ai_lead_gen_messages (campaign_id);
     CREATE INDEX IF NOT EXISTS idx_bs_ai_lead_gen_messages_contact
         ON bs_ai_lead_gen_messages (contact_id);
+
+- datetime: "2026-11-12 14:20:00"
+  remark: "subagent_definitions 增加 enable_thinking 列（思考模式覆盖：false 关闭思考，null 走 provider 默认）"
+  statements: |
+    ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS enable_thinking BOOLEAN;

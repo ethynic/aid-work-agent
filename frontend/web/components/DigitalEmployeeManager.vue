@@ -87,12 +87,16 @@
             </div>
 
             <!-- LLM 配置 -->
-            <div v-if="detail.llm_provider || detail.llm_model_codes" class="mb-6">
+            <div v-if="detail.llm_provider || detail.llm_model_codes || detail.enable_thinking === false" class="mb-6">
               <h3 class="text-sm font-medium text-default mb-3">LLM 配置</h3>
               <div class="grid grid-cols-2 gap-4">
                 <div>
                   <div class="text-sm text-muted mb-1">Provider</div>
                   <div class="text-sm text-default">{{ detail.llm_provider || '全局默认' }}</div>
+                </div>
+                <div v-if="detail.enable_thinking !== undefined && detail.enable_thinking !== null">
+                  <div class="text-sm text-muted mb-1">思考模式</div>
+                  <div class="text-sm text-default">{{ detail.enable_thinking ? '开启' : '关闭' }}</div>
                 </div>
                 <div v-for="(code, provider) in detail.llm_model_codes || {}" :key="provider">
                   <div class="text-sm text-muted mb-1">{{ provider }} model</div>

@@ -174,6 +174,7 @@ class SubagentLoader:
             allow_delegation=frontmatter.get("allow_delegation", True),
             llm_provider=frontmatter.get("llm_provider", None),
             llm_model_codes=llm_model_codes,
+            enable_thinking=frontmatter.get("enable_thinking", None),
             business_pages=frontmatter.get("business_pages", None),
             reply_style=frontmatter.get("reply_style", None),
             chat_toolbar=frontmatter.get("chat_toolbar", []) or [],
@@ -281,6 +282,8 @@ class SubagentLoader:
             frontmatter["upload_accept"] = config.upload_accept
         if config.llm_provider:
             frontmatter["llm_provider"] = config.llm_provider
+        if config.enable_thinking is not None:
+            frontmatter["enable_thinking"] = config.enable_thinking
         if config.llm_model_codes:
             for provider, model in config.llm_model_codes.items():
                 frontmatter[f"{provider}_model_code"] = model

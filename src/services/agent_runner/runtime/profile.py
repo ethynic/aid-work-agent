@@ -59,6 +59,10 @@ class RuntimeResources:
                 model_codes=getattr(subagent_config, "llm_model_codes", None))
         else:
             self.llm = llm_gateway
+        # 思考模式覆盖（子智能体级）：None 走 provider 默认，False 经 ModelAdapter
+        # 传 enable_thinking 给 provider（deepseek thinking.type=disabled）
+        self.enable_thinking = getattr(subagent_config, "enable_thinking", None) \
+            if subagent_config is not None else None
         self.prompt_manager, self.style_manager = PromptManager(), get_style_manager()
         self.memory = MemoryManager(max_short_term_messages=settings.memory.short_term.max_messages,
                                     short_term_ttl=settings.memory.short_term.ttl)

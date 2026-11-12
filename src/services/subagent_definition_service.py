@@ -120,6 +120,7 @@ class SubagentDefinitionService:
         chat_toolbar: Optional[list] = None,
         upload_accept: Optional[str] = None,
         recap: Optional[dict] = None,
+        enable_thinking: Optional[bool] = None,
         created_by: Optional[str] = None,
         commit_message: str = "初始版本",
     ) -> Optional[Dict[str, Any]]:
@@ -148,6 +149,7 @@ class SubagentDefinitionService:
             chat_toolbar=chat_toolbar or [],
             upload_accept=upload_accept,
             recap=recap,
+            enable_thinking=enable_thinking,
             created_by=created_by,
         )
         if not definition:
