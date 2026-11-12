@@ -1,0 +1,604 @@
+{
+ "runner_id": "runner_fcf1c798b95742f1bb86d79816687887",
+ "status": "completed",
+ "samples": [
+  {
+   "at": "2026-11-12T12:52:43+00:00",
+   "host_mem": "Mem:           7464        3846        1911         539        1705        2777",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.85MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.27MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.93MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "218.2MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.22MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:52:59+00:00",
+   "host_mem": "Mem:           7464        3981        1726         539        1756        2643",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.85MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.27MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.93MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "231.4MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.22MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:53:15+00:00",
+   "host_mem": "Mem:           7464        3994        1710         539        1759        2630",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.85MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.27MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.93MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "242.8MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.22MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:53:28+00:00",
+   "host_mem": "Mem:           7464        4002        1699         539        1762        2622",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.85MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.27MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.93MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "238.9MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.22MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:53:44+00:00",
+   "host_mem": "Mem:           7464        4004        1696         539        1763        2620",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.86MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.29MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.95MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "243.3MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.22MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:53:58+00:00",
+   "host_mem": "Mem:           7464        4047        1652         539        1764        2577",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.86MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.36MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.95MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "254.7MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.29MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:54:14+00:00",
+   "host_mem": "Mem:           7464        4027        1672         539        1764        2597",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.88MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.36MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.95MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "265MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.29MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:54:28+00:00",
+   "host_mem": "Mem:           7464        4062        1637         539        1764        2562",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.87MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.36MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.95MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "275.1MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.29MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:54:44+00:00",
+   "host_mem": "Mem:           7464        4047        1652         539        1764        2577",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.88MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.36MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.97MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "284.9MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.32MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:54:58+00:00",
+   "host_mem": "Mem:           7464        4063        1628         539        1772        2561",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.88MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.36MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.97MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "294.9MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.32MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:55:13+00:00",
+   "host_mem": "Mem:           7464        4065        1626         539        1772        2559",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.88MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.37MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.97MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "305.1MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.32MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:55:27+00:00",
+   "host_mem": "Mem:           7464        4080        1611         539        1772        2544",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.88MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.37MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.97MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "315MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.32MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:55:43+00:00",
+   "host_mem": "Mem:           7464        4090        1600         539        1772        2533",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.9MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.39MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.98MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "323.2MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.34MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:55:57+00:00",
+   "host_mem": "Mem:           7464        4120        1568         539        1774        2503",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.9MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.39MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.98MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "352.9MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.34MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:56:13+00:00",
+   "host_mem": "Mem:           7464        4041        1646         539        1775        2583",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.9MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.43MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.98MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "280.8MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.34MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:56:26+00:00",
+   "host_mem": "Mem:           7464        4043        1644         539        1776        2581",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.9MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.43MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.98MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "283.5MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.34MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:56:42+00:00",
+   "host_mem": "Mem:           7464        4046        1640         539        1777        2578",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.9MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.43MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.98MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "298.3MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.34MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:56:56+00:00",
+   "host_mem": "Mem:           7464        4058        1640         539        1765        2566",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.9MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.43MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.98MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "313.4MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.34MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:57:12+00:00",
+   "host_mem": "Mem:           7464        4064        1633         539        1766        2560",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.92MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.43MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.98MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "328.1MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.34MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:57:26+00:00",
+   "host_mem": "Mem:           7464        4068        1627         539        1767        2555",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.92MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.43MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.98MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "344.5MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.34MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:57:42+00:00",
+   "host_mem": "Mem:           7464        4079        1615         539        1768        2544",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.92MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.43MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.99MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "359.5MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.38MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:57:56+00:00",
+   "host_mem": "Mem:           7464        4092        1600         539        1770        2532",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.92MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.43MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "86.99MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "375.1MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.38MiB / 1GiB",
+     "events": ""
+    }
+   }
+  },
+  {
+   "at": "2026-11-12T12:58:12+00:00",
+   "host_mem": "Mem:           7464        4103        1588         539        1772        2521",
+   "containers": {
+    "agent2-runner-worker-light-4": {
+     "mem": "87.93MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-light-5": {
+     "mem": "87.43MiB / 1.5GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-1": {
+     "mem": "87MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-2": {
+     "mem": "331.9MiB / 1GiB",
+     "events": ""
+    },
+    "agent2-runner-worker-general-3": {
+     "mem": "87.38MiB / 1GiB",
+     "events": ""
+    }
+   }
+  }
+ ]
+}

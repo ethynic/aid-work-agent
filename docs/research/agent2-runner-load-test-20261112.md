@@ -14,11 +14,11 @@
 | heavy 不落轻池 | ✅ 全部轮次 heavy/light worker 集合无交集 |
 | 运行时重判（light→heavy 翻转就地继续） | ✅ 3 个 Excel 任务翻转，按设计不迁移 |
 | 看门狗防事件循环停跳（§6.2） | ✅ 真实卡死场景下 15s 阈值触发、回收 attempt、容器自动重启恢复 |
-| 轻容器 cgroup 内存 2g（§6.3） | ❌ **未落实，仍为 1GiB**，Excel 任务内存顶死（failcnt 273k） |
+| 轻容器 cgroup 内存 2g（§6.3） | ⚠️ 用户决策保持 1g 不升，改由 to_md 规模守门根治（§5.4 对话级回归验证通过） |
 | DB 连接 ≤100 | ✅ 峰值约 60 |
 | P0② 心跳锁误判再现 | ✅ 未再现（今晚窗口 0 次 LockNotAvailable/interrupted 误判） |
 
-**两个新发现的问题**（详见第五节）：① 轻容器 1GiB + excel_process 长同步处理叠加，触发事件循环停跳与看门狗中断（设计内防护链工作正常，但暴露假异步缺陷与内存门禁缺失）；② travel-consultant 因技能白名单含 paddleocr-doc-parsing 入队即判 heavy，纯文本问答占用重池。
+**两个新发现的问题**（详见第五节）：① 轻容器 1GiB + excel_process to_md 无规模守门叠加，1M 行附件整簿转换触发事件循环停跳与看门狗中断（设计内防护链工作正常；当日已守门整改并回归验证）；② travel-consultant 因技能白名单含 paddleocr-doc-parsing 入队即判 heavy，纯文本问答占用重池。
 
 ## 二、环境与轮次
 
@@ -109,6 +109,23 @@
 
 excel_range_full 用例首轮（重池占满轮）LLM 走了 upload_data_file（截断 1 万行）+ analyze_data 捷径未触发 excel_process；本轮提示词强化后 2 个 full 用例真正走了 excel_process。**提示词约束力不足时会显著改变任务判型与负载路径**，后续压测用例需把工具路径写死在提示词或改用工具直调。
 
+### 5.4 P0 整改验证（2026-11-12 部署后对话级回归）
+
+§5.1 整改（to_md 规模守门 + 路由保留分块意图）当日随版部署 agent2，用真实 1M 行附件（48MB，10 列）+ 事故同款「分块读取」自然语言指令做对话级回归（脚本 `scripts/agent2_guard_regression.py`，runner_fcf1c798b957…）：
+
+| 验证项 | 结果 |
+|---|---|
+| 任务终态 | ✅ completed（约 5.7 分钟），非 interrupted，看门狗未触发 |
+| to_md 守门拦截 | ✅ Agent 发起「只做核查：读取该文件」类 to_md 请求被 fail-fast，返回文案含流式探测规模（不低于约 20000 行 × 10 列）与 read + range 引导 |
+| Agent 自纠 | ✅ 拦截后自动改走 read + range 分块（A1:J100001 聚合段 + 尾部探针 A998001:J998020），全部成功 |
+| 判型与池路由 | ✅ 运行时重判 heavy 落通用池，轻容器全程无感 |
+| 内存水位 | ✅ 承载容器 general-2 峰值 416MB / 1GiB 上限，failcnt=0、oom_kill=0（cgroup v1）；宿主机 used 峰值 4120MB、available 最低 2503MB（23 次采样） |
+| 答复诚实性 | ✅ 明确告知「只覆盖 2 万行，不能当全量结果用」，附逐段读取范围表 |
+
+对照事故基线（§5.1）：同规模文件此前 to_md 整簿转换 → 内存顶死 1GiB（failcnt 273k）+ 停跳 8.6 分钟 → interrupted；本次拦截 → 自纠 → 正常完成。
+
+回归中观察到的存量行为（非本轮缺陷）：analyze_data 二次调用因导入表未开放给调用身份报错，Agent 改走 excel_process 路径；单次 read 区段请求 10 万行时实际返回约 2000 行并二次截断（500 行有效数据上限口径与守门文案一致）。
+
 ## 六、成本与验证缺口
 
 - **成本**：两测试租户今日累计 233.72 积分 / 594 万 token（tenant_d6c6ed2aadd6 196.15 + tenant_1dc997a1806b 37.57），约 40 条 chat_records。
@@ -129,5 +146,6 @@ excel_range_full 用例首轮（重池占满轮）LLM 走了 upload_data_file（
 | 数据准备 | evidence/agent2-load-dataprep-20261112.json |
 | 重池占满 | evidence/agent2-load-mixed-heavysat-20261112.json |
 | Excel 重判（DB 证据） | agent_runner_events runner_b2f3071960904fefb7cd8a511d347501；light-4 容器日志 19:24~19:33（watchdog 触发 + 容器重启） |
+| 守门回归（§5.4） | evidence/agent2-guard-regression-20261112.json（runner_fcf1c798b957…，23 次宿主机/容器内存采样） |
 
-压测脚本：`scripts/agent2_runner_load.py`。
+压测脚本：`scripts/agent2_runner_load.py`；守门回归脚本：`scripts/agent2_guard_regression.py`。
