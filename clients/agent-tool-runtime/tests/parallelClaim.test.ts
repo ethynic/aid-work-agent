@@ -79,19 +79,31 @@ test('旧服务端（心跳无 parallel_claim）：永远不带 parallel_only，
     claimWaitSeconds: 1,
   })
   try {
-    const a = stack.cloud.enqueueInvocation('boss_goto', { durationMs: 200, stepMs: 50 })
-    const c = stack.cloud.enqueueInvocation('boss_filter', { durationMs: 50 }, { parallel: true })
+    // FIFO：A 串行（长）→ C 声明并行（中）→ B 串行（短）。旧服务端下执行通道同受协商
+    // 门禁（修复 1）：C 不得走并行通道与后续串行 B 并发，三作业严格顺序执行
+    const a = stack.cloud.enqueueInvocation('boss_goto', { durationMs: 300, stepMs: 60 })
+    const c = stack.cloud.enqueueInvocation('boss_filter', { durationMs: 150 }, { parallel: true })
+    const b = stack.cloud.enqueueInvocation('boss_goto', { durationMs: 80 })
 
     await stack.cloud.waitFor(() => stack.cloud.getInvocation(a)!.state === 'succeeded', 15_000, 'A 完成')
     await stack.cloud.waitFor(() => stack.cloud.getInvocation(c)!.state === 'succeeded', 15_000, 'C 完成')
+    await stack.cloud.waitFor(() => stack.cloud.getInvocation(b)!.state === 'succeeded', 15_000, 'B 完成')
 
     for (const claim of stack.cloud.claimLog) {
       assert.equal(claim.parallel_only, false, '旧服务端下任何领取都不带 parallel_only')
     }
-    // 现状 FIFO：先领 A 后领 C
     const startedA = stack.cloud.callsFor(a).find((e) => e.type === 'started')!.at
+    const aResult = stack.cloud.callsFor(a).find((e) => e.type === 'result')!.at
     const startedC = stack.cloud.callsFor(c).find((e) => e.type === 'started')!.at
-    assert.ok(startedA < startedC)
+    const cResult = stack.cloud.callsFor(c).find((e) => e.type === 'result')!.at
+    const startedB = stack.cloud.callsFor(b).find((e) => e.type === 'started')!.at
+    // FIFO + 无执行重叠：每条作业在上一条终态之后才开始（开始时间互斥）
+    assert.ok(startedA < startedC, 'FIFO：A 先于 C')
+    assert.ok(startedC > aResult, '旧服务端下声明并行作业不得与串行 A 并发（执行通道同门禁）')
+    assert.ok(startedB > cResult, '串行 B 不得与声明并行 C 并发（旧服务端下 C 走串行通道）')
+    // 原串行循环形态：串行执行期间零领取请求（阻塞领取循环，不空转）
+    assert.ok(!stack.cloud.claimLog.some((r) => r.at > startedA && r.at < aResult),
+      'A 执行期间零领取请求（原串行循环）')
   } finally {
     await stack.stop()
   }
@@ -202,6 +214,79 @@ test('并行作业 Provider 崩溃按原 effect 语义落账：写工具 EXECUTI
     assert.equal(result.payload['retryable'], false)
     // 不重放：崩溃后没有第二次 started/调用
     assert.equal(stack.cloud.callsFor(c).filter((e) => e.type === 'started').length, 1)
+  } finally {
+    await stack.stop()
+  }
+})
+
+// ----- 契约 2.20 修复轮：长轮询与串行队列互不影响 -----
+
+test('BOSS-only（无并行工具）新服务端：原串行循环形态——执行中零领取请求，第二条 <1s 启动', async () => {
+  // parallelTools 缺省 = 无并行工具设备（BOSS-only 实况）：即便服务端支持 parallel_claim，
+  // 也不发送 parallel_only 长轮询（不空转），完全沿用原串行循环
+  const stack = await startTestStack({ claimWaitSeconds: 1 })
+  stack.cloud.parallelClaimSupported = true
+  try {
+    const a = stack.cloud.enqueueInvocation('boss_goto', { durationMs: 400, stepMs: 80 })
+    const b = stack.cloud.enqueueInvocation('boss_goto', { durationMs: 100 })
+    await stack.cloud.waitFor(() => stack.cloud.getInvocation(b)!.state === 'succeeded', 15_000, '两条串行作业完成')
+
+    const startedA = stack.cloud.callsFor(a).find((e) => e.type === 'started')!.at
+    const aResult = stack.cloud.callsFor(a).find((e) => e.type === 'result')!.at
+    const startedB = stack.cloud.callsFor(b).find((e) => e.type === 'started')!.at
+    assert.ok(!stack.cloud.claimLog.some((r) => r.at > startedA && r.at < aResult),
+      'A 执行期间零领取请求（原串行循环，无空转长轮询）')
+    assert.ok(startedB - aResult < 1_000,
+      `第二条串行作业应在 A 结果回传后立即启动（实际 ${startedB - aResult}ms，不得被在途空轮询拖住）`)
+    for (const claim of stack.cloud.claimLog) {
+      assert.equal(claim.parallel_only, false, '无并行工具设备不发送 parallel_only')
+    }
+  } finally {
+    await stack.stop()
+  }
+})
+
+test('混合设备：串行结束立即领取下一条串行作业——在途 parallel_only 轮询脱挂，不拖慢串行队列', async () => {
+  const stack = await startTestStack({ parallelTools: PARALLEL_TOOLS, claimWaitSeconds: 5 })
+  stack.cloud.parallelClaimSupported = true
+  try {
+    // A 串行（400ms）执行中循环发 parallel_only 长轮询（wait=5s 在途）；A 结束时轮询未返回
+    // → 脱挂并立即发空参数领取，B（串行队头）<1s 内启动，不等在途轮询超时
+    const a = stack.cloud.enqueueInvocation('boss_goto', { durationMs: 400, stepMs: 80 })
+    const b = stack.cloud.enqueueInvocation('boss_goto', { durationMs: 100 })
+    await stack.cloud.waitFor(() => stack.cloud.getInvocation(b)!.state === 'succeeded', 15_000, 'B 完成领取执行')
+
+    const aResult = stack.cloud.callsFor(a).find((e) => e.type === 'result')!.at
+    const startedB = stack.cloud.callsFor(b).find((e) => e.type === 'started')!.at
+    assert.ok(startedB - aResult < 1_000,
+      `串行队头第二条应在 A 结果回传后立即领取（实际 ${startedB - aResult}ms，不得等在途长轮询）`)
+  } finally {
+    await stack.stop()
+  }
+})
+
+test('脱挂轮询随后返回的并行作业照常后台执行：无丢失、无 unknown、串行队列时效不受影响', async () => {
+  const stack = await startTestStack({ parallelTools: PARALLEL_TOOLS, claimWaitSeconds: 4 })
+  stack.cloud.parallelClaimSupported = true
+  try {
+    const a = stack.cloud.enqueueInvocation('boss_goto', { durationMs: 300, stepMs: 60 })
+    const b = stack.cloud.enqueueInvocation('boss_goto', { durationMs: 250 })
+    await stack.cloud.waitFor(() => stack.cloud.getInvocation(a)!.state === 'succeeded', 15_000, 'A 完成')
+    // A 结果回传后脱挂的 parallel_only 轮询仍在途（wait=4s）：此时入队并行 C——
+    // 脱挂轮询返回它照常后台执行；B（串行队头）同时保持 <1s 启动
+    const c = stack.cloud.enqueueInvocation('boss_filter', { durationMs: 150 }, { parallel: true })
+    await stack.cloud.waitFor(() => stack.cloud.callsFor(c).some((e) => e.type === 'started'), 15_000, '并行 C 被领取执行')
+    await stack.cloud.waitFor(() => stack.cloud.getInvocation(c)!.state === 'succeeded', 15_000, 'C 终态')
+
+    const aResult = stack.cloud.callsFor(a).find((e) => e.type === 'result')!.at
+    const startedB = stack.cloud.callsFor(b).find((e) => e.type === 'started')!.at
+    assert.ok(startedB - aResult < 1_000, `串行 B 不被并行 C 入队与在途轮询拖住（实际 ${startedB - aResult}ms）`)
+    assert.equal(stack.cloud.getInvocation(c)!.state, 'succeeded', '脱挂轮询交付的并行作业正常完成（不丢作业、无 unknown）')
+    const cResult = stack.cloud.callsFor(c).find((e) => e.type === 'result')!
+    assert.equal(cResult.payload['success'], true, '回执沿原通路')
+    for (const id of [a, b, c]) {
+      assert.notEqual(stack.cloud.getInvocation(id)!.state, 'unknown', `${id} 无卡租约 unknown`)
+    }
   } finally {
     await stack.stop()
   }

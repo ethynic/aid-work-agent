@@ -320,3 +320,19 @@ test('runtime-unknown plugin joins execution from its own declaration without ru
   assert.equal(isWriteToolFor(derived, 'test_tool_status'), false, '注解只读派生为读工具')
   assert.ok(entry, 'entry 指向签名包 payload 入口')
 })
+
+test('安装白名单：默认构造拒绝第 4 方身份；信任配置含第 4 方身份（providers 同源派生）即安装成功', async t => {
+  const fourth = 'ai.aidwork.resume-tool'
+  const { store, options } = fixture(t, async () => ({ ready: true }), [fourth])
+  await store.initialize()
+  // 默认名单（FIRST_PARTY_PROVIDERS 三方）不放行第 4 方身份（镜像 runtimeHost 无信任配置回退）
+  const defaultStore = new PluginStore({ ...options, providers: undefined })
+  await defaultStore.initialize()
+  await assert.rejects(async () => defaultStore.import(await pack({ provider: fourth, declared: false })), error => error.code === 3)
+  // 信任配置含第 4 方身份（trust root providers + 安装白名单同源派生，镜像 runtimeHost 装配）：安装成功
+  await store.import(await pack({ provider: fourth, tools: [
+    { name: 'resume_parse', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
+  ] }))
+  assert.equal(store.list()[0].plugin_id, fourth)
+  assert.equal(store.list()[0].ready, true, '带声明的新身份插件安装即就绪')
+})

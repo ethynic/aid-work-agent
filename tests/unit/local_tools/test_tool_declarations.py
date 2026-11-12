@@ -64,6 +64,26 @@ class TestDeclaredToolsForDevice:
             "boss-recruiting": ["bad"],
         }, "字符串列表逐键保留（不做名单校验，设备上报什么按什么放行），非字符串项剔除"
 
+    def test_get_provider_keys_for_device_includes_declared_providers(self):
+        """声明驱动可领 provider 列表：declared_tools 的 provider_key 并入（含目录外新插件）"""
+        caps = declared_capabilities({"declared_tools": {"wecom": WECOM_DECLARED, "resume-tool": ["resume_parse"]}})
+        keys = catalog.get_provider_keys_for_device(caps)
+        assert keys == ["wecom", "resume-tool"], "已有 provider 顺序不变，声明 provider 追加在后"
+        # 已有 provider 集合与旧解析一致（不因声明重复/换序）
+        assert catalog.get_provider_keys_for_device(
+            declared_capabilities({"declared_tools": {"resume-tool": ["resume_parse"]}})) == \
+            ["wecom", "resume-tool"]
+
+    def test_legacy_device_provider_keys_unchanged(self):
+        """旧设备（无声明上报）：可领 provider 列表与升级前逐字节一致"""
+        legacy = {"providers": ["wecom"], "provider_id": "ai.aidwork.boss-recruiting"}
+        assert catalog.get_provider_keys_for_device(legacy) == ["wecom", "boss-recruiting"]
+        assert catalog.get_provider_keys_for_device({"providers": ["skill-runner"]}) == ["skill-runner"]
+        # 无 tool_declarations_v1 能力串的 declared_tools 不生效（形态归一回退，不抛错）
+        assert catalog.get_provider_keys_for_device({"declared_tools": {"wecom": ["wecom_probe"]}}) == []
+        assert catalog.get_provider_keys_for_device(None) == []
+        assert catalog.get_provider_keys_for_device({}) == []
+
     def test_capability_string_missing_falls_back(self):
         caps = declared_capabilities({"capabilities": ["local_v2"]})
         assert catalog.declared_tools_for_device(caps) is None, "缺 tool_declarations_v1 能力串 = 无声明设备"

@@ -170,6 +170,9 @@ def get_provider_keys_for_device(capabilities: Optional[Dict[str, Any]]) -> List
        provider_key 字符串，如 'boss-recruiting'/'weixin'）；
     2. capabilities.provider_manifests 各 value 的 provider_id 映射回 key；
     3. 旧 capabilities.provider_id 字段映射（旧 Runtime 兼容，boss-only 现状）。
+    契约 2.20 修订：设备上报调度声明时，declared_tools 的 provider_key 并入（声明驱动
+    可领列表——目录外新插件 provider 领取其声明作业的唯一通路；行级放行仍由
+    is_tool_allowed_for_device 按声明判定）。无声明/解析异常时跳过——旧设备行为不变。
     去重后返回。行 provider_key 非 NULL 的 invocation 只派给覆盖该 key 的设备。
     """
     keys: List[str] = []
@@ -201,6 +204,12 @@ def get_provider_keys_for_device(capabilities: Optional[Dict[str, Any]]) -> List
         for key, provider in TRUSTED_PROVIDERS.items():
             if provider["provider_id"] == pid:
                 _add(key)
+    # (4) 声明驱动（契约 2.20 修订）：declared_tools 的 provider_key 并入
+    declared = declared_tools_for_device(capabilities)
+    if declared:
+        for key in declared:
+            if key not in keys:
+                keys.append(key)
     return keys
 
 

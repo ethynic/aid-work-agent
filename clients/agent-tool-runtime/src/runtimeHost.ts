@@ -38,7 +38,7 @@ import { fileURLToPath } from 'node:url'
 import { atomicWrite, recoverPairing } from './pairingStore.js'
 import { assertNoLegacyRuntimeProcess } from './legacyProcessCheck.js'
 import { probePlugin } from './pluginProbe.js'
-import { loadPackagedTrust } from './productTrust.js'
+import { loadPackagedTrust, providerIdsOfTrust } from './productTrust.js'
 import { hasJournalCompletionProof } from '@aid/local-tool-host-core/legacy/completionProof'
 import { hasSessionCompletion } from './sessionTasks/completionProof.js'
 import { ProcessSupervision } from './processSupervision.js'
@@ -147,6 +147,10 @@ export class LegacyExecution implements HostAdapter {
     try { await recoverPairing() } catch { throw new ManagementError(11, '设备配对资料未能恢复，原身份文件和待处理事务已保留') }
     if (this.pluginOptions) {
       const makeStore = () => new PluginStore({ home: this.home, trust: this.pluginOptions!.trust,
+        // 契约 2.20 修订：安装白名单由产品信任配置驱动（trust roots 覆盖的 provider_id
+        // 并集）——往信任配置加新 provider 身份即可安装接入，无需改源码；无信任配置的
+        // CLI/A1 资产不产生安装权限，PluginStore 维持 FIRST_PARTY_PROVIDERS 默认
+        ...(this.pluginOptions!.trust ? { providers: providerIdsOfTrust(this.pluginOptions!.trust) } : {}),
         platform: { platform: process.platform, arch: process.arch, node_version: process.versions.node, node_abi: process.versions.modules, runtime_version: RUNTIME_VERSION },
         probe: (root, manifest) => probePlugin(this.nodeExecutable, root, manifest, providerEnvironment()),
         onChanged: () => this.pluginsChanged?.() })

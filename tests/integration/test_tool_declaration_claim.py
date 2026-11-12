@@ -108,7 +108,8 @@ def _pair_device(client, user, name, capabilities):
 
 @pytest.fixture(scope="module")
 def users_devices(client, users):
-    """三台设备：全量声明、子集声明（模拟未升级完的目录/声明差集）、旧设备（无声明）"""
+    """四台设备：全量声明、子集声明（模拟未升级完的目录/声明差集）、
+    新插件声明（目录外 provider）、旧设备（无声明）"""
     user = users[0]
     declared = _pair_device(client, user, "声明设备", {
         "providers": [WECOM_PROVIDER_KEY],
@@ -122,11 +123,17 @@ def users_devices(client, users):
         "capabilities": ["local_v2", "tool_declarations_v1"],
         "declared_tools": {"wecom": ["wecom_probe", "wecom_message_send"]},
     })
+    new_plugin = _pair_device(client, user, "新插件声明设备", {
+        "providers": ["resume-tool"],
+        "capabilities": ["local_v2", "tool_declarations_v1"],
+        "declared_tools": {"resume-tool": ["resume_parse"]},
+    })
     legacy = _pair_device(client, user, "旧设备", {
         "providers": [WECOM_PROVIDER_KEY],
         "capabilities": ["local_v2"],
     })
-    return {"user": user, "declared": declared, "subset": subset, "legacy": legacy}
+    return {"user": user, "declared": declared, "subset": subset,
+            "new_plugin": new_plugin, "legacy": legacy}
 
 
 @pytest.fixture(autouse=True)
@@ -210,6 +217,18 @@ class TestDeclarationClaimEndToEnd:
                            headers={"Authorization": f"Bearer {device['device_token']}"})
         assert resp.status_code == 200
         assert resp.json()["invocation_id"] == null_inv, "NULL provider 行（旧聊天链路）仍走目录判定放行"
+
+    def test_new_plugin_provider_claimable_from_declaration(self, client, users_devices):
+        """新插件正式接入：目录外 provider（resume-tool）作业经声明驱动可领取（修复轮 3b）"""
+        device = users_devices["new_plugin"]
+        user = users_devices["user"]
+        inv = _create(user, device["device_id"], "resume_parse", provider_key="resume-tool")
+        resp = client.post("/api/local-tools/runtime/claim?wait=1",
+                           headers={"Authorization": f"Bearer {device['device_token']}"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["invocation_id"] == inv, "声明驱动的目录外 provider 作业可领取"
+        assert body["provider"] == "resume-tool"
 
     def test_legacy_device_falls_back_to_catalog(self, client, users_devices):
         """旧设备（无声明上报）：声明内工具照常领取；目录外工具照常拒绝——行为不变"""

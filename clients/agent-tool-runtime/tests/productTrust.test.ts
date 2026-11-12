@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { loadPackagedTrust } from '../src/productTrust.js'
+import { loadPackagedTrust, providerIdsOfTrust } from '../src/productTrust.js'
 
 test('append-only publisher history remains loadable beyond sixteen releases, within the existing file-size bound', t => {
   const resources = mkdtempSync(join(tmpdir(), 'runtime-trust-history-'))
@@ -44,4 +44,26 @@ test('plugin trust comes only from fixed matching product resources; production 
   const privatePem = generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' })
   trust('acceptance', [{ ...root, public_key: privatePem }])
   assert.throws(() => loadPackagedTrust(entry), error => (error as { code: number }).code === 9, 'Public-key assets must reject private PEM even when crypto can derive its public key')
+})
+
+test('安装白名单由信任配置驱动：trust roots 覆盖 provider_id 并集，第 4 方 ai.aidwork.* 身份可加载', t => {
+  const resources = mkdtempSync(join(tmpdir(), 'aid-trust-providers-'))
+  t.after(() => rmSync(resources, { recursive: true, force: true }))
+  const entry = join(resources, 'runtime/host'); mkdirSync(entry, { recursive: true }); mkdirSync(join(resources, 'config'))
+  writeFileSync(join(resources, 'config/runtime-product.json'), JSON.stringify({ schemaVersion: 1, productKind: 'runtime', profile: 'acceptance' }))
+  const key = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }).toString()
+  const roots = [
+    { key_id: 'publisher-a', public_key: key, providers: ['ai.aidwork.weixin', 'ai.aidwork.wecom'], test_only: true },
+    { key_id: 'publisher-b', public_key: key, providers: ['ai.aidwork.boss-recruiting', 'ai.aidwork.resume-tool'], test_only: true },
+  ]
+  writeFileSync(join(resources, 'runtime/trust-roots.json'),
+    JSON.stringify({ schemaVersion: 1, profile: 'acceptance', roots }))
+  // 第 4 方身份（ai.aidwork.resume-tool）作为信任配置数据即可加载，无需改源码
+  const trust = loadPackagedTrust(entry)
+  assert.ok(trust, '信任配置含第 4 方身份时正常加载')
+  // 并集去重：跨 root 覆盖的同一 provider 只出现一次，顺序保持首现序
+  assert.deepEqual(providerIdsOfTrust(trust!),
+    ['ai.aidwork.weixin', 'ai.aidwork.wecom', 'ai.aidwork.boss-recruiting', 'ai.aidwork.resume-tool'])
+  assert.deepEqual(providerIdsOfTrust([{ key_id: 'k', public_key: key, providers: ['ai.aidwork.a', 'ai.aidwork.a'] }]),
+    ['ai.aidwork.a'], '同一 root 内重复 provider 去重')
 })
