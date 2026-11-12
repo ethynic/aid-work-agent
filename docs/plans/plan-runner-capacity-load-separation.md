@@ -8,11 +8,11 @@
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| Phase 0 | P0①② 整改（前置） | ⬜ 待开发 |
-| Phase 1 | 工具/技能轻重一次性全量判定 + agent2 内存三档实测 | ⬜ 待开发 |
-| Phase 2 | load_class 迁移 + 判型/重判 + 领取角色过滤 | ⬜ 待开发 |
-| Phase 3 | Compose 双服务改造 + agent2 全链路验证 | ⬜ 待开发 |
-| Phase 4 | 流程规范落地（负载等级强制声明） | ⬜ 待开发 |
+| Phase 0 | P0①② 整改（前置） | ✅ 已完成（c9b03484，2026-11-11） |
+| Phase 1 | 工具/技能轻重一次性全量判定 + agent2 内存三档实测 | 🔧 部分完成（清单 1558a91a；agent2 内存三档实测待真机） |
+| Phase 2 | load_class 迁移 + 判型/重判 + 领取角色过滤 | ✅ 已完成（db5c222c，2026-11-11） |
+| Phase 3 | Compose 双服务改造 + agent2 全链路验证 | 🔧 部分完成（双池改造 595527d4；agent2 部署验证待真机） |
+| Phase 4 | 流程规范落地（负载等级强制声明） | ✅ 已完成（2026-11-12） |
 | Phase 5 | 生产部署窗口（PG 120 + DB_POOL_MAX=3 + 12 轻/8 通用） | ⬜ 待部署 |
 | Phase 6 | 上线后复测、校准与文档同步 | ⬜ 待上线后 |
 
@@ -57,7 +57,11 @@
 - 三档：空载 / 混合忙时 / 双重 Excel 满载；基线参考 agent3 实测（执行进程空载 ~87MiB、忙时 ~296MiB、监督 ~45MiB、重负载病理钉 1GiB cgroup）。
 - 决策点：实测超预期则下调生产容器数（如 16 容器 = 10 轻 + 6 通用），回写设计 §4.5 后再进 Phase 3/5。
 
+> **实现状态（2026-11-11）**：1.1 已完成（提交 1558a91a）——heavy_tools 9 项 / heavy_skills 8 项写入 config.yaml，全量核对表登记入设计 §4.2；1.2 为真机缺口，待 agent2 部署后实测。
+
 ## Phase 2：轻重分离核心实现
+
+> **实现状态（2026-11-11，提交 db5c222c）**：agent_runners 增加 load_class 列（db_update.yaml 增量 + init-postgres.sql 同步，默认 'light' 含 CHECK）；入队判型 `load_class.py::classify_profile`（装配白名单 ∩ heavy 清单，main profile 判 light、异常 fail-open 到 light）；运行时重判 `state_uses_heavy` 信号 + `save_checkpoint` 同事务 `CASE WHEN` 提升；领取角色过滤 `AGENT_RUNNER_ROLE`（light|general，非法值归 general）覆盖 acquire/acquire_priority/timer/continuous/resume 五处扫描，light 角色过滤条件 `(%s <> 'light' OR r.load_class='light')`；`load_class` 不进 public_runner wire 投影。新增 test_load_class.py 25 用例，agent_runner 目录 458 passed（8 个失败为既有 apscheduler 环境缺口）。
 
 ### 2.1 数据迁移
 
@@ -84,6 +88,7 @@
 ### 2.5 可观测性
 
 - `load_class` 入 Trace/监控/告警维度（设计 §5.3 第 3 条），支撑轻池排队/通用池空转两个校准信号的观察。
+- **实现状态（2026-11-12，提交 10c6ac28）**：① Trace 维度——worker 创建 TraceCollector 时写 `trace.metadata['load_class']`（随 obs_traces 落库）；② 告警维度——长任务告警参数模型加 `load_class` 字段、外发文本渲染「负载池：轻专用池/通用池」标签、告警详情视图透出（same_attempt 条件下）；③ 池校准信号观测口径 = 领取/入队 tlog（`log/temp/runner轻重分离.log`）的 load_class + Trace metadata 过滤，未新增独立监控端点（agent_runner_alerts 表不加列，零迁移）。
 
 ### 2.6 测试
 
@@ -91,6 +96,8 @@
 - 集成：恢复/计费/租约语义回归（重判与领取改造不破坏 finalize、两分钟回收、续租）。
 
 ## Phase 3：Compose 双服务与 agent2 全链路验证
+
+> **实现状态（2026-11-11，提交 595527d4）**：3.1 已完成——`runner-worker` 拆为 `runner-worker-light`（默认 replicas 12，AGENT_RUNNER_ROLE=light）+ `runner-worker-general`（默认 replicas 8），共享基座收敛到顶层 anchor `x-runner-worker`；cgroup 统一 1GiB（mem_limit 默认 1g）；每副本 `DB_POOL_MAX` 默认 3（`AGENT_RUNNER_DB_POOL_MAX` 可覆盖）；PG max_connections 80->120 同步入 `deploy/docker-compose.postgres.yml`（生产窗口随 compose 重建生效）。agent2 经 .env 覆盖 4 轻 + 2 通用。3.2/3.3 为真机缺口，待 agent2 部署后执行。
 
 ### 3.1 Compose 改造
 
@@ -118,6 +125,8 @@
 7. agent2 混合负载排队 p95 ≤ 30s（沿用既有目标）。
 
 ## Phase 4：流程规范落地
+
+> **实现状态（2026-11-12，已完成）**：architecture.md「添加工具」「添加技能」节均已补负载等级强制声明（判型标准、登记位置 config.yaml heavy_tools/heavy_skills、误判代价不对称说明）；skill_integration.md §6 首次移植清单补负载等级声明核对项。
 
 - `.claude/rules/architecture.md`「添加工具」「添加技能」节补充**负载等级强制声明**：新增工具/技能必须声明 light/heavy，作为流程门禁（设计 §4.2 第 2 条、§6 第 5 步）。
 - 与 [skill_integration.md](../../.claude/rules/skill_integration.md) 衔接：外部技能包整合核对清单中补负载等级声明核对项。

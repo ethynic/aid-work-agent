@@ -4768,3 +4768,9 @@
         WHERE s.tenant_id=t.tenant_id AND s.user_id=t.user_id AND s.task_id=t.id
           AND s.web_session_id IS NOT NULL
      );
+
+- datetime: "2026-11-11 22:32:40"
+  remark: "agent_runners 增加 load_class 列（轻重负载分离判型，'light'|'heavy'，默认 'light'）"
+  statements: |
+    ALTER TABLE agent_runners ADD COLUMN IF NOT EXISTS load_class TEXT NOT NULL DEFAULT 'light'
+        CHECK (load_class IN ('light','heavy'));

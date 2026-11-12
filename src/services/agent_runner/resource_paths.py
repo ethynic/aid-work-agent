@@ -25,6 +25,14 @@ def validate_workspaces(resource_directory, state):
             raise RunnerError('RECOVERY_RESOURCE_SCOPE_INVALID', 409)
 
 
+def _rmtree_onerror(func, target, exc_info):
+    from loguru import logger
+    logger.opt(exception=exc_info).warning(
+        'AgentRunner workspace cleanup item failed path={}', target)
+    from src.core.temp_logger import tlog
+    tlog("runner取消自愈", "工作区清理单项失败 path={path}", path=target, level="ERROR")
+
+
 def cleanup_workspaces(resource_directory, identity, checkpoint, *, strict=False):
     """Delete only proven execution-owned resources, after terminal commit."""
     import shutil
@@ -65,7 +73,15 @@ def cleanup_workspaces(resource_directory, identity, checkpoint, *, strict=False
             complete = False
             continue
         if path.is_dir():
-            shutil.rmtree(path)
+            try:
+                # P0①：NFS stale handle（OSError errno 16 等）不得让收尾清理
+                # 中断或挂死；逐项尽力删除，失败项记日志并标记未清完。
+                shutil.rmtree(path, onerror=_rmtree_onerror)
+            except OSError as error:
+                from src.core.temp_logger import tlog
+                tlog("runner取消自愈", "工作区清理未清完 path={path} errno={errno}",
+                     path=path, errno=getattr(error, 'errno', None), level="ERROR")
+                complete = False
         elif path.exists():
             complete = False
 

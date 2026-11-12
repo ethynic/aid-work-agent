@@ -250,6 +250,14 @@ class RunnerWorker:
                  tool_recovery=None, slot_state=None):
         self.config = config
         self.worker_id = worker_id or 'worker_' + uuid.uuid4().hex
+        # 轻重负载分离（设计 §4.3）：领取角色由容器环境变量声明，
+        # 非 light/general 的值一律归 general（不过滤），避免配置笔误静默缩容。
+        self.role = os.environ.get('AGENT_RUNNER_ROLE', 'general')
+        if self.role not in ('light', 'general'):
+            self.role = 'general'
+        from src.core.temp_logger import tlog
+        tlog("runner轻重分离", "worker 启动 worker_id={wid} role={role}",
+             wid=self.worker_id, role=self.role)
         self.slot_state = slot_state
         self.boot_id=uuid.uuid4().hex
         self.executions = execution_repository or ExecutionRepository()
@@ -295,10 +303,12 @@ class RunnerWorker:
             task.cancel()
 
     async def _heartbeat(self, attempt, control, owner_task):
+        transient_failures = 0
         while True:
             await asyncio.sleep(self.config.heartbeat_seconds)
             try:
                 flags = await asyncio.to_thread(self.executions.heartbeat,attempt,self.config.lease_seconds)
+                transient_failures = 0
                 if flags.get('closed',False):
                     return
                 control.cancel_requested = flags['cancel_requested']
@@ -307,6 +317,20 @@ class RunnerWorker:
                 if isinstance(error, asyncio.CancelledError):
                     raise
                 import psycopg2
+                # P0②：行锁竞争（LockNotAvailable/55P03）是瞬时状况。租约自上次
+                # 成功续租起仍有余量，下一拍重试即可，不得把锁等待当存储不可用
+                # 而打断运行中任务；连续失败逼近租约到期才按原路径停止推进。
+                if (isinstance(error, psycopg2.errors.LockNotAvailable)
+                        and transient_failures < max(1, self.config.lease_seconds // self.config.heartbeat_seconds - 1)):
+                    transient_failures += 1
+                    logger.warning('AgentRunner heartbeat lock contention runner={} retry={}/{}',
+                        attempt.runner_id, transient_failures,
+                        max(1, self.config.lease_seconds // self.config.heartbeat_seconds - 1))
+                    from src.core.temp_logger import tlog
+                    tlog("runner心跳锁竞争", "worker 心跳重试 runner={runner} retry={retry}/{budget}",
+                         runner=attempt.runner_id, retry=transient_failures,
+                         budget=max(1, self.config.lease_seconds // self.config.heartbeat_seconds - 1))
+                    continue
                 kind = 'lease_lost' if isinstance(error, LeaseLost) else 'storage_unavailable' if isinstance(error, psycopg2.Error) else 'heartbeat_failed'
                 control.interruption_reason = {
                     'lease_lost': '原执行租约已失效，已停止推进；请在原会话核对进度后继续。',
@@ -428,6 +452,8 @@ class RunnerWorker:
                 and row['source']=='chat' and row['session_kind']=='web')
             collector.trace.trace_id = ('tr_'+row['runner_id']+
                 (':'+str(row['attempt']) if attempt_trace else ''))
+            # 轻重负载分离可观测（设计 §5.3）：池比例校准按 Trace 维度过滤。
+            collector.trace.metadata['load_class'] = row.get('load_class')
             control.trace_collector = collector
             # A committed finalization intent is immutable even if a user requests
             # cancellation while its transaction is retrying.
@@ -863,8 +889,9 @@ class RunnerWorker:
             return await self._acquire_controls() or await self._acquire_queued()
         priority=getattr(self.executions,'acquire_priority',None)
         if priority is not None:
-            urgent=await asyncio.to_thread(priority,self.worker_id,self.config.lease_seconds)
+            urgent=await asyncio.to_thread(priority,self.worker_id,self.config.lease_seconds,role=self.role)
             if urgent is not None:
+                self._tlog_acquired(urgent, 'priority')
                 return urgent
         sources=(self._acquire_controls,self._acquire_timers,self._acquire_continuous,self._acquire_queued)
         for offset in range(len(sources)):
@@ -877,7 +904,15 @@ class RunnerWorker:
         return None
 
     async def _acquire_queued(self):
-        return await asyncio.to_thread(self.executions.acquire,self.worker_id,self.config.lease_seconds)
+        row=await asyncio.to_thread(self.executions.acquire,self.worker_id,self.config.lease_seconds,role=self.role)
+        if row is not None:
+            self._tlog_acquired(row, 'queued')
+        return row
+
+    def _tlog_acquired(self, row, source):
+        from src.core.temp_logger import tlog
+        tlog("runner轻重分离", "领取 runner={runner} role={role} source={source} load_class={lc}",
+             runner=row['runner_id'], role=self.role, source=source, lc=row.get('load_class'))
 
     async def _acquire_continuous(self):
         from .continuous import interrupted_candidate
@@ -885,7 +920,7 @@ class RunnerWorker:
         from .recovery_repository import RecoveryRepository
         recovery=RecoveryRepository(self.repository.connection_factory)
         candidates=await asyncio.to_thread(recovery.next_continuous_candidates,
-            after_queue_order=self._continuous_scan_after)
+            after_queue_order=self._continuous_scan_after,role=self.role)
         self._continuous_scan_after=candidates[-1]['queue_order'] if candidates else 0
         for row in candidates:
             if not interrupted_candidate(row):
@@ -916,7 +951,8 @@ class RunnerWorker:
         from .recovery import RecoveryCoordinator
         from .recovery_repository import RecoveryRepository
         recovery = RecoveryRepository(self.repository.connection_factory)
-        candidates=await asyncio.to_thread(recovery.next_candidates,after_queue_order=self._recovery_scan_after)
+        candidates=await asyncio.to_thread(recovery.next_candidates,after_queue_order=self._recovery_scan_after,
+            role=self.role)
         self._recovery_scan_after=candidates[-1]['queue_order'] if candidates else 0
         for row in candidates:
             try:
@@ -956,7 +992,8 @@ class RunnerWorker:
         if getattr(self.config,'durable_sleep_enabled',False):
             from .timer_repository import TimerRepository
             timers=TimerRepository(self.repository.connection_factory)
-            candidates=await asyncio.to_thread(timers.next_candidates,after_queue_order=self._timer_scan_after)
+            candidates=await asyncio.to_thread(timers.next_candidates,after_queue_order=self._timer_scan_after,
+                role=self.role)
             self._timer_scan_after=candidates[-1]['queue_order'] if candidates else 0
             for row in candidates:
                 try:

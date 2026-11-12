@@ -194,6 +194,24 @@ def test_feishu_text_contains_only_allowed_runner_fields(monkeypatch):
     assert 'user_id' not in text
 
 
+def test_alert_parameters_accept_load_class_and_render_pool_label():
+    """轻重负载分离可观测：告警参数带 load_class，渲染出负载池标签。"""
+    from src.notifications.events import EVENTS, render_message_text
+    runner = {'runner_id': 'runner_1', 'attempt': 1, 'tenant_id': 'tenant_1',
+              'profile_id': 'profile_1', 'load_class': 'heavy'}
+    _, parameters = EVENTS.validate('runner.long_running', {
+        'runner_id': runner['runner_id'], 'tenant_id': runner['tenant_id'],
+        'profile_id': runner['profile_id'], 'duration_seconds': 1800,
+        'load_class': runner['load_class'],
+    }, {'type': 'runner_alert', 'id': 'runner_1'})
+    assert parameters['load_class'] == 'heavy'
+    _, body = render_message_text('runner.long_running', parameters)
+    assert '负载池：通用池' in body
+    _, light_body = render_message_text('runner.long_running',
+                                        {**parameters, 'load_class': 'light'})
+    assert '负载池：轻专用池' in light_body
+
+
 def test_feishu_alert_requires_usable_detail_link(monkeypatch):
     from src.config.settings import settings
     monkeypatch.setattr(settings.app, 'public_base_url', '', raising=False)

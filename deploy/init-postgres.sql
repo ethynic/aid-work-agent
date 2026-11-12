@@ -3012,6 +3012,7 @@ CREATE TABLE IF NOT EXISTS agent_runners (
     view_revision BIGINT NOT NULL DEFAULT 0,
     control_revision BIGINT NOT NULL DEFAULT 0,
     cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    load_class TEXT NOT NULL DEFAULT 'light' CHECK (load_class IN ('light','heavy')),
     public_snapshot JSONB NOT NULL DEFAULT '{}',
     result JSONB,
     record_id TEXT UNIQUE NOT NULL,
