@@ -190,8 +190,10 @@ def _collect_runner_section() -> "tuple[Dict[str, Any], List[str]]":
 
     # 槽位 = 双池部署配置口径（与 worker 容器共用同一 .env）；
     # 配置值非容器实况（副本崩溃不扣减），仅作容量对照展示。
-    # 轻槽每槽并发（AGENT_RUNNER_SLOT_CONCURRENCY，槽内协程 A 方案）未配置时为 1，
-    # 落地后容量自动按执行体换算（槽位 × 并发）
+    # 轻槽每槽并发（AGENT_RUNNER_SLOT_CONCURRENCY，槽内协程 A 方案）未配置时为 4，
+    # 与 settings.py slot_concurrency 默认值、compose worker 插值默认值保持一致
+    # （此前默认 1 与后两者不一致，导致健康页轻槽并发显示失真），
+    # 容量自动按执行体换算（槽位 × 并发）
     def _env_int(name: str, default: int) -> int:
         try:
             return int(os.environ.get(name, str(default)))
@@ -202,7 +204,7 @@ def _collect_runner_section() -> "tuple[Dict[str, Any], List[str]]":
     general_slots = _env_int("AGENT_RUNNER_GENERAL_SLOTS", 8)
     section["light_slots"] = light_slots
     section["general_slots"] = general_slots
-    section["light_concurrency"] = _env_int("AGENT_RUNNER_SLOT_CONCURRENCY", 1)
+    section["light_concurrency"] = _env_int("AGENT_RUNNER_SLOT_CONCURRENCY", 4)
     section["worker_slots"] = max(1, light_slots + general_slots)
 
     return section, fingerprint

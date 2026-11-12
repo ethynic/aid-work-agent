@@ -379,8 +379,8 @@ const retryShareSuffix = computed(() => {
 })
 const retryShareTitle = computed(() => 'attempt>1 的任务数 / 今日已启动任务数；启动数不足 10 时不计算占比')
 
-// 轻槽容量按执行体换算：槽位 × 每槽并发（AGENT_RUNNER_SLOT_CONCURRENCY，未配置=1）
-const lightConcurrency = computed(() => runner.value?.light_concurrency ?? 1)
+// 轻槽容量按执行体换算：槽位 × 每槽并发（AGENT_RUNNER_SLOT_CONCURRENCY，未配置=4，与 settings/compose 默认一致）
+const lightConcurrency = computed(() => runner.value?.light_concurrency ?? 4)
 const lightOccupied = computed(() =>
   (runner.value?.running_light ?? 0) + (runner.value?.finalizing_light ?? 0))
 const lightCapacity = computed(() => {
