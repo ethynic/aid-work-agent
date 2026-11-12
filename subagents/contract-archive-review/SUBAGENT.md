@@ -18,8 +18,6 @@ skills:
   allowed:
     - eas-contract-verify
     - contract-approval
-# 基础校验 + EAS 比对为规则核对流水线，思考 token 占输出大头且回传历史膨胀上下文，显式关闭
-enable_thinking: false
 context:
   max_input_tokens: 8000
   max_output_tokens: 4000

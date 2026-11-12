@@ -26,9 +26,6 @@ skills:
   allowed:
     - bid-opportunity-evaluator
     - bid-doc-generator
-# 标书生成为模板填充型任务，思考 token 占单次任务积分 ~40% 且 reasoning_content
-# 回传历史膨胀上下文（2026-11-12 trace 排查），显式关闭
-enable_thinking: false
 context:
   max_input_tokens: 8000
   max_output_tokens: 4000
