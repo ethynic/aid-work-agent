@@ -6,9 +6,10 @@
  * - 设备 token 被撤销（401）→ fail-loud 停循环
  * - shutdown：停止 claim 新任务；当前 invocation 走协作式中止；循环退出后由调用方回收 Provider
  * - 并行接单（契约 2.20）：执行通道与领取参数同受 parallel_claim 协商控制——服务端支持
- *   且本设备有并行工具时才走解耦模式（串行占用期间领取带 parallel_only，并行作业后台
- *   执行不阻塞领取循环；串行 settle 时在途长轮询脱挂，串行队列时效不受影响）；否则完全
- *   沿用原串行循环。drain/shutdown 等待全部在途（串行 + 并行 + 脱挂轮询）调用完成
+ *   且本设备有并行工具时才走解耦模式：主循环恒发空参数领取（FIFO 不变），串行占用期间
+ *   只等待串行 settle；并行作业的等待与重试由专职并行领取通道（lane）承担——任一时刻
+ *   至多一个在途 parallel_only 长轮询，跨串行作业复用，失败走 lane 私有退避，不触碰主
+ *   循环退避；否则完全沿用原串行循环。drain/shutdown 等待全部在途（串行 + 并行）调用完成
  */
 import type { ApiClient, ClaimedInvocation } from './apiClient.js'
 import { AbortLoopError, ApiError, DeviceRevokedError, NetworkError } from './apiClient.js'
@@ -72,13 +73,11 @@ export class PollLoop {
   /** 串行占用：当前有串行 invocation 领取后未到终态（执行或停止中）。
    *  仅影响领取参数（并行模式）；并行作业完成与否不改变该状态。 */
   private serialOccupied = false
-  /** 当前串行 runner（脱挂 race 用）：与 serialOccupied 同置同清 */
-  private serialRunner: Promise<void> | null = null
   /** 在途 runner（串行 + 并行）：tracked promise → invocation_id；drain/shutdown 等待全部结束 */
   private readonly inFlight = new Map<Promise<void>, string>()
-  /** 脱挂的 parallel_only 长轮询（契约 2.20 修复轮）：串行 settle 时不等待在途轮询——
-   *  promise 脱挂后返回的并行作业照常后台执行；drain/shutdown 等待全部结束 */
-  private readonly detachedClaims = new Set<Promise<void>>()
+  /** 并行领取通道 promise（契约 2.20 R3）：hasParallelTools 时随 run 启动，与主循环
+   *  共用 claimController（stopClaiming/shutdown 一并 abort）；drain 等待其退出 */
+  private lanePromise: Promise<void> | null = null
 
   constructor(options: PollLoopOptions) {
     this.opts = {
@@ -115,10 +114,9 @@ export class PollLoop {
   async drain(): Promise<void> {
     this.stopClaiming()
     if (this.claimPromise) await this.claimPromise
-    // 等待全部在途（串行 + 并行）runner 与脱挂轮询结束——脱挂轮询可能派生新 runner，
-    // 结束后再等一轮 inFlight。租约续期/终态回传依赖心跳循环存活
-    await Promise.all([...this.inFlight.keys()])
-    await Promise.all([...this.detachedClaims])
+    // 并行领取通道随后退出（stopClaiming 已 abort 其在途请求与休眠）；其交付的 runner
+    // 已同步入账，最后统一等待全部在途。租约续期/终态回传依赖心跳循环存活
+    if (this.lanePromise) await this.lanePromise
     await Promise.all([...this.inFlight.keys()])
     this.stopped = true
     this.controller.abort()
@@ -130,8 +128,12 @@ export class PollLoop {
     // Begin heartbeats/admission immediately. Old receipts are drained in bounded,
     // single-flight passes after successful heartbeats, using their original claims.
     this.claimPromise = this.claimLoop()
+    // 并行领取通道仅在有并行工具的设备启动（BOSS-only 设备连休眠轮询都不需要）
+    if (this.hasParallelTools) this.lanePromise = this.parallelLane()
     try {
-      await Promise.all([this.heartbeatLoop(), this.claimPromise])
+      const loops: Promise<void>[] = [this.heartbeatLoop(), this.claimPromise]
+      if (this.lanePromise) loops.push(this.lanePromise)
+      await Promise.all(loops)
     } finally {
       await this.replayPromise
     }
@@ -208,14 +210,13 @@ export class PollLoop {
   }
 
   /**
-   * 领取循环（契约 2.20 状态机，修复轮后执行通道与领取参数同受协商门禁）：
+   * 领取循环（契约 2.20 状态机，R3 复审修复后串行领取与并行领取彻底分离）：
    * - 解耦模式 = 服务端支持 parallel_claim 且本设备有并行工具。除此之外完全沿用原串行
    *   循环：空参数领取 → 领到即串行执行完 → 下一轮（旧服务端/BOSS-only 设备不空转）。
-   * - 解耦模式下：无串行占用 → 空参数领取（FIFO 不变）；串行占用 → 领取带 parallel_only
-   *   （服务端只派并行可领作业，串行原地等待）。领到并行作业 → 后台执行，继续领取。
-   * - 串行 runner settle 时若在途 parallel_only 长轮询未返回：脱挂（不等待、不中止），
-   *   立即继续循环发空参数领取——串行队列时效不受在途长轮询拖累。脱挂轮询最终返回时，
-   *   并行作业走统一 handleClaimed 后台执行（不丢作业、不产生卡租约）。
+   * - 解耦模式下主循环恒发空参数领取（FIFO 不变）：无串行占用 → 立即领取；串行占用 →
+   *   阻塞等待串行 runner settle（不发任何领取请求），settle 后立即发下一条空参数领取。
+   *   服务端支持标记随心跳晚到唤醒的是并行领取通道（parallelLane），主循环不改发参数。
+   * - 并行作业的等待与重试全部在专职并行领取通道内，不占用串行领取节奏。
    */
   private async claimLoop(): Promise<void> {
     const { api, claimWaitSeconds, backoffBaseMs, backoffMaxMs } = this.opts
@@ -225,11 +226,9 @@ export class PollLoop {
         await sleep(this.opts.heartbeatIntervalMs, this.claimController.signal)
         continue
       }
-      const decoupled = this.hasParallelTools && this.serverParallelClaim
-      const parallelOnly = decoupled && this.serialOccupied
       let inv: ClaimedInvocation | null = null
       try {
-        inv = await this.awaitClaim(api.claim(claimWaitSeconds, parallelOnly, this.claimController.signal), parallelOnly)
+        inv = await api.claim(claimWaitSeconds, false, this.claimController.signal)
         backoff = backoffBaseMs
       } catch (err) {
         if (err instanceof AbortLoopError || this.stopped || !this.accepting) break
@@ -252,74 +251,67 @@ export class PollLoop {
       // A successful claim response is already accepted even if stop raced with its return.
       if (this.stopped) break
       const runner = this.handleClaimed(inv)
-      if (runner && !decoupled) {
-        // 原串行循环：阻塞领取循环至串行完成——继续领取只会立刻领到下一条串行作业。
-        // 服务端支持标记随心跳到达可能晚于首次领取：有并行工具的设备在解耦模式激活时
-        // 中断等待、恢复解耦领取（新服务端场景并行拾取不被首个串行拖住）；无并行工具
-        // 的设备恒阻塞至完成（原形态，无空转领取）
-        if (this.hasParallelTools) await Promise.race([runner, this.decoupleSignal()])
-        else await runner
+      if (runner) {
+        // 串行作业：阻塞领取循环至完成——继续领取只会立刻领到下一条串行作业。
+        // 并行作业的领取由并行通道在串行占用期间负责（含服务端标记晚到场景）
+        await runner
       }
     }
   }
 
-  /** 等待解耦模式激活（hasParallelTools && serverParallelClaim）；永不激活时本信号
-   *  不结束，race 由串行 runner 一侧胜出 */
-  private async decoupleSignal(): Promise<void> {
-    while (!this.stopped && this.accepting && !(this.hasParallelTools && this.serverParallelClaim)) {
-      await sleep(25, this.claimController.signal)
-    }
-  }
-
   /**
-   * 领取返回等待：解耦模式下 parallel_only 长轮询在途期间串行 runner 可能先 settle——
-   * race 领取返回与串行结束，串行先到则把该轮询脱挂并返回 null（循环立即发空参数领取，
-   * 拿到 FIFO 串行队头）。非 parallel_only 领取原样等待。
+   * 专职并行领取通道（契约 2.20 R3 复审修复）：独立循环，任一时刻至多一个在途
+   * parallel_only 长轮询，跨串行作业复用——取代串行 settle 时的脱挂机制（每次 settle
+   * 遗留一条在途轮询、失败进共用退避拖慢串行队列）。
+   * - 激活条件 accepting && 解耦模式 && 串行占用；休眠等待按 25ms 轮询条件（与原
+   *   decoupleSignal 同风格），休眠期间不发任何请求（主循环空参数领取覆盖 FIFO 全部作业）
+   * - 领到并行作业后台执行（handleClaimed 统一入账）后立即继续领取；串行 settle 后
+   *   在途轮询自然返回（交付或丢弃）再转入休眠
+   * - 错误走 lane 私有退避（独立计时、封顶与主循环相同），不触碰主循环 backoff/状态；
+   *   DeviceRevoked 沿 fail-loud 语义停整个循环；stopClaiming/shutdown abort 共用的
+   *   claimController 使 lane 尽快结算退出
    */
-  private async awaitClaim(pending: Promise<ClaimedInvocation | null>, parallelOnly: boolean): Promise<ClaimedInvocation | null> {
-    if (!parallelOnly || !this.serialRunner) return await pending
-    const settled = await Promise.race([
-      pending.then(
-        inv => ({ kind: 'claim' as const, inv }),
-        error => ({ kind: 'claim-error' as const, error }),
-      ),
-      this.serialRunner.then(() => ({ kind: 'serial' as const })),
-    ])
-    if (settled.kind === 'serial') {
-      this.detachClaim(pending)
-      return null
-    }
-    if (settled.kind === 'claim-error') throw settled.error
-    return settled.inv
-  }
-
-  /**
-   * 脱挂在途 parallel_only 长轮询（不 abort，只脱挂）：返回并行作业走统一 handleClaimed
-   * 后台执行（parallel_only 过滤下只能是并行作业）；返回 null 丢弃；网络错误只记录
-   * （主循环已有新轮询在途）；DeviceRevoked 沿主循环 fail-loud 语义停机。promise 入
-   * detachedClaims 账，drain/shutdown 等待其结束。
-   */
-  private detachClaim(pending: Promise<ClaimedInvocation | null>): void {
-    const detached = pending.then(inv => {
-      // A successful claim response is already accepted even if stop raced with its return.
+  private async parallelLane(): Promise<void> {
+    const { api, claimWaitSeconds, backoffBaseMs, backoffMaxMs } = this.opts
+    let backoff = backoffBaseMs
+    while (!this.stopped && this.accepting) {
+      if (!(this.hasParallelTools && this.serverParallelClaim && this.serialOccupied)) {
+        await sleep(25, this.claimController.signal)
+        continue
+      }
+      if (this.opts.canClaim && !this.opts.canClaim()) {
+        await sleep(this.opts.heartbeatIntervalMs, this.claimController.signal)
+        continue
+      }
+      let inv: ClaimedInvocation | null = null
+      try {
+        inv = await api.claim(claimWaitSeconds, true, this.claimController.signal)
+        backoff = backoffBaseMs
+      } catch (err) {
+        if (err instanceof AbortLoopError || this.stopped || !this.accepting) return
+        if (err instanceof DeviceRevokedError) {
+          this.opts.onConnection?.('revoked')
+          logError('设备 token 已失效或被撤销，主循环停止。请重新 pair。')
+          this.shutdown()
+          return
+        }
+        if (err instanceof ApiError || err instanceof NetworkError) {
+          // lane 私有退避：只影响并行领取节奏，串行领取（主循环）不受影响
+          await sleep(backoff, this.claimController.signal)
+          backoff = Math.min(backoff * 2, backoffMaxMs)
+          continue
+        }
+        throw err
+      }
+      // 长轮询返回：即便串行已 settle（转入休眠前）也照常交付——成功领取即已接受
       if (inv && !this.stopped && this.accepting) this.handleClaimed(inv)
-    }, err => {
-      if (err instanceof DeviceRevokedError) {
-        this.opts.onConnection?.('revoked')
-        logError('设备 token 已失效或被撤销，主循环停止。请重新 pair。')
-        this.shutdown()
-        return
-      }
-      if (err instanceof AbortLoopError || this.stopped || !this.accepting) return
-      logError(`脱挂领取返回异常: ${err instanceof Error ? err.message : String(err)}`)
-    }).finally(() => { this.detachedClaims.delete(detached) })
-    this.detachedClaims.add(detached)
+    }
   }
 
   /**
-   * 统一领取处理（attached 循环与脱挂轮询共用）：执行通道与领取参数同受协商门禁——
+   * 统一领取处理（主循环与并行通道共用）：执行通道与领取参数同受协商门禁——
    * 并行 = serverParallelClaim && 声明并行；旧服务端（无标记）下声明并行的作业同样按
-   * 串行执行（原行为）。串行作业置占用并返回 runner promise（原串行循环阻塞等待用）。
+   * 串行执行（原行为）。串行作业置占用并返回 runner promise（主循环阻塞等待用）。
    */
   private handleClaimed(inv: ClaimedInvocation): Promise<void> | null {
     const parallel = this.serverParallelClaim && this.isParallelInvocation(inv)
@@ -330,9 +322,7 @@ export class PollLoop {
       return null
     }
     this.serialOccupied = true
-    const runner = this.startRunner(inv, { parallel: false, releaseSerial: true })
-    this.serialRunner = runner
-    return runner
+    return this.startRunner(inv, { parallel: false, releaseSerial: true })
   }
 
   /** 判定作业是否可并行执行：用本设备已上报的 parallel_tools（provider 回退语义与
@@ -361,10 +351,7 @@ export class PollLoop {
     })()
     const tracked = runner.finally(() => {
       this.inFlight.delete(tracked)
-      if (opts.releaseSerial) {
-        this.serialOccupied = false
-        this.serialRunner = null
-      }
+      if (opts.releaseSerial) this.serialOccupied = false
       this.opts.onInvocationEnd?.(inv)
     })
     this.inFlight.set(tracked, inv.invocation_id)

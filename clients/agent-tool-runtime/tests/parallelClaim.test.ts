@@ -265,15 +265,15 @@ test('混合设备：串行结束立即领取下一条串行作业——在途 p
   }
 })
 
-test('脱挂轮询随后返回的并行作业照常后台执行：无丢失、无 unknown、串行队列时效不受影响', async () => {
+test('在途 lane 长轮询返回的并行作业照常后台执行：无丢失、无 unknown、串行队列时效不受影响', async () => {
   const stack = await startTestStack({ parallelTools: PARALLEL_TOOLS, claimWaitSeconds: 4 })
   stack.cloud.parallelClaimSupported = true
   try {
     const a = stack.cloud.enqueueInvocation('boss_goto', { durationMs: 300, stepMs: 60 })
     const b = stack.cloud.enqueueInvocation('boss_goto', { durationMs: 250 })
     await stack.cloud.waitFor(() => stack.cloud.getInvocation(a)!.state === 'succeeded', 15_000, 'A 完成')
-    // A 结果回传后脱挂的 parallel_only 轮询仍在途（wait=4s）：此时入队并行 C——
-    // 脱挂轮询返回它照常后台执行；B（串行队头）同时保持 <1s 启动
+    // A 结果回传后 lane 的 parallel_only 长轮询仍在途（wait=4s）：此时入队并行 C——
+    // 该轮询返回它照常后台执行；B（串行队头）同时保持 <1s 启动
     const c = stack.cloud.enqueueInvocation('boss_filter', { durationMs: 150 }, { parallel: true })
     await stack.cloud.waitFor(() => stack.cloud.callsFor(c).some((e) => e.type === 'started'), 15_000, '并行 C 被领取执行')
     await stack.cloud.waitFor(() => stack.cloud.getInvocation(c)!.state === 'succeeded', 15_000, 'C 终态')
@@ -281,12 +281,99 @@ test('脱挂轮询随后返回的并行作业照常后台执行：无丢失、�
     const aResult = stack.cloud.callsFor(a).find((e) => e.type === 'result')!.at
     const startedB = stack.cloud.callsFor(b).find((e) => e.type === 'started')!.at
     assert.ok(startedB - aResult < 1_000, `串行 B 不被并行 C 入队与在途轮询拖住（实际 ${startedB - aResult}ms）`)
-    assert.equal(stack.cloud.getInvocation(c)!.state, 'succeeded', '脱挂轮询交付的并行作业正常完成（不丢作业、无 unknown）')
+    assert.equal(stack.cloud.getInvocation(c)!.state, 'succeeded', '在途轮询交付的并行作业正常完成（不丢作业、无 unknown）')
     const cResult = stack.cloud.callsFor(c).find((e) => e.type === 'result')!
     assert.equal(cResult.payload['success'], true, '回执沿原通路')
     for (const id of [a, b, c]) {
       assert.notEqual(stack.cloud.getInvocation(id)!.state, 'unknown', `${id} 无卡租约 unknown`)
     }
+  } finally {
+    await stack.stop()
+  }
+})
+
+// ----- 契约 2.20 R3 复审修复：并行领取等待/重试移出串行领取流程（专职 lane） -----
+
+test('并行轮询 503 失败不拖慢串行队列：下一条串行作业 <1s 启动（lane 私有退避）', async () => {
+  // 注入 3 次 parallel_only 503（真实场景：脱挂轮询失败进共用退避，实测拖住串行 0.76s）。
+  // 大退避基数放大共用退避的破坏面：修复前主循环在串行 settle 期间睡眠退避，B 延迟 >1s；
+  // 修复后退避归 lane 私有计时，主循环只等串行 settle
+  const stack = await startTestStack({
+    parallelTools: PARALLEL_TOOLS,
+    claimWaitSeconds: 1,
+    backoffBaseMs: 1_000,
+    backoffMaxMs: 30_000,
+  })
+  stack.cloud.parallelClaimSupported = true
+  stack.cloud.parallelOnlyFailStatus = 503
+  stack.cloud.parallelOnlyFailuresLeft = 3
+  try {
+    const a = stack.cloud.enqueueInvocation('boss_goto', { durationMs: 1_500, stepMs: 100 })
+    const b = stack.cloud.enqueueInvocation('boss_goto', { durationMs: 100 })
+    await stack.cloud.waitFor(() => stack.cloud.getInvocation(b)!.state === 'succeeded', 30_000, 'B 完成领取执行')
+
+    assert.ok(stack.cloud.claimLog.some((r) => r.parallel_only), '并行领取通道确实发起过 parallel_only 请求')
+    // 串行占用窗口（~1.6s）覆盖首个退避周期（1s）：失败后 lane 重试至少再来一次
+    assert.ok(stack.cloud.claimLog.filter((r) => r.parallel_only).length >= 2,
+      'lane 失败后持续重试（不放弃并行领取）')
+    const aResult = stack.cloud.callsFor(a).find((e) => e.type === 'result')!.at
+    const startedB = stack.cloud.callsFor(b).find((e) => e.type === 'started')!.at
+    assert.ok(startedB - aResult < 1_000,
+      `串行 B 不被并行轮询失败退避拖住（实际 ${startedB - aResult}ms）`)
+  } finally {
+    await stack.stop()
+  }
+})
+
+test('连续 5 条串行作业：任一时刻至多 1 个在途 parallel_only 请求，完成后无堆积回落', async () => {
+  const stack = await startTestStack({ parallelTools: PARALLEL_TOOLS, claimWaitSeconds: 1 })
+  stack.cloud.parallelClaimSupported = true
+  try {
+    const ids = Array.from({ length: 5 }, () =>
+      stack.cloud.enqueueInvocation('boss_goto', { durationMs: 150, stepMs: 40 }))
+    await stack.cloud.waitFor(
+      () => ids.every((id) => stack.cloud.getInvocation(id)!.state === 'succeeded'),
+      20_000, '5 条串行作业全部完成',
+    )
+
+    assert.ok(stack.cloud.maxConcurrentParallelOnly <= 1,
+      `任一时刻至多 1 个在途 parallel_only 请求（峰值 ${stack.cloud.maxConcurrentParallelOnly}）`)
+    assert.ok(stack.cloud.claimLog.some((r) => r.parallel_only), '串行占用期间存在并行领取')
+    // 全部作业完成后在途并行领取回落到 0（脱挂机制会遗留多条 pending 轮询）
+    await stack.cloud.waitFor(() => stack.cloud.parallelOnlyInFlight() === 0, 5_000, '在途 parallel_only 回落 0')
+  } finally {
+    await stack.stop()
+  }
+})
+
+test('并行轮询连续 503：lane 私有退避，主循环串行领取节奏稳定', async () => {
+  const stack = await startTestStack({
+    parallelTools: PARALLEL_TOOLS,
+    claimWaitSeconds: 1,
+    // 退避基数 1200ms：修复前共用退避会把第二条串行拖到 >1s；修复后 lane 首次重试
+    // （~1.2s）恰落在 3 条串行作业窗口内，可同时断言 lane 持续重试
+    backoffBaseMs: 1_200,
+    backoffMaxMs: 30_000,
+  })
+  stack.cloud.parallelClaimSupported = true
+  stack.cloud.parallelOnlyFailStatus = 503
+  try {
+    const ids = Array.from({ length: 3 }, () =>
+      stack.cloud.enqueueInvocation('boss_goto', { durationMs: 120, stepMs: 30 }))
+    await stack.cloud.waitFor(
+      () => ids.every((id) => stack.cloud.getInvocation(id)!.state === 'succeeded'),
+      30_000, '3 条串行作业完成',
+    )
+
+    let previous: number | null = null
+    for (const id of ids) {
+      const started = stack.cloud.callsFor(id).find((e) => e.type === 'started')!.at
+      if (previous !== null) {
+        assert.ok(started - previous < 1_000, `串行领取节奏稳定（间隔 ${started - previous}ms，不被 lane 退避拖住）`)
+      }
+      previous = started
+    }
+    assert.ok(stack.cloud.claimLog.some((r) => r.parallel_only), '串行占用期间 lane 确实在领取')
   } finally {
     await stack.stop()
   }

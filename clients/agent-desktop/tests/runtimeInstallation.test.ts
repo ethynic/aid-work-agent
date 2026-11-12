@@ -1,10 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { randomUUID } from 'node:crypto'
+import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { prepareRuntimeInstallation, rotateRuntimeConnection, selectRuntimeConnection } from '../electron/runtimeInstallation.js'
 
 function fixture() {
@@ -211,5 +212,126 @@ test('corrupt readable pointer is rebuilt using the trusted installation id and 
     assert.equal(rebuilt.installationId, first.installationId)
     assert.equal(rebuilt.migrated, true)
     assert.deepEqual(JSON.parse(readFileSync(path.join(rebuilt.home, 'config.json'), 'utf8')), f.config)
+  } finally { f.clean() }
+})
+
+// ----- 契约 2.20 R3 复审修复：连接迁移沿用安装信任配置逐包验签迁移（不限定三家或三条） -----
+
+/** dist/tests → clients 根（桥接真实构建产物用） */
+const clientsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..', '..')
+const winX64Only = { skip: process.platform !== 'win32' || process.arch !== 'x64' }
+
+interface Packaging {
+  createOfflinePackage(payload: Buffer, manifest: unknown, metadata: { release_id: string; key_id: string; created_at: string }, privateKey: string): Promise<{ archive: Buffer }>
+  sha256(bytes: Buffer): string
+  zipBytes(entries: Array<[string, Buffer]>): Promise<Buffer>
+}
+
+/** 离线包构造器复用 runtime-plugin-packaging（非本包 TS 依赖，运行时动态加载） */
+const packaging = async (): Promise<Packaging> =>
+  await import(new URL('../../../runtime-plugin-packaging/package.mjs', import.meta.url).href) as Packaging
+
+/**
+ * 真实迁移 fixture：不打 migratePlugins 注入接缝，改为在宿主目录布置 migratePlugins
+ * 运行时动态 import 的同包接缝——store.js/package.js 桥接 host-core 真实 dist，
+ * productTrust.js 桥接 agent-tool-runtime 真实构建，trust-roots.json 携带含第 4 方
+ * 身份的信任配置。需先构建 host-core 与 agent-tool-runtime。
+ */
+async function migrationFixture() {
+  const f = fixture()
+  const options = { ...f.options, migratePlugins: undefined }
+  const hostDir = path.dirname(options.hostEntry)
+  const corePlugins = path.join(clientsRoot, 'shared', 'local-tool-host-core', 'dist', 'plugins')
+  const trustModule = path.join(clientsRoot, 'agent-tool-runtime', 'dist', 'src', 'productTrust.js')
+  writeFileSync(path.join(hostDir, 'package.json'), JSON.stringify({ version: '0.2.25' }))
+  for (const name of ['store.js', 'package.js']) {
+    const target = path.join(hostDir, 'node_modules/@aid/local-tool-host-core/dist/plugins', name)
+    mkdirSync(path.dirname(target), { recursive: true })
+    writeFileSync(target, `export * from ${JSON.stringify(pathToFileURL(path.join(corePlugins, name)).href)}`)
+  }
+  writeFileSync(path.join(hostDir, 'productTrust.js'), `export * from ${JSON.stringify(pathToFileURL(trustModule).href)}`)
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519')
+  const trustRoot = {
+    key_id: 'migration-fixture',
+    public_key: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+    providers: ['ai.aidwork.boss-recruiting', 'ai.aidwork.weixin', 'ai.aidwork.wecom', 'ai.aidwork.resume-tool'],
+    test_only: true,
+  }
+  writeFileSync(path.resolve(hostDir, '../trust-roots.json'), JSON.stringify({ roots: [trustRoot] }))
+  const privateKeyPem = privateKey.export({ format: 'pem', type: 'pkcs8' }).toString()
+  const { createOfflinePackage, sha256, zipBytes } = await packaging()
+  const buildArchive = async (providerId: string, toolName: string): Promise<Buffer> => {
+    const cli = Buffer.from('// fixture plugin, never executed by these tests')
+    const manifest = {
+      manifest_version: 1, provider_id: providerId, provider_version: '1.0.0',
+      display_name: 'Fixture', description: '', schema_digest: 'fixture',
+      tools: [{ name: toolName }], execution_target: 'local_required', entrypoint: ['index.js', 'mcp', '--stdio'],
+      distribution: { platform: process.platform, arch: process.arch, node: { version: process.versions.node, modules_abi: process.versions.modules }, required_files: [{ path: 'index.js', size: cli.length, sha256: sha256(cli) }] },
+    }
+    const payload = await zipBytes([['runtime-manifest.json', Buffer.from(JSON.stringify(manifest))], ['index.js', cli]])
+    const built = await createOfflinePackage(payload, manifest, { release_id: `migration-${toolName}`, key_id: trustRoot.key_id, created_at: '2026-11-12T00:00:00Z' }, privateKeyPem)
+    return built.archive
+  }
+  let inventory: { version: number; records: Record<string, unknown>[] } | null = null
+  const addLegacyPlugin = (pluginId: string, enabled: boolean, archive: Buffer): void => {
+    const directory = randomUUID()
+    const file = path.join(options.legacyHome, 'plugins/releases', directory, 'archive.zip')
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, archive)
+    inventory ??= { version: 1, records: [] }
+    inventory.records.push({ plugin_id: pluginId, enabled, uninstalled: false, directory })
+    writeFileSync(path.join(options.legacyHome, 'plugins/inventory.json'), JSON.stringify(inventory))
+  }
+  return { ...f, options, buildArchive, addLegacyPlugin }
+}
+
+const migratedProviderIds = (home: string): string[] => {
+  const value = JSON.parse(readFileSync(path.join(home, 'plugins/inventory.json'), 'utf8')) as { version: number; records: Array<{ plugin_id: string; enabled: boolean }> }
+  assert.equal(value.version, 1)
+  return value.records.map(record => record.plugin_id).sort()
+}
+
+test('connection migration installs every trusted plugin beyond the first-party three, including a disabled one', winX64Only, async () => {
+  const f = await migrationFixture()
+  try {
+    writeFileSync(path.join(f.options.legacyHome, 'config.json'), JSON.stringify(f.config))
+    writeFileSync(path.join(f.options.legacyHome, 'credentials.bin'), await f.protect('a'.repeat(64)))
+    const ids = ['ai.aidwork.boss-recruiting', 'ai.aidwork.weixin', 'ai.aidwork.wecom', 'ai.aidwork.resume-tool']
+    for (const [index, id] of ids.entries()) {
+      f.addLegacyPlugin(id, id !== 'ai.aidwork.weixin', await f.buildArchive(id, `fixture_tool_${index}`))
+    }
+    const installed = await prepareRuntimeInstallation(f.options)
+    assert.deepEqual(migratedProviderIds(installed.home), [...ids].sort(), '信任配置覆盖的第 4 方身份随三家一起逐包迁移')
+    const inventory = JSON.parse(readFileSync(path.join(installed.home, 'plugins/inventory.json'), 'utf8')) as { records: Array<{ plugin_id: string; enabled: boolean }> }
+    assert.equal(inventory.records.find(record => record.plugin_id === 'ai.aidwork.weixin')?.enabled, false, '停用状态随迁移保留')
+  } finally { f.clean() }
+})
+
+test('unauthorized identity in legacy inventory is skipped per package while trusted plugins still migrate', winX64Only, async () => {
+  const f = await migrationFixture()
+  try {
+    writeFileSync(path.join(f.options.legacyHome, 'config.json'), JSON.stringify(f.config))
+    writeFileSync(path.join(f.options.legacyHome, 'credentials.bin'), await f.protect('a'.repeat(64)))
+    const trusted = ['ai.aidwork.boss-recruiting', 'ai.aidwork.weixin', 'ai.aidwork.wecom']
+    for (const [index, id] of trusted.entries()) {
+      f.addLegacyPlugin(id, true, await f.buildArchive(id, `fixture_tool_${index}`))
+    }
+    f.addLegacyPlugin('ai.aidwork.unauthorized', true, await f.buildArchive('ai.aidwork.unauthorized', 'fixture_tool_evil'))
+    const installed = await prepareRuntimeInstallation(f.options)
+    assert.deepEqual(migratedProviderIds(installed.home), [...trusted].sort(), '未授权身份该条跳过，其余照常迁移')
+  } finally { f.clean() }
+})
+
+test('legacy three-plugin inventory keeps migrating unchanged', winX64Only, async () => {
+  const f = await migrationFixture()
+  try {
+    writeFileSync(path.join(f.options.legacyHome, 'config.json'), JSON.stringify(f.config))
+    writeFileSync(path.join(f.options.legacyHome, 'credentials.bin'), await f.protect('a'.repeat(64)))
+    const trusted = ['ai.aidwork.boss-recruiting', 'ai.aidwork.weixin', 'ai.aidwork.wecom']
+    for (const [index, id] of trusted.entries()) {
+      f.addLegacyPlugin(id, true, await f.buildArchive(id, `fixture_tool_${index}`))
+    }
+    const installed = await prepareRuntimeInstallation(f.options)
+    assert.deepEqual(migratedProviderIds(installed.home), [...trusted].sort(), '三家旧行为不变')
   } finally { f.clean() }
 })
