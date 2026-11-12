@@ -121,11 +121,16 @@ python scripts/web_search.py batch sites.txt               # 批量：默认抽�
 
 ```bash
 # 采集模式：检索 + 抓取 + 结构化字段（零 LLM 依赖，获客挖掘用这个）
-python scripts/pipeline.py search "爱定义（上海）科技有限公司" --top 3 --extract --json
+python scripts/pipeline.py search "爱定义（上海）科技有限公司" --top 3 --extract
 
 # 直接给 URL，跳过检索
-python scripts/pipeline.py urls "https://a.com,https://b.com" --extract --json
+python scripts/pipeline.py urls "https://a.com,https://b.com" --extract
 ```
+
+> `pipeline.py` 只有 `search` / `urls` / `summarize` 三个子命令，输出**恒为 JSON**，
+> **没有 `--json` 参数**；单页抓取用 `web_search.py fetch`。
+> 用 shell 重定向落盘时先看退出码：命令失败（非 0）时输出文件可能为空，
+> 不要直接 `json.load` 空文件，先读 stderr 定位原因。
 
 **快照优先 + 确认即停（默认行为）**：管线先对每条检索结果的摘要/snippet 跑联系方式
 抽取（`snippet_findings` 第一优先）——企查查/天眼查等详情页常被 405/登录墙挡住，
@@ -213,6 +218,6 @@ python scripts/pipeline.py urls "https://a.com,https://b.com" --extract --json
 
 - **ai-lead-gen**：其 `SEARCH_TASK` / `SCRAPE_TASK` 委托协议的第一级执行通道（默认）——
   名单检索、官网定位、联系人挖掘一律直接用本技能管线
-  （`pipeline.py search "<query>" --extract --json` / `urls` 模式），
+  （`pipeline.py search "<query>" --extract` / `urls` 模式），
   平台 web_search/web_fetch 仅在管线全通道失败时兜底
   `pipeline.py --extract` 执行，JSON 结果直接消费入库。

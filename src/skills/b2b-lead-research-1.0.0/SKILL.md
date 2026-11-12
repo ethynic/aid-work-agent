@@ -136,7 +136,7 @@ python lead_db.py score / export / list-leads / list-contacts / show-campaign ..
    按什么口径判（格式见 `references/retrieval-layer.md`）。
 2. 按降级链委托执行：
    - **第一级（默认通道）**：`web-search-pro` 技能——**以 skill_name=web-search-pro
-     发起 skill_execute**，跑 `python scripts/pipeline.py search "<query>" --extract --json`
+     发起 skill_execute**，跑 `python scripts/pipeline.py search "<query>" --extract`
      （名单检索/联系人挖掘一站式完成：检索→抓页→snippet 优先抽取邮箱/电话→掩码还原；
      纯 HTTP 零 LLM 消耗，且不再把大段搜索摘要灌进对话上下文）。
      不要在本技能的 skill_execute 里写这些命令——scripts/ 会被替换成本技能目录；
@@ -151,7 +151,9 @@ python lead_db.py score / export / list-leads / list-contacts / show-campaign ..
 
 > 我方的委托（web-search-pro `pipeline.py`）是**同步一次性命令**，stdout JSON
 > 直接返回，不存在上游 `batch_delegate.py` 的跨轮停等问题；但重查与降级的
-> **轮次上限照旧强制**，防止在低质结果上无限空转烧迭代：
+> **轮次上限照旧强制**，防止在低质结果上无限空转烧迭代。
+> `pipeline.py` 输出恒为 JSON、**没有 `--json` 参数**，子命令只有 `search` / `urls` / `summarize`；
+> 重定向落盘前先看退出码，命令失败（非 0）时输出文件可能为空，不要直接 `json.load`。
 
 1. **重查最多 2 轮**：结果质检不合格的 query 换词/换语言后合并成**一个**重查批次；
    连续 2 轮整批仍不合格（或 hits=0）即停止，把该批标 `search_failed` 并如实上报，
@@ -253,7 +255,7 @@ python scripts/facts_builder.py --probe <campaign>/probe \
    `references/hook-library.md`）。
 2. **目标配置**：`set-target-config` 写入 contact_targets.json（目标职能/排除职能/产品一句话），
    三道闸门共用此口径。
-3. **客户名单检索**：用 web-search-pro `pipeline.py search "<关键词>" --extract --json`
+3. **客户名单检索**：用 web-search-pro `pipeline.py search "<关键词>" --extract`
    （按目标国家/地区选当地引擎与行业名录关键词，挖名单加 `--companies-only`；
    战术模板见 `references/lead-search-playbook.md`，引擎选择见
    `references/search-engine-map.md`），
@@ -261,7 +263,7 @@ python scripts/facts_builder.py --probe <campaign>/probe \
 4. **官网定位与筛选**：用 `pipeline.py search "公司名"` 或 `urls` 模式核验官网有效性，
    打分（score）并 `set-status` 标 qualified/rejected（带 reject_reason）。
 5. **官网巡检 + 企业业务综述**：对 qualified 名单用
-   `pipeline.py urls "官网首页,contact页,about页" --extract --json` 巡检，
+   `pipeline.py urls "官网首页,contact页,about页" --extract` 巡检，
    同一次抓取同时产出：正文（写综述用）、邮箱（反混淆，见下）、电话、社媒外链。
    综述分两级写入：一句话业务综述 + 详细综述（主营业务 / 痛点+证据 URL /
    钩子线索 / 决策链线索），落 `set-lead-profile`
