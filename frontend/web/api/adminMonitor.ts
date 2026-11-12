@@ -30,6 +30,13 @@ export interface RunnerSection {
   runner_stalled: boolean
   active_alerts: number
   worker_slots?: number
+  light_slots?: number
+  general_slots?: number
+  light_concurrency?: number
+  running_light?: number
+  finalizing_light?: number
+  running_heavy?: number
+  finalizing_heavy?: number
   error?: string
 }
 

@@ -53,10 +53,16 @@
           </div>
           <div class="space-y-2 text-sm">
             <div class="flex justify-between">
-              <span class="text-muted">运行中 / 收尾 / 总槽位</span>
+              <span class="text-muted">轻槽（运行+收尾）</span>
+              <span class="text-default font-medium" :title="lightSlotTitle">
+                {{ lightOccupied ?? '-' }} / {{ lightCapacity ?? '-' }}
+              </span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-muted">通用槽（运行+收尾）</span>
               <span class="text-default font-medium"
-                :title="`总槽位 = runner-worker 副本数（AGENT_RUNNER_WORKER_SLOTS，部署配置口径）`">
-                {{ runner?.running ?? '-' }} / {{ runner?.finalizing ?? '-' }} / {{ runner?.worker_slots ?? '-' }}
+                :title="`通用槽容量 = AGENT_RUNNER_GENERAL_SLOTS（部署配置口径）；通用池可兜领轻任务，占用按判型近似`">
+                {{ heavyOccupied ?? '-' }} / {{ runner?.general_slots ?? '-' }}
               </span>
             </div>
             <div class="flex justify-between">
@@ -370,6 +376,24 @@ const retryShareSuffix = computed(() => {
   return `（${r.runner_retried_today ?? 0}/${r.runner_started_today ?? 0}）`
 })
 const retryShareTitle = computed(() => 'attempt>1 的任务数 / 今日已启动任务数；启动数不足 10 时不计算占比')
+
+// 轻槽容量按执行体换算：槽位 × 每槽并发（AGENT_RUNNER_SLOT_CONCURRENCY，未配置=1）
+const lightConcurrency = computed(() => runner.value?.light_concurrency ?? 1)
+const lightOccupied = computed(() =>
+  (runner.value?.running_light ?? 0) + (runner.value?.finalizing_light ?? 0))
+const lightCapacity = computed(() => {
+  const slots = runner.value?.light_slots
+  if (slots == null) return null
+  return slots * lightConcurrency.value
+})
+const heavyOccupied = computed(() =>
+  (runner.value?.running_heavy ?? 0) + (runner.value?.finalizing_heavy ?? 0))
+const lightSlotTitle = computed(() => {
+  const slots = runner.value?.light_slots ?? '-'
+  const c = lightConcurrency.value
+  const base = `轻槽容量 = AGENT_RUNNER_LIGHT_SLOTS（部署配置口径）；轻池只领轻任务，通用池可兜领，占用按判型近似`
+  return c > 1 ? `${base}；每槽 ${c} 并发，容量已按 ${slots} 槽 × ${c} 并发换算为执行体` : base
+})
 const business = computed(() => overview.value?.snapshot?.business)
 const middleware = computed(() => overview.value?.snapshot?.middleware)
 
