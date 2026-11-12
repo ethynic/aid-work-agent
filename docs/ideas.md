@@ -51,6 +51,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261112-1500 | 子智能体思考模式排查与批量关闭（enable_thinking） | 🔧 部分完成（配置贯通+3 个内置关闭已提交，候选实测后再定） | 关思考实测省 35~40% 积分（标书 trace 根因）；配置贯通含自定义数字员工三态开关。已关：ai-bid-assistant/ai-contract-assistant/auto-form-filler/contract-archive-review；6 个候选待 trace 实测，统计时须含自定义数字员工实例三态占比。 | [排查清单](audit/enable-thinking-review-20261112.md) | — |
 | 20261110-2030 | 采购比价助手（quote-price-comparison 技能移植 + 薄壳子智能体） | 🔧 部分完成（开发+单测完成，待提交部署） | 移植 workbuddy quote-price-comparison 技能 v1.0.0（任意格式报价单抽取→知识库/网络价补充→口径归一化→红绿判定→源单副本标色→横向对比 Excel）并新建采购比价助手薄壳子智能体（含 quote-price-comparison + supplier-qualification-review 两技能）。SKILL.md/sourcing.md 适配我方工具（knowledge_base_search/web_search/cp），脚本原样合并零改动。5 单测绿：xlsx 冒烟 + 上游样例 5 来源全链路回归（判定/标色 11/11 与上游期望逐项一致），待真机对话验收。 | — | — |
 | 20261111-0945 | 项目进度管家（project-progress-tracker 技能移植 + 薄壳子智能体） | 🔧 部分完成（已合并 master 1608eda6，待部署真机验收） | 移植 workbuddy 同名技能 v1.2.0（多源归集→三态研判→离线单文件看板→增量闭环）+ 薄壳子智能体；9 单测绿，待真机验收。 | — | — |
 | 20261110-1440 | AI标书助手（bid-doc-generator 技能移植 + 薄壳子智能体） | 🔧 部分完成（v1.0.2 加轮次纪律，待提交部署重测） | 移植 bid-doc-generator 技能 + 薄壳子智能体；11-10 兰香园测试包实测对齐上游；11-11 agent2 真机首验 ITERATION_LIMIT，SKILL.md 升 v1.0.2 增「轮次预算纪律」，10 单测绿。 | [测试基准与实测记录](tests/fixtures/bid_doc_lxy/README.md) | — |
