@@ -70,6 +70,10 @@ x-runner-worker: &runner-worker
         mode: 1777
         size: 200m
     # TMPDIR 内存盘：PDF/PPT/Office/视频转码的主要执行者，2g 覆盖峰值
+    # 注意：本机引擎（docker 24.0.2 + compose 2.24.5）下 tmpfs mode 不可靠——
+    # 挂载点在镜像内已存在时按镜像目录模式生效、mode 数字值被按八进制曲解，
+    # 实测落 755 root:root 致 gosu appuser 写不进自己的 TMPDIR（2026-11-12
+    # Playwright EACCES 事故）。权威兜底是 entrypoint 的 fix_tmp.sh，勿依赖本 mode。
     - type: tmpfs
       target: /home/appuser/tmp
       tmpfs:
@@ -148,6 +152,7 @@ services:
           mode: 1777
           size: 200m
       # TMPDIR 内存盘（本服务不执行任务，仅极小临时文件）
+      # tmpfs mode 在本机引擎不可靠（详见上方 runner-worker 注释），权威兜底是 fix_tmp.sh
       - type: tmpfs
         target: /home/appuser/tmp
         tmpfs:
