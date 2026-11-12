@@ -153,6 +153,9 @@ class ExecutionRepository:
                 # P0②：行锁竞争（save_checkpoint/监督扫描并发持有 agent_runners 行）
                 # 是瞬时状况，短退避重试；不把锁等待当租约丢失向上抛。
                 last_error = error
+                from src.core.temp_logger import tlog
+                tlog("runner心跳锁竞争", "heartbeat 重试 runner={runner} attempt={attempt} retry={retry}",
+                     runner=attempt.runner_id, attempt=attempt.number, retry=_retry + 1)
                 _time.sleep(0.5)
         raise last_error
 

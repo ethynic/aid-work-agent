@@ -39,9 +39,13 @@ class RunnerManager:
         from .input_projection import project_execution_context
         execution_context = project_execution_context(request, profile_id, fingerprint)
         from .load_class import classify_profile
+        load_class = classify_profile(profile_id, config)
         row, created = self.repository.submit(principal, request, fingerprint, resolved_profile_id=profile_id,
                                               execution_context=execution_context,
-                                              load_class=classify_profile(profile_id, config))
+                                              load_class=load_class)
+        from src.core.temp_logger import tlog
+        tlog("runner轻重分离", "入队判型 runner={runner} profile={profile} load_class={lc} created={created}",
+             runner=row['runner_id'], profile=profile_id, lc=load_class, created=created)
         return public_runner(row), created
 
     def _authorize_row(self, row, credentials):

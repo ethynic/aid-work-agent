@@ -255,6 +255,9 @@ class RunnerWorker:
         self.role = os.environ.get('AGENT_RUNNER_ROLE', 'general')
         if self.role not in ('light', 'general'):
             self.role = 'general'
+        from src.core.temp_logger import tlog
+        tlog("runner轻重分离", "worker 启动 worker_id={wid} role={role}",
+             wid=self.worker_id, role=self.role)
         self.slot_state = slot_state
         self.boot_id=uuid.uuid4().hex
         self.executions = execution_repository or ExecutionRepository()
@@ -323,6 +326,10 @@ class RunnerWorker:
                     logger.warning('AgentRunner heartbeat lock contention runner={} retry={}/{}',
                         attempt.runner_id, transient_failures,
                         max(1, self.config.lease_seconds // self.config.heartbeat_seconds - 1))
+                    from src.core.temp_logger import tlog
+                    tlog("runner心跳锁竞争", "worker 心跳重试 runner={runner} retry={retry}/{budget}",
+                         runner=attempt.runner_id, retry=transient_failures,
+                         budget=max(1, self.config.lease_seconds // self.config.heartbeat_seconds - 1))
                     continue
                 kind = 'lease_lost' if isinstance(error, LeaseLost) else 'storage_unavailable' if isinstance(error, psycopg2.Error) else 'heartbeat_failed'
                 control.interruption_reason = {
@@ -882,6 +889,7 @@ class RunnerWorker:
         if priority is not None:
             urgent=await asyncio.to_thread(priority,self.worker_id,self.config.lease_seconds,role=self.role)
             if urgent is not None:
+                self._tlog_acquired(urgent, 'priority')
                 return urgent
         sources=(self._acquire_controls,self._acquire_timers,self._acquire_continuous,self._acquire_queued)
         for offset in range(len(sources)):
@@ -894,7 +902,15 @@ class RunnerWorker:
         return None
 
     async def _acquire_queued(self):
-        return await asyncio.to_thread(self.executions.acquire,self.worker_id,self.config.lease_seconds,role=self.role)
+        row=await asyncio.to_thread(self.executions.acquire,self.worker_id,self.config.lease_seconds,role=self.role)
+        if row is not None:
+            self._tlog_acquired(row, 'queued')
+        return row
+
+    def _tlog_acquired(self, row, source):
+        from src.core.temp_logger import tlog
+        tlog("runner轻重分离", "领取 runner={runner} role={role} source={source} load_class={lc}",
+             runner=row['runner_id'], role=self.role, source=source, lc=row.get('load_class'))
 
     async def _acquire_continuous(self):
         from .continuous import interrupted_candidate

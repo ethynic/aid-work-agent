@@ -119,6 +119,9 @@ def _bounded_wait(process, *, runner_id, attempt):
         logger.critical('AgentRunner slot worker unkillable runner={} attempt={}; '
                         'exiting PID 1 for container teardown',
                         runner_id, attempt)
+        from src.core.temp_logger import tlog
+        tlog("runner取消自愈", "SIGKILL 后 30s 仍未回收，PID 1 退出触发容器销毁 runner={runner} attempt={attempt}",
+             runner=runner_id, attempt=attempt, level="ERROR")
         os._exit(1)
     # An unexpectedly dead Worker may have left same-group tool grandchildren.
     # Do not start another execution process until its group has been cleared.
@@ -162,6 +165,9 @@ class RunnerSlotSupervisor:
                 # 否则下方两分钟收尾回收与取消挂死自愈永远不可达。
                 logger.debug('AgentRunner slot heartbeat lock contention runner={}',
                              attempt.runner_id)
+                from src.core.temp_logger import tlog
+                tlog("runner心跳锁竞争", "监督补租跳过本拍 runner={runner} attempt={attempt}",
+                     runner=attempt.runner_id, attempt=attempt.number)
 
         state = slot.read()
         if state.get('state') != 'BUSY' or state.get('worker_id') != worker_id:
@@ -197,6 +203,10 @@ class RunnerSlotSupervisor:
         if not requested:
             self._cancel_since.pop(attempt.runner_id, None)
             return
+        if attempt.runner_id not in self._cancel_since:
+            from src.core.temp_logger import tlog
+            tlog("runner取消自愈", "首次观察到取消挂起 runner={runner} attempt={attempt} 宽限={grace}s",
+                 runner=attempt.runner_id, attempt=attempt.number, grace=self.cancel_grace_seconds)
         first = self._cancel_since.setdefault(attempt.runner_id, self.clock())
         stuck_for = self.clock() - first
         if stuck_for < self.cancel_grace_seconds:
@@ -204,6 +214,9 @@ class RunnerSlotSupervisor:
         logger.warning('AgentRunner slot cancel grace exceeded runner={} attempt={} '
                        'stuck_for={:.0f}s; forcing recovery', attempt.runner_id,
                        attempt.number, stuck_for)
+        from src.core.temp_logger import tlog
+        tlog("runner取消自愈", "取消宽限超时强制回收 runner={runner} attempt={attempt} stuck_for={stuck:.0f}s",
+             runner=attempt.runner_id, attempt=attempt.number, stuck=stuck_for, level="ERROR")
         self._cancel_since.pop(attempt.runner_id, None)
         with slot.locked() as (_, current):
             if process.poll() is None and slot.matches(current, attempt):
