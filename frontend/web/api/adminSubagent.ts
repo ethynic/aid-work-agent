@@ -48,6 +48,7 @@ export interface SubagentDetail {
   reply_style?: string | null
   llm_provider?: string | null
   llm_model_codes?: Record<string, string> | null
+  enable_thinking?: boolean | null
   recap?: { tasks: { name: string; when: string; enabled: boolean }[] } | null
   chat_toolbar?: string[] | null
   upload_accept?: string | null
