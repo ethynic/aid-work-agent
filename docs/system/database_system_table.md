@@ -645,7 +645,7 @@ prompt_drafts（草稿，每 Prompt 最多一条，未发布的修改）
 
 租户级共用的企业邮箱 SMTP/IMAP 配置（密码加密存储），作为邮箱三层解析的
 第 2 层兜底：用户个人邮箱（`user_email_settings`）-> 租户邮箱 -> 报错提示。
-消费方：`src/skills/ai-lead-gen-1.0.0/scripts/mailbox_resolver.py`（AI获客发件与
+消费方：`src/skills/b2b-email-sender-1.0.0/scripts/mailbox_resolver.py`（AI获客发件与
 回复监控 IMAP 同源）。系统 .env 邮箱（SMTP_*/IMAP_*）仅用于平台级通知，不进入本表。
 
 **关键字段**：

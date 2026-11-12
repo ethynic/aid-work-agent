@@ -1,0 +1,7 @@
+# b2b-email-sender 依赖（发送侧）
+#
+# 本技能脚本仅使用 Python 标准库 + psycopg2（平台容器已内置），无必需第三方依赖。
+# 本技能不做检索/官网巡检，检索依赖见 web-search-pro 技能。
+
+# 可选：提高 SMTP 稳定性（scripts/send_emails.py 不强制依赖，缺失时回退 smtplib）
+# aiosmtplib>=3.0

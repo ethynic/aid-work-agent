@@ -30,6 +30,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 import unicodedata
 from datetime import datetime, timezone
@@ -52,6 +53,20 @@ VALID_SEND_MODE = {"review", "auto"}
 VALID_EMAIL_STATUS = {"draft", "approved", "sending", "sent", "failed", "bounced"}
 VALID_CAMPAIGN_STATUS = {"draft", "searching", "drafting", "awaiting_review",
                          "sending", "paused", "completed", "failed"}
+
+# 多渠道坐标（Outreach Pack 渠道枚举，b2b-lead-research 上游 v1.0.0 口径）
+# email 渠道的落点是 contacts.email（不进 contact_channels 表）
+VALID_CHANNELS = {"email", "sms", "call", "whatsapp", "telegram", "wechat",
+                  "line", "kakao", "linkedin", "x", "facebook", "instagram"}
+CHANNEL_FAMILY = {
+    "sms": "phone", "call": "phone",
+    "whatsapp": "messaging", "telegram": "messaging", "wechat": "messaging",
+    "line": "messaging", "kakao": "messaging",
+    "linkedin": "social", "x": "social", "facebook": "social",
+    "instagram": "social",
+}
+E164_RE = re.compile(r"^\+[1-9]\d{7,14}$")
+SOCIAL_HANDLE_RE = re.compile(r"^@[A-Za-z0-9_.-]{1,60}$")
 
 
 # ---------- 身份与环境 ----------
@@ -237,6 +252,54 @@ def init_tables():
                     "ON bs_ai_lead_gen_opens(track_tenant, id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bs_ailg_opens_tenant "
                     "ON bs_ai_lead_gen_opens(tenant_id)")
+        # 存量表加列（b2b-lead-research 拆分，2026-11-12）：企业综述 + 钩子锚点
+        cur.execute("ALTER TABLE bs_ai_lead_gen_leads ADD COLUMN IF NOT EXISTS summary TEXT")
+        cur.execute("ALTER TABLE bs_ai_lead_gen_leads ADD COLUMN IF NOT EXISTS profile_md TEXT")
+        cur.execute("ALTER TABLE bs_ai_lead_gen_emails ADD COLUMN IF NOT EXISTS hook_id TEXT")
+        # 多渠道坐标表：每行 = 联系人 × 渠道 × 坐标（邮箱坐标在 contacts.email，不入本表）
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_contact_channels (
+                id SERIAL PRIMARY KEY,
+                campaign_id INT NOT NULL,
+                contact_id INT NOT NULL,
+                lead_id INT,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT,
+                channel TEXT NOT NULL,
+                value TEXT NOT NULL,
+                source TEXT,
+                source_url TEXT,
+                confidence TEXT,
+                evidence TEXT,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_bs_ailg_channels_campaign "
+                    "ON bs_ai_lead_gen_contact_channels(campaign_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_bs_ailg_channels_contact "
+                    "ON bs_ai_lead_gen_contact_channels(contact_id)")
+        # 分渠道成品话术表：email 渠道话术唯一落点是 emails 表（add-email-draft），
+        # 本表只承载短信/电话/IM/社媒等非 email 渠道成品（本轮只记录不触达）
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_messages (
+                id SERIAL PRIMARY KEY,
+                campaign_id INT NOT NULL,
+                contact_id INT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT,
+                channel TEXT NOT NULL,
+                content TEXT,
+                language TEXT,
+                cta TEXT,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_bs_ailg_messages_campaign "
+                    "ON bs_ai_lead_gen_messages(campaign_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_bs_ailg_messages_contact "
+                    "ON bs_ai_lead_gen_messages(contact_id)")
         # get_db_connection 退出时无条件 rollback，DDL 必须显式提交
         conn.commit()
 
@@ -659,8 +722,8 @@ def cmd_add_lead(args):
                 INSERT INTO bs_ai_lead_gen_leads
                     (campaign_id, tenant_id, user_id, company_name, country, city,
                      website, industry, employees, founded, source, source_url,
-                     score, status, reject_reason, notes)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                     score, status, reject_reason, notes, summary)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (args.campaign_id, tenant_id, user_id, company,
                  entry.get("country", ""), entry.get("city", ""),
@@ -668,7 +731,8 @@ def cmd_add_lead(args):
                  entry.get("employees", ""), entry.get("founded", ""),
                  entry.get("source", ""), entry.get("source_url", ""),
                  int(score) if str(score).isdigit() else None,
-                 status, entry.get("reason", ""), entry.get("notes", "")),
+                 status, entry.get("reason", ""), entry.get("notes", ""),
+                 entry.get("summary", "")),
             )
             seen.add(key)
             if site:
@@ -924,11 +988,12 @@ def cmd_add_email_draft(args):
             """
             INSERT INTO bs_ai_lead_gen_emails
                 (campaign_id, contact_id, tenant_id, user_id, subject_a, subject_b,
-                 body, ab_group, status)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'draft') RETURNING id
+                 body, ab_group, status, hook_id)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'draft',%s) RETURNING id
             """,
             (args.campaign_id, contact_id, tenant_id, user_id,
-             args.subject_a, args.subject_b, body, ab_group),
+             args.subject_a, args.subject_b, body, ab_group,
+             getattr(args, "hook_id", None)),
         )
         email_id = cur.fetchone()[0]
         conn.commit()
@@ -1004,6 +1069,263 @@ def cmd_export_send_queue(args):
     out.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"queue_file": str(out), "count": len(items),
                       "send_mode": c["send_mode"]}, ensure_ascii=False))
+    return 0
+
+
+# ---------- 多渠道坐标（contact_channels） ----------
+
+def _validate_channel_value(channel, value):
+    """按渠道族校验坐标形态；非法返回错误说明，合法返回 None。"""
+    family = CHANNEL_FAMILY.get(channel)
+    if family == "phone":
+        if not E164_RE.match(value):
+            return f"channel={channel} 的坐标必须是 E.164 形态（如 +493012345678），收到: {value}"
+        return None
+    if family == "social":
+        if not (value.startswith(("http://", "https://")) or SOCIAL_HANDLE_RE.match(value)):
+            return (f"channel={channel} 的坐标必须是最终落地主页 URL 或 @handle，"
+                    f"收到: {value}")
+        return None
+    if not value.strip():
+        return f"channel={channel} 的坐标不能为空"
+    return None
+
+
+def cmd_add_channel(args):
+    """联系人多渠道坐标入库（每行 = 联系人 × 渠道 × 坐标）。
+
+    输入 JSON 数组：[{contact_id, channel, value, source?, source_url?,
+    confidence?, evidence?, notes?}]。email 渠道拒收（落点是 contacts.email）。
+    """
+    tenant_id, user_id = get_identity()
+    entries = load_json_entries(args.json_file)
+    added = skipped = 0
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
+        get_campaign(cur, tenant_id, args.campaign_id)
+        cur.execute(
+            "SELECT id FROM bs_ai_lead_gen_contacts WHERE campaign_id = %s",
+            (args.campaign_id,))
+        contact_ids = {r[0] for r in cur.fetchall()}
+        cur.execute(
+            "SELECT contact_id, channel, value FROM bs_ai_lead_gen_contact_channels "
+            "WHERE campaign_id = %s", (args.campaign_id,))
+        seen = {(r[0], r[1], r[2].strip()) for r in cur.fetchall()}
+        for entry in entries:
+            cid = entry.get("contact_id")
+            channel = (entry.get("channel") or "").strip().lower()
+            value = (entry.get("value") or "").strip()
+            if cid not in contact_ids:
+                print(f"ERROR: contact {cid} not found in campaign {args.campaign_id} "
+                      "(先 list-contacts 取真实 ID，勿猜测)")
+                return 1
+            if channel not in VALID_CHANNELS:
+                print(f"ERROR: channel 必须是 {'/'.join(sorted(VALID_CHANNELS))}，收到: {channel}")
+                return 1
+            if channel == "email":
+                print("ERROR: 邮箱坐标的落点是 contacts.email（add-contact 入库），"
+                      "不写入 contact_channels 表")
+                return 1
+            err = _validate_channel_value(channel, value)
+            if err:
+                print(f"ERROR: {err}")
+                return 1
+            key = (cid, channel, value)
+            if key in seen:
+                skipped += 1
+                continue
+            cur.execute(
+                """
+                INSERT INTO bs_ai_lead_gen_contact_channels
+                    (campaign_id, contact_id, lead_id, tenant_id, user_id,
+                     channel, value, source, source_url, confidence, evidence, notes)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (args.campaign_id, cid, entry.get("lead_id"), tenant_id, user_id,
+                 channel, value, entry.get("source", ""), entry.get("source_url", ""),
+                 entry.get("confidence", ""), entry.get("evidence", ""),
+                 entry.get("notes", "")),
+            )
+            seen.add(key)
+            added += 1
+        conn.commit()
+    print(json.dumps({"channels_added": added, "skipped_duplicate": skipped},
+                     ensure_ascii=False))
+    return 0
+
+
+def cmd_list_channels(args):
+    tenant_id, _ = get_identity()
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
+        get_campaign(cur, tenant_id, args.campaign_id)
+        sql = ("SELECT id, contact_id, channel, value, confidence, source "
+               "FROM bs_ai_lead_gen_contact_channels WHERE campaign_id = %s")
+        params = [args.campaign_id]
+        if getattr(args, "contact_id", None):
+            sql += " AND contact_id = %s"
+            params.append(args.contact_id)
+        sql += " ORDER BY contact_id, channel, id"
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    print(json.dumps([
+        {"id": r[0], "contact_id": r[1], "channel": r[2], "value": r[3],
+         "confidence": r[4], "source": r[5]}
+        for r in rows
+    ], ensure_ascii=False, indent=2))
+    return 0
+
+
+# ---------- 企业综述（leads.summary / profile_md） ----------
+
+def cmd_set_lead_profile(args):
+    """写企业业务综述：summary 一句话 + profile_md 详细综述（痛点/证据/钩子）。"""
+    tenant_id, _ = get_identity()
+    profile_md = ""
+    if args.profile_file:
+        profile_md = Path(args.profile_file).read_text(encoding="utf-8").strip()
+    if not (args.summary or "").strip() and not profile_md:
+        print("ERROR: --summary 与 --profile-file 至少提供一项")
+        return 1
+    target = norm_company(args.company)
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
+        get_campaign(cur, tenant_id, args.campaign_id)
+        cur.execute(
+            "SELECT id, company_name FROM bs_ai_lead_gen_leads WHERE campaign_id = %s",
+            (args.campaign_id,))
+        matched = [(i, n) for i, n in cur.fetchall() if norm_company(n) == target]
+        if not matched:
+            print(f"company not found: {args.company}")
+            return 1
+        for lead_id, _name in matched:
+            cur.execute(
+                "UPDATE bs_ai_lead_gen_leads SET "
+                "summary = COALESCE(%s, summary), "
+                "profile_md = COALESCE(NULLIF(%s, ''), profile_md), "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+                (args.summary, profile_md, lead_id),
+            )
+        conn.commit()
+    print(f"profile updated: {args.company}")
+    return 0
+
+
+# ---------- 分渠道成品话术（messages，非 email 渠道） ----------
+
+def cmd_add_message(args):
+    """非 email 渠道成品话术入库。email 渠道话术唯一落点是 emails 表（add-email-draft）。
+
+    输入 JSON 数组：[{contact_id, channel, content, language?, cta?, notes?}]。
+    同一联系人 × 渠道只保留一条（重复跳过）。
+    """
+    tenant_id, user_id = get_identity()
+    entries = load_json_entries(args.json_file)
+    added = skipped = 0
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
+        get_campaign(cur, tenant_id, args.campaign_id)
+        cur.execute(
+            "SELECT id FROM bs_ai_lead_gen_contacts WHERE campaign_id = %s",
+            (args.campaign_id,))
+        contact_ids = {r[0] for r in cur.fetchall()}
+        cur.execute(
+            "SELECT contact_id, channel FROM bs_ai_lead_gen_messages "
+            "WHERE campaign_id = %s", (args.campaign_id,))
+        seen = {(r[0], r[1]) for r in cur.fetchall()}
+        for entry in entries:
+            cid = entry.get("contact_id")
+            channel = (entry.get("channel") or "").strip().lower()
+            content = (entry.get("content") or "").strip()
+            if cid not in contact_ids:
+                print(f"ERROR: contact {cid} not found in campaign {args.campaign_id} "
+                      "(先 list-contacts 取真实 ID，勿猜测)")
+                return 1
+            if channel not in VALID_CHANNELS:
+                print(f"ERROR: channel 必须是 {'/'.join(sorted(VALID_CHANNELS))}，收到: {channel}")
+                return 1
+            if channel == "email":
+                print("ERROR: email 渠道话术唯一落点是 emails 表，"
+                      "用 add-email-draft 写草稿（subject_a/subject_b 两版）")
+                return 1
+            if not content:
+                print(f"ERROR: contact {cid} channel={channel} 的 content 为空")
+                return 1
+            if (cid, channel) in seen:
+                skipped += 1
+                continue
+            cur.execute(
+                """
+                INSERT INTO bs_ai_lead_gen_messages
+                    (campaign_id, contact_id, tenant_id, user_id,
+                     channel, content, language, cta, notes)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (args.campaign_id, cid, tenant_id, user_id,
+                 channel, content, entry.get("language", ""),
+                 entry.get("cta", ""), entry.get("notes", "")),
+            )
+            seen.add((cid, channel))
+            added += 1
+        conn.commit()
+    print(json.dumps({"messages_added": added, "skipped_duplicate": skipped},
+                     ensure_ascii=False))
+    return 0
+
+
+def cmd_list_messages(args):
+    tenant_id, _ = get_identity()
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
+        get_campaign(cur, tenant_id, args.campaign_id)
+        sql = ("SELECT id, contact_id, channel, content, language, cta "
+               "FROM bs_ai_lead_gen_messages WHERE campaign_id = %s")
+        params = [args.campaign_id]
+        if getattr(args, "channel", None):
+            sql += " AND channel = %s"
+            params.append(args.channel)
+        sql += " ORDER BY contact_id, channel, id"
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    print(json.dumps([
+        {"id": r[0], "contact_id": r[1], "channel": r[2], "content": r[3],
+         "language": r[4], "cta": r[5]}
+        for r in rows
+    ], ensure_ascii=False, indent=2))
+    return 0
+
+
+# ---------- 钩子战绩（hook_stats） ----------
+
+def cmd_hook_stats(args):
+    """按 emails.hook_id 聚合草稿/实发/打开/回复数，输出 JSON 供 hook_library.py record 回写。"""
+    tenant_id, _ = get_identity()
+    with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
+        get_campaign(cur, tenant_id, args.campaign_id)
+        cur.execute(
+            """
+            SELECT e.hook_id,
+                   COUNT(*) AS drafted,
+                   COUNT(*) FILTER (WHERE e.status = 'sent') AS sent,
+                   COALESCE(SUM(e.open_count), 0) AS opens
+            FROM bs_ai_lead_gen_emails e
+            WHERE e.campaign_id = %s AND e.hook_id IS NOT NULL
+            GROUP BY e.hook_id
+            """,
+            (args.campaign_id,),
+        )
+        stats = {r[0]: {"hook_id": r[0], "drafted": r[1], "sent": r[2],
+                        "opens": int(r[3]), "replies": 0} for r in cur.fetchall()}
+        cur.execute(
+            """
+            SELECT e.hook_id, COUNT(DISTINCT r.id)
+            FROM bs_ai_lead_gen_replies r
+            JOIN bs_ai_lead_gen_emails e ON e.id = r.email_id
+            WHERE e.campaign_id = %s AND e.hook_id IS NOT NULL
+            GROUP BY e.hook_id
+            """,
+            (args.campaign_id,),
+        )
+        for hook_id, replies in cur.fetchall():
+            if hook_id in stats:
+                stats[hook_id]["replies"] = replies
+    print(json.dumps({"campaign_id": args.campaign_id, "hooks": list(stats.values())},
+                     ensure_ascii=False, indent=2))
     return 0
 
 
@@ -1208,6 +1530,8 @@ def main():
     p.add_argument("--subject-b", default="")
     p.add_argument("--body-file", required=True)
     p.add_argument("--ab-group", default=None)
+    p.add_argument("--hook-id", default=None,
+                   help="所用钩子 ID（钩子库 hook_library.py recommend 产出），战绩回写锚点")
     p.set_defaults(func=cmd_add_email_draft)
 
     p = sub.add_parser("set-email-status")
@@ -1239,6 +1563,38 @@ def main():
     p = sub.add_parser("list-contacts")
     p.add_argument("--campaign-id", required=True, type=int)
     p.set_defaults(func=lambda a: cmd_list(a, "contacts"))
+
+    p = sub.add_parser("add-channel")
+    p.add_argument("--campaign-id", required=True, type=int)
+    p.add_argument("--json-file", required=True)
+    p.set_defaults(func=cmd_add_channel)
+
+    p = sub.add_parser("list-channels")
+    p.add_argument("--campaign-id", required=True, type=int)
+    p.add_argument("--contact-id", type=int, default=None)
+    p.set_defaults(func=cmd_list_channels)
+
+    p = sub.add_parser("set-lead-profile")
+    p.add_argument("--campaign-id", required=True, type=int)
+    p.add_argument("--company", required=True)
+    p.add_argument("--summary", default=None, help="一句话业务综述")
+    p.add_argument("--profile-file", default=None,
+                   help="详细综述 markdown 文件（主营业务/痛点+证据URL/钩子/决策链线索）")
+    p.set_defaults(func=cmd_set_lead_profile)
+
+    p = sub.add_parser("add-message")
+    p.add_argument("--campaign-id", required=True, type=int)
+    p.add_argument("--json-file", required=True)
+    p.set_defaults(func=cmd_add_message)
+
+    p = sub.add_parser("list-messages")
+    p.add_argument("--campaign-id", required=True, type=int)
+    p.add_argument("--channel", default=None)
+    p.set_defaults(func=cmd_list_messages)
+
+    p = sub.add_parser("hook-stats")
+    p.add_argument("--campaign-id", required=True, type=int)
+    p.set_defaults(func=cmd_hook_stats)
 
     args = parser.parse_args()
     sys.exit(args.func(args) or 0)

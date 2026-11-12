@@ -63,7 +63,7 @@ class JsonResponse(BaseModel):
     debug: Optional[str] = None
 
 
-# 合法枚举值（与 src/skills/ai-lead-gen-1.0.0/scripts/lead_db.py 保持一致）
+# 合法枚举值（与 src/skills/b2b-lead-research-1.0.0/scripts/lead_db.py 保持一致）
 CAMPAIGN_STATUSES = {"draft", "searching", "drafting", "awaiting_review", "sending", "paused", "completed", "failed"}
 SEND_MODES = {"review", "auto"}
 LEAD_STATUSES = {"new", "qualified", "rejected", "contacted"}
@@ -209,7 +209,7 @@ async def list_leads(
             cursor.execute(f"""
                 SELECT l.id, l.campaign_id, c.campaign_name, l.company_name, l.country, l.city,
                        l.website, l.industry, l.employees, l.founded, l.source, l.source_url,
-                       l.score, l.status, l.reject_reason, l.notes, l.created_at, l.updated_at
+                       l.score, l.status, l.reject_reason, l.summary, l.notes, l.created_at, l.updated_at
                 FROM bs_ai_lead_gen_leads l
                 LEFT JOIN bs_ai_lead_gen_campaigns c ON c.id = l.campaign_id
                 WHERE {where}
@@ -221,6 +221,39 @@ async def list_leads(
         return JsonResponse(success=True, data={"total": total, "page": page, "page_size": page_size, "items": items})
     except Exception as e:
         logger.error(f"查询线索公司列表失败: {e}\n{traceback.format_exc()}")
+        return JsonResponse(success=False, error="查询失败", debug=sanitize_error_info(str(e)))
+
+
+@router.get("/leads/{lead_id}", response_model=JsonResponse)
+async def get_lead_detail(
+    request: Request,
+    lead_id: int,
+    tenant_id: Optional[str] = Query(None),
+):
+    """线索详情（含企业业务综述 profile_md，供综述弹框展示）"""
+    try:
+        tid = _resolve_tenant(request, tenant_id)
+        if not tid:
+            return JsonResponse(success=False, error="缺少租户上下文")
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT l.id, l.campaign_id, c.campaign_name, l.company_name, l.country, l.city,
+                       l.website, l.industry, l.employees, l.founded, l.source, l.source_url,
+                       l.score, l.status, l.reject_reason, l.summary, l.profile_md,
+                       l.notes, l.created_at, l.updated_at
+                FROM bs_ai_lead_gen_leads l
+                LEFT JOIN bs_ai_lead_gen_campaigns c ON c.id = l.campaign_id
+                WHERE l.id = %s AND l.tenant_id = %s
+            """, (lead_id, tid))
+            row = cursor.fetchone()
+
+        if not row:
+            return JsonResponse(success=False, error="线索不存在")
+        return JsonResponse(success=True, data=_row_to_dict(row))
+    except Exception as e:
+        logger.error(f"查询线索详情失败: {e}\n{traceback.format_exc()}")
         return JsonResponse(success=False, error="查询失败", debug=sanitize_error_info(str(e)))
 
 
@@ -275,10 +308,18 @@ async def list_contacts(
                 SELECT ct.id, ct.campaign_id, c.campaign_name, ct.lead_id, ld.company_name,
                        ct.name, ct.title, ct.email, ct.email_source, ct.email_type,
                        ct.email_function, ct.email_relevance, ct.confidence, ct.language,
-                       ct.phone, ct.linkedin, ct.notes, ct.created_at, ct.updated_at
+                       ct.phone, ct.linkedin, ct.notes, ct.created_at, ct.updated_at,
+                       COALESCE(ch.channels, '[]'::jsonb) AS channels
                 FROM bs_ai_lead_gen_contacts ct
                 LEFT JOIN bs_ai_lead_gen_campaigns c ON c.id = ct.campaign_id
                 LEFT JOIN bs_ai_lead_gen_leads ld ON ld.id = ct.lead_id
+                LEFT JOIN (
+                    SELECT contact_id,
+                           jsonb_agg(jsonb_build_object('channel', channel, 'value', value,
+                                                        'confidence', confidence) ORDER BY id) AS channels
+                    FROM bs_ai_lead_gen_contact_channels
+                    GROUP BY contact_id
+                ) ch ON ch.contact_id = ct.id
                 WHERE {where}
                 ORDER BY ct.created_at DESC
                 LIMIT %s OFFSET %s

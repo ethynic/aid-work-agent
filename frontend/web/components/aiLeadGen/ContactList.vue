@@ -42,6 +42,17 @@
         <template #email="{ row }">
           <span class="text-xs break-all whitespace-normal" :title="row.email">{{ row.email || '-' }}</span>
         </template>
+        <template #channels="{ row }">
+          <div v-if="(row.channels || []).length" class="flex flex-wrap gap-1" :title="channelSummary(row.channels)">
+            <span
+              v-for="ch in row.channels"
+              :key="ch.channel + ch.value"
+              class="inline-flex items-center px-1.5 py-0.5 rounded-md text-xs font-medium bg-info-100 text-info-700 max-w-[130px]"
+              :title="`${channelMap[ch.channel] || ch.channel}: ${ch.value}`"
+            >{{ channelMap[ch.channel] || ch.channel }}</span>
+          </div>
+          <span v-else>-</span>
+        </template>
         <template #email_function="{ row }">{{ row.email_function || '-' }}</template>
         <template #email_source="{ row }">
           <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium" :class="emailSourceBadge(row.email_source).class">
@@ -161,7 +172,8 @@ import BaseTable from '@/components/ui/BaseTable.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
 import {
   aiLeadGenAPI, confidenceMap, emailSourceMap, emailTypeMap, relevanceMap,
-  emailSourceBadge, confidenceBadge, type Contact, type CampaignOption,
+  emailSourceBadge, confidenceBadge, channelMap, channelSummary,
+  type Contact, type CampaignOption,
 } from '@/api/aiLeadGen'
 import { useLeadGenList } from './useLeadGenList'
 import { formatShortDateTime as formatDate } from '@/utils/date'
@@ -174,6 +186,7 @@ const columns = [
   { key: 'title', label: '职务', width: '140px' },
   { key: 'phone', label: '手机号', width: '130px' },
   { key: 'email', label: '邮箱', width: '200px' },
+  { key: 'channels', label: '其他渠道', width: '170px' },
   { key: 'email_function', label: '职能', width: '120px' },
   { key: 'email_source', label: '来源', width: '110px' },
   { key: 'confidence', label: '置信度', width: '80px' },

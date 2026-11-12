@@ -1,0 +1,162 @@
+{
+  "_readme": "钩子结构库（语言中立）。只存心理机制与骨架，渲染成目标语言是发送时的事——由智能体按 rendering_rules 重写，不要预翻译。预翻译会带来三个问题：小语种质量不可控、库体积爆炸、加语言就要重做一遍。而钩子的说服力来自心理机制，机制在任何语言里等价。",
+  "_why_not_translated": "结构 = 心理机制 + 骨架 + 槽位语义。机制（如「同侪证据 + 时间锚点 + 具体数字」）跨语言等价，所以骨架一份就够，语言在发送时渲染。",
+
+  "rendering_rules": {
+    "principle": "不要逐字翻译。按目标市场的当地商务表达重写，保留心理机制，替换所有措辞。",
+    "steps": [
+      "1. 读懂骨架的 intent（心理机制），确认它对本收件人成立",
+      "2. 从收件人情报（官网/社媒/招聘JD）取槽位事实，注意事实本身要用目标语言表述",
+      "3. 用目标语言重写整句，让它像当地同行写的，而不是翻译腔",
+      "4. 校验硬规则：长度、无公司名、无垃圾词、有具体数字"
+    ],
+    "hard_rules": [
+      "主题行 ≤45 字符（拉丁字母语言）；中日韩 ≤25 字",
+      "不含公司简称（放签名）",
+      "不含 Re:/Fwd:、全大写、感叹号",
+      "不含 free/limited time/urgent/guaranteed/100%/立即行动 等垃圾词",
+      "不把产品名或「AI/智能体/革命」当卖点（正文再提）",
+      "至少 1 个具体数字或同侪事实，否则回到 topic 句式重写",
+      "不用绝对化承诺（best/guaranteed/第一）"
+    ],
+    "localization_by_family": {
+      "latin_west": "德/法/西/意/荷/葡/北欧：Sie/您 敬称；数字千分位用点或逗号按当地习惯；荷兰语与德语避免堆叠长定语",
+      "latin_east": "波兰/捷克/俄/乌/罗/保：西里尔与中东欧语言长复合词多，短语要更短；波兰语敬称 Pan/Pani",
+      "cjk": "中日韩：≤25 字；日语用敬体（です/ます）；韩语用요 体；中文不用全角感叹号；主语可省略",
+      "sea": "泰/越/印尼/马来：敬语层级重要（越南语 kính 语体）；句子短，不用被动堆叠",
+      "mena": "阿拉伯语/希伯来语：RTL 排版；希伯来语从右起读；数字用西阿拉伯数字；称谓要正式"
+    },
+    "slot_handling": {
+      "{n}": "具体可信的小数字（3/5/12），必须来自收件人可查的事实",
+      "{peer}": "同类买家群体，用目标语言的当地行业说法（德语 Agenturen / 代理商 / agencies）",
+      "{topic}": "对方正在做的那件事（跑周报/排产/素材测试/线索打分），用他们的原词",
+      "{pain}": "对方的具体痛点，用他们自己会用的说法",
+      "{result}": "量化结果，用目标语言的数字与单位习惯",
+      "{metric}": "金额或数量，按当地货币与数字格式",
+      "{size}": "团队规模，用当地习惯的人数表述",
+      "{region}": "对方所在区域，用当地人怎么称呼自己地区"
+    }
+  },
+
+  "patterns": {
+    "cost": {
+      "intent": "把模糊的痛点折算成具体的钱，让对方感到「这个代价我一直在付」。",
+      "mechanism": "痛感 × 金额 = 不可忽视的账单。数字比形容词有力得多。",
+      "when_to_use": "对方已经在花钱，但说不清浪费在哪（隐性成本）。",
+      "avoid": "对方根本没这个开销时不要用；无凭据的金额会显得编造。",
+      "structures": [
+        {
+          "id": "cost-annual",
+          "subject_skeleton": "{pain} costs you {metric} a year",
+          "hook_lead_skeleton": "At your current volume, {pain} costs {metric} every year.",
+          "slots": ["pain", "metric"],
+          "adapt_notes": "把 {metric} 用对方实际用的货币与数量级；{pain} 用他们的原话（交货延迟/漏跟客户/手工核单）"
+        },
+        {
+          "id": "cost-multi",
+          "subject_skeleton": "You pay for the same result {n} times",
+          "hook_lead_skeleton": "The same outcome gets paid for {n} times over — in time, in budget, in rework.",
+          "slots": ["n"],
+          "adapt_notes": "{n} 要能拆开讲（3 个环节各自耗时），正文给出这 3 处"
+        },
+        {
+          "id": "cost-leak",
+          "subject_skeleton": "{n}% of your {topic} never becomes results",
+          "hook_lead_skeleton": "A good part of everything that goes into {topic} never shows up as a result.",
+          "slots": ["n", "topic"],
+          "adapt_notes": "{n}% 是估算区间的话用「近一半」这类软表达，别用假精确数字"
+        }
+      ]
+    },
+    "peer": {
+      "intent": "同侪证据：降低「第一个尝试」的心理成本——别人都做了，我不是异类。",
+      "mechanism": "社会认同 + 时间锚点（刚发生）+ 具体数字（几家）。",
+      "when_to_use": "决策人是保守型、怕当第一个；或产品属于「早 adopter 才有优势」类别。",
+      "avoid": "同侪数字必须真实可查。编造「3 家同行都在用」是高风险且易被识破。",
+      "structures": [
+        {
+          "id": "peer-recent",
+          "subject_skeleton": "{n} {peer} changed this last month",
+          "hook_lead_skeleton": "{n} {peer} in your segment already use a different way to handle {topic}.",
+          "slots": ["n", "peer", "topic"],
+          "adapt_notes": "{peer} 用当地行业说法；「上个月」在部分语言要换成「最近几周」更自然"
+        },
+        {
+          "id": "peer-region",
+          "subject_skeleton": "Across {region}, {n} {peer} already moved",
+          "hook_lead_skeleton": "In {region}, {n} {peer} have already changed this.",
+          "slots": ["region", "n", "peer"],
+          "adapt_notes": "地域限定让同侪证据更可信，也更窄；适合市场成熟度高的国家"
+        }
+      ]
+    },
+    "number": {
+      "intent": "用可验证的量化结果替代形容词，让对方能想象采用后的样子。",
+      "mechanism": "具体数字 + 时间跨度 + 团队规模参照 = 可信且可对比。",
+      "when_to_use": "对方在意 ROI、要看结果再决定；产品价值需要量化。",
+      "avoid": "数字必须来自真实客户或可公开数据；无法验证就换成定性表述。",
+      "structures": [
+        {
+          "id": "num-timeline",
+          "subject_skeleton": "{result} in {n} days",
+          "hook_lead_skeleton": "For a client of your size we saw {result} within {n} days.",
+          "slots": ["result", "n"],
+          "adapt_notes": "{n} 天要可信；很多行业见效以周/月计，别硬套天数"
+        },
+        {
+          "id": "num-team",
+          "subject_skeleton": "{result} — from a {size} team",
+          "hook_lead_skeleton": "A {size} team got {result} without adding anyone.",
+          "slots": ["result", "size"],
+          "adapt_notes": "同规模参照比「行业头部客户」更可信；{size} 要和对方体量接近"
+        }
+      ]
+    },
+    "question": {
+      "intent": "用一个问题换回一个具体数字，把回信门槛降到最低。",
+      "mechanism": "具体问题 → 对方只需回一个数 → 对话启动。这是回信率最高的模式。",
+      "when_to_use": "对方没意识到问题、预算未定、或决策链长需要低摩擦切入。",
+      "avoid": "问完没有下文是浪费。问的同时要给出「你回一个数我就给方案」的承诺。",
+      "structures": [
+        {
+          "id": "q-one",
+          "subject_skeleton": "One question about your {pain}",
+          "hook_lead_skeleton": "How much of your team's week goes into {pain}?",
+          "slots": ["pain"],
+          "adapt_notes": "问句在很多语言里比陈述句更正式，德语尤其如此"
+        },
+        {
+          "id": "q-hours",
+          "subject_skeleton": "How many hours does {pain} take you weekly?",
+          "hook_lead_skeleton": "Quick check: how many hours a week does {pain} take?",
+          "slots": ["pain"],
+          "adapt_notes": "回「一个数字」的承诺要写进 CTA；时间单位按当地习惯（天/周/月）"
+        }
+      ]
+    },
+    "pain": {
+      "intent": "直击一个对方每天都在经历的具体动作，让他立刻点头。",
+      "mechanism": "熟悉的操作细节 + 未被承认的浪费 = 「你怎么知道的」。",
+      "when_to_use": "对方痛点明确但没说出口；同行都在做但他还没意识到差距。",
+      "avoid": "太泛的痛点（效率低、成本高）无效，必须落到某个具体动作上。",
+      "structures": [
+        {
+          "id": "pain-manual",
+          "subject_skeleton": "{pain} — still done by hand",
+          "hook_lead_skeleton": "Your {topic} still runs manually, and some of it is lost to waiting.",
+          "slots": ["pain", "topic"],
+          "adapt_notes": "{topic} 要具体到他们的流程名（客户周报/排产/对账），不是「运营」"
+        },
+        {
+          "id": "pain-restart",
+          "subject_skeleton": "Every {topic} run starts from scratch",
+          "hook_lead_skeleton": "Every {topic} run gets rebuilt each time — usually because the rules were never written down.",
+          "slots": ["topic"],
+          "adapt_notes": "适合流程型业务；正文要给一条「规则没沉淀」的具体证据"
+        }
+      ]
+    }
+  },
+
+  "_workflow": "发送时的正确顺序：先查钩子库（推荐命令见 references/hook-library.md）→ 优先复用该市场该语言的实测赢家（无需翻译）→ 否则取结构骨架，按 rendering_rules 用目标语言重写 → 填入收件人真实情报 → 发送 → validate_campaign.py 自动回写战绩与原句。"
+}

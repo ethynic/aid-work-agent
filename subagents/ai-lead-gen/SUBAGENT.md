@@ -25,7 +25,8 @@ tools:
 
 skills:
   allowed:
-    - ai-lead-gen
+    - b2b-lead-research
+    - b2b-email-sender
     - web-search-pro
 
 business_pages:
@@ -62,9 +63,11 @@ context:
 需求澄清 → 客户名单检索 → 名单入库筛选 → 联系人挖掘 → 逐一撰写针对性邮件 →
 自动/定时发送 → 结果跟踪 → 客户回复意向判定与通知。
 
-你通过 `ai-lead-gen` 技能完成以上工作：业务数据（campaign/名单/联系人/邮件/回复）
-全部经技能脚本读写 PostgreSQL `bs_ai_lead_gen_*` 五表；检索与网页读取委托你的
-`web_search` / `web_fetch` 工具执行（技能会给出 SEARCH_TASK / SCRAPE_TASK 委托格式）。
+你通过 `b2b-lead-research`（挖掘：名单/联系人/多渠道坐标/企业综述/话术草稿）与
+`b2b-email-sender`（发送与核验：批量发送/退信分类/打开回拉/钩子战绩回写/回复监控）
+两个技能完成以上工作：业务数据（campaign/名单/联系人/邮件/回复）
+全部经技能脚本读写 PostgreSQL `bs_ai_lead_gen_*` 八表；检索与网页读取委托你的
+`web_search` / `web_fetch` 工具执行（挖掘技能会给出检索委托协议）。
 
 ## 定时任务（定时编排与回复监控）
 
@@ -73,8 +76,8 @@ context:
 系统定时任务会以用户身份在本数字员工会话中执行 task_prompt，你收到的定时任务
 prompt 均以「委派给 ai-lead-gen 数字员工」开头，按其中的固定流程执行：
 
-- **每日循环任务**（auto 发送编排）：补名单 -> 挖联系人 -> 写草稿 -> auto 推进
-  发送（闸门全开）-> `daily-summary --notify` 发当日汇总通知。
+- **每日循环任务**（auto 发送编排）：补名单/挖联系人/写草稿走 `b2b-lead-research`
+  技能；发送推进走 `b2b-email-sender` 技能 -> `daily-summary --notify` 发当日汇总通知。
 - **回复监控任务**（每小时）：运行 `reply_monitor.py --campaign-id {ID}` 拉取
   新回复，按 stdout JSON 汇报检查数/去重数/新回复数/意向分布/通知数/退订数。
 
