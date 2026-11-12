@@ -21,14 +21,15 @@
 #                                   拆双池前的旧变量名沿用为通用池限额，无 GENERAL_MEMORY 变量）
 #   AGENT_RUNNER_LIGHT_MEMORY       轻池每副本内存限额（默认 1g；A 方案 4 并发下须 2g，
 #                                   设计 §6.3：4×0.29GiB 忙时 ≈1.16GiB）
-#   AGENT_RUNNER_DB_POOL_MAX        每副本 DB 连接池上限（默认 3；20 容器×(3+2)≈100 ≤ PG 120，
-#                                   缺省 15 的理论上限 340 是隐患，须显式调低）
 # 轻重负载分离（设计 §4.4）：原 runner-worker 单服务拆为 light/general 双池；
 # AGENT_RUNNER_ROLE 由服务 environment 固定注入，不经变量。
 # A 方案槽内并发（Phase 7，设计 §6）：light 池 worker 进程内并发
 # AGENT_RUNNER_SLOT_CONCURRENCY（默认 4，置 1 回退现行拓扑）个执行体；
 # general 池代码强制 1 槽 1 任务（slot_capacity.effective_slot_concurrency 兜底）。
-# agent2 测试环境（Phase 7.3 重配）：1 轻（×4）+ 3 通用，轻池 cgroup 2g、DB_POOL_MAX=6。
+# agent2 测试环境（Phase 7.3 重配）：1 轻（×4）+ 3 通用，轻池 cgroup 2g。
+# worker DB 池上限由代码按 slot_concurrency+2 派生（轻 4+2=6、通用 1+2=3），
+# 无 DB_POOL_MAX 配置项；监督进程独立小池 (1,2) 硬编码，扩槽无需重算连接预算
+# 之外仅按 副本×(并发+2+2) 增量核对 PG max_connections。
 # worker 容器名由 Compose 按 project/service/副本序号生成；同机多环境以 project 隔离。
 # 这些变量仅参与 compose 插值，src/config/settings.py 不读取（应用读取的 AGENT_RUNNER_* 见
 # settings.py 的 env 覆盖段，二者命名不冲突）。
@@ -194,7 +195,6 @@ services:
       - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
       - AGENT_RUNNER_ROLE=light
       - AGENT_RUNNER_SLOT_CONCURRENCY=${AGENT_RUNNER_SLOT_CONCURRENCY:-4}
-      - DB_POOL_MAX=${AGENT_RUNNER_DB_POOL_MAX:-3}
 
   # 通用池：无过滤领取（缺省角色 general），重任务唯一执行池
   runner-worker-general:
@@ -207,7 +207,6 @@ services:
       - AGENT_RUNNER_API_URL=http://runner-api:8091
       - AGENT_RUNNER_STORAGE_ROOT=/app/storage
       - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
-      - DB_POOL_MAX=${AGENT_RUNNER_DB_POOL_MAX:-3}
 
   # 独立扫描进程：只读 Runner 状态，写告警/通知事件/扫描状态；异常退出由 restart policy 拉起。
   runner-monitor:

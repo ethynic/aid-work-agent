@@ -1049,7 +1049,10 @@ async def run_worker(arguments):
         raise RuntimeError('AGENT_RUNNER_DISABLED')
     if not config.peers or not config.web_service_token:
         raise RuntimeError('AGENT_RUNNER_SERVICE_AUTH_REQUIRED')
-    await asyncio.to_thread(init_postgres_pool)
+    # DB 池上限随槽并发派生（并发+2：N 个执行体串行各持 1 连接 + 事件/计费/trace
+    # 等共享写路径余量；psycopg2 池满快速失败，恰好=并发会在全执行体同时持连接时
+    # 饿死其他写路径）。监督进程独立进程自带 (1,2) 小池，不受此影响。
+    await asyncio.to_thread(init_postgres_pool, 2, slot_concurrency + 2)
     try:
         await asyncio.to_thread(init_logs_pool)
         await asyncio.to_thread(RunnerRepository().assert_schema)

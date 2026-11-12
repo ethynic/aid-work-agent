@@ -153,7 +153,8 @@ docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml con
 - 读取目标库 `max_connections` 与现有连接占用；预算纳入每槽 Worker 业务池上限、监督进程
   1–2 连接、monitor 1–2 连接及 healthcheck 短连接、runner-api、主 API/background 和余量。
   特别核对诺度的 40 连接上限；本地配置解析不能替代目标环境读数。
-- 正式服不沿用 agent3 的双槽数值：按[容量初评](../docs/plans/plan-runner-execution-slot-isolation-and-alerts.md#phase-4-正式服容量初评2026-11-06只读尚未部署)先验证 4 槽，再按排队与资源实测决定是否升到 6 槽；扩槽前同时核定 Worker 的 `DB_POOL_MAX`、每槽内存上限及同机余量。默认每槽 6 GiB 内存上限和业务池 15 连接不能直接乘以目标槽数使用。
+- 正式服不沿用 agent3 的双槽数值：按[容量初评](../docs/plans/plan-runner-execution-slot-isolation-and-alerts.md#phase-4-正式服容量初评2026-11-06只读尚未部署)先验证 4 槽，再按排队与资源实测决定是否升到 6 槽；扩槽前同时核定每槽内存上限及同机余量。默认每槽 6 GiB 内存上限和业务池 15 连接不能直接乘以目标槽数使用。
+- Worker DB 池上限已由代码按槽并发派生（`并发+2`，2026-11-12 起，无 `DB_POOL_MAX`/`AGENT_RUNNER_DB_POOL_MAX` 配置项）；扩槽时连接预算按 副本×(并发+2+监督 2) 增量核对即可，无需单独配置连接池。
 - 登记已交付 Runtime＋CLI 的实际版本/包及对应旧任务样本，用于“只升级服务端”的原工具、
   恢复、回执/重投、结果上报和计费验收。旧包不可得时如实列为待验，不用模拟版本字段代替。
   具体场景与采样指标见[Phase 4 方案](../docs/plans/plan-runner-execution-slot-isolation-and-alerts.md#phase-4-本地准备与真机验收方案2026-11-06)。
