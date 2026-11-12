@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 
 import openpyxl
+import yaml
 
 pytestmark = __import__("pytest").mark.skills
 
@@ -59,7 +60,9 @@ class TestQuotePriceComparisonSkill(unittest.TestCase):
         self.assertIn("quote-price-comparison", registry.list_skills())
         skill = registry.get("quote-price-comparison")
         self.assertIsNotNone(skill)
-        self.assertEqual(skill.version, "1.0.0")
+        # 版本随上游合并递增，断言注册版本与 SKILL.md frontmatter 一致即可
+        frontmatter = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").split("---\n")[1]
+        self.assertEqual(skill.version, yaml.safe_load(frontmatter)["metadata"]["version"])
 
     def test_skill_requires_tools_declared(self):
         from src.core.skill_registry import SkillRegistry
@@ -72,16 +75,16 @@ class TestQuotePriceComparisonSkill(unittest.TestCase):
             self.assertIn(tool, getattr(skill, "requires_tools", []))
 
     def test_subagent_shell_references_skills(self):
-        """薄壳子智能体 frontmatter 顶格闭合且 skills.allowed 同时指向两个技能（防 frontmatter 陷阱）。"""
+        """薄壳子智能体 frontmatter 顶格闭合且 skills.allowed 指向比价技能（防 frontmatter 陷阱）。
+
+        资质审查职责已于 a879ca86 移除（allowed 不再含 supplier-qualification-review）。
+        """
         text = SUBAGENT_MD.read_text(encoding="utf-8")
         self.assertTrue(text.startswith("---\n"))
-        import yaml
-
         frontmatter = text.split("---\n", 2)[1]
         meta = yaml.safe_load(frontmatter)
         self.assertEqual(meta["name"], "采购比价助手")
-        self.assertIn("quote-price-comparison", meta["skills"]["allowed"])
-        self.assertIn("supplier-qualification-review", meta["skills"]["allowed"])
+        self.assertEqual(meta["skills"]["allowed"], ["quote-price-comparison"])
         self.assertTrue(meta["tools"].get("inherit"))
 
     def test_e2e_extract_compare_mark(self):
