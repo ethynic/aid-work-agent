@@ -219,7 +219,28 @@ test('corrupt readable pointer is rebuilt using the trusted installation id and 
 
 /** dist/tests → clients 根（桥接真实构建产物用） */
 const clientsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..', '..')
-const winX64Only = { skip: process.platform !== 'win32' || process.arch !== 'x64' }
+
+/**
+ * 迁移 fixture 的仓库内前置（desktop 的 npm install/test 均不准备，干净环境按手册
+ * 跑 desktop npm test 必须能走完）：runtime-plugin-packaging 的 node_modules
+ * （canonicalize/yazl，构造签名离线包用）、agent-tool-runtime 与 local-tool-host-core
+ * 的编译 dist（宿主真实迁移实现动态 import）。前置齐备时仍真实执行，不削弱守护。
+ */
+const migrationPrerequisites = {
+  packagingDeps: ['canonicalize', 'yazl'].every(name =>
+    existsSync(path.join(clientsRoot, 'runtime-plugin-packaging', 'node_modules', name, 'package.json'))),
+  runtimeDist: existsSync(path.join(clientsRoot, 'agent-tool-runtime', 'dist', 'src', 'productTrust.js')),
+  hostCoreDist: ['store.js', 'package.js'].every(name =>
+    existsSync(path.join(clientsRoot, 'shared', 'local-tool-host-core', 'dist', 'plugins', name))),
+}
+const missingPrerequisites = Object.entries(migrationPrerequisites).filter(([, ready]) => !ready).map(([name]) => name)
+const winX64Only = process.platform === 'win32' && process.arch === 'x64'
+const migrationOnly = {
+  skip: !winX64Only ? '迁移 fixture 走宿主真实实现，仅 Windows x64 执行'
+    : missingPrerequisites.length > 0
+      ? `迁移 fixture 前置缺失（${missingPrerequisites.join('、')}）：desktop npm test 不构建 runtime-plugin-packaging 依赖与 agent-tool-runtime/local-tool-host-core dist，显式跳过；补齐后本用例恢复真实执行`
+      : false,
+}
 
 interface Packaging {
   createOfflinePackage(payload: Buffer, manifest: unknown, metadata: { release_id: string; key_id: string; created_at: string }, privateKey: string): Promise<{ archive: Buffer }>
@@ -291,7 +312,7 @@ const migratedProviderIds = (home: string): string[] => {
   return value.records.map(record => record.plugin_id).sort()
 }
 
-test('connection migration installs every trusted plugin beyond the first-party three, including a disabled one', winX64Only, async () => {
+test('connection migration installs every trusted plugin beyond the first-party three, including a disabled one', migrationOnly, async () => {
   const f = await migrationFixture()
   try {
     writeFileSync(path.join(f.options.legacyHome, 'config.json'), JSON.stringify(f.config))
@@ -307,7 +328,7 @@ test('connection migration installs every trusted plugin beyond the first-party 
   } finally { f.clean() }
 })
 
-test('unauthorized identity in legacy inventory is skipped per package while trusted plugins still migrate', winX64Only, async () => {
+test('unauthorized identity in legacy inventory is skipped per package while trusted plugins still migrate', migrationOnly, async () => {
   const f = await migrationFixture()
   try {
     writeFileSync(path.join(f.options.legacyHome, 'config.json'), JSON.stringify(f.config))
@@ -322,7 +343,7 @@ test('unauthorized identity in legacy inventory is skipped per package while tru
   } finally { f.clean() }
 })
 
-test('legacy three-plugin inventory keeps migrating unchanged', winX64Only, async () => {
+test('legacy three-plugin inventory keeps migrating unchanged', migrationOnly, async () => {
   const f = await migrationFixture()
   try {
     writeFileSync(path.join(f.options.legacyHome, 'config.json'), JSON.stringify(f.config))
