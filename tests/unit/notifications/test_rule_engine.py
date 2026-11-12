@@ -403,7 +403,7 @@ class TestLeadCapturedContract:
         title, body = render_inbox_text('lead.captured', lead_params(
             previous_captured_at='2026-10-01 10:00:00'))
         assert title == '客户留资提醒'
-        assert '通过手机号 13800000000、邮箱 a@b.com留资' in body
+        assert '通过手机号 13800000000、邮箱 a@b.com 留资' in body
         assert '2026-10-01 10:00:00 留资' in body
 
     def test_render_template_defaults_for_blank_name_demand(self):
