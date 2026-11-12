@@ -78,3 +78,4 @@
 - [ ] 注册与发现验证（SkillRegistry 加载、skill_execute 调用、白名单层级配置）
 - [ ] 新建 `tests/unit/test_<skill>.py` 基础单测（注册发现/端到端/非法输入）
 - [ ] 商业授权核查：随包分发的字体/图片/模板的许可证（如 SIL OFL 1.1 可商用分发）
+- [ ] 负载等级声明（轻重负载分离门禁）：判定技能主体负载（本地 CPU/内存密集为 heavy，网络/小文本为 light），heavy 技能登记进 `configs/config.yaml` `agent_runner.heavy_skills`（按基础名匹配）；依赖的重工具一并核对 `heavy_tools` 覆盖。判定依据写回项目记忆。见 architecture.md「添加技能」与 runner-capacity 设计 §4.2
