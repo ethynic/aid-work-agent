@@ -17,7 +17,8 @@
 #   AGENT_RUNNER_LIGHT_SLOTS        轻专用池 worker 副本数（默认 12，AGENT_RUNNER_ROLE=light）
 #   AGENT_RUNNER_GENERAL_SLOTS      通用池 worker 副本数（默认 8，无过滤领取）
 #   AGENT_RUNNER_WORKER_CPUS        每副本 CPU 限额（默认 1）
-#   AGENT_RUNNER_WORKER_MEMORY      通用池每副本内存限额（默认 1g，重池 1GiB cgroup 病理钉死）
+#   AGENT_RUNNER_WORKER_MEMORY      通用池每副本内存限额（默认 1g，重池 1GiB cgroup 病理钉死；
+#                                   拆双池前的旧变量名沿用为通用池限额，无 GENERAL_MEMORY 变量）
 #   AGENT_RUNNER_LIGHT_MEMORY       轻池每副本内存限额（默认 1g；A 方案 4 并发下须 2g，
 #                                   设计 §6.3：4×0.29GiB 忙时 ≈1.16GiB）
 #   AGENT_RUNNER_DB_POOL_MAX        每副本 DB 连接池上限（默认 3；20 容器×(3+2)≈100 ≤ PG 120，
