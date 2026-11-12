@@ -15,7 +15,7 @@
 | Phase 4 | 流程规范落地（负载等级强制声明） | ✅ 已完成（2026-11-12） |
 | Phase 5 | 生产部署窗口（PG 120 + DB_POOL_MAX=3 + 12 轻/8 通用） | ⬜ 待部署 |
 | Phase 6 | 上线后复测、校准与文档同步 | ⬜ 待上线后 |
-| Phase 7 | A 方案恢复：轻池槽内并发 + 看门狗 + agent2 重配 1 轻（×4）+ 3 通用 | ⬜ 待开发（设计 §6，2026-11-12 用户决策） |
+| Phase 7 | A 方案恢复：轻池槽内并发 + 看门狗 + agent2 重配 1 轻（×4）+ 3 通用 | 🔧 开发完成（2026-11-12；7.1/7.2 代码+单测入库，7.3 仓库侧配置完成待真机部署授权） |
 
 依赖关系：
 - Phase 0 与 Phase 1/2 可并行开发；**合并验收在部署前**（Phase 5 必须包含 Phase 0 回归）。
@@ -170,16 +170,19 @@ agent2 双池发布当日（c9be70c1）实测：11:20 后 7 个任务中 4 个�
 - 领取改造：light 角色一次最多领取 N 个 `load_class='light'` runner（沿用 `FOR UPDATE SKIP LOCKED` 防重复领取）。
 - 每执行体独立 RuntimeExecution、租约、checkpoint、事件流（per-runner 基础设施零语义改动）。
 - 实现核对项：工具实例无状态规范（请求级身份只经 ToolExecutionContext）、ContextVar 按协程隔离、4 个执行体各自独立 cancel 路径。
+- ✅ 实现状态（2026-11-12）：`settings.py` 新增 `slot_concurrency`（1~16，env `AGENT_RUNNER_SLOT_CONCURRENCY`）与 `watchdog_threshold` 字段；`slot_capacity.py` 新增 `effective_slot_concurrency`/`resolve_slot_concurrency`（general 恒钳 1，显式传参也钳制）；`worker.py` run() 按槽并发领取、`--slot-concurrency` CLI 传参、slot_state+并发组合显式拒绝；`supervisor.py` 并发模式走 `_run_multi_slot`/`_observe_multi`（补租/取消宽限/收尾回收按 owned_attempts 多 attempt），单并发路径零改动。单测 `test_slot_concurrency.py` 28 例覆盖（含看门狗回收、监督多 attempt 场景、spawn 分支），全目录回归 491 passed + 8 个 apscheduler 既有失败。
 
 ### 7.2 事件循环停跳看门狗（前置条件）
 
 - 心跳线程周期性 `call_soon_threadsafe` 投递探针，超阈值未响应 → 判定循环停跳 → 自动回收该容器执行体并重启进程/容器（把 11-05 的"永久损失"降级为"短暂损失"）。
 - 验收必测：轻容器内注入同步 sleep 工具（模拟假异步回归），看门狗阈值时间内自愈，被中断任务按既有恢复语义可重新领取。
+- ✅ 实现状态（2026-11-12）：`LoopWatchdog`（slot_capacity.py）daemon 线程 5s 投探针、默认 15s 阈值（`AGENT_RUNNER_WATCHDOG_THRESHOLD` 可调）、停跳即同步 DB 回收 owned attempts 后 `os._exit(1)`；所有 worker 进程启用（general 单并发同样受益，pgrep healthcheck 探测不到循环停跳）；单测覆盖探针正常/停跳触发/单 attempt 回收失败不阻断/仅触发一次。容器内注入自愈测试留待 7.3 真机验收。
 
 ### 7.3 agent2 重配与验收（1 轻 ×4 + 3 通用）
 
 - `.env` 重配：`runner-worker-light` replicas 1（`AGENT_RUNNER_SLOT_CONCURRENCY=4`、cgroup 2g、`DB_POOL_MAX=6`）+ `runner-worker-general` replicas 3；compose up -d 重建（注意 [[agent2 env 重载陷阱]]：改 .env 必须 rebuild，docker restart 不重读 env）。
-- 连接预算：1×6 + 3×3 = 15 + 监督 ~6 + 非 Runner ~20 ≈ 41 ≤ 80，无需扩 PG。
+- 连接预算：DB_POOL_MAX 全局共用，通用池随升至 6 → 1×6 + 3×6 = 24 + 监督 ~6 + 非 Runner ~20 ≈ 50 ≤ 80，无需扩 PG（原估 41 按 3×3 计，实现取全局变量语义修正）。
+- ✅ 仓库侧配置完成（2026-11-12）：`docker-compose.agent-runner.yml` 轻池 mem_limit 变量化（`AGENT_RUNNER_LIGHT_MEMORY`，默认 1g 不影响其他环境）+ 显式注入 `AGENT_RUNNER_SLOT_CONCURRENCY`；`deploy/agent2_update.sh` 导出 1 轻/3 通用/2g/DB_POOL_MAX=6（shell export 优先于服务器 .env 插值）；compose 插值校验通过。**真机部署待用户当场授权**（按 deploy/agent-runner-deploy-checklist.md 执行）。
 - 验收：4 个轻任务同时领取并行跑完；看门狗自愈注入测试；轻容器内存水位（2g cgroup 下 4 并发忙时 ~1.16GiB）；DB 连接峰值实测；旧客户端 wire/恢复/计费回归。
 - 试跑一周观测项：看门狗误杀率、4 并发下任务耗时是否互相拖长（GIL/CPU 争用）、连接数水位。
 

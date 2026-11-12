@@ -33,7 +33,7 @@
 | 20261110-1524 | 管理后台系统健康监控页面 | 🔧 部分完成（四级状态徽标改版+网络 IO；重试占比口径 bug 已修待部署，待真机验收） | 平台后台新增 /portal/system-health 健康监控页（登录默认页）：四组指标+AI 研判，无曲线无历史，手机端一等公民 | [设计](system/system-health-monitor-design.md) | — |
 | 20261110-2201 | 系统健康真实模型错误率 | 📋 待规划 | 模型网关侧 LLM 调用失败率统计（KeyPool/CircuitBreaker 补失败计数），发现「限流被重试兜住、对话未失败」隐患；替代已删除的同源重复行（2026-11-10） | — | — |
 | 20261106-1010 | 定时任务结果免登录链接 | 📋 设计完成，待开发 | 定时任务终态通知链接免登录化（复用回复分享的公开路由/ticket/只读渲染）：只读结果页+登录入口、无密码链接即凭证、实时读跟随任务生命周期、web push/站内信/IM webhook 三处全换、产物文件免登录可下载。10 项决策已与用户逐条定稿（2026-11-06）。 | [设计](system/design-task-result-share-link.md) | [计划](plans/plan-task-result-share-link.md) |
-| 20261111-1100 | Runner 容量与轻重负载分离 | 🔧 部分完成（agent2 双池已发布验收；Phase 7 A 方案恢复待开发） | 双池 4+2 已上线 agent2；11-12 判型口径收窄+A 方案恢复（轻池槽内并发）登记；生产部署与内存实测待办。 | [设计](system/runner-capacity-and-load-separation-design.md) | [开发计划](plans/plan-runner-capacity-load-separation.md) |
+| 20261111-1100 | Runner 容量与轻重负载分离 | 🔧 部分完成（Phase 7 A 方案开发完成待部署） | 11-12 槽内并发+看门狗+agent2 重配开发完成（28 单测，491 回归绿）；真机部署待授权，生产推广待试跑。 | [设计](system/runner-capacity-and-load-separation-design.md) | [开发计划](plans/plan-runner-capacity-load-separation.md) |
 | 20261105-1902 | Runner 执行槽隔离与运行告警 | 🔧 部分完成（agent3 初验） | 混合负载与 Excel 重负载专项已验：隔离性与告警达成，新发现取消挂死/心跳锁超时/假异步 3 个 P0 待整改。 | [设计](system/agent-application-architecture-design.md#10-runner-执行槽隔离与运行告警2026-11-05) | [计划](plans/plan-runner-execution-slot-isolation-and-alerts.md) |
 | 20261104-1639 | 知识库多轮检索新鲜度与结果去重 | 🔧 部分完成 | 工具说明对照无差异，待 Web 与正式微信 KF 复验。 | [设计](system/knowledge-base/knowledge-search-freshness-design.md) | [计划](plans/plan-knowledge-search-freshness.md) |
 | 20261109-1440 | 知识库文档禁用/启用 | ✅ 已完成开发（待部署） | documents 加 disabled 列，检索全入口过滤（收口点+模式B/C+数据分析），页面状态列+禁用/启用按钮；11 单测绿+201 回归绿。 | — | — |

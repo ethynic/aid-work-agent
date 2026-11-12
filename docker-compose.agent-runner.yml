@@ -17,13 +17,17 @@
 #   AGENT_RUNNER_LIGHT_SLOTS        轻专用池 worker 副本数（默认 12，AGENT_RUNNER_ROLE=light）
 #   AGENT_RUNNER_GENERAL_SLOTS      通用池 worker 副本数（默认 8，无过滤领取）
 #   AGENT_RUNNER_WORKER_CPUS        每副本 CPU 限额（默认 1）
-#   AGENT_RUNNER_WORKER_MEMORY      每副本内存限额（默认 1g，轻重分离初期统一 1GiB cgroup，
-#                                   设计 §4.4：判型准确率有数据前不收窄，防重误判轻 OOM）
+#   AGENT_RUNNER_WORKER_MEMORY      通用池每副本内存限额（默认 1g，重池 1GiB cgroup 病理钉死）
+#   AGENT_RUNNER_LIGHT_MEMORY       轻池每副本内存限额（默认 1g；A 方案 4 并发下须 2g，
+#                                   设计 §6.3：4×0.29GiB 忙时 ≈1.16GiB）
 #   AGENT_RUNNER_DB_POOL_MAX        每副本 DB 连接池上限（默认 3；20 容器×(3+2)≈100 ≤ PG 120，
 #                                   缺省 15 的理论上限 340 是隐患，须显式调低）
 # 轻重负载分离（设计 §4.4）：原 runner-worker 单服务拆为 light/general 双池；
-# AGENT_RUNNER_ROLE 由服务 environment 固定注入，不经变量。agent2 测试环境
-# 经 .env 覆盖 AGENT_RUNNER_LIGHT_SLOTS=4 / AGENT_RUNNER_GENERAL_SLOTS=2（预设，待校准）。
+# AGENT_RUNNER_ROLE 由服务 environment 固定注入，不经变量。
+# A 方案槽内并发（Phase 7，设计 §6）：light 池 worker 进程内并发
+# AGENT_RUNNER_SLOT_CONCURRENCY（默认 4，置 1 回退现行拓扑）个执行体；
+# general 池代码强制 1 槽 1 任务（slot_capacity.effective_slot_concurrency 兜底）。
+# agent2 测试环境（Phase 7.3 重配）：1 轻（×4）+ 3 通用，轻池 cgroup 2g、DB_POOL_MAX=6。
 # worker 容器名由 Compose 按 project/service/副本序号生成；同机多环境以 project 隔离。
 # 这些变量仅参与 compose 插值，src/config/settings.py 不读取（应用读取的 AGENT_RUNNER_* 见
 # settings.py 的 env 覆盖段，二者命名不冲突）。
@@ -169,9 +173,11 @@ services:
   # 双池共享配置收敛到顶层 anchor x-runner-worker；environment 因 AGENT_RUNNER_ROLE
   # 不同各自全量声明（YAML merge 对列表整体替换，无法部分合并）。
   # 每副本限额可配置；正式槽数与限额须按实测校准。
-  # 轻专用池：保底轻任务容量，对重任务突发免疫（heavy 行对此池不可见）
+  # 轻专用池：保底轻任务容量，对重任务突发免疫（heavy 行对此池不可见）；
+  # 槽内并发 N=4（A 方案 Phase 7），cgroup 默认 1g、agent2 按重配升至 2g
   runner-worker-light:
     <<: *runner-worker
+    mem_limit: ${AGENT_RUNNER_LIGHT_MEMORY:-1g}
     deploy:
       replicas: ${AGENT_RUNNER_LIGHT_SLOTS:-12}
     environment:
@@ -181,6 +187,7 @@ services:
       - AGENT_RUNNER_STORAGE_ROOT=/app/storage
       - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
       - AGENT_RUNNER_ROLE=light
+      - AGENT_RUNNER_SLOT_CONCURRENCY=${AGENT_RUNNER_SLOT_CONCURRENCY:-4}
       - DB_POOL_MAX=${AGENT_RUNNER_DB_POOL_MAX:-3}
 
   # 通用池：无过滤领取（缺省角色 general），重任务唯一执行池

@@ -22,6 +22,7 @@ from .repository import RunnerRepository
 from .usage_context import UsageScope, runner_usage_scope
 from .usage_repository import UsageRepository
 from .source_receipts import SourceUnavailable
+from .slot_capacity import LoopWatchdog, resolve_slot_concurrency
 
 
 def channel_verbose_config(source, request_data, base_config):
@@ -247,7 +248,7 @@ def execution_result(state, status=None, error_code=None):
 class RunnerWorker:
     def __init__(self, config, *, worker_id=None, execution_repository=None, repository=None,
                  authorizer=None, usage_repository=None, finalizer=None, runtime_factory=None,
-                 tool_recovery=None, slot_state=None):
+                 tool_recovery=None, slot_state=None, slot_concurrency=None):
         self.config = config
         self.worker_id = worker_id or 'worker_' + uuid.uuid4().hex
         # 轻重负载分离（设计 §4.3）：领取角色由容器环境变量声明，
@@ -255,9 +256,12 @@ class RunnerWorker:
         self.role = os.environ.get('AGENT_RUNNER_ROLE', 'general')
         if self.role not in ('light', 'general'):
             self.role = 'general'
+        # 轻池槽内并发（A 方案，设计 §6）：supervisor 显式传参优先，缺省按角色自算；
+        # general 角色恒 1 槽 1 任务，误配 env 不影响重池隔离。
+        self.slot_concurrency = resolve_slot_concurrency(self.role, config, slot_concurrency)
         from src.core.temp_logger import tlog
-        tlog("runner轻重分离", "worker 启动 worker_id={wid} role={role}",
-             wid=self.worker_id, role=self.role)
+        tlog("runner轻重分离", "worker 启动 worker_id={wid} role={role} slot_concurrency={sc}",
+             wid=self.worker_id, role=self.role, sc=self.slot_concurrency)
         self.slot_state = slot_state
         self.boot_id=uuid.uuid4().hex
         self.executions = execution_repository or ExecutionRepository()
@@ -823,14 +827,22 @@ class RunnerWorker:
             raise RuntimeError('AGENT_RUNNER_DISABLED')
         completed = 0
         tasks = set()
+        watchdog = None
         try:
             open_resources = getattr(self.factory,'open',None)
             if open_resources is not None:
                 await open_resources()
+            # 事件循环停跳看门狗（设计 §6.2 前置条件）：探针卡死即回收执行体并硬退，
+            # 触发监督进程的容器重启路径；pgrep healthcheck 探测不到循环停跳。
+            # worker_id 经 __init__ 必有；getattr 兜底兼容绕过 __init__ 的单测构造。
+            watchdog = LoopWatchdog(asyncio.get_running_loop(), self.executions,
+                getattr(self, 'worker_id', None) or 'worker',
+                threshold_seconds=getattr(self.config, 'watchdog_threshold', 15))
+            watchdog.start()
             while not self.stopping.is_set():
                 await asyncio.to_thread(self.executions.reap_expired)
                 await asyncio.to_thread(self.finalizer.settle_ready)
-                while len(tasks) < self.config.concurrency and (max_tasks is None or completed+len(tasks)<max_tasks):
+                while len(tasks) < self.slot_concurrency and (max_tasks is None or completed+len(tasks)<max_tasks):
                     row = await self._acquire_next()
                     if row is None:
                         break
@@ -866,6 +878,8 @@ class RunnerWorker:
             return completed
         finally:
             self.stop()
+            if watchdog is not None:
+                watchdog.stop()
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks,return_exceptions=True)
@@ -1024,7 +1038,12 @@ async def run_worker(arguments):
     from src.db.database import init_postgres_pool, close_postgres_pool, init_logs_pool, close_logs_pool
     config = settings.agent_runner
     slot_path = getattr(arguments, 'slot_state_file', None)
-    if slot_path is not None and (not arguments.worker_id or config.concurrency != 1):
+    explicit_concurrency = getattr(arguments, 'slot_concurrency', None)
+    # slot_state 是单值 BUSY/IDLE，仅在单执行体语义下有效；并发模式由监督进程
+    # 按 owned_attempts 做回收（--slot-state-file 不传）。
+    slot_concurrency = resolve_slot_concurrency(
+        os.environ.get('AGENT_RUNNER_ROLE', 'general'), config, explicit_concurrency)
+    if slot_path is not None and (not arguments.worker_id or slot_concurrency != 1):
         raise RuntimeError('AGENT_RUNNER_SLOT_REQUIRES_SINGLE_CONCURRENCY')
     if not config.enabled:
         raise RuntimeError('AGENT_RUNNER_DISABLED')
@@ -1037,7 +1056,8 @@ async def run_worker(arguments):
         if slot_path is not None:
             from .supervisor import SlotState
         worker = RunnerWorker(config,worker_id=arguments.worker_id,
-            slot_state=SlotState(slot_path) if slot_path is not None else None)
+            slot_state=SlotState(slot_path) if slot_path is not None else None,
+            slot_concurrency=slot_concurrency)
         loop = asyncio.get_running_loop()
         for signum in (signal.SIGTERM,signal.SIGINT):
             loop.add_signal_handler(signum,worker.stop)
@@ -1051,6 +1071,7 @@ def main():
     parser = argparse.ArgumentParser(description='Run an independent AgentRunner durable worker')
     parser.add_argument('--worker-id',default=None)
     parser.add_argument('--slot-state-file',default=None)
+    parser.add_argument('--slot-concurrency',type=int,default=None)
     parser.add_argument('--once',action='store_true')
     parser.add_argument('--max-tasks',type=int,default=None)
     arguments = parser.parse_args()

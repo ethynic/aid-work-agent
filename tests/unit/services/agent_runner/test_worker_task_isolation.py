@@ -19,6 +19,8 @@ class WorkerHarness:
             enabled=True, concurrency=concurrency, poll_seconds=0.001,
             heartbeat_seconds=0.005, lease_seconds=30,
         )
+        # 绕过 __init__ 构造，run() 依赖的槽内并发与既有语义字段需手动补齐
+        self.worker.slot_concurrency = concurrency
         self.worker.stopping = asyncio.Event()
         self.worker.jobs = {}
         self.worker.sources = None
