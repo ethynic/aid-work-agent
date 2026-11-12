@@ -123,3 +123,29 @@ class TestResolveDbSubagentPrompt:
         with patches[0], patches[1], patches[2], patches[3]:
             result = _make_sources(cfg)._resolve_db_subagent_prompt()
         assert result == "内置员工提示词"
+
+
+class TestSourceSection:
+    """系统提示词注入对话来源标识：模型据此按 web/渠道分支提问形式。"""
+
+    def _make(self, source, session_kind):
+        return PromptSources(
+            mode=SimpleNamespace(value="subagent"), subagent_config=None, tenant_id="t1",
+            skill_registry=None, style_manager=None, prompt_manager=None, tool_controls=None,
+            subagent_registry=None, tools=lambda: [], available_subagents=[],
+            usage_guides=lambda: "", source=source, session_kind=session_kind,
+        )
+
+    def test_web_session_section(self):
+        section = self._make("chat", "web")._source_section()
+        assert "web 网页对话" in section
+        assert "渠道" not in section.split("## 当前对话来源")[1]
+
+    def test_channel_session_labels_channel_and_gate_hint(self):
+        section = self._make("wecom_kf", "channel")._source_section()
+        assert "企业微信客服" in section and "wecom_kf" in section
+        assert "仅限 1 道选择题" in section
+
+    def test_channel_unknown_source_falls_back_to_raw_source(self):
+        section = self._make("unknown_channel", "channel")._source_section()
+        assert "unknown_channel" in section

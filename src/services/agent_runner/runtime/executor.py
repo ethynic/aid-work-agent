@@ -266,7 +266,8 @@ class RuntimeExecution:
             style_manager=resources.style_manager, prompt_manager=resources.prompt_manager,
             tool_controls=resources._tool_controls, subagent_registry=resources.subagent_registry,
             tools=self.catalog._get_tools, available_subagents=self.visibility.available,
-            usage_guides=self.catalog._collect_tool_usage_guides)
+            usage_guides=self.catalog._collect_tool_usage_guides,
+            source=identity.source, session_kind=identity.session_kind)
         workspace_root = None
         if getattr(self.control, 'durable_owner', False):
             from ..resource_paths import workspace_directory
