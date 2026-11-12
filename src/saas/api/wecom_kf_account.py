@@ -142,7 +142,8 @@ async def _servicer_del_batched(adapter, open_kfid: str, userid_list: List[str])
 async def _sync_kf_servicers(adapter, open_kfid: str, target_userid_list: List[str]) -> None:
     """将客服账号接待人员同步为目标列表，与企微保持一致；任一企微报错抛 400。
 
-    1. 校验每个目标 userid 在企业微信通讯录存在（user/get），否则抛 400（拦 60111）
+    1. 校验每个目标 userid 在企业微信通讯录存在（user/get），否则抛 400（拦 60111；
+       60011 = 应用可见范围未覆盖该员工，单独给出配置指引）
     2. 对比企微当前接待人员，新增未配置的（servicer/add）、删除多余的（servicer/del）
     调用方在本地配置写入前执行，同步失败则整个保存失败，保证本地与企微一致。
     """
@@ -153,12 +154,24 @@ async def _sync_kf_servicers(adapter, open_kfid: str, target_userid_list: List[s
 
     for userid in sorted(target_set):
         user_result = await adapter.api_client.get_user(userid)
-        if user_result.get("errcode", 0) != 0:
+        errcode = user_result.get("errcode", 0)
+        if errcode != 0:
+            if errcode == 60011:
+                # 60011 = 应用无该成员的通讯录访问权限（可见范围未覆盖），userid 本身可能没错
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"人工接待人员 {userid} 校验失败：企业微信应用没有该员工的通讯录访问权限。"
+                        f"请到企业微信管理后台【应用管理】->【应用可见范围】，"
+                        f"把该员工（或其所在部门）加入可见范围，建议直接勾选全员"
+                        f"（errcode=60011，{user_result.get('errmsg')}）"
+                    ),
+                )
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"人工接待人员 {userid} 在企业微信通讯录中不存在"
-                    f"（{user_result.get('errmsg')}），请核对企微 userid"
+                    f"人工接待人员 {userid} 在企业微信通讯录中不存在，请核对企微 userid"
+                    f"（errcode={errcode}，{user_result.get('errmsg')}）"
                 ),
             )
         # user/get 返回 canonical userid；响应无该字段时回退原始输入
