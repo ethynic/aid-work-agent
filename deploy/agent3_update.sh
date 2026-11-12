@@ -251,7 +251,6 @@ echo "[3] 重启后端服务..."
 COMPOSE_FILES=(-f docker-compose.dev.yml)
 if [ -f docker-compose.agent-runner.yml ]; then
     COMPOSE_FILES+=(-f docker-compose.agent-runner.yml)
-    export AGENT_RUNNER_WORKER_MEMORY="${AGENT_RUNNER_WORKER_MEMORY:-1g}"
     echo "    叠加 AgentRunner overlay（runner-api/runner-worker-light/runner-worker-general/runner-monitor）"
 else
     echo "    未发现 AgentRunner overlay，仅主 compose"

@@ -239,18 +239,13 @@ echo "[6] 重启后端服务..."
 COMPOSE_FILES=(-f docker-compose.test.yml)
 if [ -f docker-compose.agent-runner.yml ]; then
     COMPOSE_FILES+=(-f docker-compose.agent-runner.yml)
-    export AGENT_RUNNER_NETWORK=aid-network2
-    export AGENT_RUNNER_UPLOADS_HOST_DIR=/var/www/qb3_upload/agent2_uploads
-    export AGENT_RUNNER_STORAGE_HOST_DIR=/var/www/qb3_upload/agent2_storage
-    export AGENT_RUNNER_WORKER_MEMORY="${AGENT_RUNNER_WORKER_MEMORY:-1g}"
-    # Phase 7.3 A 方案重配（2026-11-12 用户定版，设计 §6.4）：1 轻（×4 槽内并发）+ 3 通用。
-    # 轻池 cgroup 2g（4 并发忙时 ~1.16GiB，设计 §6.3）；DB_POOL_MAX 全局升至 6，
-    # 连接预算 1×6+3×6=24 + 监督 ~6 + 非 Runner ~20 ≈ 50 ≤ 80（PG 80 不扩）。
-    # shell export 优先于服务器 .env 插值，部署时核对 .env 旧值（LIGHT_SLOTS=4/GENERAL_SLOTS=2）不再生效。
-    export AGENT_RUNNER_LIGHT_SLOTS=1
-    export AGENT_RUNNER_GENERAL_SLOTS=3
-    export AGENT_RUNNER_LIGHT_MEMORY=2g
-    export AGENT_RUNNER_DB_POOL_MAX=6
+    # AgentRunner overlay 的插值变量（网络/宿主目录/槽位/内存/DB 池）一律以服务器
+    # .env 为唯一来源（compose up 会重读 .env，无需额外操作），脚本不再 export 覆盖。
+    # agent2 应配置：AGENT_RUNNER_NETWORK=aid-network2、
+    #   AGENT_RUNNER_UPLOADS_HOST_DIR=/var/www/qb3_upload/agent2_uploads、
+    #   AGENT_RUNNER_STORAGE_HOST_DIR=/var/www/qb3_upload/agent2_storage、
+    #   AGENT_RUNNER_LIGHT_SLOTS=1、AGENT_RUNNER_GENERAL_SLOTS=3、
+    #   AGENT_RUNNER_LIGHT_MEMORY=2g、AGENT_RUNNER_DB_POOL_MAX=6
     echo "    叠加 AgentRunner overlay（runner-api/runner-worker/runner-monitor）"
     # 互斥预检：用本环境主 API 容器的 compose project 标签锚定当前 project 名
     # （首次部署容器不存在时退回目录名，与 compose 默认 project 命名一致）
