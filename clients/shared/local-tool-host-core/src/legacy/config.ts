@@ -126,16 +126,18 @@ export function machineFingerprint(): string {
  * - provider_manifests：各可用 provider 的 manifest 摘要（provider_id/manifest_digest/protocol_version）
  * - provider_id：第一个可用 provider 的 id（云端 catalog 兼容字段；boss-only 环境与历史一致）
  * - store（契约 2.20，可选）：商店插件派生 manifest 与调度声明上报——manifests 优先于
- *   TRUSTED 回退；parallel_tools 仅列声明 parallel 的工具（legacy 直配 entry 不参与）；
- *   存在任一有效声明时 capabilities 追加 tool_declarations_v1
+ *   TRUSTED 回退；parallel_tools 仅列声明 parallel 的工具、declared_tools 为声明全集映射
+ *   （两者同源同过滤：已验签、启用且带有效声明的商店插件且 provider 实际可用，legacy
+ *   直配 entry 不参与；全空省略字段）；存在任一有效声明时 capabilities 追加 tool_declarations_v1
  *
  * 键序契约：providers 数组与 provider_manifests 键序固定为 boss-recruiting 恒首位、其余
  * 按字典序——首个可用 provider 即旧 provider_id 兼容字段的取值来源，顺序漂移会改变
  * 上报字节与云端 catalog 归属，不可依赖对象插入顺序的隐式行为。
  */
-/** 商店插件声明上报输入（契约 2.20）：派生 manifest、并行工具与存在性，来自 PluginStore */
+/** 商店插件声明上报输入（契约 2.20）：派生 manifest、并行工具、声明全集与存在性，来自 PluginStore */
 export interface StoreDeclarationReport {
   parallelTools?: Record<string, readonly string[]>
+  declaredTools?: Record<string, readonly string[]>
   hasDeclarations?: boolean
   manifests?: Record<string, ProviderManifest>
 }
@@ -201,11 +203,15 @@ export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessR
     }
   }
   if (store?.hasDeclarations) capabilities.push('tool_declarations_v1')
-  // parallel_tools：仅已验签、启用且带有效声明的商店插件（store 来源），且 provider
-  // 实际可用（有 entry）；无并行工具的 provider 不出现键，全空则整个字段省略
+  // parallel_tools/declared_tools：仅已验签、启用且带有效声明的商店插件（store 来源），
+  // 且 provider 实际可用（有 entry）；无并行工具的 provider 不出现键，全空则整个字段省略
   const parallel: Record<string, string[]> = {}
+  const declared: Record<string, string[]> = {}
   for (const [key, tools] of Object.entries(store?.parallelTools ?? {})) {
     if (tools.length > 0 && available.includes(key)) parallel[key] = [...tools]
+  }
+  for (const [key, tools] of Object.entries(store?.declaredTools ?? {})) {
+    if (tools.length > 0 && available.includes(key)) declared[key] = [...tools]
   }
   return {
     providers: available,
@@ -213,6 +219,7 @@ export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessR
     provider_manifests: manifests,
     capabilities,
     ...(Object.keys(parallel).length > 0 ? { parallel_tools: parallel } : {}),
+    ...(Object.keys(declared).length > 0 ? { declared_tools: declared } : {}),
     ...(first ? { provider_id: (TRUSTED_MANIFESTS[first] ?? storeManifests[first])!.provider_id } : {}),
   }
 }

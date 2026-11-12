@@ -233,27 +233,28 @@ export function providerKeyOfPlugin(pluginId: string): string {
 /**
  * 验签清单 → 通用 ProviderManifest 派生（Runtime 消费端唯一入口）。
  *
- * - tools = 清单 tools 名单；write_tools = annotations.readOnlyHint !== true（缺省按写，保守）
+ * - 契约 2.20 修订：声明即调度授权——受信面 = tool_declaration.tools 全集（内部命令
+ *   不声明的工具不进受信面）；不与历史写死名单取交集，未知插件与已交付插件同一逻辑。
+ *   store 门禁已保证到达此处的清单带有效声明（声明名 ⊆ 清单 tools、无重复）。
+ * - write_tools = 声明工具的 annotations.readOnlyHint !== true（缺省按写，保守）
  * - protocol_version=1 / shared_lock_capable=false / execution_target=local_required（验签已固定）
- * - 已交付三插件的受信面仍由 TRUSTED_MANIFESTS 锚定（清单与受信清单取交集）：现状签名清单
- *   多列 runtime 不接入的内部工具（wecom 清单 17 项、受信 12 项），不交集会扩大受信面与
- *   能力上报（云端 W14 自动装配按 capabilities 增删 Agent 工具）；Runtime 未预知的 key
- *   无锚点，工具名单完全由清单决定（解耦通用接入）。
  */
 export function deriveProviderManifest(manifest: RuntimeManifest): ProviderManifest {
   const provider_id = String(manifest.provider_id ?? '')
   const key = providerKeyOfPlugin(provider_id)
-  const anchor = TRUSTED_MANIFESTS[key]
-  const defs = (Array.isArray(manifest.tools) ? manifest.tools : [])
+  const declaration = (manifest as { tool_declaration?: { tools?: unknown } }).tool_declaration
+  const names = [...new Set((Array.isArray(declaration?.tools) ? declaration.tools : [])
+    .map(tool => (tool as { name?: unknown } | null)?.name)
+    .filter((name): name is string => typeof name === 'string' && name !== ''))]
+  const readOnlyHints = new Map((Array.isArray(manifest.tools) ? manifest.tools : [])
     .map(tool => tool as { name?: unknown; annotations?: { readOnlyHint?: unknown } } | null)
     .filter((def): def is { name: string; annotations?: { readOnlyHint?: unknown } } => typeof def?.name === 'string' && def.name !== '')
-  const names = [...new Set(defs.map(def => def.name))]
-  const tools = anchor ? names.filter(name => (anchor.tools as readonly string[]).includes(name)) : names
-  const write_tools = new Set(defs.filter(def => tools.includes(def.name) && def.annotations?.readOnlyHint !== true).map(def => def.name))
+    .map(def => [def.name, def.annotations?.readOnlyHint] as const))
+  const write_tools = new Set(names.filter(name => readOnlyHints.get(name) !== true))
   return {
     provider_key: key,
     provider_id,
-    tools,
+    tools: names,
     execution_target: 'local_required',
     protocol_version: 1,
     shared_lock_capable: false,
@@ -270,20 +271,24 @@ export interface PluginDeclaration {
 }
 
 /**
- * 商店声明插件 → 派生 manifest 与并行工具上报记录（Runtime 启动装配一次，runner 门禁
- * 与能力上报同源）。parallel_tools 仅列声明 parallel:true 的工具；全串行插件不出现键。
+ * 商店声明插件 → 派生 manifest 与并行/声明全集上报记录（Runtime 启动装配一次，runner
+ * 门禁与能力上报同源）。parallel_tools 仅列声明 parallel:true 的工具；declared_tools 为
+ * 声明全集映射（服务端 claim 放行与设备闸门的声明依据）；全串行插件不出现在 parallel_tools。
  */
 export function assembleStoreManifests(declared: readonly PluginDeclaration[]): {
   manifests: Record<string, ProviderManifest>
   parallelTools: Record<string, string[]>
+  declaredTools: Record<string, string[]>
 } {
   const manifests: Record<string, ProviderManifest> = {}
   const parallelTools: Record<string, string[]> = {}
+  const declaredTools: Record<string, string[]> = {}
   for (const item of declared) {
     const key = providerKeyOfPlugin(item.plugin_id)
     manifests[key] = deriveProviderManifest(item.manifest)
+    declaredTools[key] = item.declaration.tools.map(tool => tool.name)
     const parallel = item.declaration.tools.filter(tool => tool.parallel === true).map(tool => tool.name)
     if (parallel.length > 0) parallelTools[key] = parallel
   }
-  return { manifests, parallelTools }
+  return { manifests, parallelTools, declaredTools }
 }

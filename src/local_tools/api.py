@@ -380,6 +380,12 @@ async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dic
     tool_name 属于该设备心跳上报 parallel_tools[provider_key]）。映射取自设备行
     capabilities_json 并做最小形态归一（非 dict/值非 list 的键丢弃），异常形态退化为
     空映射（匹配不到任何行，不抛 500）。缺省 False 时选取规则完全不变。
+
+    行级放行（契约 2.20 修订，声明即调度授权）：已上报 tool_declarations_v1 且
+    declared_tools 非空的设备，非 NULL provider 行以设备 declared_tools 为准
+    （串行与 parallel_only 两条领取路径共用同一判定）；provider 未被声明覆盖
+    （runtime-recovery/skill-runner 等）与 NULL provider 行回退目录判定；
+    无声明/旧设备/解析异常完整回退 catalog.is_tool_allowed，行为不变。
     """
     device_id = str(device["id"])
     tenant_id = device["tenant_id"]
@@ -408,9 +414,14 @@ async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dic
                 parallel_tools=parallel_tools,
             )
             if invocation:
-                # 校验 tool_name 在该 invocation Provider（行 provider_key 优先）批准的 tools 内
-                invocation_provider = invocation.get("provider_key") or default_provider_key
-                if not catalog.is_tool_allowed(invocation_provider, invocation["tool_name"]):
+                # 校验 tool_name 在该 invocation Provider（行 provider_key 优先）批准的
+                # tools 内；声明设备以 declared_tools 分流（含并行领取路径）
+                row_provider_key = invocation.get("provider_key")
+                invocation_provider = row_provider_key or default_provider_key
+                if not catalog.is_tool_allowed_for_device(
+                    device.get("capabilities_json"), row_provider_key,
+                    invocation["tool_name"], default_provider_key,
+                ):
                     logger.warning(
                         f"后端日志：invocation {invocation['id']} 工具 "
                         f"{invocation['tool_name']} 不在设备 Provider 批准清单内，置为失败"

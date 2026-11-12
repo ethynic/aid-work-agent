@@ -38,10 +38,23 @@ export interface ProviderManifest {
   tool_declaration: { version: 1; tools: Array<{ name: string; parallel?: true }> }
 }
 
-/** 调度声明：每个清单工具一项 {name}，并行工具加 parallel:true（与 manifestTools 同源）。
- * 微信全部工具为桌面操作，整插件串行（无 parallel 标记） */
+/** 调度声明白名单（契约 2.20 修订：声明即调度授权，内部命令不声明）——6 个 v1 工具
+ * （与 runtime TRUSTED_MANIFESTS weixin v1 受信面同一集合）。weixin_session_observe 为
+ * v2 显式协商变体专用、weixin_message_send_v2 为 v2 许可发送：均不进声明（v2 override
+ * 机制 runtime 侧保持现状，不受声明驱动）。清单 tools 数组本身不动——它们仍是 CLI
+ * 真实 MCP 工具，schema_digest 不变。微信全部桌面操作，整插件串行（无 parallel 标记）。 */
+const DECLARED_TOOLS = new Set([
+  'weixin_probe',
+  'weixin_chat_search',
+  'weixin_message_send',
+  'weixin_history_read',
+  'weixin_unread_list',
+  'weixin_name_resolve',
+])
+
+/** 调度声明：白名单工具按清单顺序一项 {name} */
 export function buildToolDeclaration(): ProviderManifest['tool_declaration'] {
-  return { version: 1, tools: TOOL_DEFS.map((def) => ({ name: def.name })) }
+  return { version: 1, tools: TOOL_DEFS.filter((def) => DECLARED_TOOLS.has(def.name)).map((def) => ({ name: def.name })) }
 }
 
 /** 包根 provider-manifest.json 的静态身份字段（digest/tools/version 不入文件，避免漂移） */

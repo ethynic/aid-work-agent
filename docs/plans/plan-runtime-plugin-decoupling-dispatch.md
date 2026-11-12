@@ -6,6 +6,7 @@
 | --- | --- | --- | --- |
 | Phase 1 | 插件工具声明与 Runtime 通用接入 | ✅ 完成（2026-11-12） | commit 8e47bd54：三 CLI buildManifest 输出 tool_declaration（仅企微两本地库读工具 parallel）、boss 注解审计修正 5 处对齐写集合；Runtime 宽松解析 +「需要升级插件」门禁 + 派生清单与 TRUSTED 取交集锚定保持现网受信面 + parallel_tools/tool_declarations_v1 心跳上报；未知插件零改动接入有端到端测试。五包 typecheck 0，定向+回归绿（基线失败 stash 对照一致）；CR 4 项记录不阻断 |
 | Phase 2 | 服务端按类型派发和 Runtime 并行执行 | ✅ 完成（2026-11-12） | commit 503774f2：claim 可选 parallel_only（jsonb 过滤，缺省 SQL 逐字节不变）+ 心跳 parallel_claim 协商 + 领取状态机（串行占用/后台并行/全部在途 drain）+ 并行跳桌面锁与 Provider 并发 lane。真实 PG 16 集成 8/8（scratch 最小 DDL）、服务端单测 743 过、runtime parallelClaim 7/7、五包 typecheck 0；CR 无 P0/P1，2 P2 记录（支持标记翻转窗口锁兜底、parallel 限只读已补契约）；fail-loud 提前返回判可接受（租约 unknown 兜底不变） |
+| Phase 3 | 声明即调度授权：CLI 声明收敛 + Runtime 删交集锚定 + 服务端声明分流 | 🔧 进行中（待 CR） | 契约 2.20 修订（e0ae04f2）落地：wecom 声明白名单 12 工具（chat_search 等 5 个内部命令不声明）、weixin 声明 6 个 v1 工具（session_observe/v2 发送不声明），两 CLI 清单 tools 与 schema_digest 不动；host-core deriveProviderManifest 受信面=声明全集（删交集锚定，未知插件同一逻辑）+ 心跳新增 declared_tools（与 parallel_tools 同源同过滤）；服务端 claim 行级放行与 device_ready_error 声明分流（未声明覆盖的 provider 与 NULL 行回退目录，旧设备逐字节不变）。服务端单测 765 过（新增 22）、真实 PG 16 集成 5/5（声明端到端）+ Phase 2 集成 8/8 回归、host-core 129/130 与 runtime 340/343（基线失败 stash 对照一致）、三 CLI manifest 测试绿、五包 typecheck 0 |
 
 ## 实施
 

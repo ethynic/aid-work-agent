@@ -28,7 +28,11 @@ function capabilitiesClosure(): () => Record<string, unknown> {
   return () => deviceCapabilities(
     { server: 'http://127.0.0.1:1', device_id: 'dev-e2e', providers: { 'test-tool': { entry: fakeProviderEntry() } } },
     false, false, false, false, false,
-    { parallelTools: { 'test-tool': ['test_tool_poll'] }, hasDeclarations: true, manifests: { 'test-tool': derived } })
+    {
+      parallelTools: { 'test-tool': ['test_tool_poll'] },
+      declaredTools: { 'test-tool': ['test_tool_status', 'test_tool_poll'] },
+      hasDeclarations: true, manifests: { 'test-tool': derived },
+    })
 }
 
 test('未预知插件按派生 manifest 路由执行，串行工具无写门禁直接完成', async () => {
@@ -55,7 +59,7 @@ test('未预知插件按派生 manifest 路由执行，串行工具无写门禁�
   }
 })
 
-test('心跳上报 parallel_tools 与 tool_declarations_v1（FakeCloud 捕获 capabilities_json）', async () => {
+test('心跳上报 parallel_tools、declared_tools 与 tool_declarations_v1（FakeCloud 捕获 capabilities_json）', async () => {
   let stack: TestStack | null = null
   try {
     stack = await startTestStack({
@@ -70,6 +74,8 @@ test('心跳上报 parallel_tools 与 tool_declarations_v1（FakeCloud 捕获 ca
     const capabilities = body['capabilities'] as Record<string, unknown>
     assert.deepEqual(capabilities['parallel_tools'], { 'test-tool': ['test_tool_poll'] },
       '仅并行工具入表；全串行插件不出现键')
+    assert.deepEqual(capabilities['declared_tools'], { 'test-tool': ['test_tool_status', 'test_tool_poll'] },
+      '声明全集映射随心跳上报（服务端 claim 放行的声明依据）')
     assert.ok((capabilities['capabilities'] as string[]).includes('tool_declarations_v1'))
     const manifests = capabilities['provider_manifests'] as Record<string, Record<string, unknown>>
     assert.equal(manifests['test-tool']!['provider_id'], 'ai.aidwork.test-tool')
@@ -81,12 +87,13 @@ test('心跳上报 parallel_tools 与 tool_declarations_v1（FakeCloud 捕获 ca
   }
 })
 
-test('无并行工具声明仅上报 tool_declarations_v1，不出现 parallel_tools 键', async () => {
+test('无并行工具声明仅上报 tool_declarations_v1 与 declared_tools，不出现 parallel_tools 键', async () => {
   const derived: ProviderManifest = { ...deriveProviderManifest(TEST_TOOL_MANIFEST) }
   const caps = deviceCapabilities(
     { server: 'http://127.0.0.1:1', device_id: 'dev-e2e', providers: { 'test-tool': { entry: fakeProviderEntry() } } },
     false, false, false, false, false,
-    { parallelTools: { 'test-tool': [] }, hasDeclarations: true, manifests: { 'test-tool': derived } })
+    { parallelTools: {}, declaredTools: { 'test-tool': ['test_tool_status', 'test_tool_poll'] }, hasDeclarations: true, manifests: { 'test-tool': derived } })
   assert.equal(caps['parallel_tools'], undefined, '无并行工具的 provider 不出现键，全空则字段省略')
+  assert.deepEqual(caps['declared_tools'], { 'test-tool': ['test_tool_status', 'test_tool_poll'] })
   assert.ok((caps['capabilities'] as string[]).includes('tool_declarations_v1'))
 })

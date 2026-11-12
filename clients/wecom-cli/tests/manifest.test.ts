@@ -195,10 +195,25 @@ test('注解派生写集合 == runtime 受信写集合（WECOM_WRITE_TOOLS 4，�
   assert.deepEqual(derived, [...runtimeWriteTools].sort())
 })
 
-test('tool_declaration：version 1、与 tools 同源无重复；并行标记恰为企微两个本地库读工具', () => {
+test('tool_declaration：version 1、声明白名单恰为 12 个受信工具（写死防漂移）；并行标记恰为企微两个本地库读工具', () => {
   const m = buildManifest()
   assert.equal(m.tool_declaration.version, 1)
-  assert.deepEqual(m.tool_declaration.tools.map((t) => t.name), TOOL_NAMES)
+  // 声明即调度授权（契约 2.20 修订）：写死预期名单，防声明面漂移（与 runtime
+  // TRUSTED_MANIFESTS/服务端目录同一集合；新增云端工具必须显式更新此断言）
+  assert.deepEqual(m.tool_declaration.tools.map((t) => t.name), [
+    'wecom_probe',
+    'wecom_message_send',
+    'wecom_send_status',
+    'wecom_send_image',
+    'wecom_send_file',
+    'wecom_unread_list',
+    'wecom_read_session',
+    'wecom_session_directory',
+    'wecom_read_sessions',
+    'wecom_group_poll',
+    'wecom_config_doctor',
+    'wecom_config_calibrate',
+  ])
   assert.equal(new Set(m.tool_declaration.tools.map((t) => t.name)).size, m.tool_declaration.tools.length, '声明名不重复')
   for (const declared of m.tool_declaration.tools) {
     assert.ok(TOOL_NAMES.includes(declared.name), `${declared.name} 必须出现在清单 tools 内`)
@@ -208,7 +223,18 @@ test('tool_declaration：version 1、与 tools 同源无重复；并行标记恰
       assert.equal(declared.parallel, undefined, `${declared.name} 串行（缺省不带 parallel）`)
     }
   }
-  // 调度声明不计入 schema_digest（digest 沿用旧规则只覆盖 tools 数组）
+})
+
+test('tool_declaration：内部命令不声明（chat_search/chat_select/watch_poll/group_list/group_read 仅开放命令进程内调用）', () => {
+  const m = buildManifest()
+  const declared = new Set(m.tool_declaration.tools.map((t) => t.name))
+  for (const internal of ['wecom_chat_search', 'wecom_chat_select', 'wecom_watch_poll', 'wecom_group_list', 'wecom_group_read']) {
+    assert.ok(!declared.has(internal), `${internal} 为内部命令，不得进调度声明`)
+    assert.ok(TOOL_NAMES.includes(internal), `${internal} 仍是 CLI 真实 MCP 工具（清单 tools 不动）`)
+  }
+  // 清单 tools 数组本身不动：仍是全部 17 个工具，schema_digest 不变
+  assert.equal(TOOL_NAMES.length, 17)
+  assert.equal(m.tools.length, 17)
   assert.equal(m.schema_digest, computeSchemaDigest())
 })
 

@@ -255,7 +255,7 @@ export class LegacyExecution implements HostAdapter {
     // runner 门禁、session engine 与能力上报共用同一份装配。weixin v2Send 显式协商时以
     // v2 变体覆盖派生结果（协商语义优先）。遗留直配 entry 不产生派生 manifest。
     const declaredPlugins = this.pluginStore?.declaredPlugins() ?? []
-    const { manifests: storeManifests, parallelTools } = assembleStoreManifests(declaredPlugins)
+    const { manifests: storeManifests, parallelTools, declaredTools } = assembleStoreManifests(declaredPlugins)
     if (config?.providers?.['weixin']?.v2Send === true) storeManifests.weixin = weixinV2Manifest()
     if (declaredPlugins.length > 0) logInfo(`[runtime] 商店声明插件: ${declaredPlugins.map(plugin => plugin.provider_key).join(', ')}`)
     logInfo(`[runtime] providers: ${Object.keys(entries).join(', ')}`)
@@ -275,7 +275,7 @@ export class LegacyExecution implements HostAdapter {
       const value = deviceCapabilities(this.effectiveConfig(config), wecom?.wecomBusinessReady,
         wecom?.wecomDirectoryReady, wecom?.wecomDirectorySearchReady,
         wecom?.wecomConfigDoctorReady, wecom?.wecomConfigCalibrateReady,
-        { parallelTools, hasDeclarations: declaredPlugins.length > 0, manifests: storeManifests })
+        { parallelTools, declaredTools, hasDeclarations: declaredPlugins.length > 0, manifests: storeManifests })
       if (recoveryReady && this.supervision.enabled) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_stop_v1']
       if (wecomRecoveryReady) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_wecom_v1']
       if (recoveryReady) { value.providers = [...(value.providers as string[]), 'runtime-recovery']; value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_observe_v2'] }
