@@ -19,12 +19,14 @@ ROUTING_PROMPT_PREFIX = """你是 Excel 电子表格处理工具的内部路由�
 ## 可用操作
 
 1. **read** — 读取 Excel 文件的数据内容
-   - 触发：用户想看Excel里有什么数据、查看某个Sheet
+   - 触发：用户想看Excel里有什么数据、查看某个Sheet；**大文件（数千行以上）或用户要求分块/按范围读取时必须用 read**
    - 参数：{sheet_name: "可选", range: "可选,如A1:D10", include_formulas: false}
+   - 大文件用 range 分段读取（如 A1:C2000，逐段推进），单次最多返回 500 行有效数据
 
 2. **to_md** — 将 Excel 转为 Markdown 表格
    - 触发：用户要求查看Excel内容、将Excel转为文本
    - 参数：{sheet_name: "可选", max_rows: 100}
+   - **禁止用于大文件（数千行以上）**：to_md 是整簿转换会内存超限，大文件一律 read + range 分块
 
 3. **export** — 从数据创建新的 Excel 文件
    - 触发：用户要求导出数据为Excel、把表格数据存为Excel、创建报表
@@ -71,7 +73,8 @@ ROUTING_PROMPT_PREFIX = """你是 Excel 电子表格处理工具的内部路由�
 按优先级从高到低匹配：
 - 有附件且上下文提到"模板"、"按这个格式"、"照着这个填"等 → fill_template（template_file = 附件路径）
 - 要求基于系统模板生成（无附件模板，提到模板名或要求选择）→ fill_template（template_name）或先 list_templates
-- 有附件且要求转为Markdown理解 → to_md
+- 有附件且要求转为Markdown理解 → to_md（大文件除外，见下）
+- 大文件（数千行以上）或要求分块/按范围/前N行读取 → read + range 分段，禁止 to_md
 - 要求修改已有Excel → modify
 - 要求设置样式格式 → format
 - 要求创建新Excel / 导出数据 → export（但 context 中必须包含实际数据，如果只有用户意图没有数据，则 params 中标注 needs_data: true）
@@ -142,6 +145,30 @@ def _is_modify_intent(lower_ctx: str) -> bool:
     # 坐标引用同现即按修改意图处理。误判方向安全：只是跳过 to_md 短路多走一轮
     # LLM 路由（LLM 路由仍可判 read/to_md），不会把只读指令劫持成写操作
     if ("单元格" in lower_ctx or "cell" in lower_ctx) and _CELL_REF_RE.search(lower_ctx):
+        return True
+    return False
+
+
+# 分块读取意图：命中即跳过规则路由的 to_md 短路，交给 LLM 路由判 read+range
+# （2026-11-12 agent2 压测：1M 行 Excel 被 to_md 短路成整簿转换，MarkItDown 全量
+# 加载顶死 1GiB cgroup、事件循环停跳 8.6 分钟。read 路径是 read_only 流式+500 行
+# 截断，大文件安全；to_md 无规模守门时整簿转换是禁手——见 excel_to_md._guard_too_large）
+_CHUNKED_READ_TOKENS = (
+    "分块", "分段", "分批", "分次", "每次读", "逐行读", "逐段",
+    "一部分一部分", "部分读取", "读取部分",
+)
+
+# 区域引用（如 A1:D10）；前后不得紧跟字母/数字，避免命中文件 ID 内部字母数字段
+_RANGE_RE = re.compile(r"(?<![a-z0-9])[a-z]{1,3}\d{1,7}:[a-z]{1,3}\d{1,7}(?![a-z0-9])")
+
+
+def _is_chunked_read_intent(lower_ctx: str) -> bool:
+    if any(token in lower_ctx for token in _CHUNKED_READ_TOKENS):
+        return True
+    # "前 N 行"/"前N行" 词表不好覆盖，用正则；误判方向安全：只多走一轮 LLM 路由
+    if re.search(r"前\s*\d+\s*行", lower_ctx):
+        return True
+    if _RANGE_RE.search(lower_ctx):
         return True
     return False
 
@@ -312,9 +339,14 @@ class ExcelRouter:
 
         # 修改类指令禁止命中 to_md：此前"把A1的内容改为…"/"文本查找替换"因含"内容"/"文本"
         # 被劫持成 to_md（只读转文本却返回 success），导致修改静默失效（2026-09-15 研学行程事故）。
-        # 修改类指令落到末尾的规则未命中 → 交给 LLM 路由，由其生成 modify/format 的具体 operations。
-        if paths and not _is_modify_intent(lower_ctx) and any(
-            token in lower_ctx for token in ("markdown", "文本", "查看", "读取", "内容")
+        # 分块读取意图同样禁止命中 to_md：to_md 是整簿转换，大文件会内存超限（2026-11-12 压测），
+        # 分块读取必须走 read + range（read_only 流式+500 行截断）。
+        # 两者落到末尾的规则未命中 → 交给 LLM 路由，由其生成 modify/read+range 的具体参数。
+        if (
+            paths
+            and not _is_modify_intent(lower_ctx)
+            and not _is_chunked_read_intent(lower_ctx)
+            and any(token in lower_ctx for token in ("markdown", "文本", "查看", "读取", "内容"))
         ):
             return {
                 "task": "to_md",
