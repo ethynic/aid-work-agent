@@ -81,7 +81,7 @@ Web / 微信客服 / 飞书 / 钉钉 / 企业微信应用
 `src/tools/control_set.py` 中显式装配和评审。请求级 tenant/user/session 从
 `ToolExecutionContext` 读取，禁止写入共享工具实例或新增身份 setter。
 
-**负载等级强制声明（轻重负载分离门禁，2026-11-11 起）**：新增工具必须判定并声明负载等级——本地 CPU/内存密集计算（转换/渲染/大文件解析）为 **heavy**，网络等待/小文本操作/DB 查询为 **light**。heavy 工具必须登记进 `configs/config.yaml` 的 `agent_runner.heavy_tools`（按工具注册 `name` 匹配），否则该工具只会在轻专用池被领取，运行时重判才兜底升级（增加重池占用滞后）；误登 light 工具为 heavy 仅浪费重池容量，可接受。判定依据（依赖什么本地库/渲染器）写入 PR 描述。详见 [runner-capacity-and-load-separation-design.md](../../docs/system/runner-capacity-and-load-separation-design.md) §4.2。
+**负载等级强制声明（轻重负载分离门禁，2026-11-11 起；2026-11-12 口径修订）**：新增工具必须判定并声明负载等级。判定标准（槽隔离下 heavy 清单唯一作用是池路由）：**预期运行分钟级以上，且内存可能逼近 cgroup 上限（~1GiB）或独占 CPU 核分钟级**的病理/大内存任务为 **heavy**（如全量加载大 Excel、OCR 全页识别、AI 生图、大数据表加载）；普通文档转换/比对/生成类（数百 MiB 级、几分钟完成）与网络等待/小文本操作/DB 查询一律 **light**。heavy 工具必须登记进 `configs/config.yaml` 的 `agent_runner.heavy_tools`（按工具注册 `name` 匹配），否则该工具只会在轻专用池被领取，运行时重判才兜底升级（增加重池占用滞后）。**误登 light 工具为 heavy 会占用重池容量、拉长重任务排队（2026-11-12 agent2 实测排队 7 分钟），不是可接受的小事**，拿不准时判 light（重误判轻只是温和降级）。判定依据（依赖什么本地库/渲染器、预期内存/时长量级）写入 PR 描述。详见 [runner-capacity-and-load-separation-design.md](../../docs/system/runner-capacity-and-load-separation-design.md) §4.2。
 
 **Schema 来源**：每个工具类通过 `InputModel`（Pydantic BaseModel）或 `parameters_schema` 定义参数 schema，`ToolRegistry.get_tool_definitions()` 自动收集。不再需要手动维护 `schemas.py`。
 
@@ -97,7 +97,7 @@ Web / 微信客服 / 飞书 / 钉钉 / 企业微信应用
 
 每新增一个 skill 给子智能体用，**只需改 1 处**：管理后台 / DB 的 `subagent_definitions.skills.allowed`。
 
-**负载等级强制声明（轻重负载分离门禁，2026-11-11 起）**：新增技能必须判定并声明负载等级——主体为本地 CPU/内存密集（文档生成、渲染、OCR、大文件解析）为 **heavy**，网络调用/小文本处理为 **light**。heavy 技能必须登记进 `configs/config.yaml` 的 `agent_runner.heavy_skills`（按技能**基础名**匹配，去版本后缀，版本升级不改配置），否则子智能体启用该技能时入队判型会落到轻专用池。详见 [runner-capacity-and-load-separation-design.md](../../docs/system/runner-capacity-and-load-separation-design.md) §4.2。
+**负载等级强制声明（轻重负载分离门禁，2026-11-11 起；2026-11-12 口径修订）**：新增技能必须判定并声明负载等级。判定标准与工具一致：**预期运行分钟级以上，且内存可能逼近 cgroup 上限或独占 CPU 核分钟级**为 **heavy**（如 OCR 全页识别、依赖 AI 生图渲染）；文档比对/生成/转换类（数百 MiB 级、几分钟完成）与网络调用/小文本处理一律 **light**。heavy 技能必须登记进 `configs/config.yaml` 的 `agent_runner.heavy_skills`（按技能**基础名**匹配，去版本后缀，版本升级不改配置），否则子智能体启用该技能时入队判型会落到轻专用池；误登 light 技能为 heavy 会占用重池容量、拉长重任务排队，拿不准时判 light。详见 [runner-capacity-and-load-separation-design.md](../../docs/system/runner-capacity-and-load-separation-design.md) §4.2。
 
 **技能依赖自动补全**：技能若依赖特定工具或 recap 任务，在 SKILL.md frontmatter 声明 `requires_tools: [tool_a, ...]` 与 `requires_recap: [{name: external_push, when: every_round}, ...]`（loader 由 `src/core/skill_loader.py` 解析）。自定义数字员工保存时（`SubagentDefinitionService.apply_skill_requirements`）与前端勾选技能时自动补全缺失的工具和 recap 任务；幂等，已存在的配置不覆盖。参考 `src/skills/pre-sales-api-1.0.0/SKILL.md`。
 

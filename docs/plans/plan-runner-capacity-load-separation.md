@@ -1,6 +1,6 @@
 # Runner 槽位容量与轻重负载分离开发计划
 
-> 日期：2026-11-11。设计依据：[Runner 槽位容量与轻重负载分离方案](../system/runner-capacity-and-load-separation-design.md)（定稿 v2：纯容器拓扑 12 轻专用 + 8 通用 = 20 执行体 + 非对称双池 + PG 120）。本计划覆盖设计 §6 实施顺序 1~8；备选方案 B（§7）只登记触发条件不排期。
+> 日期：2026-11-11。设计依据：[Runner 槽位容量与轻重负载分离方案](../system/runner-capacity-and-load-separation-design.md)（v3：纯容器拓扑 12 轻专用 + 8 通用 = 20 执行体 + 非对称双池 + PG 120；2026-11-12 判型口径收窄 §4.2 + A 方案恢复 §6）。本计划覆盖设计 §7 实施顺序 1~9；备选方案 B（§8）只登记触发条件不排期。
 >
 > 关联：[执行槽隔离计划](plan-runner-execution-slot-isolation-and-alerts.md)（P0①② 来源，Phase 4 待整改清单）、[Excel 读取性能计划](plan-excel-read-performance.md)（TPG80509，待部署，随 Phase 5 同窗上线）。
 
@@ -9,17 +9,27 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | Phase 0 | P0①② 整改（前置） | ✅ 已完成（c9b03484，2026-11-11） |
-| Phase 1 | 工具/技能轻重一次性全量判定 + agent2 内存三档实测 | 🔧 部分完成（清单 1558a91a；agent2 内存三档实测待真机） |
+| Phase 1 | 工具/技能轻重一次性全量判定 + agent2 内存三档实测 | 🔧 部分完成（清单 1558a91a，2026-11-12 口径收窄见 §校准记录；内存三档实测待真机） |
 | Phase 2 | load_class 迁移 + 判型/重判 + 领取角色过滤 | ✅ 已完成（db5c222c，2026-11-11） |
-| Phase 3 | Compose 双服务改造 + agent2 全链路验证 | 🔧 部分完成（双池改造 595527d4；agent2 部署验证待真机） |
+| Phase 3 | Compose 双服务改造 + agent2 全链路验证 | ✅ 已完成（595527d4；agent2 双池 4+2 发布 c9be70c1 验收通过，2026-11-12；内存三档实测归 Phase 1 缺口） |
 | Phase 4 | 流程规范落地（负载等级强制声明） | ✅ 已完成（2026-11-12） |
 | Phase 5 | 生产部署窗口（PG 120 + DB_POOL_MAX=3 + 12 轻/8 通用） | ⬜ 待部署 |
 | Phase 6 | 上线后复测、校准与文档同步 | ⬜ 待上线后 |
+| Phase 7 | A 方案恢复：轻池槽内并发 + 看门狗 + agent2 重配 1 轻（×4）+ 3 通用 | ⬜ 待开发（设计 §6，2026-11-12 用户决策） |
 
 依赖关系：
 - Phase 0 与 Phase 1/2 可并行开发；**合并验收在部署前**（Phase 5 必须包含 Phase 0 回归）。
 - Phase 1 的清单是 Phase 2 判型实现的输入；Phase 3 依赖 Phase 0~2 完成。
 - Excel 修复（TPG80509）已部署生产（2026-11-11 核对 243 四容器），重负载典型内存回到数百 MiB 的前提已满足；Phase 1 三档实测可直接进行。
+- Phase 7 依赖 Phase 3 双池拓扑已上线（✅）与设计 §6.2 看门狗方案评审通过；agent2 重配随 Phase 7 实现一并执行。
+
+## 校准记录：2026-11-12 判型口径修订与清单收窄（已执行）
+
+agent2 双池发布当日（c9be70c1）实测：11:20 后 7 个任务中 4 个判重（procurement-comparison ×2、supplier-qualification-review ×3 中 3 个），通用池仅 2 槽，重任务排队 6~7 分钟；3 个 ai-lead-gen 判轻正常（其中 1 个由通用池闲时支援领取）。判型按清单正确工作，问题在**首版口径过宽**。
+
+裁决（用户 2026-11-12）：槽隔离 + 统一 cgroup 下，heavy 清单唯一实际作用是池路由，判定标准从"CPU/内存密集"修订为「预期运行分钟级以上，且内存可能逼近 cgroup 上限或独占 CPU 核分钟级」。清单收窄已写入 `configs/config.yaml`（heavy_tools 9→5、heavy_skills 8→2），设计 §4.2 已登记依据与移出/保留对照表。已移出：word_process、ppt_process、pdf_process、x_to_image、pptx-vi-gen、excel-to-template、bid-doc-generator、supplier-qualification-review、spec-to-quotation-list、quote-price-comparison。
+
+同日用户决策恢复 A 方案（轻池槽内并发，设计 §6）→ 本计划新增 Phase 7。
 
 ## Phase 0：P0①② 整改（前置，2026-11-11 用户确认必须）
 
@@ -58,6 +68,7 @@
 - 决策点：实测超预期则下调生产容器数（如 16 容器 = 10 轻 + 6 通用），回写设计 §4.5 后再进 Phase 3/5。
 
 > **实现状态（2026-11-11）**：1.1 已完成（提交 1558a91a）——heavy_tools 9 项 / heavy_skills 8 项写入 config.yaml，全量核对表登记入设计 §4.2；1.2 为真机缺口，待 agent2 部署后实测。
+> **2026-11-12 修订**：首版口径过宽，按 agent2 实测收窄为 heavy_tools 5 项 / heavy_skills 2 项（见上方「校准记录」与设计 §4.2 对照表）；1.2 内存三档实测仍是真机缺口。
 
 ## Phase 2：轻重分离核心实现
 
@@ -104,7 +115,7 @@
 - 拆两个服务：`runner-worker-light`（replicas 12，env `AGENT_RUNNER_ROLE=light`）+ `runner-worker-general`（replicas 8，缺省角色），复用 Phase 2 已验证的 `deploy.replicas` 参数化机制（`deploy/docker-compose.agent-runner.sim.yml:108` 模式）。
 - cgroup 初期统一 1GiB/容器（分离只保容量不省内存）；轻容器收窄须与误判 OOM 风险联动评估，判型准确率有数据后另行决策（设计 §4.4）。
 
-### 3.2 agent2 部署（4 轻 + 2 通用，生产 30% 预设）
+### 3.2 agent2 部署（4 轻 + 2 通用，生产 30% 预设；2026-11-12 已发布 c9be70c1 验收通过）
 
 - agent2/agent3 同宿主机（8GiB）：6 容器空载 ~0.8GiB 可承受；连接 6×(3+2) + 非 Runner ~20 ≈ 50 ≤ 80，**无需扩 PG**。
 - 每容器 `DB_POOL_MAX=3` 在 agent2 先行配置，为生产连接预算口径提前验证。
@@ -149,13 +160,43 @@
 4. 文档同步：架构设计 §10 补充角色分离说明（「Worker 内根 Runner 并发数固定为 1」表述维持不变）；执行槽隔离计划追加本计划 Phase 引用；设计文档状态更新。
 5. `docs/ideas.md` 条目状态与一句话说明更新。
 
+## Phase 7：A 方案恢复——轻池槽内并发（2026-11-12 用户决策，设计 §6）
+
+> 背景：用户裁决恢复 2026-11-11 否决的 A 方案（槽内协程并发），**轻池限定**。吞吐正常情况下翻 4 倍；代价是阻塞类事故损失一个槽内全部执行体，但其余槽位不受牵连，且叠加了 11-05 当年不存在的四层保护（假异步门禁/堵塞性工具隔离重池/爆炸半径有界/看门狗自愈）。设计依据 §6 全文，本节只列实施项。
+
+### 7.1 槽内并发实现
+
+- 轻池执行进程内并发 N 个执行体：环境变量 `AGENT_RUNNER_SLOT_CONCURRENCY`（默认 4，置 1 即回退现行拓扑，无需回滚代码）；重池维持 1 槽 1 任务不变。
+- 领取改造：light 角色一次最多领取 N 个 `load_class='light'` runner（沿用 `FOR UPDATE SKIP LOCKED` 防重复领取）。
+- 每执行体独立 RuntimeExecution、租约、checkpoint、事件流（per-runner 基础设施零语义改动）。
+- 实现核对项：工具实例无状态规范（请求级身份只经 ToolExecutionContext）、ContextVar 按协程隔离、4 个执行体各自独立 cancel 路径。
+
+### 7.2 事件循环停跳看门狗（前置条件）
+
+- 心跳线程周期性 `call_soon_threadsafe` 投递探针，超阈值未响应 → 判定循环停跳 → 自动回收该容器执行体并重启进程/容器（把 11-05 的"永久损失"降级为"短暂损失"）。
+- 验收必测：轻容器内注入同步 sleep 工具（模拟假异步回归），看门狗阈值时间内自愈，被中断任务按既有恢复语义可重新领取。
+
+### 7.3 agent2 重配与验收（1 轻 ×4 + 3 通用）
+
+- `.env` 重配：`runner-worker-light` replicas 1（`AGENT_RUNNER_SLOT_CONCURRENCY=4`、cgroup 2g、`DB_POOL_MAX=6`）+ `runner-worker-general` replicas 3；compose up -d 重建（注意 [[agent2 env 重载陷阱]]：改 .env 必须 rebuild，docker restart 不重读 env）。
+- 连接预算：1×6 + 3×3 = 15 + 监督 ~6 + 非 Runner ~20 ≈ 41 ≤ 80，无需扩 PG。
+- 验收：4 个轻任务同时领取并行跑完；看门狗自愈注入测试；轻容器内存水位（2g cgroup 下 4 并发忙时 ~1.16GiB）；DB 连接峰值实测；旧客户端 wire/恢复/计费回归。
+- 试跑一周观测项：看门狗误杀率、4 并发下任务耗时是否互相拖长（GIL/CPU 争用）、连接数水位。
+
+### 7.4 生产推广
+
+- 生产轻池容器数（缩容器省内存 vs 保容器扩容量）与 `SLOT_CONCURRENCY` 终值（4 还是 2）按 agent2 试跑数据定，回写设计 §6.3/§9 后进生产窗口（与 Phase 5 同批或紧随）。
+- 回退开关：`AGENT_RUNNER_SLOT_CONCURRENCY=1`，恢复现行拓扑。
+
 ## 风险与开放问题（承设计 §8）
 
 | 项 | 处置 |
 |---|---|
-| 池比例（12/8）与判型清单准确率 | agent2 实测校准（Phase 3.2 / Phase 6.2） |
-| agent2 比例（4轻+2通用 vs 直觉 2轻+3通用） | 按轻池排队/通用池空转两信号校准 |
-| 轻容器 cgroup 收窄 | 判型误判率有数据后评估，与 OOM 风险联动 |
+| 池比例（12/8）与判型清单准确率（收窄后） | agent2 实测校准（Phase 3.2 / Phase 6.2） |
+| agent2 比例 | 已定 1 轻（×4）+ 3 通用（2026-11-12 用户指定，Phase 7.3 落地；A 方案前过渡期维持 4+2） |
+| `SLOT_CONCURRENCY` 终值（4/2）与生产轻池容器数 | 按 agent2 Phase 7.3 试跑数据校准（设计 §6.3/§9） |
+| A 方案同进程 4 执行体共享进程状态 | 实现核对项（Phase 7.1）；OOM/挂死影响面 ×4 由看门狗（7.2）+ P0① 修复兜底 |
+| 轻容器 cgroup 收窄 | 判型误判率有数据后评估，与 OOM 风险联动；A 方案下先升 2g，评估顺延 |
 | 执行进程数动态伸缩 | 按容器重启生效，暂不做 |
 | waiting 存量 15 条 runner 清理 | 与本方案无关，顺带登记待清理 |
 | 4 逻辑核对 5 个 CPU 密集重任务超订 | 与拓扑无关，重任务排队可容忍（20 分钟 vs 40 分钟感知差异小） |
