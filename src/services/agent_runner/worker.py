@@ -452,6 +452,8 @@ class RunnerWorker:
                 and row['source']=='chat' and row['session_kind']=='web')
             collector.trace.trace_id = ('tr_'+row['runner_id']+
                 (':'+str(row['attempt']) if attempt_trace else ''))
+            # 轻重负载分离可观测（设计 §5.3）：池比例校准按 Trace 维度过滤。
+            collector.trace.metadata['load_class'] = row.get('load_class')
             control.trace_collector = collector
             # A committed finalization intent is immutable even if a user requests
             # cancellation while its transaction is retrying.

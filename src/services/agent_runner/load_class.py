@@ -50,24 +50,66 @@ def classify_profile(profile_id, config):
     return 'light'
 
 
+def _fact_calls(facts):
+    """统一产出 (name, arguments)：兼容 ToolFact 对象与 checkpoint dict 两种形态。
+
+    运行时 state 里是对象，落盘 checkpoint 里是 dict（{'call': {...}, ...}）。
+    """
+    for fact in (facts or {}).values():
+        if isinstance(fact, dict):
+            call = fact.get('call') or {}
+            yield call.get('name'), call.get('arguments')
+        else:
+            call = getattr(fact, 'call', None)
+            yield getattr(call, 'name', None), getattr(call, 'arguments', None)
+
+
+def _call_uses_heavy(name, arguments, heavy_tools, heavy_skills):
+    if not name:
+        return False
+    if name in heavy_tools:
+        return True
+    if name == 'skill_execute':
+        skill = (arguments or {}).get('skill')
+        return bool(skill) and skill_base_name(skill) in heavy_skills
+    return False
+
+
+def _node_uses_heavy(node, heavy_tools, heavy_skills):
+    """单个执行节点（ExecutionState 对象或 checkpoint dict）递归判型。
+
+    子执行（delegate_to_subagent）的 checkpoint 挂在父 state.children[call_id]
+    ['checkpoint']，重子智能体（标书/资质审查）的工具调用只出现在子 checkpoint；
+    不递归会让主智能体派重子智能体的任务全程留轻池。
+    """
+    if node is None:
+        return False
+    if isinstance(node, dict):
+        facts = node.get('tools')
+        children = node.get('children')
+    else:
+        facts = getattr(node, 'tools', None)
+        children = getattr(node, 'children', None)
+    for name, arguments in _fact_calls(facts):
+        if _call_uses_heavy(name, arguments, heavy_tools, heavy_skills):
+            return True
+    for child in (children or {}).values():
+        if isinstance(child, dict):
+            checkpoint = child.get('checkpoint')
+        else:
+            checkpoint = getattr(child, 'checkpoint', None)
+        if checkpoint is not None and _node_uses_heavy(checkpoint, heavy_tools, heavy_skills):
+            return True
+    return False
+
+
 def state_uses_heavy(state):
     """运行时重判信号：checkpoint 边界扫描已记录的工具/技能调用。
 
     state.tools 含本轮全部工具调用事实；技能脚本经 skill_execute 执行，
-    重负载依据参数里的技能名判定。
+    重负载依据参数里的技能名判定；子执行 checkpoint 递归扫描。
     """
     heavy_tools, heavy_skills = heavy_sets()
     if not heavy_tools and not heavy_skills:
         return False
-    for fact in (getattr(state, 'tools', None) or {}).values():
-        call = getattr(fact, 'call', None)
-        name = getattr(call, 'name', None)
-        if not name:
-            continue
-        if name in heavy_tools:
-            return True
-        if name == 'skill_execute':
-            skill = (getattr(call, 'arguments', None) or {}).get('skill')
-            if skill and skill_base_name(skill) in heavy_skills:
-                return True
-    return False
+    return _node_uses_heavy(state, heavy_tools, heavy_skills)

@@ -28,6 +28,7 @@ def publish_platform_runner_alert_in_tx(cursor, *, runner, duration_seconds):
     definition, parameters = EVENTS.validate('runner.long_running', {
         'runner_id': runner_id, 'tenant_id': runner.get('tenant_id'),
         'profile_id': runner['profile_id'], 'duration_seconds': duration_seconds,
+        'load_class': runner.get('load_class'),
     }, resource)
     cursor.execute('SELECT clock_timestamp() AS now')
     now = cursor.fetchone()['now']

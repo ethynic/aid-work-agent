@@ -106,6 +106,47 @@ class TestStateUsesHeavy:
         assert load_class.state_uses_heavy(self._state({})) is False
         assert load_class.state_uses_heavy(SimpleNamespace(tools=None)) is False
 
+    # 子执行（delegate_to_subagent）checkpoint 递归扫描：checkpoint 内
+    # ToolFact 落盘为 dict 形态，children[call_id] = {'checkpoint': {...}}
+
+    def _child_state(self, checkpoint):
+        return SimpleNamespace(tools={}, children={'call_1': {
+            'execution_id': 'exec_1', 'status': 'succeeded', 'checkpoint': checkpoint}})
+
+    def test_child_checkpoint_dict_with_heavy_tool(self, monkeypatch):
+        _patch_heavy_sets(monkeypatch, ['excel_process'], [])
+        checkpoint = {'tools': {'c1': {'call': {'name': 'excel_process', 'arguments': {}}, 'phase': 'done'}}}
+        assert load_class.state_uses_heavy(self._child_state(checkpoint)) is True
+
+    def test_child_checkpoint_dict_with_heavy_skill(self, monkeypatch):
+        _patch_heavy_sets(monkeypatch, [], ['interior-render'])
+        checkpoint = {'tools': {'c1': {'call': {'name': 'skill_execute',
+            'arguments': {'skill': 'interior-render-1.0.0'}}, 'phase': 'done'}}}
+        assert load_class.state_uses_heavy(self._child_state(checkpoint)) is True
+
+    def test_child_checkpoint_plain_is_light(self, monkeypatch):
+        _patch_heavy_sets(monkeypatch, ['excel_process'], ['interior-render'])
+        checkpoint = {'tools': {'c1': {'call': {'name': 'email_send', 'arguments': {}}}}}
+        assert load_class.state_uses_heavy(self._child_state(checkpoint)) is False
+
+    def test_nested_grandchild_checkpoint(self, monkeypatch):
+        _patch_heavy_sets(monkeypatch, ['excel_process'], [])
+        checkpoint = {'tools': {}, 'children': {'call_x': {'checkpoint': {
+            'tools': {'c2': {'call': {'name': 'excel_process', 'arguments': {}}}}}}}}
+        assert load_class.state_uses_heavy(self._child_state(checkpoint)) is True
+
+    def test_parent_tool_still_detected_with_children(self, monkeypatch):
+        _patch_heavy_sets(monkeypatch, ['excel_process'], [])
+        state = SimpleNamespace(
+            tools={'c0': SimpleNamespace(call=SimpleNamespace(name='excel_process', arguments={}))},
+            children={'call_1': {'checkpoint': {'tools': {}}}})
+        assert load_class.state_uses_heavy(state) is True
+
+    def test_child_without_checkpoint_key(self, monkeypatch):
+        _patch_heavy_sets(monkeypatch, ['excel_process'], [])
+        state = SimpleNamespace(tools={}, children={'call_1': {'status': 'running'}})
+        assert load_class.state_uses_heavy(state) is False
+
 
 class TestAcquireRoleFilter:
     """light 角色领取必须带 load_class 过滤；general 角色不过滤。"""
