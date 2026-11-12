@@ -194,7 +194,7 @@ class TestBidAssistantSubagent(unittest.TestCase):
         import yaml
 
         fm = yaml.safe_load(m.group(1))
-        self.assertEqual(fm["name"], "AI标书助手")
+        self.assertEqual(fm["name"], "AI投标助手")
         self.assertIn("bid-doc-generator", fm["skills"]["allowed"])
         self.assertTrue(fm["tools"]["inherit"])
         self.assertTrue(m.group(2).strip(), "system_prompt 应放在 body 中")
