@@ -35,7 +35,6 @@ from pydantic import BaseModel, Field
 
 from src.llm.gateway import DEFAULT_MAX_TOKENS
 
-from src.core.temp_logger import tlog
 from src.services.recap.runner import RecapPayload
 from src.tools.base import BaseTool
 
@@ -267,12 +266,11 @@ def parse_api_meta(doc_text: str, topic: str = "外部推送") -> Optional[Dict[
     summary_fields（可选）：逗号分隔的累计摘要字段名（如 genjinhuizongzhaiyao）。
     推送循环扫描 http_api 查询结果中的这些字段，命中后向上下文显式注入
     「客户当前摘要 + 回写规则」提醒，消除对模型自觉查重合并的依赖（见 _run_push_loop）。
-    无块 / login_url 缺失 / login_url 非 https 均返回 None（放弃原因写入 tlog）。
+    无块 / login_url 缺失 / login_url 非 https 均返回 None（放弃原因由调用方告警与追踪记录）。
     宁可解析失败放弃本轮，绝不猜测 URL。
     """
     match = re.search(r"```\s*api-meta[^\n]*\n(.*?)```", doc_text or "", re.DOTALL)
     if not match:
-        tlog(topic, "api-meta 解析失败：文档缺少 api-meta 约定块")
         return None
 
     meta: Dict[str, str] = {}
@@ -287,14 +285,11 @@ def parse_api_meta(doc_text: str, topic: str = "外部推送") -> Optional[Dict[
 
     login_url = meta.get("login_url", "")
     if not login_url:
-        tlog(topic, "api-meta 解析失败：缺少 login_url")
         return None
     if not login_url.startswith("https://"):
-        tlog(topic, f"api-meta 解析失败：login_url 非 https（{login_url.split('?')[0]}）")
         return None
     if "${" in login_url:
         # 通用模板渲染后仍残留占位符 = 租户环境变量未配置（如 APP_ID），放弃推送
-        tlog(topic, f"api-meta 解析失败：login_url 占位符未解析（租户环境变量未配置）: {login_url}")
         return None
 
     meta.setdefault("user_token_name", _DEFAULT_USER_TOKEN_NAME)
@@ -327,15 +322,11 @@ def _strip_excluded_sections(doc_text: str, meta: Dict[str, str], topic: str = "
 
     parts = re.split(r"\n(?=## )", doc_text)
     kept = [parts[0]]
-    removed = []
     for part in parts[1:]:
         title_line = part.strip().splitlines()[0] if part.strip() else ""
         if any(item in title_line for item in excludes):
-            removed.append(title_line.lstrip("#").strip())
             continue
         kept.append(part)
-    if removed:
-        tlog(topic, f"文档裁剪章节: {', '.join(removed)}")
     return "\n".join(kept)
 
 
@@ -601,7 +592,6 @@ async def _summarize(payload: RecapPayload, ctx: Dict[str, Any], topic: str = "�
         )
         data = _extract_json_object(response.get("content", ""))
         if not data:
-            tlog(topic, "摘要输出解析失败，降级截断原文")
             return fallback
         return {
             "customer_need": _truncate(str(data.get("customer_need") or "")) or fallback["customer_need"],
@@ -785,13 +775,6 @@ def _normalize_http_method(args: Dict[str, Any], meta: Dict[str, str], topic: st
         return args
     corrected = dict(args)
     corrected["method"] = declared
-    tlog(
-        topic,
-        "纠正请求方式: model={orig} -> declared={declared}, url={url}",
-        orig=original,
-        declared=declared,
-        url=str(corrected.get("url") or "")[:120],
-    )
     return corrected
 
 
@@ -801,8 +784,6 @@ def _normalized_headers(args: Dict[str, Any], topic: str = "外部推送") -> Di
     if isinstance(headers, str):
         headers = _safe_json_loads(headers)
     if not isinstance(headers, dict):
-        if headers:
-            tlog(topic, f"http_api headers 非法（{type(headers).__name__}），重建 headers")
         return {}
     return dict(headers)
 
@@ -1166,7 +1147,6 @@ async def _run_push_loop(
                 code = _extract_business_code(result)
                 if code == -99 and not auth_retried:
                     auth_retried = True
-                    tlog(topic, f"业务接口 Code=-99，强刷委托登录 round={round_no}")
                     refreshed = await asyncio.to_thread(
                         _delegate_login,
                         payload.tenant_id,
@@ -1212,13 +1192,6 @@ async def _run_push_loop(
                     "不得照抄用户消息中的对话预摘要。"
                 ),
             })
-            tlog(
-                topic,
-                "累计摘要注入提醒: fields={fields}, values_len={vlen}, round={round_no}",
-                fields=",".join(round_summary_values.keys()),
-                vlen=len(values_text),
-                round_no=round_no,
-            )
 
         if reported:
             break
@@ -1235,7 +1208,6 @@ async def _run_push_loop(
     report = report_holder[-1]
     if not report.get("success"):
         raise RuntimeError(f"推送失败（模型报告放弃）: {report.get('detail') or '未说明原因'}")
-    tlog(topic, f"推送完成 round={payload.round_message_id}, detail={report.get('detail')}")
     return report.get("detail") or ""
 
 
@@ -1266,7 +1238,6 @@ class ExternalPushAdapter:
 
         doc = _load_tenant_doc(payload.tenant_id, subagent_name)
         if doc is None:
-            tlog(topic, f"放弃：租户未配置 {doc_filename}, tenant={payload.tenant_id}")
             _trace_summary(payload, "skipped", f"租户未配置 {doc_filename}")
             return
 
@@ -1284,7 +1255,6 @@ class ExternalPushAdapter:
             logger.warning(
                 f"[external_push] 归属员工手机号缺失，放弃推送 session={payload.session_id}"
             )
-            tlog(topic, f"放弃：归属员工手机号缺失, tenant={payload.tenant_id}, open_kfid={ctx['open_kfid']}")
             _trace_summary(payload, "skipped", "归属员工手机号缺失")
             return
 
@@ -1293,7 +1263,6 @@ class ExternalPushAdapter:
             logger.warning(
                 f"[external_push] 租户未配置 AGENT_TOKEN，放弃推送 session={payload.session_id}"
             )
-            tlog(topic, f"放弃：租户未配置 AGENT_TOKEN, tenant={payload.tenant_id}")
             _trace_summary(payload, "skipped", "租户未配置 AGENT_TOKEN")
             return
 

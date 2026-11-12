@@ -28,7 +28,6 @@ from loguru import logger
 
 from src.core.cache_utils import CacheKeys
 from src.core.redis_client import redis_client
-from src.core.temp_logger import tlog
 from src.services.recap.runner import RecapPayload
 from src.saas.models.enums import LeadIntentLevel
 
@@ -40,8 +39,6 @@ _COLLECT_MESSAGE_LIMIT = 50
 
 # 单条消息内容截断（防超长消息撑爆输入）
 _MESSAGE_TRUNCATE_CHARS = 300
-
-_TOPIC = "lead_refresh"
 
 # 意向度判定标准（一期固定通用标准，租户级自定义见设计文档开放问题 §9.4）
 _ANALYSIS_SYSTEM_PROMPT = (
@@ -143,13 +140,11 @@ class LeadRefreshAdapter:
         lead_capture = (session.get("metadata") or {}).get("lead_capture") or {}
         lead_id = (lead_capture.get("lead_id") or "").strip()
         if not lead_id:
-            tlog(_TOPIC, "no-op: 会话未留资, session={sid}", sid=payload.session_id)
             return
 
         # 2. 线索不存在（已被「新会话」命令删除，#63）则 no-op
         lead = await asyncio.to_thread(LeadCaptureDB.get_by_id, lead_id, payload.tenant_id)
         if not lead:
-            tlog(_TOPIC, "no-op: 线索不存在或已删除, lead_id={lid}", lid=lead_id)
             return
 
         # 3. 冷却占坑（防抖）：占坑失败说明 5 分钟内已分析过，本次跳过。
@@ -159,12 +154,6 @@ class LeadRefreshAdapter:
             CacheKeys.LEAD_REFRESH_COOLDOWN, f"{payload.tenant_id}:{lead_id}"
         )
         if not redis_client.acquire_lock(cooldown_key, "1", ex=LEAD_REFRESH_COOLDOWN_SECONDS):
-            tlog(
-                _TOPIC,
-                "cooldown skip: lead_id={lid}, round={rid}",
-                lid=lead_id,
-                rid=payload.round_message_id,
-            )
             return
 
         # 4. 外部系统入口守卫：租户已声明任一外部系统入口（如 qbweb3.1）则跳过。
@@ -178,12 +167,6 @@ class LeadRefreshAdapter:
             logger.opt(exception=True).debug(f"[lead_refresh] 外部系统入口检查失败，放行分析（fail-open）: {e}")
             external_systems = []
         if external_systems:
-            tlog(
-                _TOPIC,
-                "skip: 租户已声明外部系统入口, lead_id={lid}, n={n}",
-                lid=lead_id,
-                n=len(external_systems),
-            )
             return
 
         try:
@@ -201,7 +184,6 @@ class LeadRefreshAdapter:
                     lines.append(line)
                     last_message_id = msg.get("message_id") or last_message_id
             if not lines:
-                tlog(_TOPIC, "no-op: 无可分析消息, lead_id={lid}", lid=lead_id)
                 return
             transcript = "\n".join(lines)
 
@@ -251,17 +233,10 @@ class LeadRefreshAdapter:
             data = _extract_json_object(response.get("content", ""))
             if not data:
                 redis_client.delete(cooldown_key)
-                tlog(_TOPIC, "分析输出解析失败，保留旧值: lead_id={lid}", lid=lead_id)
                 return
             intent_level = str(data.get("intent_level") or "").strip().lower()
             if intent_level not in LeadIntentLevel.all_values():
                 redis_client.delete(cooldown_key)
-                tlog(
-                    _TOPIC,
-                    "intent_level 非法，保留旧值: lead_id={lid}, value={val}",
-                    lid=lead_id,
-                    val=intent_level,
-                )
                 return
             intent_reason = str(data.get("intent_reason") or "").strip() or None
             demand_points_raw = data.get("demand_points")
@@ -275,15 +250,10 @@ class LeadRefreshAdapter:
             else:
                 # 字段存在但类型非法：视为解析失败，保留旧值待重试
                 redis_client.delete(cooldown_key)
-                tlog(
-                    _TOPIC,
-                    "demand_points 类型非法，保留旧值: lead_id={lid}",
-                    lid=lead_id,
-                )
                 return
 
             # 9. 回写线索行（同步 DB 调用经 to_thread 包裹，不阻塞事件循环）
-            updated = await asyncio.to_thread(
+            await asyncio.to_thread(
                 LeadCaptureDB.update_analysis,
                 lead_id,
                 payload.tenant_id,
@@ -292,26 +262,10 @@ class LeadRefreshAdapter:
                 demand_points,
                 last_message_id,
             )
-
-            # 10. 前后对比留痕（意向度变化、需求条数变化）
-            old_points = old_demand_points if isinstance(old_demand_points, list) else []
-            tlog(
-                _TOPIC,
-                "分析回写{ok}: lead_id={lid}, intent {old_i} -> {new_i}, "
-                "需求条数 {old_n} -> {new_n}, last_message_id={mid}",
-                ok="ok" if updated else "failed(线索已删除)",
-                lid=lead_id,
-                old_i=lead.get("intent_level") or "无",
-                new_i=intent_level,
-                old_n=len(old_points),
-                new_n=len(demand_points or []),
-                mid=last_message_id,
-            )
         except Exception as e:
             # LLM 调用或回写失败：删占坑键，允许下一条消息重试
             try:
                 redis_client.delete(cooldown_key)
             except Exception:
                 logger.debug("[lead_refresh] 冷却键删除失败（不影响重试语义）")
-            tlog(_TOPIC, "分析失败，冷却键已删除待重试: lead_id={lid}, err={err}", lid=lead_id, err=e)
             raise

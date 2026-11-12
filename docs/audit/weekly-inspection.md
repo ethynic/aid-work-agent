@@ -53,7 +53,7 @@ ssh <srv> "find /var/www/qb3_upload/agent{,2}_storage/tenants -mindepth 2 -maxde
 ssh <srv> "ls /var/www/qb3_upload/agent_storage /var/www/qb3_upload/agent2_storage"
 ```
 
-- 逐条核对命中项：是否属于 `tenants/{tid}/{scene}/` 合法结构（scene ∈ conversation/knowledge/export/report/memory/avatar/temp/…）；`documents.file_path` 等登记值与磁盘路径抽样比对（按环境连主库 `SELECT file_path FROM documents ORDER BY doc_id DESC LIMIT 20`）。
+- 逐条核对命中项：是否属于 `tenants/{tid}/{scene}/` 合法结构（scene ∈ conversation/knowledge/export/report/memory/avatar/temp/…）；`documents.file_path` 等登记值与磁盘路径抽样比对（按环境连主库 `SELECT file_path FROM documents ORDER BY id DESC LIMIT 20`）。
 - 历史遗留（旧 uploads 存量）记为「已知遗留」不算新违规；**只记录，不删除**，删除动作需用户确认。
 
 ## 3. 近 7 天 error / warning 日志收集（两环境）
@@ -70,7 +70,7 @@ GROUP BY 1, 2, 3 ORDER BY cnt DESC LIMIT 50;
 2. 宿主机主日志近 7 天 WARNING/ERROR 主题分布（按周轮转文件取本周份）：
 
 ```bash
-ssh <srv> "grep -hE '(ERROR|WARNING)' /var/www/agent{,2}/log/aid-work-agent.log* 2>/dev/null \
+ssh <srv> "grep -hE '(ERROR|WARNING)' /var/www/agent{,2}/log/agent/aid-work-agent_*.log 2>/dev/null \
   | grep -oE '(ERROR|WARNING)[^:]{0,80}' | sort | uniq -c | sort -rn | head -30"
 ```
 
@@ -86,7 +86,7 @@ SELECT left(COALESCE(error_message, '(null)'), 150) AS err, count(*) AS cnt,
        sum(total_tokens) AS total_tokens, max(created_at) AS last_seen
 FROM obs_traces
 WHERE created_at > NOW() - INTERVAL '7 days'
-  AND tags @> '["tool_error"]' AND status <> 'running'
+  AND 'tool_error' = ANY(tags) AND status <> 'running'
 GROUP BY 1 ORDER BY total_tokens DESC, cnt DESC LIMIT 30;
 
 -- 明细：top token 消耗的单个 trace
@@ -94,7 +94,7 @@ SELECT trace_id, session_id, tenant_id, created_at, total_tokens,
        left(COALESCE(error_message, '(null)'), 200) AS err
 FROM obs_traces
 WHERE created_at > NOW() - INTERVAL '7 days'
-  AND tags @> '["tool_error"]' AND status <> 'running'
+  AND 'tool_error' = ANY(tags) AND status <> 'running'
 ORDER BY total_tokens DESC LIMIT 30;
 
 -- 失败工具分布（obs_spans 无 success 列，失败判定用 status='failed'）
