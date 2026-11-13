@@ -460,3 +460,55 @@ def test_tenant_target_same_rule_readd_without_binding_version_idempotent(bounda
         service_database.rows('DELETE FROM notification_targets WHERE scope_key=%s',
                               ('tenant:' + admin.tenant_id,))
         service_database.rows('DELETE FROM notification_rules WHERE rule_id=%s', ('rule_test_a',))
+
+
+# ==================== 企微应用 target 登记（Phase 3 绑定闭环） ====================
+
+
+class WecomAppStubAdapter:
+    """真库 upsert 语义验证用：wecom_app 协议桩（发送不走网络）。"""
+
+    channel = provider = 'wecom_app'
+    capabilities = AdapterCapabilities()
+
+    def available(self):
+        return True
+
+    def validate_target(self, configuration):
+        return hashlib.sha256(configuration['wecom_userid'].encode()).hexdigest()
+
+    def render(self, message, target):
+        return {'ref': message['notification_ref']}
+
+    def send(self, configuration, payload, ttl):
+        return SendResult('accepted')
+
+
+def wecom_registration(user_id, version=None):
+    """服务端绑定后登记载体（与 wecom_bind._register_target 同构）。"""
+    from src.notifications.contracts import WecomAppTargetRegistration
+    return WecomAppTargetRegistration(
+        installation_ref='wecom_bind_' + user_id, expected_binding_version=version,
+        configuration={'wecom_userid': 'zhangsan', 'bound_user_name': '张三', 'tenant_id': ''})
+
+
+def test_wecom_bind_target_registration_queryable_and_rebind_idempotent(boundary_repo, actors):
+    """绑定登记闭环：登记后 targets 可查；重复绑定幂等（同 target、版本不变）；
+    解绑撤销后重绑复活（版本+1）。"""
+    boundary_repo.registry.register(WecomAppStubAdapter())
+    owner = subject(actors['a'])
+    first = boundary_repo.register_target(owner, wecom_registration(actors['a'].user_id))
+    listed = [item for item in boundary_repo.targets(owner) if item['channel'] == 'wecom_app']
+    assert [item['target_id'] for item in listed] == [first['target_id']]
+    assert first['binding_version'] == 1 and first['state'] == 'active'
+    # 重复绑定（同配置同版本）幂等：命中更新分支，不抬版本
+    again = boundary_repo.register_target(
+        owner, wecom_registration(actors['a'].user_id, version=first['binding_version']))
+    assert again['target_id'] == first['target_id'] and again['binding_version'] == 1
+    # 解绑撤销 → 重绑复活（登记时回传撤销后的当前版本；复活是状态变更，
+    # update 分支 changed=True 抬版本：撤销后 2 → 复活后 3）
+    boundary_repo.revoke_target(owner, first['target_id'], first['binding_version'])
+    revived = boundary_repo.register_target(
+        owner, wecom_registration(actors['a'].user_id, version=first['binding_version'] + 1))
+    assert revived['target_id'] == first['target_id']
+    assert revived['state'] == 'active' and revived['binding_version'] == 3

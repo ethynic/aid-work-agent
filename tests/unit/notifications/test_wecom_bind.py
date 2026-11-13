@@ -4,6 +4,8 @@
 - callback：code 换 userid 成功落库；企微 errcode 非零失败；成员不在可见范围拒绝；未登录 401
 - suggest 手机号预填只读不写；confirm 服务端二次核实（前端伪造 userid 被拒）
 - 解绑清空 wecom_userid 并撤销既有 wecom_app target
+- Phase 3 登记接线：绑定落库后服务端登记 wecom_app target（幂等 upsert，
+  回传既有 binding_version）；登记失败不影响绑定落库，响应 target_registered 可见
 
 参照 test_api_task_rules.py 手法：最小 app + 注入 fake 客户端/仓储/DB。
 """
@@ -51,11 +53,14 @@ class FakeWecomClient:
 
 
 class StubBindRepository:
-    """unbind 撤销 target 用：只提供 assert_schema/targets/revoke_target。"""
+    """unbind 撤销 + Phase 3 登记接线用：assert_schema/targets/revoke_target/
+    register_target。"""
 
-    def __init__(self, targets=()):
+    def __init__(self, targets=(), register_error=None):
         self._targets = list(targets)
         self.revoked = []
+        self.registered = []
+        self.register_error = register_error
 
     def assert_schema(self):
         pass
@@ -67,10 +72,18 @@ class StubBindRepository:
         self.revoked.append((target_id, version))
         return {'target_id': target_id, 'state': 'revoked'}
 
+    def register_target(self, subject, body):
+        if self.register_error is not None:
+            raise self.register_error
+        self.registered.append((subject, body))
+        return {'target_id': 'target_new', 'installation_ref': body.installation_ref,
+                'binding_version': 1, 'state': 'active', 'channel': body.channel,
+                'provider': body.provider}
 
-def _wecom_target():
+
+def _wecom_target(version=1, state='active'):
     return {'target_id': 'target_wecom_1', 'installation_ref': 'inst_wecom',
-            'binding_version': 1, 'state': 'active', 'enabled_since': None,
+            'binding_version': version, 'state': state, 'enabled_since': None,
             'channel': 'wecom_app', 'provider': 'wecom_app', 'rule_id': None}
 
 
@@ -172,7 +185,8 @@ class TestCallback:
                         wecom=wecom, store=store).get(
             f'/api/notifications/wecom/bind/callback?code=goodcode&state={state}', headers=AUTH)
         assert resp.status_code == 200
-        assert resp.json() == {'success': True, 'userid': 'zhangsan', 'name': '张三'}
+        assert resp.json() == {'success': True, 'userid': 'zhangsan', 'name': '张三',
+                               'target_registered': True}
         assert wecom.oauth_codes == ['goodcode']
         # 落库当前登录用户（租户归属来自登录态，不信任前端）
         assert saved['saved'] == [('user_1', 'zhangsan')]
@@ -214,7 +228,8 @@ class TestCallback:
         resp_a = client_a.get(f'/api/notifications/wecom/bind/callback?code=goodcode&state={state_a}',
                               headers=AUTH)
         assert resp_a.status_code == 200
-        assert resp_a.json() == {'success': True, 'userid': 'zhangsan', 'name': '张三'}
+        assert resp_a.json() == {'success': True, 'userid': 'zhangsan', 'name': '张三',
+                                 'target_registered': True}
         assert saved['saved'] == [('user_1', 'zhangsan')]
 
     def test_wecom_errcode_nonzero_rejected(self, saved):
@@ -327,7 +342,8 @@ class TestConfirm:
                         wecom=wecom).post('/api/notifications/wecom/bind/confirm',
                                           json={'userid': 'zhangsan'}, headers=AUTH)
         assert resp.status_code == 200
-        assert resp.json() == {'success': True, 'userid': 'zhangsan', 'name': '张三'}
+        assert resp.json() == {'success': True, 'userid': 'zhangsan', 'name': '张三',
+                               'target_registered': True}
         assert saved['saved'] == [('user_1', 'zhangsan')]
 
     def test_phone_unmatched_rejected(self, saved):
@@ -345,6 +361,79 @@ class TestConfirm:
             '/api/notifications/wecom/bind/confirm', json={'userid': 'zhangsan'}, headers=AUTH)
         assert resp.status_code == 400
         assert resp.json() == {'error': 'NOTIFICATION_BIND_PHONE_REQUIRED'}
+
+
+# ============== Phase 3 登记接线（绑定 → wecom_app target） ==============
+
+class TestTargetRegistration:
+    def _bind_via_callback(self, saved, repository):
+        store = BindStateStore()
+        state = store.issue('user_1')
+        return make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
+                        store=store, repository=repository).get(
+            f'/api/notifications/wecom/bind/callback?code=goodcode&state={state}',
+            headers=AUTH)
+
+    def test_callback_registers_wecom_target(self, saved):
+        repository = StubBindRepository()
+        resp = self._bind_via_callback(saved, repository)
+        assert resp.status_code == 200
+        assert resp.json()['target_registered'] is True
+        assert len(repository.registered) == 1
+        subject, body = repository.registered[0]
+        assert (body.channel, body.provider) == ('wecom_app', 'wecom_app')
+        assert body.installation_ref == 'wecom_bind_user_1'
+        assert body.expected_binding_version is None  # 首次登记走 INSERT 分支
+        assert body.configuration.wecom_userid == 'zhangsan'
+        assert body.configuration.bound_user_name == '张三'
+        assert body.configuration.tenant_id == 't1'
+
+    def test_repeat_bind_passes_existing_binding_version(self, saved):
+        """重复绑定幂等（upsert 语义）：回传既有 target 的 binding_version，
+        repository.register_target 命中更新分支不抬版本。"""
+        repository = StubBindRepository(targets=[_wecom_target(version=3)])
+        resp = self._bind_via_callback(saved, repository)
+        assert resp.status_code == 200
+        _, body = repository.registered[0]
+        assert body.expected_binding_version == 3
+
+    def test_rebind_after_unbind_upserts_revoked_target(self, saved):
+        """解绑（revoked，版本+1）后重绑：回传当前版本复活 target。"""
+        repository = StubBindRepository(targets=[_wecom_target(version=2, state='revoked')])
+        resp = self._bind_via_callback(saved, repository)
+        assert resp.status_code == 200
+        _, body = repository.registered[0]
+        assert body.expected_binding_version == 2
+
+    def test_register_failure_does_not_break_bind(self, saved):
+        """登记失败不影响绑定落库本身：绑定成功 + 响应 target_registered=False 可见。"""
+        repository = StubBindRepository(
+            register_error=NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503))
+        resp = self._bind_via_callback(saved, repository)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body['success'] is True and body['target_registered'] is False
+        # 绑定落库已生效
+        assert saved['saved'] == [('user_1', 'zhangsan')]
+
+    def test_confirm_registers_target(self, saved):
+        repository = StubBindRepository()
+        wecom = FakeWecomClient()
+        resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
+                        wecom=wecom, repository=repository).post(
+            '/api/notifications/wecom/bind/confirm', json={'userid': 'zhangsan'}, headers=AUTH)
+        assert resp.status_code == 200
+        assert resp.json()['target_registered'] is True
+        _, body = repository.registered[0]
+        assert body.configuration.wecom_userid == 'zhangsan'
+        assert body.installation_ref == 'wecom_bind_user_1'
+
+    def test_suggest_still_read_only(self, saved):
+        """suggest 只读预填：不落库也不登记 target。"""
+        repository = StubBindRepository()
+        make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
+                 repository=repository).get('/api/notifications/wecom/bind/suggest', headers=AUTH)
+        assert repository.registered == []
 
 
 # ============== 解绑 ==============

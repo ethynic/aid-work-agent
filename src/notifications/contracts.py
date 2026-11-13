@@ -45,9 +45,11 @@ class RegisterTarget(StrictDTO):
 
 
 class PreferenceRequest(StrictDTO):
+    # wecom_app：企微任务通知偏好（绑定后开关用，wecom-app-task-notification-design
+    # §4.5；target 登记是服务端行为，偏好开关仍走本 API）
     category: Literal['task']
-    channel: Literal['web_push']
-    provider: Literal['web_push']
+    channel: Literal['web_push', 'wecom_app']
+    provider: Literal['web_push', 'wecom_app']
     enabled: StrictBool
 
 
@@ -72,6 +74,27 @@ class EmailConfiguration(StrictDTO):
 class WecomBindConfirm(StrictDTO):
     """手机号兜底确认绑定：userid 仅回传预填值，服务端以登录用户手机号重新核实（设计 §4.1）"""
     userid: str = Field(min_length=1, max_length=64)
+
+
+class WecomAppConfiguration(StrictDTO):
+    """企微应用通知目标配置（wecom-app-task-notification-design §4.3）。
+
+    目标注册是绑定成功后的服务端内部行为（OAuth/确认绑定后登记），不走用户
+    提交的 RegisterTarget API；RegisterTarget.channel 维持 web_push 不扩。"""
+    wecom_userid: str = Field(min_length=1, max_length=64)
+    # 绑定成员姓名快照（企微 user/get 返回，设置页展示用，非机密）
+    bound_user_name: str = Field(default='', max_length=128)
+    tenant_id: str = Field(default='', max_length=64)
+
+
+class WecomAppTargetRegistration(StrictDTO):
+    """绑定事务内服务端登记 wecom_app target 的载体（复用
+    repository.register_target 的 upsert/归属/幂等语义）。"""
+    channel: Literal['wecom_app'] = 'wecom_app'
+    provider: Literal['wecom_app'] = 'wecom_app'
+    installation_ref: str = Field(min_length=1, max_length=128)
+    expected_binding_version: StrictInt | None = Field(default=None, ge=1)
+    configuration: WecomAppConfiguration
 
 
 TENANT_CHANNEL_PROVIDERS = {

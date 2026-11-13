@@ -9,8 +9,8 @@
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
 | Phase 1 | 绑定：users.wecom_userid 字段 + OAuth 绑定回调 + 手机号预填确认 + 解绑 | ✅ 完成（2026-11-13） | 4424f65c + a06c6f70（CR P2：state 绑定发起用户）；26 用例 + notifications 326 + UserDB 回归 283 全绿，vue-tsc 通过；真机 OAuth/企微外呼待部署清单 |
-| Phase 2 | 触发判定：runner 终态 web 会话 + 时长阈值（默认 300s） | 📋 待开发 | — |
-| Phase 3 | 企微应用 Adapter：textcard 发送、errcode 分类、出站安全 | 📋 待开发 | — |
+| Phase 2 | 触发判定：runner 终态 web 会话 + 时长阈值（默认 300s） | ✅ 完成（2026-11-13） | 446ceb05；口径 B：时长门禁仅 source=chat，scheduled 沿用既有通知不收缩；14 用例 + notifications 340 + agent_runner 577（3 失败为宿主机预存）；integration 真 PG 回归 18 skipped 待容器 |
+| Phase 3 | 企微应用 Adapter：textcard 发送、errcode 分类、出站安全 | 🔧 进行中（开发+自测完成，待独立测试/CR） | wecom_app.py（token 缓存+40014/42001 刷新重试、errcode 分类、pinned HTTPS、description 渲染执行耗时）；TerminalParameters 加可选 duration_seconds（chat/scheduled 终态均带入，缺省/0 兜底不渲染，其他渠道不受影响）；绑定落库后登记 target（幂等 upsert）；PreferenceRequest 白名单扩 wecom_app；notifications 415 + task_result_sharing 19 全绿；integration 真 PG 登记 upsert 用例已备待容器 |
 | Phase 4 | 通知设置页：企微通知卡片（绑定/开关/解绑）+ 点击回跳定位 | 📋 待开发 | — |
 | Phase 5 | 回归测试 + agent2 真机验收 | 📋 待开发 | — |
 

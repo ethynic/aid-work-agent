@@ -56,7 +56,9 @@ class TestDurationGate:
         assert event['event_type'] == 'task.completed'
         assert event['event_key'] == 'terminal:runner'
         assert event['producer'] == 'runner'
-        assert event['parameters'] == {'session_title': '会话A', 'event_kind': 'completed'}
+        # 时长随终态事件带入（设计 §4.3，textcard 渲染耗时用）
+        assert event['parameters'] == {'session_title': '会话A', 'event_kind': 'completed',
+                                       'duration_seconds': 600}
 
     def test_short_task_not_published_and_no_row_written(self, published):
         """web 会话 + 时长 299 → 不发布；阈值判定在发布前，不产生任何 DB 访问
@@ -103,6 +105,34 @@ class TestDurationGate:
         cursor.fetchone.return_value = {'title': '会话A'}
         publish_runner_terminal_in_tx(cursor, row)
         assert len(published) == 1
+        # 时长未知按 0 带入（渲染侧兜底不显示耗时）
+        assert published[0]['parameters']['duration_seconds'] == 0
+
+    def test_terminal_parameters_carry_chat_duration(self, published):
+        """设计 §4.3：chat 终态触发判定已算得的时长随事件带入（TEXTCARD 渲染耗时）。"""
+        cursor = MagicMock()
+        cursor.fetchone.return_value = {'title': '会话A'}
+        publish_runner_terminal_in_tx(cursor, runner(duration_seconds=332),
+                                      NotificationsConfig())
+        assert published[0]['parameters']['duration_seconds'] == 332
+
+    def test_scheduled_terminal_parameters_carry_duration(self, published):
+        """scheduled 终态（不受时长门禁）同样把时长带入事件参数。"""
+        from unittest.mock import patch
+        scheduled = runner(duration_seconds=125, source='scheduled',
+                           actor_kind='system', actor_id='scheduler',
+                           input={'request_data': {'scheduled': {'task_id': 'sched_1'}}})
+        cursor = MagicMock()
+        cursor.fetchone.side_effect = [
+            {'title': '每日日报'},
+            {'task_id': 'sched_1', 'name': '每日日报', 'notification_rule_id': None,
+             'notification_target_id': None, 'task_prompt': ''},
+        ]
+        with patch('src.services.task_result_sharing.service'
+                   '.ensure_task_result_share_in_tx', lambda *args: 'share_key'):
+            publish_runner_terminal_in_tx(cursor, scheduled, NotificationsConfig())
+        assert len(published) == 1
+        assert published[0]['parameters']['duration_seconds'] == 125
 
 
 class TestWebSessionOnly:

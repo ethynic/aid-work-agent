@@ -7,8 +7,9 @@
 - 解绑：DELETE /wecom/bind 清空 wecom_userid 并撤销既有 wecom_app target。
 
 出站走 pinned HTTPS（域名白名单 + 公网地址校验，复用 web_push 防护），固定
-qyapi.weixin.qq.com；secret/access_token 不落日志。target 登记（绑定成功后注册
-wecom_app target）由 Phase 3 接线，本模块只提供解绑时的撤销。
+qyapi.weixin.qq.com；secret/access_token 不落日志。target 登记（Phase 3，
+设计 §4.3）：绑定落库成功后由服务端登记 channel='wecom_app' target，幂等
+upsert；登记失败不影响绑定落库本身，结果在响应与日志可见。
 """
 import http.client
 import json
@@ -20,7 +21,8 @@ from fastapi import APIRouter, Depends, Request
 from loguru import logger
 
 from src.core.cache_utils import CacheKeys, get_cached, set_cached, delete_cached
-from src.notifications.contracts import NotificationError, Subject, WecomBindConfirm
+from src.notifications.contracts import (NotificationError, Subject,
+                                         WecomAppTargetRegistration, WecomBindConfirm)
 from src.notifications.service import notification_repository
 from src.notifications.web_push import PinnedHTTPSConnection, public_addresses
 
@@ -199,6 +201,37 @@ def create_bind_router(config=None, repository=None, user_loader=None,
         UserDB.set_wecom_userid(current.user_id, userid)
         return member.get('name') or ''
 
+    def _register_target(current, userid, name):
+        """绑定落库成功后登记 wecom_app 投递目标（Phase 3，设计 §4.1/§4.3）。
+
+        幂等 upsert：复用 repository.register_target 的归属/幂等语义——同用户
+        已有 target 时回传当前 binding_version 命中更新分支（重复绑定不变更
+        版本），解绑后重绑复活 revoked target；installation_ref 按用户确定
+        生成，endpoint 摘要 sha256(wecom_userid) 由 adapter.validate_target
+        产出保持唯一性口径。"""
+        existing = next((item for item in repository.targets(current)
+                         if item.get('channel') == 'wecom_app'), None)
+        body = WecomAppTargetRegistration(
+            installation_ref='wecom_bind_' + str(current.user_id),
+            expected_binding_version=existing['binding_version'] if existing else None,
+            configuration={'wecom_userid': userid, 'bound_user_name': name,
+                           'tenant_id': current.tenant_id or ''})
+        return repository.register_target(current, body)
+
+    def _bind_and_register(current, userid):
+        """落库 + target 登记：登记失败不影响绑定落库本身，结果在响应
+        （target_registered 字段）与日志可见。"""
+        name = _bind(current, userid)
+        registered = True
+        try:
+            _register_target(current, userid, name)
+        except Exception:
+            registered = False
+            logger.opt(exception=True).warning(
+                '企微绑定成功但通知 target 登记失败 user_id={}', current.user_id)
+        return {'success': True, 'userid': userid, 'name': name,
+                'target_registered': registered}
+
     @router.get('/wecom/bind/url')
     def wecom_bind_url(current: Subject = Depends(subject)):
         app_config = _require_app()
@@ -223,7 +256,7 @@ def create_bind_router(config=None, repository=None, user_loader=None,
         userid = wecom_client.oauth_userid(request.query_params.get('code', ''))
         if not userid:
             raise NotificationError('NOTIFICATION_BIND_FAILED')
-        return {'success': True, 'userid': userid, 'name': _bind(current, userid)}
+        return _bind_and_register(current, userid)
 
     @router.get('/wecom/bind/suggest')
     def wecom_bind_suggest(current: Subject = Depends(subject)):
@@ -241,7 +274,7 @@ def create_bind_router(config=None, repository=None, user_loader=None,
         server_userid = wecom_client.userid_by_phone(_current_phone(current))
         if not server_userid or server_userid != body.userid:
             raise NotificationError('NOTIFICATION_BIND_MISMATCH')
-        return {'success': True, 'userid': server_userid, 'name': _bind(current, server_userid)}
+        return _bind_and_register(current, server_userid)
 
     @router.delete('/wecom/bind')
     def wecom_bind_unbind(current: Subject = Depends(subject)):

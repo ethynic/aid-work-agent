@@ -202,6 +202,9 @@ def publish_runner_terminal_in_tx(cursor, runner, config=None):
         if scheduled is None:
             return  # Deleted resources have no recipient-readable result.
         parameters, task = scheduled
+        # 执行时长随终态事件带入（设计 §4.3，触发判定已算得）；0=时长未知，
+        # 渲染侧兜底（企微 textcard 耗时展示，其他渠道不读取）
+        parameters['duration_seconds'] = _runner_duration_seconds(runner)
         from src.services.task_result_sharing.service import ensure_task_result_share_in_tx
 
         ensure_task_result_share_in_tx(cursor, task, runner)
@@ -223,7 +226,9 @@ def publish_runner_terminal_in_tx(cursor, runner, config=None):
     occurred=runner['finished_at']
     return publish_in_tx(cursor,subject=subject,producer='runner',event_type='task.'+runner['status'],
         event_key='terminal:'+runner['runner_id'],resource_ref={'type':'runner_result','id':runner['runner_id']},
-        parameters={'session_title':session_title(session['title']),'event_kind':runner['status']},
+        parameters={'session_title':session_title(session['title']),'event_kind':runner['status'],
+            # 执行时长随终态事件带入（设计 §4.3，触发判定已算得）；0=时长未知
+            'duration_seconds':_runner_duration_seconds(runner)},
         occurred_at=occurred,accepted_at=runner['accepted_at'],
         expires_at=occurred+timedelta(seconds=config.ttl_seconds))
 

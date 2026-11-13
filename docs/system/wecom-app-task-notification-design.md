@@ -45,8 +45,8 @@ BOSS 直聘爬虫等长任务在 web 控制台执行，完成后当前实现会�
 
 在既有 `publish_runner_terminal_in_tx`（`src/notifications/producer.py:161`）扩展判定，不改变通知核心：
 
-- 仅 `source=chat & session_kind=web` 的 runner（沿用 web push 设计的接入范围口径）；
-- `duration_seconds ≥ WECOM_TASK_NOTIFY_MIN_SECONDS`（配置项，默认 300）；
+- 发布范围为 `session_kind=web` 的用户自有 runner（沿用 web push 设计的接入范围口径，来源含 chat 与 scheduled）；
+- 时长门禁：`source=chat` 时要求 `duration_seconds ≥ wecom_task_min_seconds`（配置项，默认 300）；
 - **时长门禁仅作用于 `source=chat`**（2026-11-13 用户拍板口径 B）：scheduled（定时任务）沿用既有通知行为不按时长门禁——定时任务常在用户不在页面时完成，短定时任务的完成通知恰是通知价值场景，不收缩已交付行为；
 - 两条件同时满足才发布 `task.completed/task.failed` 事件（复用现有事件与幂等 event_key；阈值判定在发布前，避免短任务空进通知表）。
 - 砍掉页面在线/心跳判定（决策 3 修正）：不做 presence，不引入前端心跳。
