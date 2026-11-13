@@ -195,7 +195,9 @@ def make_repository():
 
 def bind_like_wecom_layer(repository, subject, userid):
     """与 wecom_bind._register_target 同构：existing 优先 active 行，无 active
-    回退 created_at 最近行回传其 binding_version（stale 亦然）。"""
+    回退 created_at 最近行回传其 binding_version（stale 亦然）；identity_
+    preverified=True——绑定路径身份已由服务端 member() 核验（四轮回炉：
+    接手/复活非 active 行豁免钉扎仅限该路径，Web Push 用户 API 不豁免）。"""
     rows = [item for item in repository.targets(subject)
             if item.get('channel') == 'wecom_app']
     existing = next((item for item in rows if item.get('state') == 'active'),
@@ -204,7 +206,7 @@ def bind_like_wecom_layer(repository, subject, userid):
         installation_ref='wecom_bind_' + subject.user_id,
         expected_binding_version=existing['binding_version'] if existing else None,
         configuration={'wecom_userid': userid, 'bound_user_name': '张三',
-                       'tenant_id': subject.tenant_id or ''}))
+                       'tenant_id': subject.tenant_id or ''}), identity_preverified=True)
 
 
 A = Subject('user_a', 't1')
@@ -271,7 +273,8 @@ class TestActiveRowPinningPreserved:
 
 class TestRevokedRowSkipsPinning:
     """复审 2：revoked 行无在途投递、无 lost-update 面（advisory 锁串行化），
-    expected 传错值也必须能激活。"""
+    企微绑定路径（identity_preverified=True）expected 传错值也必须能激活；
+    Web Push 用户 API 不豁免（见 test_web_push_register_pinning.py）。"""
 
     def test_revoked_row_wrong_version_activates(self):
         repository = make_repository()
@@ -281,7 +284,7 @@ class TestRevokedRowSkipsPinning:
             installation_ref='wecom_bind_' + A.user_id,
             expected_binding_version=999,
             configuration={'wecom_userid': 'zhangsan', 'bound_user_name': '张三',
-                           'tenant_id': 't1'}))
+                           'tenant_id': 't1'}), identity_preverified=True)
         assert revived['target_id'] == first['target_id']
         assert revived['state'] == 'active'
         assert revived['binding_version'] == first['binding_version'] + 2

@@ -492,23 +492,31 @@ def wecom_registration(user_id, version=None, userid='zhangsan'):
         configuration={'wecom_userid': userid, 'bound_user_name': '张三', 'tenant_id': ''})
 
 
+def wecom_bind_register(repo, owner, body):
+    """四轮回炉（Web Push 回归）：与 wecom_bind._register_target 同构——绑定
+    路径身份已由服务端 member() 核验，repository 传 identity_preverified=True
+    才允许对接手/复活非 active 行豁免版本钉扎；web_push 用户 API（上方
+    register_target 直调）不带此标记，保持版本校验。"""
+    return repo.register_target(owner, body, identity_preverified=True)
+
+
 def test_wecom_bind_target_registration_queryable_and_rebind_idempotent(boundary_repo, actors):
     """绑定登记闭环：登记后 targets 可查；重复绑定幂等（同 target、版本不变）；
     解绑撤销后重绑复活（版本+1）。"""
     boundary_repo.registry.register(WecomAppStubAdapter())
     owner = subject(actors['a'])
-    first = boundary_repo.register_target(owner, wecom_registration(actors['a'].user_id))
+    first = wecom_bind_register(boundary_repo, owner, wecom_registration(actors['a'].user_id))
     listed = [item for item in boundary_repo.targets(owner) if item['channel'] == 'wecom_app']
     assert [item['target_id'] for item in listed] == [first['target_id']]
     assert first['binding_version'] == 1 and first['state'] == 'active'
     # 重复绑定（同配置同版本）幂等：命中更新分支，不抬版本
-    again = boundary_repo.register_target(
+    again = wecom_bind_register(boundary_repo,
         owner, wecom_registration(actors['a'].user_id, version=first['binding_version']))
     assert again['target_id'] == first['target_id'] and again['binding_version'] == 1
     # 解绑撤销 → 重绑复活（登记时回传撤销后的当前版本；复活是状态变更，
     # update 分支 changed=True 抬版本：撤销后 2 → 复活后 3）
     boundary_repo.revoke_target(owner, first['target_id'], first['binding_version'])
-    revived = boundary_repo.register_target(
+    revived = wecom_bind_register(boundary_repo,
         owner, wecom_registration(actors['a'].user_id, version=first['binding_version'] + 1))
     assert revived['target_id'] == first['target_id']
     assert revived['state'] == 'active' and revived['binding_version'] == 3
@@ -521,8 +529,8 @@ def test_wecom_same_member_binds_targets_in_different_tenants(boundary_repo, ser
     不透出 scope_key，不再读返回字典）。"""
     boundary_repo.registry.register(WecomAppStubAdapter())
     # 两个租户的用户绑定同一企微成员 zhangsan（installation_ref 按各自 user_id）
-    first = boundary_repo.register_target(subject(actors['a']), wecom_registration(actors['a'].user_id))
-    second = boundary_repo.register_target(subject(actors['b']), wecom_registration(actors['b'].user_id))
+    first = wecom_bind_register(boundary_repo, subject(actors['a']), wecom_registration(actors['a'].user_id))
+    second = wecom_bind_register(boundary_repo, subject(actors['b']), wecom_registration(actors['b'].user_id))
     assert second['target_id'] != first['target_id']
     # 归属从库直查：b 的 target 落在自己租户 scope、属主为 b
     row = service_database.rows('SELECT scope_key,recipient_user_id FROM notification_targets WHERE target_id=%s',
@@ -531,7 +539,7 @@ def test_wecom_same_member_binds_targets_in_different_tenants(boundary_repo, ser
     assert row['recipient_user_id'] == actors['b'].user_id
     # 同租户他人绑定同企微身份：endpoint 摘要命中 a 的 active target → 仍 TARGET_OWNED
     with pytest.raises(NotificationError, match='NOTIFICATION_TARGET_OWNED'):
-        boundary_repo.register_target(subject(actors['a_other']), wecom_registration(actors['a_other'].user_id))
+        wecom_bind_register(boundary_repo, subject(actors['a_other']), wecom_registration(actors['a_other'].user_id))
     # 各自视角只看得到本人 target（scope 断言兜底）
     assert [item['target_id'] for item in boundary_repo.targets(subject(actors['a']))] == [first['target_id']]
     assert [item['target_id'] for item in boundary_repo.targets(subject(actors['b']))] == [second['target_id']]
@@ -545,17 +553,17 @@ def test_wecom_target_takeover_after_unbind_in_same_tenant(boundary_repo, servic
     boundary_repo.registry.register(WecomAppStubAdapter())
     a, b = subject(actors['a']), subject(actors['a_other'])
     # B 先绑另一身份再解绑：留下 B 的 stale revoked installation 行
-    stale = boundary_repo.register_target(b, wecom_registration(actors['a_other'].user_id, userid='lisi'))
+    stale = wecom_bind_register(boundary_repo, b, wecom_registration(actors['a_other'].user_id, userid='lisi'))
     boundary_repo.revoke_target(b, stale['target_id'], stale['binding_version'])
     # A 绑定 zhangsan
-    first = boundary_repo.register_target(a, wecom_registration(actors['a'].user_id))
+    first = wecom_bind_register(boundary_repo, a, wecom_registration(actors['a'].user_id))
     # A active 时同租户 B 绑定 → 409 不变（必须先解绑）
     with pytest.raises(NotificationError, match='NOTIFICATION_TARGET_OWNED'):
-        boundary_repo.register_target(b, wecom_registration(actors['a_other'].user_id))
+        wecom_bind_register(boundary_repo, b, wecom_registration(actors['a_other'].user_id))
     # A 解绑：行保留（state=revoked，digest 不变）
     boundary_repo.revoke_target(a, first['target_id'], first['binding_version'])
     # B 绑定同一身份 → 接手 A 的行（同 target_id，非新增），版本 +1
-    taken = boundary_repo.register_target(b, wecom_registration(actors['a_other'].user_id))
+    taken = wecom_bind_register(boundary_repo, b, wecom_registration(actors['a_other'].user_id))
     assert taken['target_id'] == first['target_id']
     assert taken['state'] == 'active' and taken['binding_version'] == first['binding_version'] + 2
     row = service_database.rows('SELECT scope_key,recipient_user_id,installation_ref FROM notification_targets WHERE target_id=%s',
@@ -572,7 +580,7 @@ def test_wecom_target_takeover_after_unbind_in_same_tenant(boundary_repo, servic
     assert stale_row['state'] == 'revoked'
     assert boundary_repo.targets(a) == []
     # 接手后重复绑定幂等：同配置回传当前版本，版本不变
-    again = boundary_repo.register_target(
+    again = wecom_bind_register(boundary_repo,
         b, wecom_registration(actors['a_other'].user_id, version=taken['binding_version']))
     assert again['target_id'] == first['target_id']
     assert again['binding_version'] == taken['binding_version']
@@ -585,11 +593,11 @@ def test_wecom_rebind_after_takeover_unbind_closed_loop(boundary_repo, actors):
     引用钉扎直接激活，不得 BINDING_CHANGED 409 死循环；重绑后重复绑定幂等。"""
     boundary_repo.registry.register(WecomAppStubAdapter())
     a, b = subject(actors['a']), subject(actors['a_other'])
-    first = boundary_repo.register_target(a, wecom_registration(actors['a'].user_id))
-    yi = boundary_repo.register_target(b, wecom_registration(actors['a_other'].user_id, userid='lisi'))
+    first = wecom_bind_register(boundary_repo, a, wecom_registration(actors['a'].user_id))
+    yi = wecom_bind_register(boundary_repo, b, wecom_registration(actors['a_other'].user_id, userid='lisi'))
     boundary_repo.revoke_target(a, first['target_id'], first['binding_version'])
     boundary_repo.revoke_target(b, yi['target_id'], yi['binding_version'])
-    taken = boundary_repo.register_target(b, wecom_registration(actors['a_other'].user_id))
+    taken = wecom_bind_register(boundary_repo, b, wecom_registration(actors['a_other'].user_id))
     assert taken['target_id'] == first['target_id'] and taken['state'] == 'active'
     boundary_repo.revoke_target(b, taken['target_id'], taken['binding_version'])
     # 与 wecom_bind._register_target 同构取 expected：existing 优先 active 行，
@@ -597,13 +605,13 @@ def test_wecom_rebind_after_takeover_unbind_closed_loop(boundary_repo, actors):
     rows = [item for item in boundary_repo.targets(b) if item['channel'] == 'wecom_app']
     existing = next((item for item in rows if item['state'] == 'active'), rows[0])
     assert existing['target_id'] == yi['target_id']
-    rebound = boundary_repo.register_target(b, wecom_registration(
+    rebound = wecom_bind_register(boundary_repo, b, wecom_registration(
         actors['a_other'].user_id, version=existing['binding_version']))
     assert rebound['target_id'] == first['target_id']
     assert rebound['state'] == 'active'
     assert rebound['binding_version'] == taken['binding_version'] + 2
     # 重绑后幂等：active 行回传当前版本，版本不变
-    again = boundary_repo.register_target(
+    again = wecom_bind_register(boundary_repo,
         b, wecom_registration(actors['a_other'].user_id, version=rebound['binding_version']))
     assert again['target_id'] == rebound['target_id']
     assert again['binding_version'] == rebound['binding_version']
@@ -615,12 +623,12 @@ def test_wecom_bind_profile_active_row_not_shadowed_by_stale_revoked(boundary_re
     最近行（既有语义）。"""
     boundary_repo.registry.register(WecomAppStubAdapter())
     a, b = subject(actors['a']), subject(actors['a_other'])
-    first = boundary_repo.register_target(a, wecom_registration(actors['a'].user_id))
-    yi = boundary_repo.register_target(b, wecom_registration(actors['a_other'].user_id, userid='lisi'))
+    first = wecom_bind_register(boundary_repo, a, wecom_registration(actors['a'].user_id))
+    yi = wecom_bind_register(boundary_repo, b, wecom_registration(actors['a_other'].user_id, userid='lisi'))
     boundary_repo.revoke_target(a, first['target_id'], first['binding_version'])
     boundary_repo.revoke_target(b, yi['target_id'], yi['binding_version'])
     # B 接手甲：旧行转 active（created_at 早于 B 的 revoked 乙行）
-    taken = boundary_repo.register_target(b, wecom_registration(actors['a_other'].user_id))
+    taken = wecom_bind_register(boundary_repo, b, wecom_registration(actors['a_other'].user_id))
     assert taken['target_id'] == first['target_id']
     profile = boundary_repo.wecom_bind_profile(b)
     assert profile['target_state'] == 'active'

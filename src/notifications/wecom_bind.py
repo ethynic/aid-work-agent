@@ -227,7 +227,11 @@ def create_bind_router(config=None, repository=None, user_loader=None,
             expected_binding_version=existing['binding_version'] if existing else None,
             configuration={'wecom_userid': userid, 'bound_user_name': name,
                            'tenant_id': current.tenant_id or ''})
-        return repository.register_target(current, body)
+        # 四轮回炉（Web Push 回归）：identity_preverified=True 标记本登记由
+        # 服务端已核验企微身份（member() 可见范围+active 状态+租户内唯一）的
+        # 绑定流程发起，repository 据此对接手/复活非 active 行豁免版本钉扎；
+        # Web Push 用户 API 不带此标记，保持版本校验（用户关闭必须被尊重）。
+        return repository.register_target(current, body, identity_preverified=True)
 
     def _bind_and_register(current, userid):
         """落库 + target 登记：登记失败不影响绑定落库本身，结果在响应

@@ -80,7 +80,8 @@ class StubBindRepository:
         self.revoked.append((target_id, version))
         return {'target_id': target_id, 'state': 'revoked'}
 
-    def register_target(self, subject, body):
+    def register_target(self, subject, body, *, identity_preverified=False):
+        # identity_preverified=True（wecom_bind 绑定路径标记，四轮回炉）不影响本桩断言
         if self.register_error is not None:
             raise self.register_error
         self.registered.append((subject, body))

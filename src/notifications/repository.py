@@ -294,7 +294,17 @@ class NotificationRepository:
                 AND recipient_user_id=%s ORDER BY created_at DESC''', (subject.scope_key, subject.user_id))
             return [public_target(row) for row in cursor.fetchall()]
 
-    def register_target(self, subject, body):
+    def register_target(self, subject, body, *, identity_preverified=False):
+        """登记/更新用户渠道投递目标。
+
+        identity_preverified：登记是否由服务端已核验身份的企微绑定流程
+        （wecom_bind：member() 可见范围+active 状态核验 + 租户内唯一防线）
+        发起。仅该路径允许对接手/复活非 active 行豁免 installation_ref/
+        binding_version 钉扎（复审 2 换绑闭环依赖此豁免）；Web Push 用户
+        API（POST /api/notifications/targets）不带此标记，保持版本校验
+        ——用户关闭通知（revoke 升版本）后，携 stale 版本晚到的登记请求
+        必须 409，不得把已关闭目标复活为 opt-in（四轮回炉 Web Push 回归）。
+        """
         adapter = self.registry.get(body.channel, body.provider)
         if not adapter or not adapter.available():
             raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
@@ -318,7 +328,12 @@ class NotificationRepository:
             # 非 active（revoked/invalid）行允许同 scope 用户接手——身份已由
             # wecom_bind 服务端 member() 核验，无条件 409 会造成「A 解绑后
             # B 绑同一身份被 A 的废弃行卡死」死循环。
-            if endpoint and not owned(endpoint, subject) and endpoint['state'] == 'active':
+            # 四轮回炉（Web Push 回归）：接手豁免仅限 identity_preverified=True
+            # 的企微绑定路径；Web Push 用户 API 对他人行（不分 state）恢复
+            # 原 409 TARGET_OWNED——web push 设计 §6：切换主体必须撤销旧目标
+            # 重新订阅，不静默覆盖。
+            if endpoint and not owned(endpoint, subject) and (
+                    endpoint['state'] == 'active' or not identity_preverified):
                 raise NotificationError('NOTIFICATION_TARGET_OWNED', 409)
             cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND installation_ref=%s
                 ORDER BY (state='active') DESC,updated_at DESC LIMIT 1 FOR UPDATE''', (body.provider, body.installation_ref))
@@ -331,9 +346,10 @@ class NotificationRepository:
                     and endpoint['target_id'] != installation['target_id']):
                 raise NotificationError('NOTIFICATION_BINDING_CONFLICT', 409)
             if endpoint and not owned(endpoint, subject):
-                # 接手：改属主/安装引用/配置并复活；identity_digest 不变（同一
-                # 身份）。跳过 expected_binding_version 校验——旧版本号属于前任
-                # 属主，对绑定发起人无并发意义。
+                # 接手（仅 identity_preverified=True 可达，见上方 409 门）：
+                # 改属主/安装引用/配置并复活；identity_digest 不变（同一身份）。
+                # 跳过 expected_binding_version 校验——旧版本号属于前任属主，
+                # 对绑定发起人无并发意义。
                 cursor.execute('''UPDATE notification_targets SET recipient_user_id=%s,
                     installation_ref=%s,configuration_encrypted=%s,state='active',
                     binding_version=binding_version+1,enabled_since=clock_timestamp(),
@@ -345,13 +361,20 @@ class NotificationRepository:
                 return result
             row = endpoint or (installation if owned(installation, subject) else None)
             if row:
-                # 复审 2：版本/安装引用钉扎仅在 active 行生效——active 行防并发
-                # lost-update（expected 必须同时匹配 installation_ref 与版本）。
-                # 非 active 行（解绑后 revive/接手激活）跳过校验直接激活：revoked
-                # 行无在途投递、无 lost-update 面，pg_advisory_xact_lock 已串行化
-                # 并发；对 revoked 行钉扎会让重绑回传 stale 版本（如换绑后另一
-                # revoked 行的版本）陷入 BINDING_CHANGED 409 死循环。
-                if (row['state'] == 'active'
+                # 复审 2：企微绑定路径（identity_preverified=True）版本/安装引用
+                # 钉扎仅在 active 行生效——active 行防并发 lost-update（expected
+                # 必须同时匹配 installation_ref 与版本）；非 active 行（解绑后
+                # revive/接手激活）跳过校验直接激活：revoked 行无在途投递、无
+                # lost-update 面，pg_advisory_xact_lock 已串行化并发；对 revoked
+                # 行钉扎会让重绑回传 stale 版本（如换绑后另一 revoked 行的版本）
+                # 陷入 BINDING_CHANGED 409 死循环。
+                # 四轮回炉（Web Push 回归）：上述非 active 跳钉扎豁免仅限
+                # identity_preverified=True；Web Push 用户 API 恢复无条件
+                # installation_ref+expected 版本校验（=回归前行为）——标签页 A
+                # 携 stale 版本晚到的登记请求必须 409 BINDING_CHANGED，尊重
+                # 用户刚做出的关闭（opt-out 不被翻转为 opt-in）。active 行
+                # 语义对所有取值不变。
+                if ((not identity_preverified or row['state'] == 'active')
                         and (row['installation_ref'] != body.installation_ref
                              or body.expected_binding_version != row['binding_version'])):
                     raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
