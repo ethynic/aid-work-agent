@@ -345,8 +345,15 @@ class NotificationRepository:
                 return result
             row = endpoint or (installation if owned(installation, subject) else None)
             if row:
-                if (row['installation_ref'] != body.installation_ref
-                        or body.expected_binding_version != row['binding_version']):
+                # 复审 2：版本/安装引用钉扎仅在 active 行生效——active 行防并发
+                # lost-update（expected 必须同时匹配 installation_ref 与版本）。
+                # 非 active 行（解绑后 revive/接手激活）跳过校验直接激活：revoked
+                # 行无在途投递、无 lost-update 面，pg_advisory_xact_lock 已串行化
+                # 并发；对 revoked 行钉扎会让重绑回传 stale 版本（如换绑后另一
+                # revoked 行的版本）陷入 BINDING_CHANGED 409 死循环。
+                if (row['state'] == 'active'
+                        and (row['installation_ref'] != body.installation_ref
+                             or body.expected_binding_version != row['binding_version'])):
                     raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
                 old = unprotect(row['configuration_encrypted'])
                 changed = old != configuration or row['state'] != 'active'
@@ -869,9 +876,12 @@ class NotificationRepository:
         with self.connection_factory() as conn:
             cursor = conn.cursor()
             self.guard(cursor, subject)
+            # 接手复用旧行（created_at 不变），仅按 created_at 取最近会被用户的
+            # stale revoked 新行遮蔽接手的 active 行（设置页误显示已撤销）；与
+            # installation 查找同口径：active 行优先，无 active 再回退最近行。
             cursor.execute('''SELECT state,configuration_encrypted FROM notification_targets
                 WHERE scope_key=%s AND recipient_user_id=%s AND channel='wecom_app'
-                ORDER BY created_at DESC LIMIT 1''', (subject.scope_key, subject.user_id))
+                ORDER BY (state='active') DESC, created_at DESC LIMIT 1''', (subject.scope_key, subject.user_id))
             row = cursor.fetchone()
             if not row:
                 return {'target_state': None, 'name': None}
