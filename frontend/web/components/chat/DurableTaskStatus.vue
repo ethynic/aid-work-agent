@@ -41,6 +41,7 @@ const title = computed(() => props.row.cancel_requested && !terminal.value ? '�
   : props.resumePending || props.row.resume_requested ? '正在恢复任务'
   : props.row.sleep_blocked ? '自动继续已暂停'
   : wait.value?.kind === 'continuous_guard' ? '连续执行已暂停'
+  : wait.value?.kind === 'clarification' && props.row.status === 'waiting' ? '等待你的回复'
   : ({ paused:'任务已暂停', interrupted:'任务已中断，请核对执行记录', completed:'任务已完成',
       failed:'任务执行失败', cancelled:'任务已停止', finalizing:'正在保存任务结果', queued:'任务排队中' } as Record<string,string>)[props.row.status]
     || (timer.value && props.row.status === 'waiting' ? '任务休眠中' : '任务执行中'))

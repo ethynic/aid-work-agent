@@ -1,5 +1,6 @@
 """Proof and input resolution for repeatable server tool calls."""
 
+import os
 import re
 import shutil
 import tempfile
@@ -13,6 +14,7 @@ from .resource_paths import workspace_directory
 
 QUOTATION_SKILL = 'quotation-pricing'
 QUOTATION_DIRECTORY = Path(__file__).resolve().parents[2] / 'skills' / 'quotation-pricing-1.0.0'
+_OFFICE_DOCUMENT_SUFFIXES = {'.doc','.docx','.xls','.xlsx','.ppt','.pptx'}
 _QUOTATION_PARSE = re.compile(
     r'OUT=/app/storage/tmp/quoteprice_\$\(date \+%s\) && mkdir -p \$OUT && echo "OUT=\$OUT"'
     r' && cd /app/src/skills/quotation-pricing-1\.0\.0 && python scripts/parse_quotation\.py'
@@ -40,7 +42,7 @@ def is_builtin_quotation_skill(skill):
             and skill.version == '1.0.0')
 
 
-def quotation_available(state, profiles):
+def recovery_skill(state, profiles, name):
     from .runtime.resource_cache import allowed_skill_names, cached_skill_registry
     tenant_id = state.identity.tenant_id
     config, _ = profiles.resolve(state.profile_id, tenant_id)
@@ -48,17 +50,50 @@ def quotation_available(state, profiles):
     if tenant_id:
         from src.saas.services.tenant_skill_cache import tenant_skill_cache
         skills = tenant_skill_cache.get_or_load(tenant_id, QUOTATION_DIRECTORY.parent, allowed)
-        return is_builtin_quotation_skill(skills.get(QUOTATION_SKILL))
-    return is_builtin_quotation_skill(cached_skill_registry(allowed).get(QUOTATION_SKILL))
+        return skills.get(name)
+    return cached_skill_registry(allowed).get(name)
+
+
+def quotation_available(state, profiles):
+    return is_builtin_quotation_skill(recovery_skill(state, profiles, QUOTATION_SKILL))
+
+
+def repeatable_server_tool(call):
+    if call.name == 'knowledge_file_search':
+        from src.tools.knowledge.knowledge_file_search_tool import KnowledgeFileSearchTool
+        return KnowledgeFileSearchTool
+    if call.name == 'read':
+        from src.tools.file.read_tool import ReadTool
+        value = call.arguments.get('file_path')
+        if not isinstance(value,str) or not value:
+            return None
+        path = Path(value)
+        if not path.is_absolute():
+            path = QUOTATION_DIRECTORY.parents[2] / path
+        try:
+            # Read resolves symlinks before choosing its Office parser, which
+            # can spill a newly named output file.
+            if path.resolve().suffix.lower() not in _OFFICE_DOCUMENT_SUFFIXES:
+                return ReadTool
+        except (OSError,RuntimeError,ValueError):
+            return None
+    if call.name == 'grep':
+        from src.tools.file.grep_tool import GrepTool
+        pattern = call.arguments.get('pattern')
+        # The normal tool passes a positional pattern to rg. Neither an option
+        # argument nor an inherited config that may install a preprocessor is
+        # evidence of a read-only operation.
+        if isinstance(pattern,str) and pattern and not pattern.startswith('-') and not os.getenv('RIPGREP_CONFIG_PATH'):
+            return GrepTool
+    return None
 
 
 def can_repeat_server_call(fact):
     if fact.phase != 'dispatching' or fact.result is not None or fact.invocation_id or fact.result_recorded:
         return False
     call = fact.call
-    if call.name == 'knowledge_file_search':
-        return True
-    return call.name == 'skill_execute' and quotation_call(call) is not None
+    return (repeatable_server_tool(call) is not None
+            or call.name == 'skill_execute' and quotation_call(call) is not None)
 
 
 def quotation_call(call):
@@ -135,10 +170,18 @@ def create_recovery_workspace(state, resource_directory):
     return Path(tempfile.mkdtemp(prefix='skill_ws_',dir=root))
 
 
-def stage_quotation_call(call, match, source, workspace):
+def safe_workbook_name(filename):
+    candidate = Path((filename or '').replace('\\','/')).name
+    if (Path(candidate).suffix.lower() == '.xlsx' and not _COMMAND_REWRITE.search(candidate)
+            and not re.search(r'[\x00-\x1f{}]', candidate) and len(candidate.encode()) <= 255):
+        return candidate
+    return None
+
+
+def stage_quotation_call(call, match, source, workspace, *, name=None):
     # Preserve the original file basename recorded in the extracted rows,
     # even when the source is an opaque registered download ID.
-    staged = workspace / Path(match['source']).name
+    staged = workspace / (name or Path(match['source']).name)
     shutil.copyfile(source,staged)
     output = quote(str(workspace / 'items_extracted.json'))
     script = quote(str(QUOTATION_DIRECTORY / 'scripts' / 'parse_quotation.py'))

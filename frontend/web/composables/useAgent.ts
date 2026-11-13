@@ -124,6 +124,12 @@ const LOCAL_RECOVERY_MESSAGES = {
   unavailable: '原操作暂不能结束等待。请保持原 Runtime 连接以回传结果，再核对原操作；补充消息和附件仍保留。',
 } as const
 
+const RECOVERY_REPLY_MESSAGES: Record<string, string> = {
+  RECOVERY_EXCEL_REQUIRED: '请只上传一份 .xlsx 文件并发送。',
+  RECOVERY_EXCEL_UNAVAILABLE: '这份 Excel 文件无法读取，请重新上传后发送。',
+  RECOVERY_CHOICE_REQUIRED: '请在核对问题中选择一项后发送。',
+}
+
 function recoveryControlMessage(code?: string | null, row?: RunnerView) {
   if ((row?.local_recovery || row?.local_verification_available)
       && (code === 'RECOVERY_TOOL_VERIFICATION_REQUIRED' || code === 'LOCAL_DEADLINE_VERIFICATION_REQUIRED'))
@@ -224,8 +230,9 @@ export function useAgent() {
     return rows.find(row => !runnerTerminal(row.status)
       && (row.execution_mode === 'continuous' || runnerWaitLeaf(row.snapshot.waiting)?.kind === 'timer'))
       || (rows[0]?.execution_mode === 'continuous' ? rows[0] : undefined)
-      // 非持续任务的暂停/中断行也挂任务卡：给「继续任务」与「停止任务」入口
-      || rows.find(row => !runnerTerminal(row.status) && ['paused','interrupted'].includes(row.status))
+      // 暂停、中断或等用户答复时，普通任务同样保留停止入口。
+      || rows.find(row => ['paused','interrupted'].includes(row.status)
+        || (row.status === 'waiting' && runnerWaitLeaf(row.snapshot.waiting)?.kind === 'clarification'))
   })
   const durableTaskBusy = ref(false)
   const resumePending = computed(() => {
@@ -414,6 +421,8 @@ export function useAgent() {
 
   /** runner 错误文案归约：control 保留文案 / NO_CREDIT 积分提示 / 通用兜底 */
   function runnerIssueText(issue: Error): string {
+    if (issue instanceof RunnerRequestError && RECOVERY_REPLY_MESSAGES[issue.code])
+      return RECOVERY_REPLY_MESSAGES[issue.code]
     const safeMessages = new Set([
       ...Object.values(LOCAL_RECOVERY_MESSAGES),
       '消息操作未成功，请稍后重试。',
@@ -1187,7 +1196,8 @@ export function useAgent() {
 
   async function sendMessage(content: string, subagent?: string | null, overrideSessionId?: string, instanceId?: string | null,
     retryFiles?: UploadedFile[], retrySource?: string, executionMode?: 'continuous') {
-    if (!content.trim()) return
+    const hasText = !!content.trim()
+    if (!hasText && (retryFiles || !currentFiles.value.some(file => file.file_id))) return
     const headers = getEffectiveAuthHeader()
     checkRunnerSubject(headers)
     const effectiveSessionId = overrideSessionId || sessionId.value
@@ -1259,6 +1269,9 @@ export function useAgent() {
       .find(row => ['waiting','paused','interrupted'].includes(row.status))
     const leaf = clarificationLeaf(parked?.snapshot.waiting)
     const canReply = !!(leaf?.wait_id && leaf.target_execution_id)
+    // A plain clarification can ask for a file without requiring a text answer.
+    if (!hasText && (parked?.status !== 'waiting' || !canReply || leaf?.form
+        || !currentFiles.value.some(file => file.file_id))) return
     if (parked?.cancel_requested) {
       runnerError(effectiveSessionId,new Error(parked.local_recovery
         ? LOCAL_RECOVERY_MESSAGES.cancelBlocked : LOCAL_RECOVERY_MESSAGES.ending))

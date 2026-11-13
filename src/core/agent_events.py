@@ -149,7 +149,7 @@ SENSITIVE_ARG_KEYS = frozenset({
     "token", "access_token",
     "secret", "secret_key",
     "authorization", "cookie", "cookies",
-    "credential", "credentials",
+    "credential", "credentials", "confirmation_id",
     "private_key", "client_secret",
 })
 

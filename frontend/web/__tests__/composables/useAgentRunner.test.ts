@@ -739,6 +739,35 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     expect(external.legacy).not.toHaveBeenCalled()
   })
 
+  it('keeps the Excel reply draft when the original recovery question rejects the attachment', async () => {
+    const waiting = { kind:'clarification', wait_id:'excel-wait', target_execution_id:'runner-A',
+      question:'任务中断后，原 Excel 文件无法读取。请上传一份 .xlsx 文件并发送。' }
+    await discoverParked(runnerView({ status:'waiting', snapshot:{ waiting } }))
+    await agent.sendMessage('', null, 'A')
+    expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(0)
+    const attachment = { file_id:'wrong-file', name:'wrong.pdf', type:'file' as const, size:12, mime_type:'application/pdf' }
+    agent.currentFiles.value = [attachment]
+    const sending = agent.sendMessage('', null, 'A'); await flush()
+    const posted = request('/runners/runner-A/controls','POST')
+    expect(JSON.parse(posted.body!)).toMatchObject({ action:'reply', wait_id:'excel-wait', target_execution_id:'runner-A',
+      answer:'', attachments:[attachment] })
+    posted.respond({ code:'RECOVERY_EXCEL_UNAVAILABLE', error:'RECOVERY_EXCEL_UNAVAILABLE' },422)
+    expect(await sending).toMatchObject({ restoreInput:true })
+    expect(agent.currentFiles.value).toEqual([attachment])
+    expect(agent.runnerFeedback.value?.message).toBe('这份 Excel 文件无法读取，请重新上传后发送。')
+    expect(agent.resumableTask.value).toBeUndefined()
+    expect(agent.durableTask.value?.runner_id).toBe('runner-A')
+  })
+
+  it('an attachment alone cannot resume a paused task without a clarification', async () => {
+    await discoverParked(runnerView({ status:'paused' }))
+    const attachment = { file_id:'held-file', name:'workbook.xlsx', type:'file' as const, size:12, mime_type:'application/octet-stream' }
+    agent.currentFiles.value = [attachment]
+    await agent.sendMessage('', null, 'A'); await flush()
+    expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(0)
+    expect(agent.currentFiles.value).toEqual([attachment])
+  })
+
   it('restoring historical failed runner and rejected controls remains silent while preserving history', async () => {
     const historical = runnerView({ status: 'paused', snapshot: { supplementalInputs: [{
       control_id: 'historical-control', client_request_id: 'historical-key', message_id: 'historical-control:user',
