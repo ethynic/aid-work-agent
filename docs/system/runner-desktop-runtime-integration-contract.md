@@ -1,5 +1,14 @@
 # AgentRunner / Desktop / Runtime 共同集成契约
 
+### BOSS 筛选容错与本机操作恢复共同检查点
+
+2026-11-12 · 契约 2.20 候选，待实施。适用 BOSS 网页任务。规则见 [筛选输入](../design/recruiting/resume-job-matching-design.md#boss-筛选参数容错)、[恢复交互](agent-application-architecture-design.md#boss-本机操作恢复) 和 [计划](../plans/plan-boss-filter-input-and-local-recovery.md)。
+
+- **筛选参数**由 BOSS 服务端代理唯一写入新 invocation 的规范参数，已持久化的调用保持其原绑定及摘要。CLI 在自身入口归一化可选筛选条件，且是业务回执的唯一生产者。Device 请求结构、授权、目标绑定和业务回执外层保持兼容。若 MCP 容错改变公开 schema，BOSS 发布同时生成真实 tools schema 和 manifest 摘要，按现有能力发现及签名包规则验证。服务端传给旧插件的参数始终符合旧 schema。
+- **正常结束的事实**由 Runtime Host/Core 唯一附加。候选 v1 在既有受权结果 `data` 内保留 `_runtime_completion: {version: 1}`，仅适用于声明 `runtime_boss_completion_v1`、并在领取时确认为该能力的 BOSS 调用。只有原可信 Provider 的结构化终态已到达且此次调用相关执行已退出、锁已释放才写入，插件原回执同名字段先剥离。Host 合成错误、取消信号、超时、崩溃、无法确认退出的路径不得写入。服务端核验原设备、领取凭据、原调用、能力与版本，按原幂等入口持久化和消费。结束事实只解除该调用的资源占用，原 `state` / `effect`、原始业务回执和计费依据按原规则保留，迟到可信回执单独核定。该内部证据不得由模型或网页提交。
+- **停止与接续**由 Runner 服务端唯一写入。拟在原 Web/内部 `verify-local` 增加可选 `continue_after_stop: true`，只开放原对话任务的主人，沿原请求 ID 和停稳核验的冻结范围，服务端负责协作停止、必要的受管停止和接续。可选公开动作 `stop_and_continue` 只在服务端可受理时投影。旧入口的请求/响应、已有 v2 观察和 `runtime_recovery_stop_v1` v3 停止证明继续兼容。前端仅依据服务端动作和进度展示按钮。
+- **升级兼容**。Device API、H1/H3 及全局最低客户端版本保持原接口。缺少新版回执证据时沿已有可信终态和原设备停止证明处理。只更新服务端即可修复旧插件收到空筛选值的问题，已经交付的旧 Runtime＋旧 BOSS 仍能使用原工具、恢复、上报和计费。验收按 [开发计划](../plans/plan-boss-filter-input-and-local-recovery.md) 跑通旧端组合、新证据和竞态。
+
 2026-11-10 企业微信监控首次启动发送 P0 检查点（契约 2.19，加性服务端事实）：代理任务首次成功启动事务是 `has_started` 和当次目标 `opening_send_status=pending` 的唯一写入入口。旧任务以任一保留目标的 `web_session_id` 证明已启动（包括移除目标）；只在首次启动前允许设置可空的 `opening_message`，因此首次启动即冻结正文，重复启动不改目标或正文。现有企微设备组派发器在组锁内、原回答 Runner 释放占用后，按目标 ID 逐个派发并核定；监控读和普通回答不能越过尚未处理的首启发送。同事务以原用户、设备、内部会话及稳定 `ws1` 目标写 `local_tool_invocations` 并关联原目标，内部 `business_kind='wecom_proxy_opening'`、`business_ref={version:1,task_id,target_id}` 和目标 ID 幂等键仅由该后台路径生成；Runtime 仍接收既有 `wecom_message_send({session,text})`，CLI 按稳定 locator 自带账号绑定核对，无新 Device API 字段、工具 schema、能力串、模型或 Runner。暂停式停止取消未授权项，原运行项继续核定；已知失败不重试，后续目标继续。租约停续沿原 unknown 规则，迟到回执仍是原事实；有可信原回执定位符时仅在同设备/会话发起一条现有 `wecom_send_status` 只读核对，不重放发送，不阻塞后续正常派发。沿用普通发送工具的余额检查和成功回执记账入口，对账仍零价。P0.1 同一 CLI 使用既有双点标定输入点先切换焦点，再执行原标题复制、目标核对和后续文本写入；无新增模型调用或客户端协议变动。实际发行组合须验证旧设备仍能按既有路径完成原操作。独立测试和 CR 只读验证该绑定、重复启动、租户/账号隔离、停止与回执竞态以及旧客户端兼容。
 
 P0 设备组占用补充：首启事务发布待发记录、首启发送绑定、普通回答批次取得占用共用同租户、设备、账号的 PostgreSQL 事务锁，组身份由持久任务行确定。加锁顺序为任务行 → 设备组锁 → 目标行，首启事务原有账号归属锁在设备组锁之前。首启绑定在锁内重查其他首启正在发送和普通回答正在运行；普通回答在锁内重查待发或正在发送的首启及其他运行批次。被挡住的工作保持待处理，包括普通回答的失权路径未取得占用时也不核定失败、不停止任务。进程内组锁仍用于监控协调。
