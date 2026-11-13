@@ -31,7 +31,7 @@
 
 | 分组 | 指标 | 数据来源 |
 |---|---|---|
-| Runner 执行面 | 槽位占用（running/finalizing ÷ concurrency）、总槽位（`AGENT_RUNNER_WORKER_SLOTS` 部署配置口径，默认 1）、排队深度（queued 数）、最老任务运行时长、排队等待时长（accepted→首次 running）、当前 active 告警 | `agent_runners` 表 + supervisor 槽位状态；复用 `RunnerAlertRepository.candidates()` |
+| Runner 执行面 | 双池槽位（轻槽 `AGENT_RUNNER_LIGHT_SLOTS` + 通用槽 `AGENT_RUNNER_GENERAL_SLOTS`，部署配置口径；轻槽容量按 `AGENT_RUNNER_SLOT_CONCURRENCY` 换算执行体，未配置=1）、池占用（running/finalizing 按 `load_class` 判型近似——轻池只领 light，通用池可兜领，claim 未记录领取池）、排队深度（queued 数）、最老任务运行时长、排队等待时长（accepted→首次 running）、当前 active 告警 | `agent_runners` 表 + supervisor 槽位状态；复用 `RunnerAlertRepository.candidates()` |
 | 系统资源 | CPU% / load / 内存 / 磁盘 IO 速率 / 网络 IO 速率 / storage 与日志分区使用率 | psutil（主 API 容器内，/proc 反映宿主机级）；网络 IO 跨轮差分、排除回环/虚拟网卡，带宽占满研判需环境变量 `PUBLIC_BANDWIDTH_MBPS`（Mbps，未配置则只展示不研判，观察 ≥80% / 警告 ≥95%） |
 | 业务面 | 在线用户（最近 5 分钟活跃会话数）、今日请求量、今日对话失败率 | `chat_records` / `chat_sessions` 聚合 |
 | 响应时长 | 任务执行耗时 P50/P95、模型调用错误率 | `chat_records` 或追踪库 obs_spans |

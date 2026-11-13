@@ -53,10 +53,18 @@
           </div>
           <div class="space-y-2 text-sm">
             <div class="flex justify-between">
-              <span class="text-muted">运行中 / 收尾 / 总槽位</span>
+              <span class="text-muted">轻槽</span>
+              <span class="text-default font-medium" :title="lightSlotTitle">
+                {{ lightOccupied ?? '-' }} / {{ lightCapacity ?? '-' }}
+                <span v-if="lightCapacity != null" class="text-muted text-xs">({{ lightConcurrency }} * {{ runner?.light_slots ?? '-' }})</span>
+              </span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-muted">通用槽</span>
               <span class="text-default font-medium"
-                :title="`总槽位 = runner-worker 副本数（AGENT_RUNNER_WORKER_SLOTS，部署配置口径）`">
-                {{ runner?.running ?? '-' }} / {{ runner?.finalizing ?? '-' }} / {{ runner?.worker_slots ?? '-' }}
+                :title="generalSlotTitle">
+                {{ heavyOccupied ?? '-' }} / {{ runner?.general_slots ?? '-' }}
+                <span v-if="runner?.general_slots != null" class="text-muted text-xs">(1 * {{ runner?.general_slots }})</span>
               </span>
             </div>
             <div class="flex justify-between">
@@ -370,6 +378,27 @@ const retryShareSuffix = computed(() => {
   return `（${r.runner_retried_today ?? 0}/${r.runner_started_today ?? 0}）`
 })
 const retryShareTitle = computed(() => 'attempt>1 的任务数 / 今日已启动任务数；启动数不足 10 时不计算占比')
+
+// 轻槽容量按执行体换算：槽位 × 每槽并发（AGENT_RUNNER_SLOT_CONCURRENCY，未配置=4，与 settings/compose 默认一致）
+const lightConcurrency = computed(() => runner.value?.light_concurrency ?? 4)
+const lightOccupied = computed(() =>
+  (runner.value?.running_light ?? 0) + (runner.value?.finalizing_light ?? 0))
+const lightCapacity = computed(() => {
+  const slots = runner.value?.light_slots
+  if (slots == null) return null
+  return slots * lightConcurrency.value
+})
+const heavyOccupied = computed(() =>
+  (runner.value?.running_heavy ?? 0) + (runner.value?.finalizing_heavy ?? 0))
+const lightSlotTitle = computed(() => {
+  const slots = runner.value?.light_slots ?? '-'
+  const c = lightConcurrency.value
+  return `占用/容量为运行+收尾合并计数；容量 = 每槽并发 ${c} × 轻槽副本 ${slots}（AGENT_RUNNER_SLOT_CONCURRENCY × AGENT_RUNNER_LIGHT_SLOTS，部署配置口径）；轻池只领轻任务，通用池可兜领，占用按判型近似`
+})
+const generalSlotTitle = computed(() => {
+  const slots = runner.value?.general_slots ?? '-'
+  return `占用/容量为运行+收尾合并计数；容量 = 通用槽副本 ${slots}（AGENT_RUNNER_GENERAL_SLOTS，部署配置口径），每槽 1 执行体；通用池可兜领轻任务，占用按判型近似`
+})
 const business = computed(() => overview.value?.snapshot?.business)
 const middleware = computed(() => overview.value?.snapshot?.middleware)
 

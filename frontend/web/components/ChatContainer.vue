@@ -71,10 +71,12 @@
               @upload="handleUpload"
               @remove="handleRemoveFile"
               @stop="abortStreaming"
+              @resume="resumeResumableTask"
               :disabled="isProcessing || isWaitingHuman || existingSessionLoading || !!existingSessionError"
               :is-processing="isProcessing"
               :files="currentFiles"
               :can-stop="canStop"
+              :can-resume="!!resumableTask"
               :upload-accept="currentUploadAccept"
               :toolbar-buttons="currentToolbarButtons"
               :quick-prompts="currentQuickPrompts"
@@ -140,6 +142,7 @@ const {
   messages,
   isProcessing,
   canStop,
+  resumableTask,
   currentFiles,
   sendMessage,
   clearSession,
@@ -160,6 +163,7 @@ const {
   durableHistory,
   loadDurableHistory,
   controlDurableTask,
+  resumeResumableTask,
   localRecovery,
   localRecoveryBusy,
   localVerificationMessage,

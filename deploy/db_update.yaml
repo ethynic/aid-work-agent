@@ -4768,3 +4768,59 @@
         WHERE s.tenant_id=t.tenant_id AND s.user_id=t.user_id AND s.task_id=t.id
           AND s.web_session_id IS NOT NULL
      );
+
+- datetime: "2026-11-11 22:32:40"
+  remark: "agent_runners 增加 load_class 列（轻重负载分离判型，'light'|'heavy'，默认 'light'）"
+  statements: |
+    ALTER TABLE agent_runners ADD COLUMN IF NOT EXISTS load_class TEXT NOT NULL DEFAULT 'light'
+        CHECK (load_class IN ('light','heavy'));
+
+- datetime: "2026-11-12 10:30:00"
+  remark: "AI获客拆分双技能：leads 加综述两列、emails 加 hook_id，新增 contact_channels/messages 两表"
+  statements: |
+    ALTER TABLE bs_ai_lead_gen_leads
+        ADD COLUMN IF NOT EXISTS summary TEXT,
+        ADD COLUMN IF NOT EXISTS profile_md TEXT;
+    ALTER TABLE bs_ai_lead_gen_emails ADD COLUMN IF NOT EXISTS hook_id TEXT;
+    CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_contact_channels (
+        id SERIAL PRIMARY KEY,
+        campaign_id INTEGER NOT NULL,
+        contact_id INTEGER NOT NULL,
+        lead_id INTEGER,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT,
+        channel TEXT NOT NULL,
+        value TEXT NOT NULL,
+        source TEXT,
+        source_url TEXT,
+        confidence TEXT,
+        evidence TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_ai_lead_gen_channels_campaign
+        ON bs_ai_lead_gen_contact_channels (campaign_id);
+    CREATE INDEX IF NOT EXISTS idx_bs_ai_lead_gen_channels_contact
+        ON bs_ai_lead_gen_contact_channels (contact_id);
+    CREATE TABLE IF NOT EXISTS bs_ai_lead_gen_messages (
+        id SERIAL PRIMARY KEY,
+        campaign_id INTEGER NOT NULL,
+        contact_id INTEGER NOT NULL,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT,
+        channel TEXT NOT NULL,
+        content TEXT,
+        language TEXT,
+        cta TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_bs_ai_lead_gen_messages_campaign
+        ON bs_ai_lead_gen_messages (campaign_id);
+    CREATE INDEX IF NOT EXISTS idx_bs_ai_lead_gen_messages_contact
+        ON bs_ai_lead_gen_messages (contact_id);
+
+- datetime: "2026-11-12 14:20:00"
+  remark: "subagent_definitions 增加 enable_thinking 列（思考模式覆盖：false 关闭思考，null 走 provider 默认）"
+  statements: |
+    ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS enable_thinking BOOLEAN;

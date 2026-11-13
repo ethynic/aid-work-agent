@@ -1,0 +1,8 @@
+# b2b-lead-research 依赖（挖掘侧）
+#
+# 本技能脚本仅使用 Python 标准库 + psycopg2（平台容器已内置），无必需第三方依赖。
+# 检索/爬取能力由 web-search-pro 技能承担（依赖见该技能 requirements.txt）。
+# 本技能不承担任何发送动作，不需要 SMTP 相关依赖。
+
+# 可选：邮箱格式/MX 校验增强（scripts/email_verify.py 缺库时降级为纯格式校验）
+# dnspython>=2.0

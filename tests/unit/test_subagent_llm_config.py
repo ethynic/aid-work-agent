@@ -11,7 +11,7 @@
 
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
@@ -344,3 +344,214 @@ body
 
         assert config is not None
         assert config.get_excluded_tools() == ["paddleocr_doc_parsing"]
+
+
+class TestEnableThinking:
+    """子智能体级思考模式覆盖（enable_thinking）解析/回写/运行时透传。"""
+
+    def test_parse_enable_thinking_false(self, tmp_path):
+        content = """---
+name: 测试智能体
+description: test
+enable_thinking: false
+---
+
+body
+"""
+        path = tmp_path / "SUBAGENT.md"
+        path.write_text(content, encoding="utf-8")
+
+        from src.subagents.loader import SubagentLoader
+        config = SubagentLoader().parse_subagent_md(path)
+        assert config is not None
+        assert config.enable_thinking is False
+
+    def test_parse_default_none(self, tmp_path):
+        """未声明 enable_thinking 时为 None（走 provider 默认）。"""
+        content = """---
+name: 测试智能体
+description: test
+---
+
+body
+"""
+        path = tmp_path / "SUBAGENT.md"
+        path.write_text(content, encoding="utf-8")
+
+        from src.subagents.loader import SubagentLoader
+        config = SubagentLoader().parse_subagent_md(path)
+        assert config.enable_thinking is None
+
+    def test_serialize_roundtrip(self):
+        from src.subagents.loader import SubagentLoader
+        config = SubagentConfig(name="test", description="test", enable_thinking=False)
+        md = SubagentLoader().serialize_to_subagent_md(config)
+        assert "enable_thinking: false" in md
+        assert SubagentConfig(name="test", description="test").enable_thinking is None
+
+    def test_serialize_omits_when_none(self):
+        from src.subagents.loader import SubagentLoader
+        md = SubagentLoader().serialize_to_subagent_md(SubagentConfig(name="t", description="t"))
+        assert "enable_thinking" not in md
+
+    def test_bid_assistant_subagent_md_declares_false(self):
+        """ai-bid-assistant 实际 SUBAGENT.md 声明 enable_thinking: false。"""
+        from src.subagents.loader import SubagentLoader
+        path = Path(__file__).resolve().parents[2] / "subagents" / "ai-bid-assistant" / "SUBAGENT.md"
+        config = SubagentLoader().parse_subagent_md(path)
+        assert config is not None
+        assert config.enable_thinking is False
+
+    @staticmethod
+    def _run_complete(adapter, state):
+        import asyncio
+        return asyncio.run(adapter.complete(state, "call-1", []))
+
+    def _make_state(self):
+        state = MagicMock()
+        state.execution_id = "ae_test"
+        state.system_prompt = "sys"
+        state.resources = {}
+        # messages 需含 assistant 消息，_tool_attachment_messages 的 latest 游标才能定位
+        state.messages = [
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "hi"},
+        ]
+        return state
+
+    def test_model_adapter_passes_enable_thinking(self):
+        """ModelAdapter.complete 将 enable_thinking 透传给 chat_with_tools。"""
+        from src.services.agent_runner.runtime.executor import ModelAdapter
+
+        gateway = MagicMock()
+        gateway.chat_with_tools = AsyncMock(return_value={"content": "ok"})
+        adapter = ModelAdapter(gateway, enable_thinking=False)
+        self._run_complete(adapter, self._make_state())
+        assert gateway.chat_with_tools.call_args.kwargs["enable_thinking"] is False
+
+    def test_model_adapter_default_none(self):
+        """未配置时透传 None，provider 走自身默认（行为不变）。"""
+        from src.services.agent_runner.runtime.executor import ModelAdapter
+
+        gateway = MagicMock()
+        gateway.chat_with_tools = AsyncMock(return_value={"content": "ok"})
+        adapter = ModelAdapter(gateway)
+        self._run_complete(adapter, self._make_state())
+        assert gateway.chat_with_tools.call_args.kwargs["enable_thinking"] is None
+
+    def test_factory_load_from_db_carries_enable_thinking(self):
+        """factory._load_single_from_db 从 DB 行构造 SubagentConfig 时透传 enable_thinking。"""
+        from unittest.mock import patch
+        from src.subagents.factory import AgentFactory
+
+        row = {
+            "agent_id": "bid-custom",
+            "name": "标书副本",
+            "description": "test",
+            "enable_thinking": False,
+        }
+        registry = MagicMock()
+        with patch("src.db.subagent_definition_db.SubagentDefinitionDB.get_by_agent_id", return_value=row), \
+             patch("src.prompts.prompt_resolver.prompt_resolver") as resolver:
+            resolver.resolve.return_value = "prompt content"
+            config = AgentFactory._load_single_from_db(registry, "bid-custom")
+        assert config is not None
+        assert config.enable_thinking is False
+
+    def test_factory_load_from_db_default_none(self):
+        """DB 行 enable_thinking 为 None（列默认）时配置为 None。"""
+        from unittest.mock import patch
+        from src.subagents.factory import AgentFactory
+
+        row = {"agent_id": "bid-custom", "name": "标书副本", "description": "test", "enable_thinking": None}
+        registry = MagicMock()
+        with patch("src.db.subagent_definition_db.SubagentDefinitionDB.get_by_agent_id", return_value=row), \
+             patch("src.prompts.prompt_resolver.prompt_resolver") as resolver:
+            resolver.resolve.return_value = "prompt content"
+            config = AgentFactory._load_single_from_db(registry, "bid-custom")
+        assert config is not None
+        assert config.enable_thinking is None
+
+
+class TestEnableThinkingDefinitionRequest:
+    """自定义数字员工 API 的 enable_thinking 三态语义（显式 null 清空 / 省略不动）。"""
+
+    def test_explicit_null_preserved_for_clearing(self):
+        from src.api.agent_definitions import UpdateDefinitionRequest
+
+        body = UpdateDefinitionRequest.model_validate({"enable_thinking": None})
+        result = body.model_dump(exclude_unset=True)
+        assert "enable_thinking" in result
+        assert result["enable_thinking"] is None
+
+    def test_false_value_preserved(self):
+        from src.api.agent_definitions import UpdateDefinitionRequest
+
+        body = UpdateDefinitionRequest.model_validate({"enable_thinking": False})
+        result = body.model_dump(exclude_unset=True)
+        assert result["enable_thinking"] is False
+
+    def test_omitted_field_excluded(self):
+        from src.api.agent_definitions import UpdateDefinitionRequest
+
+        body = UpdateDefinitionRequest.model_validate({"name": "xxx"})
+        result = body.model_dump(exclude_unset=True)
+        assert "enable_thinking" not in result
+
+
+class TestEnableThinkingDbUpdate:
+    """SubagentDefinitionDB.update 对 enable_thinking 的三态写入。"""
+
+    @staticmethod
+    def _run_update(kwargs):
+        """mock 掉连接与回查，捕获 UPDATE 语句与参数。"""
+        from unittest.mock import patch, MagicMock
+        from src.db import subagent_definition_db as db_mod
+
+        captured = {}
+
+        class FakeCursor:
+            def execute(self, sql, params):
+                captured["sql"] = sql
+                captured["params"] = params
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class FakeConn:
+            def cursor(self):
+                return FakeCursor()
+
+            def commit(self):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with patch.object(db_mod, "get_db_connection", return_value=FakeConn()), \
+             patch.object(db_mod.SubagentDefinitionDB, "get_by_agent_id", return_value={"agent_id": "x"}):
+            db_mod.SubagentDefinitionDB.update("x", **kwargs)
+        return captured
+
+    def test_explicit_null_writes_null(self):
+        """显式传 None 清空回 provider 默认（不被通用过滤丢弃）。"""
+        captured = self._run_update({"enable_thinking": None})
+        assert "enable_thinking = %s" in captured["sql"]
+        # 参数序：SET 值们 + WHERE agent_id
+        assert captured["params"][0] is None
+
+    def test_false_written_as_false(self):
+        captured = self._run_update({"enable_thinking": False})
+        assert "enable_thinking = %s" in captured["sql"]
+        assert False in captured["params"]
+
+    def test_omitted_field_not_in_update(self):
+        """未传入时不出现在 SET 子句（PATCH 语义）。"""
+        captured = self._run_update({"name": "新名字"})
+        assert "enable_thinking" not in captured["sql"]

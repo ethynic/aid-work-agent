@@ -23,6 +23,8 @@ tools:
 skills:
   allowed:
     - contract-generator
+# 模板匹配 + 字段回填为固定链路，思考 token 占输出大头且回传历史膨胀上下文，显式关闭
+enable_thinking: false
 context:
   max_input_tokens: 8000
   max_output_tokens: 4000
@@ -45,6 +47,8 @@ context:
 收到合同起草需求后，先调用 `use_skill` 加载 contract-generator，严格按其 SKILL.md 执行固定四步：
 
 1. **匹配模板** → 2. **运行时分析模板**（analysis.json，按模板 hash 缓存）→ 3. **单轮问全** → 4. **一次回填 + 报告验收**（fill_report.json）。
+
+第 3 步问全在 **web 对话**下必须用 `ask_user` 结构化问卷发起（text 题型、建议默认值写进题干），不要在正文中列纯文本待填清单；**渠道会话**按 ask_user 通用指南在正文列清单问全（渠道端问卷仅限 1 道选择题）。产品/服务清单等多条目内容可保留在正文/问卷 intro 中。
 
 遵守技能的「最少往返」准则与两条铁律：
 

@@ -49,7 +49,7 @@ class RunnerAlertRepository:
     def inspect_candidate(self, candidate):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
-            cursor.execute('''SELECT runner_id,attempt,status,tenant_id,profile_id,
+            cursor.execute('''SELECT runner_id,attempt,status,tenant_id,profile_id,load_class,
                 execution_started_at,clock_timestamp() AS database_now
                 FROM agent_runners WHERE runner_id=%s FOR UPDATE''', (candidate['runner_id'],))
             runner = cursor.fetchone()
@@ -143,7 +143,7 @@ class RunnerAlertRepository:
             cursor = conn.cursor()
             cursor.execute('''SELECT a.*, EXTRACT(EPOCH FROM
                 (COALESCE(a.ended_at,clock_timestamp())-a.started_at))::bigint AS elapsed_seconds,
-                r.input,r.checkpoint,r.attempt AS current_attempt FROM agent_runner_alerts a
+                r.input,r.checkpoint,r.load_class,r.attempt AS current_attempt FROM agent_runner_alerts a
                 JOIN agent_runners r ON r.runner_id=a.runner_id WHERE a.alert_id=%s''', (alert_id,))
             row = cursor.fetchone()
         if row is None:
@@ -185,6 +185,7 @@ class RunnerAlertRepository:
             'latest_model_context': context,
             'model_saved_at': saved_at,
             'context_redacted': response is not None,
+            'load_class': row.get('load_class') if same_attempt else None,
             'model_unavailable_reason': None if same_attempt else 'CURRENT_ATTEMPT_CHANGED'}}
 
     def thresholds(self):

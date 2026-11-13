@@ -50,9 +50,20 @@ export interface Lead {
   score?: number
   status?: string
   reject_reason?: string
+  summary?: string
   notes?: string
   created_at?: string
   updated_at?: string
+}
+
+export interface LeadDetail extends Lead {
+  profile_md?: string
+}
+
+export interface ContactChannel {
+  channel: string
+  value: string
+  confidence?: string
 }
 
 export interface Contact {
@@ -73,6 +84,7 @@ export interface Contact {
   phone?: string
   linkedin?: string
   notes?: string
+  channels?: ContactChannel[]
   created_at?: string
   updated_at?: string
 }
@@ -178,6 +190,17 @@ export const relevanceMap: Record<string, string> = {
   relevant: '相关', generic: '泛用', unknown: '未知',
 }
 
+export const channelMap: Record<string, string> = {
+  email: '邮箱', sms: '短信', call: '电话', whatsapp: 'WhatsApp',
+  telegram: 'Telegram', wechat: '微信', line: 'LINE', kakao: 'KakaoTalk',
+  linkedin: 'LinkedIn', x: 'X', facebook: 'Facebook', instagram: 'Instagram',
+}
+
+export function channelSummary(channels?: ContactChannel[] | null): string {
+  if (!channels || channels.length === 0) return ''
+  return channels.map(ch => `${channelMap[ch.channel] || ch.channel}: ${ch.value}`).join('\n')
+}
+
 export const intentMap: Record<string, string> = {
   interested: '有意向', info_request: '索要资料', refused: '拒绝',
   irrelevant: '无关', unclear: '不明确',
@@ -278,6 +301,9 @@ export const aiLeadGenAPI = {
 
   listLeads: (params: ListParams = {}) =>
     request<ListResponse<Lead>>('/api/ai-lead-gen/leads', params),
+
+  getLeadDetail: (leadId: number) =>
+    request<LeadDetail>(`/api/ai-lead-gen/leads/${leadId}`),
 
   listContacts: (params: ListParams = {}) =>
     request<ListResponse<Contact>>('/api/ai-lead-gen/contacts', params),

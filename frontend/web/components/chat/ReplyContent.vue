@@ -40,7 +40,7 @@ const content = computed(() => props.message.content
 const renderedContent = computed(() => renderMarkdown(content.value, resolver))
 const images = computed(() => (props.message.images || []).map(image => {
   const fileId = replyFileId(image.download_url || '')
-  return resolver && fileId ? { ...image, download_url: resolver(fileId) } : image
+  return fileId ? { ...image, download_url: resolver(fileId) } : image
 }))
 const beforeImages = computed(() => images.value.filter(image => image.placement === 'before_text'))
 const afterImages = computed(() => images.value.filter(image => !image.placement || image.placement === 'after_text'))

@@ -2,7 +2,7 @@
 #
 # 用法（叠加到目标环境主 compose，例如生产）：
 #   docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml config   # 纯语法/插值校验
-#   docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml up -d runner-api runner-worker
+#   docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml up -d runner-api runner-worker-light runner-worker-general
 #   # 微信客服使用原主 API 渠道入口，不再部署独立 KF ingress/admission。
 #
 # ⚠️ 红线：本文件只是部署配置。执行 up/down/restart/recreate 即激活 AgentRunner 接线并变更
@@ -14,12 +14,88 @@
 #   AGENT_RUNNER_UPLOADS_HOST_DIR   上传宿主目录（与目标环境主 compose 的 uploads 挂载同一路径）
 #   AGENT_RUNNER_STORAGE_HOST_DIR   产物宿主目录（与目标环境主 compose 的 storage 挂载同一路径）
 #   AGENT_RUNNER_API_CONTAINER      runner-api 容器名（默认 aid-runner-api）
-#   AGENT_RUNNER_WORKER_SLOTS       独立 worker 副本数（deploy.replicas，默认 1）
+#   AGENT_RUNNER_LIGHT_SLOTS        轻专用池 worker 副本数（默认 12，AGENT_RUNNER_ROLE=light）
+#   AGENT_RUNNER_GENERAL_SLOTS      通用池 worker 副本数（默认 8，无过滤领取）
 #   AGENT_RUNNER_WORKER_CPUS        每副本 CPU 限额（默认 1）
-#   AGENT_RUNNER_WORKER_MEMORY      每副本内存限额（各环境默认沿用原值）
+#   AGENT_RUNNER_WORKER_MEMORY      通用池每副本内存限额（默认 1g，重池 1GiB cgroup 病理钉死；
+#                                   拆双池前的旧变量名沿用为通用池限额，无 GENERAL_MEMORY 变量）
+#   AGENT_RUNNER_LIGHT_MEMORY       轻池每副本内存限额（默认 1g；A 方案 4 并发下须 2g，
+#                                   设计 §6.3：4×0.29GiB 忙时 ≈1.16GiB）
+# 轻重负载分离（设计 §4.4）：原 runner-worker 单服务拆为 light/general 双池；
+# AGENT_RUNNER_ROLE 由服务 environment 固定注入，不经变量。
+# A 方案槽内并发（Phase 7，设计 §6）：light 池 worker 进程内并发
+# AGENT_RUNNER_SLOT_CONCURRENCY（默认 4，置 1 回退现行拓扑）个执行体；
+# general 池代码强制 1 槽 1 任务（slot_capacity.effective_slot_concurrency 兜底）。
+# agent2 测试环境（Phase 7.3 重配）：1 轻（×4）+ 3 通用，轻池 cgroup 2g。
+# worker DB 池上限由代码按 slot_concurrency+2 派生（轻 4+2=6、通用 1+2=3），
+# 无 DB_POOL_MAX 配置项；监督进程独立小池 (1,2) 硬编码，扩槽无需重算连接预算
+# 之外仅按 副本×(并发+2+2) 增量核对 PG max_connections。
 # worker 容器名由 Compose 按 project/service/副本序号生成；同机多环境以 project 隔离。
 # 这些变量仅参与 compose 插值，src/config/settings.py 不读取（应用读取的 AGENT_RUNNER_* 见
 # settings.py 的 env 覆盖段，二者命名不冲突）。
+
+# AgentRunner 执行 worker 共享基座（Compose 扩展字段，顶层声明供双池 anchor 合并；
+# 不作为服务运行）。每副本 = 一监督进程（python -m supervisor）管一单并发 Worker。
+# 锚点必须定义在引用之前（YAML 别名只能指向已解析的节点）。
+x-runner-worker: &runner-worker
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: aid-agent-api:latest
+  restart: unless-stopped
+  stop_grace_period: 75s
+  cpus: ${AGENT_RUNNER_WORKER_CPUS:-1}
+  mem_limit: ${AGENT_RUNNER_WORKER_MEMORY:-1g}
+  shm_size: 512m
+  # 先起独立 API（schema 断言/接单面就绪）再起 worker；worker 自身也会 assert_schema，
+  # 该依赖只为启动顺序确定性，不构成运行时耦合（worker 只访问 DB，不调用 API）。
+  depends_on:
+    runner-api:
+      condition: service_healthy
+  env_file:
+    - .env
+  entrypoint: ["sh", "-c"]
+  command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.services.agent_runner.supervisor"]
+  volumes:
+    - .:/app
+    - ./log:/app/log
+    - ./configs:/app/configs
+    - ./skills:/app/skills
+    # 共享业务存储（产物/资源目录与主 API、runner-api 一致）
+    - ${AGENT_RUNNER_UPLOADS_HOST_DIR:-/var/www/qb3_upload/agent_uploads}:/app/uploads
+    - ${AGENT_RUNNER_STORAGE_HOST_DIR:-/var/www/qb3_upload/agent_storage}:/app/storage
+    # worker 执行 Browser 工具（Playwright/Chromium），/tmp 权限兜底必须有
+    - type: tmpfs
+      target: /tmp
+      tmpfs:
+        mode: 1777
+        size: 200m
+    # TMPDIR 内存盘：PDF/PPT/Office/视频转码的主要执行者，2g 覆盖峰值
+    # 注意：本机引擎（docker 24.0.2 + compose 2.24.5）下 tmpfs mode 不可靠——
+    # 挂载点在镜像内已存在时按镜像目录模式生效、mode 数字值被按八进制曲解，
+    # 实测落 755 root:root 致 gosu appuser 写不进自己的 TMPDIR（2026-11-12
+    # Playwright EACCES 事故）。权威兜底是 entrypoint 的 fix_tmp.sh，勿依赖本 mode。
+    - type: tmpfs
+      target: /home/appuser/tmp
+      tmpfs:
+        mode: 1777
+        size: 2g
+  networks:
+    - ${AGENT_RUNNER_NETWORK:-aid-network}
+  # worker 无 HTTP/心跳文件端点（background_runner 的 .bg_runner_alive 机制不在此进程），
+  # 只能用 pgrep 进程判活（镜像已装 procps）。[.] 写法防止 healthcheck 自身命令行被
+  # pgrep -f 误匹配。仅证明进程存活，不证明 lease/执行健康——局限见部署清单。
+  healthcheck:
+    test: ["CMD-SHELL", "pgrep -f 'src[.]services[.]agent_runner[.]worker' >/dev/null"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 60s
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
 
 services:
   # AgentRunner 独立 API（bootstrap 入口）：接单/事件/控制 HTTP 面，不执行任务。
@@ -77,6 +153,7 @@ services:
           mode: 1777
           size: 200m
       # TMPDIR 内存盘（本服务不执行任务，仅极小临时文件）
+      # tmpfs mode 在本机引擎不可靠（详见上方 runner-worker 注释），权威兜底是 fix_tmp.sh
       - type: tmpfs
         target: /home/appuser/tmp
         tmpfs:
@@ -98,70 +175,38 @@ services:
         max-file: "3"
 
   # AgentRunner 执行 worker：认领/心跳/执行/恢复，全部经共享数据库，不监听 HTTP。
-  # 每副本限额可配置；正式槽数与限额须按 Phase 4 实测定值。
-  runner-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: aid-agent-api:latest
-    restart: unless-stopped
-    stop_grace_period: 75s
+  # 轻重负载分离（设计 §4.1 非对称双池）：light 池领取时过滤 load_class='light'
+  # 绝不领重任务；general 池无过滤领取（重任务仅在此跑，轻低谷时可支援轻任务）。
+  # 双池共享配置收敛到顶层 anchor x-runner-worker；environment 因 AGENT_RUNNER_ROLE
+  # 不同各自全量声明（YAML merge 对列表整体替换，无法部分合并）。
+  # 每副本限额可配置；正式槽数与限额须按实测校准。
+  # 轻专用池：保底轻任务容量，对重任务突发免疫（heavy 行对此池不可见）；
+  # 槽内并发 N=4（A 方案 Phase 7），cgroup 默认 1g、agent2 按重配升至 2g
+  runner-worker-light:
+    <<: *runner-worker
+    mem_limit: ${AGENT_RUNNER_LIGHT_MEMORY:-1g}
     deploy:
-      replicas: ${AGENT_RUNNER_WORKER_SLOTS:-1}
-    cpus: ${AGENT_RUNNER_WORKER_CPUS:-1}
-    mem_limit: ${AGENT_RUNNER_WORKER_MEMORY:-6g}
-    shm_size: 512m
-    # 先起独立 API（schema 断言/接单面就绪）再起 worker；worker 自身也会 assert_schema，
-    # 该依赖只为启动顺序确定性，不构成运行时耦合（worker 只访问 DB，不调用 API）。
-    depends_on:
-      runner-api:
-        condition: service_healthy
-    env_file:
-      - .env
+      replicas: ${AGENT_RUNNER_LIGHT_SLOTS:-12}
     environment:
       - SERVER_MODE=agent-runner-worker
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - AGENT_RUNNER_API_URL=http://runner-api:8091
       - AGENT_RUNNER_STORAGE_ROOT=/app/storage
       - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
-    entrypoint: ["sh", "-c"]
-    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.services.agent_runner.supervisor"]
-    volumes:
-      - .:/app
-      - ./log:/app/log
-      - ./configs:/app/configs
-      - ./skills:/app/skills
-      # 共享业务存储（产物/资源目录与主 API、runner-api 一致）
-      - ${AGENT_RUNNER_UPLOADS_HOST_DIR:-/var/www/qb3_upload/agent_uploads}:/app/uploads
-      - ${AGENT_RUNNER_STORAGE_HOST_DIR:-/var/www/qb3_upload/agent_storage}:/app/storage
-      # worker 执行 Browser 工具（Playwright/Chromium），/tmp 权限兜底必须有
-      - type: tmpfs
-        target: /tmp
-        tmpfs:
-          mode: 1777
-          size: 200m
-      # TMPDIR 内存盘：PDF/PPT/Office/视频转码的主要执行者，2g 覆盖峰值
-      - type: tmpfs
-        target: /home/appuser/tmp
-        tmpfs:
-          mode: 1777
-          size: 2g
-    networks:
-      - ${AGENT_RUNNER_NETWORK:-aid-network}
-    # worker 无 HTTP/心跳文件端点（background_runner 的 .bg_runner_alive 机制不在此进程），
-    # 只能用 pgrep 进程判活（镜像已装 procps）。[.] 写法防止 healthcheck 自身命令行被
-    # pgrep -f 误匹配。仅证明进程存活，不证明 lease/执行健康——局限见部署清单。
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'src[.]services[.]agent_runner[.]worker' >/dev/null"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+      - AGENT_RUNNER_ROLE=light
+      - AGENT_RUNNER_SLOT_CONCURRENCY=${AGENT_RUNNER_SLOT_CONCURRENCY:-4}
+
+  # 通用池：无过滤领取（缺省角色 general），重任务唯一执行池
+  runner-worker-general:
+    <<: *runner-worker
+    deploy:
+      replicas: ${AGENT_RUNNER_GENERAL_SLOTS:-8}
+    environment:
+      - SERVER_MODE=agent-runner-worker
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - AGENT_RUNNER_API_URL=http://runner-api:8091
+      - AGENT_RUNNER_STORAGE_ROOT=/app/storage
+      - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
 
   # 独立扫描进程：只读 Runner 状态，写告警/通知事件/扫描状态；异常退出由 restart policy 拉起。
   runner-monitor:

@@ -38,11 +38,13 @@ class RunnerRepository:
             from src.notifications.repository import NotificationRepository
             NotificationRepository.assert_schema_in_tx(cursor)
 
-    def submit(self, principal, request, profile_fingerprint, *, resolved_profile_id=None, execution_context=None):
+    def submit(self, principal, request, profile_fingerprint, *, resolved_profile_id=None, execution_context=None,
+               load_class=None):
         with self.connection_factory() as conn:
             try:
                 row,created=self.submit_in_tx(conn.cursor(),principal,request,profile_fingerprint,
-                    resolved_profile_id=resolved_profile_id,execution_context=execution_context)
+                    resolved_profile_id=resolved_profile_id,execution_context=execution_context,
+                    load_class=load_class)
             except psycopg2.errors.UniqueViolation as error:
                 # 仅自愈 queue_order 序列滞后；幂等键等其余唯一冲突照常抛出，
                 # 幂等/所有权语义不变。
@@ -57,12 +59,13 @@ class RunnerRepository:
                                'realigned sequence to {} scope={} actor={}', realigned,
                                principal.scope_key, principal.actor_id)
                 row,created=self.submit_in_tx(conn.cursor(),principal,request,profile_fingerprint,
-                    resolved_profile_id=resolved_profile_id,execution_context=execution_context)
+                    resolved_profile_id=resolved_profile_id,execution_context=execution_context,
+                    load_class=load_class)
             conn.commit()
             return row,created
 
     def submit_in_tx(self, cursor, principal, request, profile_fingerprint, *, resolved_profile_id=None,
-                     execution_context=None, initial_checkpoint=None):
+                     execution_context=None, initial_checkpoint=None, load_class=None):
         identity=principal.identity
         runner_id='runner_'+uuid.uuid4().hex
         if identity.source=='scheduled':
@@ -82,15 +85,15 @@ class RunnerRepository:
         cursor.execute("""INSERT INTO agent_runners
             (runner_id, tenant_id, scope_key, session_kind, session_id, actor_kind, actor_id, user_id,
              service_id, source, client_request_id, input_digest, input, profile_id, profile_fingerprint,
-             record_id, public_snapshot, checkpoint)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s::jsonb,%s::jsonb)
+             record_id, public_snapshot, checkpoint, load_class)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s::jsonb,%s::jsonb,%s)
             ON CONFLICT (scope_key, actor_kind, actor_id, source, client_request_id) DO NOTHING
             RETURNING *""", (runner_id, identity.tenant_id, principal.scope_key,
             identity.session_kind, identity.session_id, principal.actor_kind, principal.actor_id,
             identity.user_id, principal.service_id, identity.source, request.client_request_id,
             request.digest(), json.dumps(request.intent(), ensure_ascii=False), resolved_profile_id or request.profile_id,
             profile_fingerprint, "record_" + uuid.uuid4().hex, capped_snapshot_dumps(snapshot),
-            capped_checkpoint_dumps(checkpoint)))
+            capped_checkpoint_dumps(checkpoint), load_class or 'light'))
         row = cursor.fetchone()
         created = row is not None
         if row is None:

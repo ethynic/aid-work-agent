@@ -223,6 +223,7 @@ async def get_subagent_detail(request: Request, agent_id: str):
             "reply_style": config.reply_style,
             "llm_provider": config.llm_provider,
             "llm_model_codes": config.llm_model_codes,
+            "enable_thinking": config.enable_thinking,
             "recap": config.recap,
             "chat_toolbar": config.chat_toolbar,
             "upload_accept": config.upload_accept,

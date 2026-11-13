@@ -38,6 +38,9 @@
         <template #score="{ row }">
           <span class="tabular-nums" :class="scoreClass(row.score)">{{ row.score ?? '-' }}</span>
         </template>
+        <template #summary="{ row }">
+          <span class="text-xs truncate block" :title="row.summary">{{ row.summary || '-' }}</span>
+        </template>
         <template #status="{ row }">
           <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium" :class="leadStatusBadge(row.status).class">
             {{ leadStatusBadge(row.status).label }}
@@ -47,6 +50,7 @@
         <template #created_at="{ row }">{{ formatDate(row.created_at) }}</template>
         <template #actions="{ row }">
           <div class="flex items-center justify-end gap-1">
+            <BaseButton intent="ghost" size="sm" @click="openProfile(row as Lead)">综述</BaseButton>
             <BaseButton intent="ghost" size="sm" @click="openDetail(row)">详情</BaseButton>
           </div>
         </template>
@@ -74,6 +78,19 @@
       v-model:page-size="pageSize"
       @change="refresh"
     />
+
+    <!-- Profile Modal -->
+    <BaseModal v-model="profileVisible" :title="profileLead?.company_name ? `${profileLead.company_name} · 企业业务综述` : '企业业务综述'" size="lg">
+      <div v-if="profileLoading" class="flex items-center justify-center py-12 text-sm text-muted">
+        <svg class="w-5 h-5 animate-spin mr-2" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+        加载中...
+      </div>
+      <p v-else-if="profileMd" class="text-sm text-default whitespace-pre-wrap break-words leading-relaxed">{{ profileMd }}</p>
+      <div v-else class="empty-state">暂无业务综述</div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="profileVisible = false">关闭</BaseButton>
+      </template>
+    </BaseModal>
 
     <!-- Detail Side Panel -->
     <Teleport to="body">
@@ -140,6 +157,7 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import BasePagination from '@/components/ui/BasePagination.vue'
+import BaseModal from '@/components/ui/BaseModal.vue'
 import { aiLeadGenAPI, leadStatusMap, leadStatusBadge, type Lead, type CampaignOption } from '@/api/aiLeadGen'
 import { useLeadGenList } from './useLeadGenList'
 import { formatShortDateTime as formatDate } from '@/utils/date'
@@ -153,6 +171,7 @@ const columns = [
   { key: 'industry', label: '行业', width: '110px' },
   { key: 'source', label: '来源', width: '110px' },
   { key: 'score', label: '评分', width: '70px' },
+  { key: 'summary', label: '业务综述' },
   { key: 'status', label: '状态', width: '100px' },
   { key: 'created_at', label: '创建时间', width: '150px' },
   { key: 'actions', label: '操作', width: '90px' },
@@ -192,6 +211,30 @@ function resetFilters() {
 
 function openDetail(row: any) {
   selected.value = row as Lead
+}
+
+const profileVisible = ref(false)
+const profileLoading = ref(false)
+const profileLead = ref<Lead | null>(null)
+const profileMd = ref('')
+
+async function openProfile(row: Lead) {
+  profileLead.value = row
+  profileVisible.value = true
+  profileLoading.value = true
+  profileMd.value = ''
+  try {
+    const detail = await aiLeadGenAPI.getLeadDetail(row.id)
+    profileMd.value = detail.profile_md || ''
+    if (detail.summary && profileLead.value) {
+      profileLead.value = { ...profileLead.value, summary: detail.summary }
+    }
+  } catch (e: any) {
+    console.error('加载业务综述失败:', e)
+    profileMd.value = ''
+  } finally {
+    profileLoading.value = false
+  }
 }
 
 onMounted(async () => {

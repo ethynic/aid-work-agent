@@ -16,7 +16,7 @@
     </p>
     <p v-if="row.usage?.updated_at" class="mt-1 text-xs text-muted">积分更新于 {{ dateTime(row.usage.updated_at) }}</p>
     <div v-if="!terminal" class="mt-2 flex flex-wrap gap-2">
-      <BaseButton v-if="canResume" size="sm" :disabled="disabled" @click="$emit('control', 'resume')">{{ row.status === 'paused' ? '继续任务' : '立即继续' }}</BaseButton>
+      <BaseButton v-if="canResume" size="sm" :disabled="disabled" @click="$emit('control', 'resume')">{{ row.status === 'paused' || row.status === 'interrupted' ? '继续任务' : '立即继续' }}</BaseButton>
       <BaseButton v-if="row.status === 'running' || row.status === 'waiting'" size="sm" intent="secondary" :disabled="disabled || row.pause_requested" @click="$emit('control', 'pause')">暂停</BaseButton>
       <BaseButton size="sm" intent="danger" :disabled="disabled" @click="$emit('control', 'cancel')">停止任务</BaseButton>
     </div>
@@ -26,16 +26,15 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import BaseButton from '../ui/BaseButton.vue'
-import { runnerTerminal, runnerWaitLeaf, type RunnerView } from '@/api/runner'
+import { runnerResumable, runnerTerminal, runnerWaitLeaf, type RunnerView } from '@/api/runner'
 
 const props = defineProps<{ row: RunnerView; busy: boolean }>()
 defineEmits<{ control: [action: 'pause' | 'resume' | 'cancel'] }>()
 const terminal = computed(() => runnerTerminal(props.row.status))
 const wait = computed(() => runnerWaitLeaf(props.row.snapshot.waiting))
 const timer = computed(() => wait.value?.kind === 'timer' ? wait.value : undefined)
-const canResume = computed(() => !props.row.local_recovery && (props.row.status === 'paused' && !wait.value
-  || wait.value?.kind === 'continuous_guard' && !!wait.value.wait_id && !!wait.value.target_execution_id && ['waiting','paused'].includes(props.row.status)
-  || !!timer.value?.wait_id && !!timer.value.target_execution_id && ['waiting','paused'].includes(props.row.status)))
+// 与 sendMessage/播放按钮同一恢复判定（含发版中断的 verification 等待）
+const canResume = computed(() => !props.row.local_recovery && runnerResumable(props.row))
 const disabled = computed(() => props.busy || props.row.cancel_requested || !!props.row.resume_requested)
 const title = computed(() => props.row.cancel_requested && !terminal.value ? '正在停止任务'
   : props.row.pause_requested && props.row.status !== 'paused' ? '正在暂停任务'

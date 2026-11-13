@@ -82,6 +82,7 @@ services:
       - /var/www/qb3_upload/agent_storage:/app/storage
     tmpfs:
       - /tmp:size=200m,mode=1777
+      # tmpfs mode 在本机引擎不可靠（详见下方 runner-worker-sim 注释），权威兜底是 fix_tmp.sh
       - /home/appuser/tmp:size=128m,mode=1777
     networks:
       - aid-prod-net
@@ -133,7 +134,12 @@ services:
       - /var/www/qb3_upload/agent_storage:/app/storage
     tmpfs:
       - /tmp:size=200m,mode=1777     # worker 执行 Browser 工具（Playwright/Chromium）需要可写 /tmp
-      - /home/appuser/tmp:size=2g,mode=1777   # TMPDIR 内存盘：转换/渲染类任务主执行者
+      # TMPDIR 内存盘：转换/渲染类任务主执行者。注意：tmpfs mode 在本机引擎
+      # （docker 24.0.2 + compose 2.24.5）不可靠——挂载点在镜像内已存在时按镜像
+      # 目录模式生效、mode 数字值被按八进制曲解，实测落 755 root:root 致 gosu
+      # appuser 写不进自己的 TMPDIR（2026-11-12 Playwright EACCES 事故）。
+      # 权威兜底是 entrypoint 的 fix_tmp.sh，勿依赖本 mode。
+      - /home/appuser/tmp:size=2g,mode=1777
     networks:
       - aid-prod-net
     # worker 无 HTTP/心跳端点，只能 pgrep 进程判活（[.] 防自匹配）；

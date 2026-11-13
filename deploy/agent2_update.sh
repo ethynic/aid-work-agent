@@ -239,10 +239,13 @@ echo "[6] 重启后端服务..."
 COMPOSE_FILES=(-f docker-compose.test.yml)
 if [ -f docker-compose.agent-runner.yml ]; then
     COMPOSE_FILES+=(-f docker-compose.agent-runner.yml)
-    export AGENT_RUNNER_NETWORK=aid-network2
-    export AGENT_RUNNER_UPLOADS_HOST_DIR=/var/www/qb3_upload/agent2_uploads
-    export AGENT_RUNNER_STORAGE_HOST_DIR=/var/www/qb3_upload/agent2_storage
-    export AGENT_RUNNER_WORKER_MEMORY="${AGENT_RUNNER_WORKER_MEMORY:-1g}"
+    # AgentRunner overlay 的插值变量（网络/宿主目录/槽位/内存/DB 池）一律以服务器
+    # .env 为唯一来源（compose up 会重读 .env，无需额外操作），脚本不再 export 覆盖。
+    # agent2 应配置：AGENT_RUNNER_NETWORK=aid-network2、
+    #   AGENT_RUNNER_UPLOADS_HOST_DIR=/var/www/qb3_upload/agent2_uploads、
+    #   AGENT_RUNNER_STORAGE_HOST_DIR=/var/www/qb3_upload/agent2_storage、
+    #   AGENT_RUNNER_LIGHT_SLOTS=1、AGENT_RUNNER_GENERAL_SLOTS=3、
+    #   AGENT_RUNNER_LIGHT_MEMORY=2g、AGENT_RUNNER_DB_POOL_MAX=6
     echo "    叠加 AgentRunner overlay（runner-api/runner-worker/runner-monitor）"
     # 互斥预检：用本环境主 API 容器的 compose project 标签锚定当前 project 名
     # （首次部署容器不存在时退回目录名，与 compose 默认 project 命名一致）
@@ -273,14 +276,24 @@ for c in aid-runner-api; do
         || echo "  跳过 $c（不存在）"
 done
 
-# 8. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
-#    Dockerfile 的 chmod 不生效，entrypoint 已处理；此处作为运行时兜底）
-echo "[8] 修复容器 /tmp 权限..."
-if ! docker exec -u root aid-agent-api2 chmod 1777 /tmp 2>/dev/null; then
-  echo "  chmod 失败，尝试 mount remount..."
-  docker exec -u root aid-agent-api2 mount -o remount,mode=1777 /tmp 2>/dev/null || \
-      echo "  警告：两种方式均失败，appuser 可能无法写入 /tmp"
-fi
+# 8. 修复容器内 /tmp 与 /home/appuser/tmp 权限（运行时兜底）。
+#    /tmp 是 tmpfs 且模式选项在本机引擎不可靠，Dockerfile 的 chmod 不生效，
+#    正常路径由 entrypoint fix_tmp.sh 修复；此处兜底「代码已更新但镜像未重建」
+#    的容器。/home/appuser/tmp 是 worker 的 TMPDIR：compose 挂 tmpfs 后按镜像
+#    目录模式落 755 root:root，gosu appuser 写不进会使 Playwright 渲染等报
+#    EACCES（2026-11-12 事故），必须恢复 appuser 属主。
+echo "[8] 修复容器 /tmp 与 /home/appuser/tmp 权限..."
+docker exec -u root aid-agent-api2 chmod 1777 /tmp 2>/dev/null \
+    || echo "  警告：aid-agent-api2 /tmp chmod 失败"
+for c in $(docker ps --format '{{.Names}}' | grep -E '^agent2-runner-worker-(general|light)-|^aid-runner-api$'); do
+    if docker exec -u root "$c" sh -c "chmod 1777 /tmp && chown appuser:appgroup /home/appuser/tmp" 2>/dev/null; then
+        # 以 appuser 身份自检可写性，失败时输出可 grep 的警告
+        docker exec -u 1000 "$c" sh -c "touch /home/appuser/tmp/.perm_probe && rm -f /home/appuser/tmp/.perm_probe" 2>/dev/null \
+            || echo "  警告：$c appuser 无法写 /home/appuser/tmp，请核对镜像内 fix_tmp.sh 版本"
+    else
+        echo "  警告：$c 权限修复失败（容器不存在或 exec 异常）"
+    fi
+done
 docker exec -u root aid-agent-api2 ls -ld /tmp || true
 
 # 9. 等待前端编译完成

@@ -7,14 +7,27 @@ from src.models.user import User
 
 from src.core.agent_engine.context import render_prompt
 class PromptSources:
+    # 对话来源渠道名映射（source 命名与渠道系统一致）
+    _CHANNEL_LABELS = {
+        'wecom': '企业微信应用',
+        'wecom_kf': '企业微信客服',
+        'dingtalk': '钉钉',
+        'feishu': '飞书',
+    }
+
     def __init__(self, *, mode, subagent_config, tenant_id, skill_registry,
                  style_manager, prompt_manager, tool_controls, subagent_registry,
-                 tools, available_subagents, usage_guides):
+                 tools, available_subagents, usage_guides,
+                 source='chat', session_kind='web'):
         self.mode, self.subagent_config, self._init_tenant_id = mode, subagent_config, tenant_id
         self.skill_registry, self.style_manager, self.prompt_manager = skill_registry, style_manager, prompt_manager
         self._tool_controls, self.subagent_registry = tool_controls, subagent_registry
         self._get_tools, self._get_available_subagents = tools, available_subagents
         self._collect_tool_usage_guides = usage_guides
+        # 对话执行来源（identity.source/session_kind），供系统提示词注入来源标识，
+        # 让模型按 web/渠道分支提问形式（ask_user 适用范围等）
+        self._source = source or 'chat'
+        self._session_kind = session_kind or 'web'
     def _build_base_system_prompt(
         self,
         include_delegation: bool = True,
@@ -121,6 +134,7 @@ class PromptSources:
                 "long_term_memory": long_term_memory,
                 "user_info_section": user_info_section,
                 "reply_style_section": reply_style_section,
+                "source_section": self._source_section(),
             }
         else:
             template_name = "subagent_base.md"
@@ -132,6 +146,7 @@ class PromptSources:
                 "long_term_memory": long_term_memory,
                 "user_info_section": user_info_section,
                 "reply_style_section": reply_style_section,
+                "source_section": self._source_section(),
             }
 
         return render_prompt(self.prompt_manager.load_template(template_name), variables)
@@ -228,6 +243,15 @@ class PromptSources:
         if extra_system_prompt:
             base_prompt = base_prompt + "\n" + extra_system_prompt
         return base_prompt
+
+    def _source_section(self) -> str:
+        """注入对话来源标识：模型据此分支提问形式（ask_user 适用范围按来源区分）。"""
+        if self._session_kind == 'channel':
+            label = self._CHANNEL_LABELS.get(self._source, self._source)
+            return ("\n\n## 当前对话来源\n\n渠道会话：" f"{label}（{self._source}）。"
+                    "提问形式须匹配来源：ask_user 仅限 1 道选择题，"
+                    "多题或填空请改用 clarify 或在正文中列清单提问。")
+        return "\n\n## 当前对话来源\n\nweb 网页对话。"
 
     def _resolve_db_subagent_prompt(self) -> str:
         """DB 子智能体的 system_prompt 实时渲染：模板 + sections 变量"""

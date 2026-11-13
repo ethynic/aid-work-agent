@@ -166,6 +166,7 @@ async def test_source_outage_defers_original_continuation_instead_of_requiring_m
     _, row = interrupted
     worker = object.__new__(RunnerWorker)
     worker.repository = SimpleNamespace(connection_factory=object())
+    worker.role = 'general'
     worker._continuous_scan_after = 0
     worker.tool_recovery = SimpleNamespace()
     worker.sources = SimpleNamespace(prepare_execution=AsyncMock(side_effect=SourceUnavailable('temporary')))
@@ -185,6 +186,7 @@ async def test_timer_source_outage_keeps_a_retry_path_instead_of_clearing_its_de
     worker = object.__new__(RunnerWorker)
     worker.config = SimpleNamespace(durable_sleep_enabled=True)
     worker.repository = SimpleNamespace(connection_factory=object())
+    worker.role = 'general'
     worker._timer_scan_after = 0
     worker.tool_recovery = SimpleNamespace()
     worker.sources = SimpleNamespace(prepare_execution=AsyncMock(side_effect=SourceUnavailable('temporary')))

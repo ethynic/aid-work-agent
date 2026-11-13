@@ -22,8 +22,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-aid_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Aid_2026}
       # 生产优化参数
-      # 最大连接数（50用户场景，80足够；保留余量给后台管理/迁移等）
-      POSTGRES_MAX_CONNECTIONS: 80
+      # 最大连接数（轻重负载分离双池后上调：20 worker 容器×(DB_POOL_MAX 3+2)≈100
+      # + 非 Runner ~20 → 120，PG 多耗 ~300MiB；见 runner-capacity 设计 §4.4）
+      POSTGRES_MAX_CONNECTIONS: 120
       # 共享缓冲区（16G宿主机推荐1GB，约1/16）
       POSTGRES_SHARED_BUFFERS: 1GB
       # 有效缓存大小（告知PG可用OS缓存大小；宿主机 buff/cache 约9G）
@@ -57,7 +58,7 @@ services:
     command:
       - "postgres"
       - "-c"
-      - "max_connections=80"
+      - "max_connections=120"
       - "-c"
       - "shared_buffers=1GB"
       - "-c"

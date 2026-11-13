@@ -47,6 +47,7 @@ class SubagentDefinitionDB:
         chat_toolbar: Optional[list] = None,
         upload_accept: Optional[str] = None,
         recap: Optional[dict] = None,
+        enable_thinking: Optional[bool] = None,
         created_by: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         row_id = str(uuid.uuid4())
@@ -60,14 +61,14 @@ class SubagentDefinitionDB:
                         triggers, tools, skills, context,
                         delegatable_to, allow_delegation,
                         llm_provider, reply_style, business_pages, knowledge_sources,
-                        chat_toolbar, upload_accept, recap,
+                        chat_toolbar, upload_accept, recap, enable_thinking,
                         created_by, updated_by
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s,
                         %s, %s,
                         %s, %s, %s, %s,
-                        %s, %s, %s,
+                        %s, %s, %s, %s,
                         %s, %s
                     )
                 """, (
@@ -81,6 +82,7 @@ class SubagentDefinitionDB:
                     _json(chat_toolbar or []),
                     upload_accept,
                     _json(recap or {}),
+                    enable_thinking,
                     created_by, created_by,
                 ))
                 conn.commit()
@@ -188,6 +190,11 @@ class SubagentDefinitionDB:
         for k, v in kwargs.items():
             if k in allowed and v is not None:
                 updates[k] = _json(v) if k in jsonb_fields else v
+
+        # enable_thinking 三态：None=provider 默认。单独处理以支持显式传 null 清空
+        # （通用循环的 v is not None 会丢掉 None），False 正常走通用分支也可，但统一在此收口
+        if "enable_thinking" in kwargs:
+            updates["enable_thinking"] = kwargs["enable_thinking"]
 
         # 合并 llm 配置：如果调用方传了 llm_provider 或 llm_model_codes，写 JSONB
         # 注意：只传其中一个时，另一个保持空（不读旧值合并），因为业务上两者通常一起设置

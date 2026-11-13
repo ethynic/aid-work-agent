@@ -1101,6 +1101,7 @@ CREATE TABLE IF NOT EXISTS subagent_definitions (
     chat_toolbar JSONB DEFAULT '[]',
     upload_accept TEXT,
     recap JSONB DEFAULT '{}',
+    enable_thinking BOOLEAN,
     PRIMARY KEY (id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_subagent_def_agent_id ON subagent_definitions USING btree (agent_id);
@@ -3012,6 +3013,7 @@ CREATE TABLE IF NOT EXISTS agent_runners (
     view_revision BIGINT NOT NULL DEFAULT 0,
     control_revision BIGINT NOT NULL DEFAULT 0,
     cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    load_class TEXT NOT NULL DEFAULT 'light' CHECK (load_class IN ('light','heavy')),
     public_snapshot JSONB NOT NULL DEFAULT '{}',
     result JSONB,
     record_id TEXT UNIQUE NOT NULL,

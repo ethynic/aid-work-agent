@@ -19,6 +19,8 @@ class WorkerHarness:
             enabled=True, concurrency=concurrency, poll_seconds=0.001,
             heartbeat_seconds=0.005, lease_seconds=30,
         )
+        # 绕过 __init__ 构造，run() 依赖的槽内并发与既有语义字段需手动补齐
+        self.worker.slot_concurrency = concurrency
         self.worker.stopping = asyncio.Event()
         self.worker.jobs = {}
         self.worker.sources = None
@@ -94,6 +96,54 @@ async def test_heartbeat_stops_owned_io_with_the_actual_public_cause(failure, re
     with pytest.raises(asyncio.CancelledError): await owner
     assert reason in control.interruption_reason
     assert str(failure) not in control.interruption_reason, 'raw exceptions must not become public details'
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_lock_contention_is_transient_and_never_interrupts():
+    """P0②：55P03 行锁竞争在租约余量内按拍重试，不得打断运行中任务。"""
+    harness = WorkerHarness([])
+    calls = {'n': 0}
+    def contended(attempt, lease_seconds):
+        calls['n'] += 1
+        if calls['n'] <= 3:
+            raise psycopg2.errors.LockNotAvailable('fixture row lock contention')
+        return {'closed': False, 'cancel_requested': False, 'pause_requested': False}
+    harness.worker.executions.heartbeat = contended
+    interrupted = []
+    control = SimpleNamespace(interrupt=lambda: interrupted.append('stop'))
+    owner = asyncio.create_task(asyncio.Event().wait())
+    heartbeat = asyncio.create_task(harness.worker._heartbeat(
+        Attempt('original', 'worker', 1), control, owner))
+    try:
+        await asyncio.sleep(0.08)
+    finally:
+        heartbeat.cancel()
+        await asyncio.gather(heartbeat, return_exceptions=True)
+    assert calls['n'] >= 4, 'retry must continue past contention beats'
+    assert interrupted == [], 'lock contention must not interrupt the running task'
+    assert not owner.done(), 'owner task must survive transient contention'
+    assert not hasattr(control, 'interruption_reason')
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_contention_beyond_lease_margin_stops_the_task():
+    """连续锁竞争耗尽租约余量后，按存储不可用原路径停止推进并保留进度。"""
+    harness = WorkerHarness([])
+    # 容忍预算 = lease//heartbeat - 1 = 3；第 4 拍竞争即触发停止。
+    harness.worker.config.lease_seconds = 0.2
+    harness.worker.config.heartbeat_seconds = 0.05
+    def contended(attempt, lease_seconds):
+        raise psycopg2.errors.LockNotAvailable('fixture row lock contention')
+    harness.worker.executions.heartbeat = contended
+    interrupted = []
+    control = SimpleNamespace(interrupt=lambda: interrupted.append('stop'))
+    owner = asyncio.create_task(asyncio.Event().wait())
+    await harness.worker._heartbeat(Attempt('original', 'worker', 1), control, owner)
+    with pytest.raises(asyncio.CancelledError):
+        await owner
+    assert interrupted == ['stop']
+    assert '心跳存储暂不可用' in control.interruption_reason
+    assert 'fixture' not in control.interruption_reason
 
 
 def test_explicit_service_stop_is_distinguishable_from_lease_or_storage_failure():

@@ -119,17 +119,26 @@ def _collect_runner_section() -> "tuple[Dict[str, Any], List[str]]":
     section: Dict[str, Any] = {}
     with get_db_connection() as cur:
         cur.execute(
-            "SELECT status, COUNT(*) AS cnt FROM agent_runners "
-            "WHERE status = ANY(%s) GROUP BY status",
+            "SELECT status, load_class, COUNT(*) AS cnt FROM agent_runners "
+            "WHERE status = ANY(%s) GROUP BY status, load_class",
             (list(ACTIVE_STATUSES),),
         )
-        counts = {r["status"]: r["cnt"] for r in cur.fetchall()}
-        section["queued"] = counts.get("queued", 0)
-        section["running"] = counts.get("running", 0)
-        section["finalizing"] = counts.get("finalizing", 0)
+        counts = {}
+        for r in cur.fetchall():
+            key = r["status"] + ("_light" if (r["load_class"] or "light") == "light" else "_heavy")
+            counts[key] = counts.get(key, 0) + r["cnt"]
+        section["queued"] = counts.get("queued_light", 0) + counts.get("queued_heavy", 0)
+        section["running"] = counts.get("running_light", 0) + counts.get("running_heavy", 0)
+        section["finalizing"] = counts.get("finalizing_light", 0) + counts.get("finalizing_heavy", 0)
         section["waiting"] = counts.get("waiting", 0)
         section["paused"] = counts.get("paused", 0)
         section["interrupted"] = counts.get("interrupted", 0)
+        # 池占用按 load_class 近似：轻池只领 light，通用池两者都能兜领，
+        # light 行可能溢出到通用槽（判型分布 ≠ 精确槽位归属，claim 未记录领取池）
+        section["running_light"] = counts.get("running_light", 0)
+        section["finalizing_light"] = counts.get("finalizing_light", 0)
+        section["running_heavy"] = counts.get("running_heavy", 0)
+        section["finalizing_heavy"] = counts.get("finalizing_heavy", 0)
 
         cur.execute(
             "SELECT COALESCE(MAX(EXTRACT(EPOCH FROM (clock_timestamp()-execution_started_at))"
@@ -179,12 +188,24 @@ def _collect_runner_section() -> "tuple[Dict[str, Any], List[str]]":
         cur.execute("SELECT COUNT(*) AS cnt FROM agent_runner_alerts WHERE ended_at IS NULL")
         section["active_alerts"] = int(cur.fetchone()["cnt"])
 
-    # 总槽位 = runner-worker 副本数（与 worker 容器共用同一 .env 的部署配置口径，默认 1）；
-    # 配置值非容器实况（副本崩溃不扣减），仅作容量对照展示
-    try:
-        section["worker_slots"] = max(1, int(os.environ.get("AGENT_RUNNER_WORKER_SLOTS", "1")))
-    except ValueError:
-        section["worker_slots"] = 1
+    # 槽位 = 双池部署配置口径（与 worker 容器共用同一 .env）；
+    # 配置值非容器实况（副本崩溃不扣减），仅作容量对照展示。
+    # 轻槽每槽并发（AGENT_RUNNER_SLOT_CONCURRENCY，槽内协程 A 方案）未配置时为 4，
+    # 与 settings.py slot_concurrency 默认值、compose worker 插值默认值保持一致
+    # （此前默认 1 与后两者不一致，导致健康页轻槽并发显示失真），
+    # 容量自动按执行体换算（槽位 × 并发）
+    def _env_int(name: str, default: int) -> int:
+        try:
+            return int(os.environ.get(name, str(default)))
+        except ValueError:
+            return default
+
+    light_slots = _env_int("AGENT_RUNNER_LIGHT_SLOTS", 12)
+    general_slots = _env_int("AGENT_RUNNER_GENERAL_SLOTS", 8)
+    section["light_slots"] = light_slots
+    section["general_slots"] = general_slots
+    section["light_concurrency"] = _env_int("AGENT_RUNNER_SLOT_CONCURRENCY", 4)
+    section["worker_slots"] = max(1, light_slots + general_slots)
 
     return section, fingerprint
 

@@ -265,6 +265,7 @@ class AgentFactory:
             allow_delegation=row.get("allow_delegation", True),
             llm_provider=_provider,
             llm_model_codes=_model_codes,
+            enable_thinking=row.get("enable_thinking"),
             reply_style=row.get("reply_style"),
             business_pages=row.get("business_pages"),
             chat_toolbar=row.get("chat_toolbar") or [],

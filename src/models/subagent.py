@@ -84,6 +84,10 @@ class SubagentConfig(BaseModel):
         description="各 provider 的 model_code 覆盖，如 {'deepseek': 'deepseek-v4-pro', 'qwen': 'qwen3.7-plus'}。"
                     "未列出的 provider 使用全局默认 model",
     )
+    # 思考模式覆盖：False 显式关闭思考（deepseek -> thinking.type=disabled），
+    # None 走 provider 默认（deepseek 默认开启）。deepseek 思考 token 计入 completion
+    # 且 reasoning_content 会回传历史膨胀上下文，模板填充型智能体（如标书生成）建议关闭
+    enable_thinking: Optional[bool] = Field(default=None, description="思考模式覆盖：False 关闭思考，None 走 provider 默认")
 
     # 回复风格
     reply_style: Optional[str] = Field(default=None, description="回复风格ID（对应 src/prompts/styles/ 下的文件名）")

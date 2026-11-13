@@ -343,6 +343,7 @@ async def get_subagent_detail(request: Request, agent_id: str):
             "skills": config.skills,
             "context": config.context,
             "system_prompt": config.system_prompt,
+            "enable_thinking": getattr(config, "enable_thinking", None),
             "type": "custom" if getattr(config, "from_db", False) else "builtin",
         }
         if config.business_pages:

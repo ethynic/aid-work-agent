@@ -75,9 +75,15 @@ async function loadPdf() {
       import.meta.url,
     ).toString()
 
+    // 非嵌入字体 PDF（中文报价单等工具生成）需要 CMap 解码 CID 编码、
+    // 标准字体数据兜底 Helvetica 等，缺任一组资源文字层整体不渲染。
+    // 资源拷贝自 pdfjs-dist@5.4.624（public/pdfjs/），升级依赖时需同步重拷
     loadingTask = pdfjs.getDocument({
       url: props.fileUrl,
       useSystemFonts: true,
+      cMapUrl: '/pdfjs/cmaps/',
+      cMapPacked: true,
+      standardFontDataUrl: '/pdfjs/standard_fonts/',
     })
     documentProxy = await loadingTask.promise
     if (version !== loadVersion) return

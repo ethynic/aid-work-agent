@@ -40,6 +40,9 @@
 ```bash
 grep -rn "gateway\.chat\b\|llm_gateway\.chat\b\|_gateway\.chat\b" src/ --include="*.py" \
   | grep -v "def chat\b\|async def chat\b\|# \|chat_with_tools"
+# 同一轮扫描须覆盖 lite / no-thinking / 流式变体（主 grep 不命中这些后缀）
+grep -rn "\.chat_lite\b\|\.chat_no_thinking\b\|\.stream_chat\b" src/ --include="*.py" \
+  | grep -v "def \|# "
 ```
 
 **对每个命中点**，逐点读函数上下文，确认调用方是否在 `async def` 中且 `await`（避免 [followup_manager P1 bug](../../docs/audit/llm-billing-gap-audit.md#518-srcskillsfollowup-tracking-100scriptsfollowup_managerpy364附带-p1-bug-修复) 同步调用 async 函数致 LLM 实际未执行）。

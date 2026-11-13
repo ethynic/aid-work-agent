@@ -151,6 +151,61 @@ class TestHardValidation:
         assert 7000 < payload <= MAX_FORM_BYTES
 
 
+class TestChannelGate:
+    """渠道端形态闸门：渠道会话仅支持 1 道选择题（2026-11-12 适用范围口径）。
+
+    渠道判定读 ToolExecutionContext.channel（executor 从 identity.source 注入，
+    web='chat'）；None（兼容链路/后台）宽松放行。
+    """
+
+    async def execute_in_channel(self, channel, questions, **kwargs):
+        from src.tools.context import ToolExecutionContext, tool_execution_scope
+        tool = AskUserTool()
+        with tool_execution_scope(ToolExecutionContext(channel=channel)):
+            return await tool.execute(questions=questions, **kwargs)
+
+    async def test_web_chat_multiple_text_questions_ok(self):
+        questions = [question(prompt=f"字段{i}", type="text", options=None)
+                     for i in range(1, 4)]
+        result = await self.execute_in_channel("chat", questions)
+        assert result["success"] is True
+        assert len(result["form"]["questions"]) == 3
+
+    async def test_no_context_permissive(self):
+        # 无上下文（兼容链路/后台）宽松放行，按 web 口径处理
+        result = await AskUserTool().execute(questions=[question(type="text", options=None),
+                                                        question(type="text", options=None)])
+        assert result["success"] is True
+
+    async def test_channel_multiple_questions_rejected(self):
+        questions = [question(prompt="题一"), question(prompt="题二")]
+        result = await self.execute_in_channel("wecom_kf", questions)
+        assert result["success"] is False
+        assert "仅支持 1 道选择题" in result["error"]
+        assert "clarify" in result["error"]
+
+    async def test_channel_text_question_rejected(self):
+        result = await self.execute_in_channel("wecom_kf", [question(type="text")])
+        assert result["success"] is False
+        assert "不支持填空题" in result["error"]
+
+    async def test_channel_single_choice_question_ok(self):
+        result = await self.execute_in_channel("wecom_kf", [question()])
+        assert result["success"] is True
+        assert result["form"]["questions"][0]["type"] == "multi"
+
+    async def test_channel_single_type_ok(self):
+        result = await self.execute_in_channel(
+            "dingtalk", [question(type="single", options=[{"label": "甲"}, {"label": "乙"}])])
+        assert result["success"] is True
+
+    async def test_channel_mixed_text_and_choice_rejected(self):
+        questions = [question(prompt="题一"), question(prompt="补充", type="text")]
+        result = await self.execute_in_channel("feishu", questions)
+        assert result["success"] is False
+        assert "仅支持 1 道选择题" in result["error"]
+
+
 class TestAssembly:
     def test_control_set_carries_ask_user_definition_and_guide(self):
         from types import SimpleNamespace

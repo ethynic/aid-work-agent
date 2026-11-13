@@ -763,8 +763,22 @@ class AgentRunnerConfig(BaseModel):
     port: int = Field(default=8091, ge=1, le=65535)
     lease_seconds: int = Field(default=30, ge=5)
     heartbeat_seconds: int = Field(default=10, ge=1)
+    # P0① 自愈边界：cancel_requested 已置位但执行进程超过该宽限仍未提交终态
+    # （挂死），监督进程强制回收槽位。默认高于实测合法取消延迟（to_thread 长调用
+    # 下 10~17 分钟），避免误杀正常的取消核对流程。
+    cancel_grace_seconds: int = Field(default=1200, ge=60)
     poll_seconds: float = Field(default=1.0, gt=0)
     concurrency: int = Field(default=1, ge=1, le=1)
+    # 轻池槽内并发（A 方案，设计 §6）：light 角色 worker 执行进程内并发执行体数，
+    # 置 1 即回退现行拓扑（无需回滚代码）；general 角色经 slot_capacity 强制 1。
+    slot_concurrency: int = Field(default=4, ge=1, le=16)
+    # 事件循环停跳看门狗阈值（秒）：探针超过该时长未在 loop 内响应即判定停跳，
+    # 回收本进程执行体并硬退触发容器重启（设计 §6.2）。
+    watchdog_threshold: int = Field(default=15, ge=5, le=300)
+    # 轻重负载分离判型清单（设计 §4.2）：本地 CPU/内存密集为重。
+    # heavy_skills 按技能基础名（去版本后缀）匹配，heavy_tools 按工具注册 name 匹配。
+    heavy_tools: List[str] = Field(default_factory=list)
+    heavy_skills: List[str] = Field(default_factory=list)
     browser_owner: AgentRunnerBrowserOwnerConfig = Field(default_factory=AgentRunnerBrowserOwnerConfig)
     limits: AgentRunnerLimitsConfig = Field(default_factory=AgentRunnerLimitsConfig)
 
@@ -1072,6 +1086,16 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         runner_cfg["enabled"] = os.getenv("AGENT_RUNNER_ENABLED", "").lower() in ("true", "1", "yes")
     if os.getenv('AGENT_RUNNER_DURABLE_SLEEP_ENABLED') is not None:
         runner_cfg['durable_sleep_enabled'] = os.environ['AGENT_RUNNER_DURABLE_SLEEP_ENABLED'].lower() in ('true','1','yes')
+    if os.getenv('AGENT_RUNNER_SLOT_CONCURRENCY'):
+        try:
+            runner_cfg['slot_concurrency'] = int(os.environ['AGENT_RUNNER_SLOT_CONCURRENCY'])
+        except ValueError:
+            pass
+    if os.getenv('AGENT_RUNNER_WATCHDOG_THRESHOLD'):
+        try:
+            runner_cfg['watchdog_threshold'] = int(os.environ['AGENT_RUNNER_WATCHDOG_THRESHOLD'])
+        except ValueError:
+            pass
     browser_owner = runner_cfg.setdefault('browser_owner', {})
     if os.getenv('AGENT_RUNNER_BROWSER_OWNER_ENABLED') is not None:
         browser_owner['enabled'] = os.environ['AGENT_RUNNER_BROWSER_OWNER_ENABLED'].lower() in ('true','1','yes')

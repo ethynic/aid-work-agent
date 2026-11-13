@@ -74,6 +74,8 @@ services:
       # 应用临时目录（TMPDIR=/home/appuser/tmp）落内存盘：LibreOffice/Pandoc/
       # PDF 渲染/PPT 导出/Excel 转换不再写 overlay 磁盘。上限 1g，达到上限时报
       # ENOSPC（任务失败）而不是撑爆宿主机；tmpfs 用量计入 mem_limit。
+      # 注意：tmpfs mode 在本机引擎不可靠（挂载点在镜像内已存在时按镜像目录模式生效），
+      # 权威兜底是 entrypoint 的 fix_tmp.sh（appuser 可写性自检见脚本注释），勿依赖本 mode。
       - type: tmpfs
         target: /home/appuser/tmp
         tmpfs:
@@ -149,6 +151,7 @@ services:
           mode: 1777
           size: 200m
       # 应用临时目录（TMPDIR）落内存盘，避免转换类任务写 overlay 磁盘
+      # tmpfs mode 在本机引擎不可靠（见上方注释），权威兜底是 fix_tmp.sh
       - type: tmpfs
         target: /home/appuser/tmp
         tmpfs:

@@ -12,7 +12,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-SKILL_DIR = Path(__file__).resolve().parents[2] / "src" / "skills" / "ai-lead-gen-1.0.0" / "scripts"
+SKILL_DIR = Path(__file__).resolve().parents[2] / "src" / "skills" / "b2b-email-sender-1.0.0" / "scripts"
 sys.path.insert(0, str(SKILL_DIR))
 
 import tracking_key  # noqa: E402

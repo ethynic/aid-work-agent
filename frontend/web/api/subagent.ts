@@ -53,6 +53,7 @@ export interface SubagentDetail {
   skills: Record<string, any>
   context: Record<string, any>
   system_prompt: string
+  enable_thinking?: boolean | null
   type: 'builtin' | 'custom'
   business_pages?: BusinessPage[]
 }

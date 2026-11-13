@@ -21,6 +21,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.tools.base import BaseTool
+from src.tools.context import current_tool_execution_context
 
 # 单次提问总载荷硬上限（UTF-8 字节，§4.1）。仅约束表单总体积；title/tag/
 # prompt/label 等文案长度是生成/展示建议（usage guide 约束），不做逐字段拒绝门。
@@ -79,13 +80,16 @@ class AskUserTool(BaseTool):
     name = "ask_user"
     description = "向用户发起结构化提问表单（单选/多选/自由文本，1~5 题打包），阻塞等待用户作答"
     usage_guide = (
-        "当信息缺失且候选明确、或需要用户做业务确认/选择时调用：一次调用把 1~5 个问题"
-        "打包进 questions，阻塞等待用户作答后继续（root 与子执行一致）。分工：开放式"
-        "问题没有明确候选项时不用本工具，改用 clarify（纯文本追问）；无需作答的建议"
-        "直接写在正文中。题型显式声明：互斥选择用 single（最多选一项），可并集的"
-        "多选用 multi（受 max_select 约束），自由文本用 text（不得携带 options）。选项题"
-        "默认保留自定义输入（allow_custom_text 默认 true，仅严格业务确认门才关闭）；"
-        "每个选项 label 附一句 description 说明含义。文案精炼即可（title ≤20 字、"
+        "需要用户作答/确认时调用，阻塞等待用户作答后继续（root 与子执行一致）。"
+        "分工：单个开放式小澄清优先用 clarify（纯文本追问）；需要一次收集多个字段、"
+        "或希望用户在表单卡片里填写/选择时用本工具。适用范围按对话来源区分："
+        "web 网页对话——1~5 题打包，选择题（single/multi）与填空题（text）均适合；"
+        "渠道会话（企微/企微客服/钉钉/飞书）——仅限 1 道选择题（用户回选项序号即可），"
+        "多题或填空题不适用（工具会直接拒绝），改用 clarify 或在正文列清单提问。"
+        "题型显式声明：互斥选择用 single（最多选一项），可并集的多选用 multi"
+        "（受 max_select 约束），自由文本用 text（不得携带 options，仅 web 端）。"
+        "选项题默认保留自定义输入（allow_custom_text 默认 true，仅严格业务确认门才"
+        "关闭）；每个选项 label 附一句 description 说明含义。文案精炼即可（title ≤20 字、"
         "tag ≤12 字、label ≤40 字为建议而非硬性限制）。单轮最多调用本工具 1 次，"
         "多题合并进 questions，不要连续多次提问。"
     )
@@ -114,6 +118,22 @@ class AskUserTool(BaseTool):
         if not isinstance(questions, list) or not 1 <= len(questions) <= 5:
             count = len(questions) if isinstance(questions, list) else "非列表"
             return {"success": False, "error": f"questions 需要提供 1~5 个问题，实际 {count}"}
+
+        # 渠道端形态闸门：渠道会话仅支持 1 道选择题（用户回选项序号即可）。
+        # 多题/填空在渠道端无表单卡片承载，拒绝并给模型明确出口（clarify/正文清单），
+        # 与 resolve_category_scope「拒绝引导自纠」同一模式。channel 由 executor
+        # 从 identity.source 注入（web='chat'）；None（兼容链路/后台）宽松放行。
+        context = current_tool_execution_context()
+        channel = getattr(context, "channel", None) if context is not None else None
+        if channel and channel != "chat":
+            if len(questions) > 1:
+                return {"success": False, "error": (
+                    f"当前为渠道会话（{channel}），ask_user 仅支持 1 道选择题；"
+                    "多题请改用 clarify，或在正文中列清单一次性提问")}
+            if any(isinstance(q, dict) and q.get("type") == "text" for q in questions):
+                return {"success": False, "error": (
+                    f"当前为渠道会话（{channel}），ask_user 不支持填空题；"
+                    "请改用 clarify 提问，或把待填内容列在正文中请用户回复")}
 
         built = []
         for index, item in enumerate(questions, start=1):

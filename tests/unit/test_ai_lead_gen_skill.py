@@ -1,10 +1,12 @@
-"""AI获客技能（ai-lead-gen-1.0.0）单元测试。
+"""AI获客技能（b2b-lead-research / b2b-email-sender 双技能）单元测试。
 
-覆盖：lead_db 身份/去重/五表建表/联系人入库闸门、P2 定时任务绑定与每日汇总、
-mailbox_resolver 三层解析、send_emails 的 cfg 构建/结果回写/主题与限额纯函数、
-reply_monitor 归属/意图解析纯函数、leadgen 通知事件渲染。数据库一律 mock（FakeConn）。
+覆盖：lead_db 身份/去重/八表建表/联系人入库闸门/多渠道坐标/分渠道话术/
+企业综述/钩子战绩聚合、P2 定时任务绑定与每日汇总、mailbox_resolver 三层解析、
+send_emails 的 cfg 构建/结果回写/主题与限额纯函数、reply_monitor 归属/意图解析
+纯函数、hook_library 租户级库闭环、双技能副本一致性。数据库一律 mock（FakeConn）。
 """
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -14,7 +16,11 @@ import unittest
 
 import pytest
 
-SKILL_DIR = Path(__file__).resolve().parents[2] / "src" / "skills" / "ai-lead-gen-1.0.0" / "scripts"
+SKILL_DIR = Path(__file__).resolve().parents[2] / "src" / "skills" / "b2b-lead-research-1.0.0" / "scripts"
+SENDER_SKILL_DIR = Path(__file__).resolve().parents[2] / "src" / "skills" / "b2b-email-sender-1.0.0" / "scripts"
+# 发送脚本（mailbox_resolver/send_emails/reply_monitor）归 sender 目录；
+# 重叠的 lead_db/email_rules 以 research 权威副本优先（sender 侧为薄壳/一致副本）
+sys.path.insert(0, str(SENDER_SKILL_DIR))
 sys.path.insert(0, str(SKILL_DIR))
 
 import lead_db  # noqa: E402
@@ -112,7 +118,7 @@ def test_norm_company_dedup_key():
     assert lead_db.norm_company("Acme, Inc.") == lead_db.norm_company("ACME")
 
 
-def test_init_tables_creates_six_tables(monkeypatch):
+def test_init_tables_creates_eight_tables(monkeypatch):
     conn = FakeConn()
     monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
     lead_db.init_tables()
@@ -121,9 +127,15 @@ def test_init_tables_creates_six_tables(monkeypatch):
               if sql.startswith("CREATE TABLE IF NOT EXISTS bs_ai_lead_gen")}
     assert tables == {
         "bs_ai_lead_gen_campaigns", "bs_ai_lead_gen_leads",
-        "bs_ai_lead_gen_contacts", "bs_ai_lead_gen_emails",
+        "bs_ai_lead_gen_contacts", "bs_ai_lead_gen_contact_channels",
+        "bs_ai_lead_gen_emails", "bs_ai_lead_gen_messages",
         "bs_ai_lead_gen_replies", "bs_ai_lead_gen_opens",
     }
+    # 拆分双技能新增列：leads 综述两列、emails.hook_id
+    alters = [sql for sql, _ in conn.cur.executed if sql.startswith("ALTER TABLE")]
+    assert any("bs_ai_lead_gen_leads" in s and "summary" in s for s in alters)
+    assert any("bs_ai_lead_gen_leads" in s and "profile_md" in s for s in alters)
+    assert any("bs_ai_lead_gen_emails" in s and "hook_id" in s for s in alters)
     # DDL 必须显式提交（get_db_connection 退出时无条件 rollback）
     assert conn.commits == 1
 
@@ -519,8 +531,16 @@ def test_build_cfg_encryption_none_plain(tmp_path):
 def test_skill_md_declares_init_script():
     skill_md = (SKILL_DIR.parent / "SKILL.md").read_text(encoding="utf-8")
     assert "init_script: lead_db.py" in skill_md
-    assert "name: ai-lead-gen" in skill_md
+    assert "name: b2b-lead-research" in skill_md
     assert "requires_tools: [web_search, web_fetch]" in skill_md
+
+
+def test_sender_skill_md_has_no_init_script():
+    """发送侧无 init_script：表由 research 技能 init_tables 建（SkillLoader 全技能执行）。"""
+    skill_md = (SENDER_SKILL_DIR.parent / "SKILL.md").read_text(encoding="utf-8")
+    assert "name: b2b-email-sender" in skill_md
+    frontmatter = skill_md.split("---", 2)[1]
+    assert "init_script:" not in frontmatter
 
 
 def test_subagent_md_loadable():
@@ -530,7 +550,8 @@ def test_subagent_md_loadable():
     # system_prompt 必须在 body（frontmatter 之外），不在 YAML 里
     parts = text.split("---", 2)
     assert len(parts) == 3
-    assert "skills:" in parts[1] and "ai-lead-gen" in parts[1]
+    assert "skills:" in parts[1]
+    assert "b2b-lead-research" in parts[1] and "b2b-email-sender" in parts[1]
     assert "AI获客" in parts[2]
     assert "system_prompt:" not in parts[1]
 
@@ -931,3 +952,236 @@ def test_cmd_bind_scheduler_window_completed_rejected(monkeypatch, capsys):
     assert not any(s.startswith("UPDATE bs_ai_lead_gen_campaigns")
                    for s, _ in conn.cur.executed)
     assert "时间窗已结束" in capsys.readouterr().out
+
+
+# ---------- 拆分双技能：多渠道坐标 / 分渠道话术 / 企业综述 / 钩子战绩 ----------
+
+def _channel_env(conn, monkeypatch, campaign_id=7):
+    conn.cur.fetchone_queue.append(campaign_row(campaign_id))  # get_campaign
+    conn.cur.fetchall_queue.append([(1,), (2,)])               # contacts ids
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+
+
+def test_add_channel_ok_and_dedup(monkeypatch, tmp_path, capsys):
+    conn = FakeConn()
+    conn.cur.fetchall_queue.insert(1, [])  # 已有 channels（contacts 后第二个 fetchall）
+    _channel_env(conn, monkeypatch)
+    # 注意 fetchall_queue 顺序：contacts -> existing channels
+    conn.cur.fetchall_queue = [[(1,), (2,)], [(1, "linkedin", "https://x.co/acme")]]
+    f = tmp_path / "channels.json"
+    f.write_text(json.dumps([
+        {"contact_id": 1, "channel": "linkedin", "value": "https://x.co/acme"},  # 已存在 -> skip
+        {"contact_id": 2, "channel": "whatsapp", "value": "+493012345678"},
+    ]), encoding="utf-8")
+    args = type("A", (), {"json_file": str(f), "campaign_id": 7})()
+    assert lead_db.cmd_add_channel(args) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"channels_added": 1, "skipped_duplicate": 1}
+    assert conn.commits == 1
+
+
+def test_add_channel_rejects_enum_outside(monkeypatch, tmp_path, capsys):
+    conn = FakeConn()
+    _channel_env(conn, monkeypatch)
+    conn.cur.fetchall_queue = [[(1,), (2,)], []]
+    f = tmp_path / "channels.json"
+    f.write_text(json.dumps([{"contact_id": 1, "channel": "tiktok", "value": "https://t.co/a"}]),
+                 encoding="utf-8")
+    args = type("A", (), {"json_file": str(f), "campaign_id": 7})()
+    assert lead_db.cmd_add_channel(args) == 1
+    assert "channel 必须是" in capsys.readouterr().out
+    assert conn.commits == 0
+
+
+def test_add_channel_rejects_email_channel(monkeypatch, tmp_path, capsys):
+    conn = FakeConn()
+    _channel_env(conn, monkeypatch)
+    conn.cur.fetchall_queue = [[(1,), (2,)], []]
+    f = tmp_path / "channels.json"
+    f.write_text(json.dumps([{"contact_id": 1, "channel": "email", "value": "a@b.com"}]),
+                 encoding="utf-8")
+    args = type("A", (), {"json_file": str(f), "campaign_id": 7})()
+    assert lead_db.cmd_add_channel(args) == 1
+    assert "contacts.email" in capsys.readouterr().out
+
+
+def test_add_channel_rejects_non_e164_phone(monkeypatch, tmp_path, capsys):
+    conn = FakeConn()
+    _channel_env(conn, monkeypatch)
+    conn.cur.fetchall_queue = [[(1,), (2,)], []]
+    f = tmp_path / "channels.json"
+    f.write_text(json.dumps([{"contact_id": 1, "channel": "sms", "value": "00493012345678"}]),
+                 encoding="utf-8")
+    args = type("A", (), {"json_file": str(f), "campaign_id": 7})()
+    assert lead_db.cmd_add_channel(args) == 1
+    assert "E.164" in capsys.readouterr().out
+
+
+def test_add_channel_rejects_short_social_url(monkeypatch, tmp_path, capsys):
+    # 社媒坐标必须是最终落地主页 URL 或 @handle，短链/裸域名拒绝
+    conn = FakeConn()
+    _channel_env(conn, monkeypatch)
+    conn.cur.fetchall_queue = [[(1,), (2,)], []]
+    f = tmp_path / "channels.json"
+    f.write_text(json.dumps([{"contact_id": 1, "channel": "linkedin", "value": "bit.ly/abc"}]),
+                 encoding="utf-8")
+    args = type("A", (), {"json_file": str(f), "campaign_id": 7})()
+    assert lead_db.cmd_add_channel(args) == 1
+    assert "落地主页 URL" in capsys.readouterr().out
+
+
+def test_add_message_rejects_email_channel(monkeypatch, tmp_path, capsys):
+    conn = FakeConn()
+    _channel_env(conn, monkeypatch)
+    conn.cur.fetchall_queue = [[(1,), (2,)], []]
+    f = tmp_path / "messages.json"
+    f.write_text(json.dumps([{"contact_id": 1, "channel": "email", "content": "hi"}]),
+                 encoding="utf-8")
+    args = type("A", (), {"json_file": str(f), "campaign_id": 7})()
+    assert lead_db.cmd_add_message(args) == 1
+    out = capsys.readouterr().out
+    assert "emails 表" in out and "add-email-draft" in out
+    assert conn.commits == 0
+
+
+def test_add_message_ok_and_dedup_by_contact_channel(monkeypatch, tmp_path, capsys):
+    conn = FakeConn()
+    _channel_env(conn, monkeypatch)
+    conn.cur.fetchall_queue = [[(1,), (2,)], [(1, "sms")]]
+    f = tmp_path / "messages.json"
+    f.write_text(json.dumps([
+        {"contact_id": 1, "channel": "sms", "content": "旧短信"},       # 已存在 -> skip
+        {"contact_id": 2, "channel": "linkedin", "content": "连接请求"},
+    ]), encoding="utf-8")
+    args = type("A", (), {"json_file": str(f), "campaign_id": 7})()
+    assert lead_db.cmd_add_message(args) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"messages_added": 1, "skipped_duplicate": 1}
+    inserts = [p for s, p in conn.cur.executed
+               if s.startswith("INSERT INTO bs_ai_lead_gen_messages")]
+    assert inserts and inserts[0][4] == "linkedin"
+    assert conn.commits == 1
+
+
+def test_set_lead_profile_writes_summary_and_profile_md(monkeypatch, tmp_path, capsys):
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row())           # get_campaign
+    conn.cur.fetchall_queue.append([(5, "Acme Ltd")])        # leads 匹配
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    pf = tmp_path / "profile.md"
+    pf.write_text("## 痛点\n1. 交期波动", encoding="utf-8")
+    args = type("A", (), {"campaign_id": 7, "company": "Acme Ltd",
+                          "summary": "德国密封件制造商", "profile_file": str(pf)})()
+    assert lead_db.cmd_set_lead_profile(args) == 0
+    updates = [(s, p) for s, p in conn.cur.executed
+               if s.startswith("UPDATE bs_ai_lead_gen_leads")]
+    assert updates and updates[0][1][0] == "德国密封件制造商"
+    assert updates[0][1][1].startswith("## 痛点")
+    assert conn.commits == 1
+
+
+def test_set_lead_profile_requires_input(capsys):
+    args = type("A", (), {"campaign_id": 7, "company": "Acme",
+                          "summary": "", "profile_file": None})()
+    assert lead_db.cmd_set_lead_profile(args) == 1
+    assert "至少提供一项" in capsys.readouterr().out
+
+
+def test_hook_stats_aggregates_by_hook_id(monkeypatch, capsys):
+    conn = FakeConn()
+    conn.cur.fetchone_queue.append(campaign_row())
+    conn.cur.fetchall_queue.append([
+        ("cost", 10, 8, 25),   # hook_id, drafted, sent, opens
+        ("peer", 5, 5, 0),
+    ])
+    conn.cur.fetchall_queue.append([("cost", 2)])            # replies 聚合
+    monkeypatch.setattr(lead_db, "get_conn", lambda: conn)
+    args = type("A", (), {"campaign_id": 7})()
+    assert lead_db.cmd_hook_stats(args) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["campaign_id"] == 7
+    by_hook = {h["hook_id"]: h for h in out["hooks"]}
+    assert by_hook["cost"] == {"hook_id": "cost", "drafted": 10, "sent": 8,
+                               "opens": 25, "replies": 2}
+    assert by_hook["peer"]["replies"] == 0
+
+
+# ---------- 副本一致性（双技能同仓库） ----------
+
+def test_email_rules_copies_identical():
+    a = (SKILL_DIR / "email_rules.py").read_bytes()
+    b = (SENDER_SKILL_DIR / "email_rules.py").read_bytes()
+    assert hashlib.sha256(a).hexdigest() == hashlib.sha256(b).hexdigest()
+
+
+def test_email_compliance_copies_identical():
+    a = (SKILL_DIR.parent / "references" / "email-compliance.md").read_bytes()
+    b = (SENDER_SKILL_DIR.parent / "references" / "email-compliance.md").read_bytes()
+    assert hashlib.sha256(a).hexdigest() == hashlib.sha256(b).hexdigest()
+
+
+def _load_module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_sender_lead_db_shell_forwards_cli_and_symbols():
+    """sender 侧 lead_db.py 薄壳：注入权威副本符号 + CLI main() 双语义可用。"""
+    shell = _load_module("sender_lead_db_shell", SENDER_SKILL_DIR / "lead_db.py")
+    for fn in ("cmd_init", "cmd_add_contact", "cmd_hook_stats", "get_identity", "init_tables"):
+        assert callable(getattr(shell, fn, None))
+    assert hasattr(shell, "main")
+
+
+def test_sender_hook_library_shell_forwards_cli():
+    shell = _load_module("sender_hook_library_shell", SENDER_SKILL_DIR / "hook_library.py")
+    assert callable(getattr(shell, "main", None))
+    assert callable(getattr(shell, "cmd_record", None))
+
+
+# ---------- hook_library 租户级库闭环（B2B_HOOK_LIBRARY 隔离） ----------
+
+@pytest.fixture()
+def hook_lib_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("B2B_HOOK_LIBRARY", str(tmp_path / "hook_library"))
+    return tmp_path / "hook_library"
+
+
+def _hl_args(**kw):
+    base = {"key": None, "name": None, "product": None, "icp": None, "lang": None,
+            "segment": [], "business": None, "market": None, "lang2": None}
+    base.update(kw)
+    return type("A", (), base)()
+
+
+def test_hook_library_register_recommend_record_loop(hook_lib_env, capsys):
+    import hook_library
+
+    assert hook_library.cmd_register(_hl_args(
+        key="ai-marketing-agent", name="AI 营销智能体", product="AI 营销智能体",
+        icp="海外营销代理", lang="zh", segment=["agency"])) == 0
+    assert hook_library.cmd_add_market(_hl_args(
+        business="ai-marketing-agent", market="de")) == 0
+
+    # 战绩回写（hook-stats JSON 形态）
+    stats_file = hook_lib_env.parent / "hook_stats.json"
+    stats_file.write_text(json.dumps({
+        "campaign_id": 12,
+        "hooks": [{"hook_id": "cost", "drafted": 30, "sent": 30, "opens": 10, "replies": 3}],
+    }), encoding="utf-8")
+    args = _hl_args(business="ai-marketing-agent", market="DE", segment="agency")
+    args.stats_file = str(stats_file)
+    assert hook_library.cmd_record(args) == 0
+
+    # 同 campaign 重跑幂等覆盖，不叠加
+    assert hook_library.cmd_record(args) == 0
+
+    data = json.loads((hook_lib_env / "businesses" / "ai-marketing-agent.json")
+                      .read_text(encoding="utf-8"))
+    camp = data["campaigns"]["campaign_12"]
+    st = camp["stats"]["DE|agency|cost"]
+    assert st["sent"] == 30 and st["replies"] == 3
+    assert st["market"] == "DE" and st["segment"] == "agency"
+    assert "agency" in data["segments"] and "DE" in data["markets"]

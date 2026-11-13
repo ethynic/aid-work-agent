@@ -41,6 +41,7 @@ class CreateDefinitionRequest(BaseModel):
     allow_delegation: bool = True
     llm_provider: Optional[str] = None
     llm_model_codes: Optional[Dict[str, str]] = None
+    enable_thinking: Optional[bool] = None
     reply_style: Optional[str] = None
     business_pages: Optional[List[Dict[str, Any]]] = None
     knowledge_sources: Optional[List[Dict[str, str]]] = None
@@ -63,6 +64,7 @@ class UpdateDefinitionRequest(BaseModel):
     allow_delegation: Optional[bool] = None
     llm_provider: Optional[str] = None
     llm_model_codes: Optional[Dict[str, str]] = None
+    enable_thinking: Optional[bool] = None
     reply_style: Optional[str] = None
     business_pages: Optional[List[Dict[str, Any]]] = None
     knowledge_sources: Optional[List[Dict[str, str]]] = None
@@ -216,6 +218,7 @@ async def create_definition(request: Request, body: CreateDefinitionRequest):
             allow_delegation=body.allow_delegation,
             llm_provider=body.llm_provider,
             llm_model_codes=body.llm_model_codes,
+            enable_thinking=body.enable_thinking,
             reply_style=body.reply_style,
             business_pages=body.business_pages,
             knowledge_sources=body.knowledge_sources,
@@ -641,6 +644,7 @@ async def export_definition(request: Request, agent_id: str):
                 "allow_delegation": definition.get("allow_delegation", True),
                 "llm_provider": definition.get("llm_provider"),
                 "llm_model_codes": definition.get("llm_model_codes"),
+                "enable_thinking": definition.get("enable_thinking"),
                 "reply_style": definition.get("reply_style"),
                 "business_pages": definition.get("business_pages"),
                 "knowledge_sources": definition.get("knowledge_sources"),
@@ -836,6 +840,7 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
                 allow_delegation=bool(d.get("allow_delegation", True)),
                 llm_provider=d.get("llm_provider"),
                 llm_model_codes=d.get("llm_model_codes"),
+                enable_thinking=d.get("enable_thinking"),
                 reply_style=d.get("reply_style") or "",
                 business_pages=d.get("business_pages") or [],
                 recap=d.get("recap") or {},
@@ -888,6 +893,7 @@ async def import_definition(request: Request, body: ImportDefinitionRequest):
             allow_delegation=bool(d.get("allow_delegation", True)),
             llm_provider=d.get("llm_provider"),
             llm_model_codes=d.get("llm_model_codes"),
+            enable_thinking=d.get("enable_thinking"),
             reply_style=d.get("reply_style"),
             business_pages=d.get("business_pages"),
             recap=d.get("recap"),

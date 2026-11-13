@@ -19,7 +19,7 @@
 | 20261023-1226 | wecom CLI 三工具与持续恢复 | ✅ 已完成开发；打包兼容复核完成，旧包验签/MCP、长路径及CR通过。 | [设计](design/wecom/wecom-cli-design.md#12-持续监控端到端收敛2026-10-27) | [开发计划](plans/plan-wecom-cli-group-chat-experiment.md) |
 | 20261013-1434 | 结构化提问交互（ask_user 提问卡片） | ✅ 已完成开发；选项焦点白屏已修，独立48项/CR、构建及原卡片实测通过。 | [设计](system/design-ask-user-interactive-question.md) | [实施计划](plans/plan-ask-user-interactive-question.md) |
 | 20261030-1710 | 追踪库保留清理调度化（obs_* 表保留 30 天） | ✅ 已完成并部署 243：每日 01:30 分批删 30 天前 obs_* 数据 + 周日 VACUUM（82ea04b2），生产实测连续 3 天正常执行，存量已收敛。 | [设计 §8](infrastructure/observability-design.md) | — |
-| 20261030-1644 | 每周例行巡检（计费/存储/日志/tool_error/tlog） | ✅ 已完成：周四 11:30 定时巡检五项（cron 9540fb2b），11-05 轮 P0/P2 整改项均已修复。 | [巡检规范](audit/weekly-inspection.md)（[11-05 报告](audit/weekly-2026-11-05.md)、[整改清单](audit/weekly-2026-11-05-整改清单.md)） | — |
+| 20261030-1644 | 每周例行巡检（计费/存储/日志/tool_error/tlog） | ✅ 已完成：周四 11:30 定时巡检五项（cron 9540fb2b），11-12 轮无新增计费缺口，tlog 清理 3 文件待提交。 | [巡检规范](audit/weekly-inspection.md)（[11-05 报告](audit/weekly-2026-11-05.md)、[11-12 报告](audit/weekly-2026-11-12.md)） | — |
 | 20261029-1800 | agent3 在线开发环境拆库启用 | ✅ 已完成：agent3 独立库 aid_work_agent3/logs3（自 agent2 复制）+ runner 容器名参数化 + background3 + test2dev.sh 整库单向同步（d928fc4b），部署验证通过。 | [部署现状 §5.2](../deploy/服务器部署现状.md) | — |
 | 20261026-1130 | 调度器幽灵锁自愈修复（发版强杀后后台调度器永久罢工） | ✅ 已完成并发布 243：三调度器与 manager 抢锁失败改循环重试自愈（f3410aa1），47 用例+1649 回归通过，CR 无 P0/P1。 | [事故复盘](incidents/scheduler-ghost-lock-stall-20261021.md) | — |
 | 20261026-1744 | 测试入口隔离与Runtime断言收尾 | ✅ 已完成开发；隔离准入及自建库清理证明完成，旧断言校准，独测/CR通过。 | [设计](design/devtools/test-database-isolation-design.md) | [计划](plans/plan-test-database-isolation-runtime-assertions.md) |

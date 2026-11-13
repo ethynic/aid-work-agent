@@ -4,7 +4,7 @@ import type { AskForm, AskFormErrorItem, RunnerAnswerItem } from '@/api/runner'
 import { SSEManager, uploadFile, type UploadedFile } from '@/api/agent'
 import { notifyScheduledTasksChanged } from '@/api/scheduledTask'
 import { getSession, getSessionMessages, updateFailedMessageUI, type FailedMessageUI } from '@/api/session'
-import { RunnerClient, RunnerRequestError, runnerTerminal, runnerObservationComplete, runnerWaitLeaf, type RunnerCapabilities, type RunnerControlIntent, type RunnerControlView, type RunnerSubmission, type RunnerView, type RunnerWait } from '@/api/runner'
+import { RunnerClient, RunnerRequestError, runnerTerminal, runnerResumable, runnerObservationComplete, runnerWaitLeaf, type RunnerCapabilities, type RunnerControlIntent, type RunnerControlView, type RunnerSubmission, type RunnerView, type RunnerWait } from '@/api/runner'
 import { historyMessages, mergeRunnerMessages, visibleFailedMessages } from '@/utils/runnerMessages'
 import { clientCanonicalText } from '@/utils/askForm'
 import { useToast } from 'vue-toastification'
@@ -219,18 +219,18 @@ export function useAgent() {
     return rows.find(row => !runnerTerminal(row.status)
       && (row.execution_mode === 'continuous' || runnerWaitLeaf(row.snapshot.waiting)?.kind === 'timer'))
       || (rows[0]?.execution_mode === 'continuous' ? rows[0] : undefined)
+      // 非持续任务的暂停/中断行也挂任务卡：给「继续任务」与「停止任务」入口
+      || rows.find(row => !runnerTerminal(row.status) && ['paused','interrupted'].includes(row.status))
   })
   const durableTaskBusy = ref(false)
-  async function controlDurableTask(action: 'pause' | 'resume' | 'cancel') {
-    const row = durableTask.value
+  async function controlDurableTask(action: 'pause' | 'resume' | 'cancel', targetRunnerId?: string) {
     const sid = sessionId.value
     const state = getStreamState(sid)
+    const row = targetRunnerId ? state.runnerViews.get(targetRunnerId) : durableTask.value
     if (!row || durableTaskBusy.value || state.pendingControl || row.resume_requested
       || row.cancel_requested || runnerTerminal(row.status)) return
     const wait = runnerWaitLeaf(row.snapshot.waiting)
-    if (action === 'resume' && !(row.status === 'paused' && !wait
-      || wait?.kind === 'continuous_guard' && wait.wait_id && wait.target_execution_id && ['waiting','paused'].includes(row.status)
-      || wait?.kind === 'timer' && wait.wait_id && wait.target_execution_id)) return
+    if (action === 'resume' && !runnerResumable(row)) return
     const headers = getEffectiveAuthHeader()
     const generation = state.runnerGeneration
     durableTaskBusy.value = true
@@ -321,13 +321,30 @@ export function useAgent() {
             ? LOCAL_RECOVERY_MESSAGES.upgrade : LOCAL_RECOVERY_MESSAGES.unavailable))
     } finally { localRecoveryBusy.value = false }
   }
+  // 可恢复的 parked 行：输入区停止按钮让位给播放按钮，取消走任务卡「停止任务」。
+  // 与 sendMessage 相同的排队序取第一个 parked 行，保证播放目标与文本恢复一致。
+  const resumableTask = computed(() => {
+    const state = getStreamState(sessionId.value)
+    void state.messages.value
+    void state.isProcessing.value
+    const parked = [...state.runnerViews.values()].sort((a,b) => a.queue_order-b.queue_order)
+      .find(row => ['waiting','paused','interrupted'].includes(row.status))
+    return parked && runnerResumable(parked) ? parked : undefined
+  })
   const canStop = computed(() => {
     const state = getStreamState(sessionId.value)
-    return state.isProcessing.value || state.messages.value.some(message => {
+    if (state.isProcessing.value) return true
+    const resumable = resumableTask.value
+    return state.messages.value.some(message => {
       const row = message.runnerId ? state.runnerViews.get(message.runnerId) : undefined
-      return !!row && !runnerTerminal(row.status)
+      return !!row && row !== resumable && !runnerTerminal(row.status)
     })
   })
+  // 播放按钮恢复：锚定与文本恢复相同的 resumableTask 行，多 parked 行会话不漂移
+  function resumeResumableTask() {
+    const row = resumableTask.value
+    if (row) void controlDurableTask('resume', row.runner_id)
+  }
   const isWaitingHuman = computed(() => {
     const state = getStreamState(sessionId.value)
     const currentMessages = messages.value
@@ -1232,7 +1249,10 @@ export function useAgent() {
     const timerResume = resumeWait?.kind === 'timer' && !!resumeWait.wait_id && !!resumeWait.target_execution_id
     const guardResume = !!parked && ['paused','waiting'].includes(parked.status) && resumeWait?.kind === 'continuous_guard'
       && !!resumeWait.wait_id && !!resumeWait.target_execution_id
-    const canResume = !!parked && (['paused','interrupted'].includes(parked.status) && !resumeWait || timerResume || guardResume)
+    // 保留原宽门（含无等待的 interrupted）：local_recovery 行靠它进入 resume 分支后
+    // 被重定向到「核对并继续」提示；runnerResumable 增量放行发版中断的 verification 等待。
+    const canResume = !!parked && (['paused','interrupted'].includes(parked.status) && !resumeWait
+      || timerResume || guardResume || runnerResumable(parked))
     if (parked && (canReply || canResume) && !parked.resume_requested) {
       if (parked.local_recovery && !canReply) {
         runnerError(effectiveSessionId,new Error(LOCAL_RECOVERY_MESSAGES.instruction))
@@ -1778,6 +1798,7 @@ export function useAgent() {
     progressMessages,
     isProcessing,
     canStop,
+    resumableTask,
     refreshRunner,
     currentResponse,
     liveVerbose,
@@ -1788,6 +1809,7 @@ export function useAgent() {
     loadDurableHistory,
     durableTaskBusy,
     controlDurableTask,
+    resumeResumableTask,
     localRecovery,
     localRecoveryBusy,
     localVerificationMessage,

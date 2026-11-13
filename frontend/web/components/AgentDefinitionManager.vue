@@ -239,6 +239,16 @@
                     <p class="text-[11px] text-gray-400 mt-1">指定后该智能体使用此 provider；留空则沿用 .env 中的 LLM_PROVIDER。</p>
                   </div>
                   <div>
+                    <label class="text-xs text-gray-500 mb-1 block">思考模式</label>
+                    <select v-model="form.enable_thinking"
+                      class="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-primary-400">
+                      <option :value="null">默认（跟随 provider）</option>
+                      <option :value="true">开启思考</option>
+                      <option :value="false">关闭思考</option>
+                    </select>
+                    <p class="text-[11px] text-gray-400 mt-1">deepseek 默认开启思考；思考 token 计入输出费用且会回传历史膨胀上下文，模板填充型任务（如标书生成）建议关闭。</p>
+                  </div>
+                  <div>
                     <label class="text-xs text-gray-500 mb-1 block">各 Provider Model 覆盖</label>
                     <div class="bg-gray-50 rounded-lg p-2 space-y-1.5">
                       <div class="grid grid-cols-[80px_1fr] items-center gap-2">
@@ -945,6 +955,7 @@ function populateForm(data: AgentDefinition) {
     reply_style: data.reply_style || null,
     status: data.status || 'active',
     llm_provider: data.llm_provider || null,
+    enable_thinking: data.enable_thinking ?? null,
     llm_model_codes: {
       deepseek: data.llm_model_codes?.deepseek || '',
       qwen: data.llm_model_codes?.qwen || '',
@@ -1179,6 +1190,7 @@ async function saveDefinition() {
       chat_toolbar: [...chatToolbar.value],
       upload_accept: uploadAccept.value.trim(),
       llm_provider: form.value.llm_provider || null,
+      enable_thinking: form.value.enable_thinking ?? null,
       llm_model_codes: Object.keys(model_codes).length > 0 ? model_codes : null,
       status: form.value.status,
     }

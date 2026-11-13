@@ -112,8 +112,9 @@
         @load="handleHtmlLoad"
       ></iframe>
 
-      <!-- Text/Code Preview -->
-      <div v-if="previewType === 'text' || previewType === 'markdown'" class="p-4">
+      <!-- Text/Code Preview：h-full + overflow-y-auto 与 docx 预览同模式，
+           长文档在面板内垂直滚动（外层容器 overflow-hidden，缺滚动会裁掉下半部分） -->
+      <div v-if="previewType === 'text' || previewType === 'markdown'" class="p-4 h-full overflow-y-auto">
         <div
           v-if="previewType === 'markdown'"
           class="markdown-content prose prose-slate max-w-none text-sm"

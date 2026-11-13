@@ -5,7 +5,7 @@ Recap 运行时 runner
 
 职责：读取 agent.subagent_config.recap 配置 -> 校验系统级开关 -> Redis SET NX 幂等 ->
 分发到 tasks 注册表中的适配器 -> 单任务故障隔离（异常吞掉不上抛，不影响对话主流程）。
-过程留痕走 tlog("recap", ...)，主日志每轮至多一条 INFO 汇总。
+主日志每轮至多一条 INFO 汇总。
 """
 
 import asyncio
@@ -18,7 +18,6 @@ from loguru import logger
 
 from src.core.cache_utils import CacheKeys
 from src.core.redis_client import redis_client
-from src.core.temp_logger import tlog
 
 # 幂等键 TTL：recap_task:{tenant_id}:{task_name}:{round_message_id}
 RECAP_IDEMPOTENT_TTL = 86400  # 24h
@@ -253,8 +252,6 @@ def enqueue_human_period_tasks(tenant_id: str, session_id: str, round_message_id
     且下一条客户消息会再次触发，无需补偿）。
     """
     try:
-        from src.core.temp_logger import tlog as _tlog
-
         # round_message_id（企微回调 msgid）仅作幂等键成分；缺失时幂等键退化为
         # 固定串，首条 SET NX 占坑 24h 会把该租户所有线索的入口 B 消息全部
         # dedup 掉（功能静默停摆），必须与 trigger_recap 同款守卫放弃执行
@@ -280,17 +277,9 @@ def enqueue_human_period_tasks(tenant_id: str, session_id: str, round_message_id
             ],
             enqueued_at=time.time(),
         )
-        enqueued = redis_client.rpush(
+        redis_client.rpush(
             redis_client.make_key(CacheKeys.RECAP_QUEUE),
             payload.to_dict(),
-        )
-        _tlog(
-            "人工期任务",
-            "入口B入队{res}: tenant={tid}, session={sid}, round={rid}",
-            res="ok" if enqueued else "failed(redis不可用)",
-            tid=tenant_id,
-            sid=session_id,
-            rid=round_message_id,
         )
     except Exception as e:
         logger.warning(f"[recap] 人工期任务入队异常（不影响消息链路）: {e}")
@@ -308,13 +297,6 @@ def defer_recap_task(payload: RecapPayload, task_name: str, delay_seconds: float
     """
     try:
         if not redis_client.is_available():
-            tlog(
-                "人工期任务",
-                "延迟补推登记failed(redis不可用): tenant={tid}, session={sid}, task={task}",
-                tid=payload.tenant_id,
-                sid=payload.session_id,
-                task=task_name,
-            )
             return False
         deferred = payload.to_dict()
         deferred["round_message_id"] = f"{payload.round_message_id}-defer"
@@ -331,15 +313,6 @@ def defer_recap_task(payload: RecapPayload, task_name: str, delay_seconds: float
         if not enqueued:
             redis_client.delete(payload_key)
         stored = enqueued and redis_client.get(payload_key) is not None
-        tlog(
-            "人工期任务",
-            "延迟补推登记{res}: tenant={tid}, session={sid}, task={task}, delay={delay}s",
-            res="ok" if stored else "failed(payload未写入或未入队)",
-            tid=payload.tenant_id,
-            sid=payload.session_id,
-            task=task_name,
-            delay=round(delay_seconds),
-        )
         return stored
     except Exception as e:
         logger.warning(f"[recap] 延迟补推登记异常（退化为跳过不补推）: {e}")
@@ -380,13 +353,6 @@ def poll_due_deferred_tasks() -> int:
             _background_tasks.add(bg_task)
             bg_task.add_done_callback(_background_tasks.discard)
             dispatched += 1
-            tlog(
-                "人工期任务",
-                "延迟补推派发: session={sid}, task={task}, round={rid}",
-                sid=payload.session_id,
-                task=task_name,
-                rid=payload.round_message_id,
-            )
         except Exception as e:
             logger.opt(exception=True).error(f"[recap] 延迟补推任务派发异常 member={member}: {e}")
     return dispatched
@@ -455,9 +421,7 @@ async def _run_tasks(tasks: List[RecapTaskConfig], payload: RecapPayload) -> Non
             continue
 
         try:
-            tlog("recap", f"task={task.name} start, tenant={payload.tenant_id}, round={payload.round_message_id}")
             await adapter.execute(payload)
-            tlog("recap", f"task={task.name} done, round={payload.round_message_id}")
             results.append(f"{task.name}=ok")
         except Exception as e:
             # 不重试、不上抛——下一轮问答自然产生新的 recap

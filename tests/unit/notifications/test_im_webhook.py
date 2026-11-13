@@ -81,8 +81,9 @@ class TestRender:
             'session_title': '2026-11-02 各渠道销售日报', 'event_kind': 'completed',
             'task_id': 'sched_1', 'task_name': '昨日各渠道销售情况播报'}}
         payload = FeishuBotAdapter().render(message, {})
-        assert '任务执行完成' in payload['text']
-        assert '昨日各渠道销售情况播报' in payload['text']
+        # scheduled 终态文案 154107f8 起定版：标题「定时任务执行结果」+ 任务名 +「已完成」
+        assert '定时任务执行结果' in payload['text']
+        assert '定时任务「昨日各渠道销售情况播报」已完成' in payload['text']
 
     def test_render_terminal_chat_source_falls_back_to_session_title(self):
         """chat 来源无 task_name，退回 session_title"""

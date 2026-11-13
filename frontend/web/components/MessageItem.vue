@@ -178,6 +178,7 @@ import ReplyContent from './chat/ReplyContent.vue'
 import { getRuntime } from '@/platform/runtime'
 import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { renderMarkdown } from '@/utils/markdown'
+import { useReplyResources } from '@/utils/replyResources'
 import { useDebugMode } from '@/composables/useDebugMode'
 import HumanAssistanceCard from './browser/HumanAssistanceCard.vue'
 import QuestionCard from './chat/QuestionCard.vue'
@@ -344,8 +345,10 @@ const displayContent = computed(() => {
   return content
 })
 
+const { resolver } = useReplyResources()
+
 const renderedContent = computed(() => {
-  return renderMarkdown(displayContent.value)
+  return renderMarkdown(displayContent.value, resolver)
 })
 
 const formattedTime = computed<string | null>(() => {

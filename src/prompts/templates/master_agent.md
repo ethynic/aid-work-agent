@@ -51,3 +51,4 @@
 {long_term_memory}
 {user_info_section}
 {reply_style_section}
+{source_section}

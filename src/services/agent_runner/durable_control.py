@@ -27,6 +27,7 @@ class DurableControl:
         self.authorization_check = None
         self.prepared_source = None
         self.tool_started = {}
+        self._heavy_used_logged = False
         self.started_at = time.monotonic()
         self.active_attempt = row['status'] == 'running'
 
@@ -151,9 +152,17 @@ class DurableControl:
                 self.envelope['business_plan'] = plan.model_dump(mode='json') if plan is not None else None
                 state.plan_ref = plan.plan_id if plan is not None else None
             checkpoint, snapshot = self._capture(state)
+            from .load_class import state_uses_heavy
+            heavy_used = state_uses_heavy(state)
+            if heavy_used and not self._heavy_used_logged:
+                self._heavy_used_logged = True
+                from src.core.temp_logger import tlog
+                tlog("runner轻重分离", "运行时重判触发 runner={runner} attempt={attempt}",
+                     runner=self.attempt.runner_id, attempt=self.attempt.number)
             row = await asyncio.to_thread(self.repository.save_checkpoint, self.attempt,
                 self.revision, checkpoint, snapshot,
-                dispatch=boundary in {'before_model', 'before_tool'})
+                dispatch=boundary in {'before_model', 'before_tool'},
+                heavy_used=heavy_used)
         except StopRequested as error:
             self.pause_requested = error.command == 'pause'
             self.cancel_requested = error.command == 'cancel'

@@ -25,10 +25,13 @@ from .tools import ToolDispatcher
 
 
 class ModelAdapter:
-    def __init__(self, gateway, defer_names=None, deferred_call_id=None, resource_directory=None):
+    def __init__(self, gateway, defer_names=None, deferred_call_id=None, resource_directory=None,
+                 enable_thinking=None):
         self.gateway = gateway
         self.defer_names, self.deferred_call_id = defer_names, deferred_call_id
         self.resource_directory = resource_directory
+        # None 走 provider 默认（deepseek 默认开启思考）；False 显式关闭
+        self.enable_thinking = enable_thinking
 
     @staticmethod
     def _message_has_image_references(message):
@@ -168,7 +171,8 @@ class ModelAdapter:
         with execution_call(state.execution_id, call_id):
             from ..continuous_context import context_prompt
             response = await self.gateway.chat_with_tools(
-                system_prompt=state.system_prompt+context_prompt(state), messages=messages, tools=tools)
+                system_prompt=state.system_prompt+context_prompt(state), messages=messages, tools=tools,
+                enable_thinking=self.enable_thinking)
         response = dict(response)
         response.setdefault("model", self.gateway.get_model_name())
         response.setdefault("provider", self.gateway.get_provider_name())
@@ -262,7 +266,8 @@ class RuntimeExecution:
             style_manager=resources.style_manager, prompt_manager=resources.prompt_manager,
             tool_controls=resources._tool_controls, subagent_registry=resources.subagent_registry,
             tools=self.catalog._get_tools, available_subagents=self.visibility.available,
-            usage_guides=self.catalog._collect_tool_usage_guides)
+            usage_guides=self.catalog._collect_tool_usage_guides,
+            source=identity.source, session_kind=identity.session_kind)
         workspace_root = None
         if getattr(self.control, 'durable_owner', False):
             from ..resource_paths import workspace_directory
@@ -513,7 +518,8 @@ class RuntimeExecution:
                 return
             async for event in AgentEngine().run(self.state,
                 ModelAdapter(self.resources.llm, defer_names, deferred_call_id,
-                             resource_directory=self.resources.resource_directory), dispatcher,
+                             resource_directory=self.resources.resource_directory,
+                             enable_thinking=self.resources.enable_thinking), dispatcher,
                 self.control, self.observer):
                 if event["type"] == "execution_completed":
                     yield make_event("progress", data="✅ 任务完成，正在生成回复...")

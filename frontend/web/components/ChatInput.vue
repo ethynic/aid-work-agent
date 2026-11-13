@@ -131,6 +131,17 @@
                 <rect x="6" y="6" width="12" height="12" rx="2" />
               </svg>
             </button>
+            <!-- Resume Button（原任务暂停/中断待恢复时替换停止按钮，点击接续原任务） -->
+            <button
+              v-if="canResume && !isProcessing"
+              @click="emit('resume')"
+              class="w-9 h-9 rounded-full bg-primary-50 text-primary-600 border border-primary-200 hover:bg-primary-100 transition-colors flex items-center justify-center"
+              title="继续上次任务"
+            >
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            </button>
             <!-- Send Button：圆形向上箭头 -->
             <button
               v-if="!isProcessing"
@@ -182,6 +193,8 @@ interface Props {
   disabled: boolean
   isProcessing: boolean
   canStop?: boolean
+  /** 存在可恢复的暂停/中断任务时显示播放按钮 */
+  canResume?: boolean
   files: UploadedFile[]
   /** 当前会话 subagent 的上传文件类型限定（如 "image/*"），未声明时 fallback 到默认白名单 */
   uploadAccept?: string | null
@@ -198,6 +211,7 @@ const emit = defineEmits<{
   (e: 'upload', file: File): void
   (e: 'remove', file: UploadedFile): void
   (e: 'stop'): void
+  (e: 'resume'): void
 }>()
 
 const { isMobile } = useMobile()
