@@ -75,6 +75,13 @@ export type NotificationErrorCode =
   | 'NOTIFICATION_ENDPOINT_FORBIDDEN'
   | 'NOTIFICATION_INVALID_EMAIL'
   | 'NOTIFICATION_TENANT_DISABLED'
+  | 'NOTIFICATION_WECOM_APP_UNAVAILABLE'
+  | 'NOTIFICATION_BIND_STATE_INVALID'
+  | 'NOTIFICATION_BIND_FAILED'
+  | 'NOTIFICATION_BIND_NOT_IN_SCOPE'
+  | 'NOTIFICATION_BIND_TAKEN'
+  | 'NOTIFICATION_BIND_MISMATCH'
+  | 'NOTIFICATION_BIND_PHONE_REQUIRED'
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { ...getAuthHeader(), ...(init.headers as Record<string, string> || {}) }
@@ -179,6 +186,55 @@ export const notificationsAPI = {
     const q = new URLSearchParams({ task_id: taskId })
     return request<TaskDeliverySummary>(`/task-deliveries?${q.toString()}`)
   },
+
+  /** ---------- 企微应用身份绑定（长任务企微通知 Phase 1，设计 §4.1；页面在 Phase 4） ---------- */
+
+  /** OAuth 授权链接（企业内 oauth2/authorize + PC 扫码 qrConnect，共用同一 state） */
+  wecomBindUrl: () =>
+    request<WecomBindUrl>('/wecom/bind/url'),
+
+  /** OAuth 回调确认（重定向落地页携 code+state 回调，需登录态；state 一次性消费） */
+  wecomBindCallback: (code: string, state: string) => {
+    const q = new URLSearchParams({ code, state })
+    return request<WecomBindSuccess>(`/wecom/bind/callback?${q.toString()}`)
+  },
+
+  /** 手机号预填（只读）：按当前登录用户手机号匹配企微通讯录 */
+  wecomBindSuggest: () =>
+    request<WecomBindSuggest>('/wecom/bind/suggest'),
+
+  /** 确认绑定：服务端按手机号二次核实后才落库，不信任前端传的 userid */
+  wecomBindConfirm: (userid: string) =>
+    request<WecomBindSuccess>('/wecom/bind/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userid }),
+    }),
+
+  /** 解绑：清空 wecom_userid 并撤销既有 wecom_app target */
+  wecomBindUnbind: () =>
+    request<{ success: boolean }>('/wecom/bind', { method: 'DELETE' }),
+}
+
+export interface WecomBindUrl {
+  success: boolean
+  state: string
+  /** 企业内浏览器 OAuth 授权链接 */
+  oauth_url: string
+  /** PC 扫码授权链接 */
+  qr_url: string
+}
+
+export interface WecomBindSuggest {
+  matched: boolean
+  userid?: string
+  name?: string
+}
+
+export interface WecomBindSuccess {
+  success: boolean
+  userid: string
+  name: string
 }
 
 export interface TaskDeliveryRecord {

@@ -132,6 +132,9 @@ class CacheKeys:
     MONITOR_SNAPSHOT = "monitor_snapshot"      # monitor_snapshot（整体快照 JSON：四组指标+活性指纹状态）
     MONITOR_HEARTBEAT = "monitor_heartbeat"    # monitor_heartbeat（采集器心跳，value=ISO 时间戳）
     MONITOR_ASSESSMENT = "monitor_assessment"  # monitor_assessment（AI 健康研判结论 + 规则层回落判定）
+    # 企微绑定 OAuth state：wecom_bind_state:{state}（防 CSRF 随机值，TTL 5 分钟，回调一次性消费；
+    # docs/system/wecom-app-task-notification-design.md §4.1）
+    WECOM_BIND_STATE = "wecom_bind_state"
 
 
 # ============== 通用缓存函数 ==============

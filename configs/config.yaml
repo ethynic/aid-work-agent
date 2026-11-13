@@ -601,6 +601,15 @@ notifications:
       - updates.push.services.mozilla.com
       - web.push.apple.com
       - '*.notify.windows.com'
+  # 企微通知应用（长任务企微应用通知，独立 agentid+secret，与渠道对话应用隔离；
+  # docs/system/wecom-app-task-notification-design.md §4.6；redirect_uri 空
+  # 时回退 app.public_base_url + /notification/wecom-bind）
+  wecom_app:
+    enabled: false
+    corp_id: ''
+    agentid: 0
+    secret: ''
+    redirect_uri: ''
 
 # 防滥用策略 Phase 1 观察闭环（docs/system/saas/anti-abuse-policy-design.md）
 anti_abuse:

@@ -69,6 +69,11 @@ class EmailConfiguration(StrictDTO):
     email_address: str = Field(min_length=3, max_length=254)
 
 
+class WecomBindConfirm(StrictDTO):
+    """手机号兜底确认绑定：userid 仅回传预填值，服务端以登录用户手机号重新核实（设计 §4.1）"""
+    userid: str = Field(min_length=1, max_length=64)
+
+
 TENANT_CHANNEL_PROVIDERS = {
     'im_webhook': frozenset({'feishu_bot', 'dingtalk_bot', 'wecom_bot'}),
     'email': frozenset({'smtp'}),
