@@ -58,6 +58,14 @@ def _effective_event_types(stored):
     return stored
 
 
+# 渠道事件白名单（评审回炉 P2-5，设计决策 3/§4.3）：企微应用通知仅投递任务
+# 终态（completed/failed）——waiting_input/paused 等过程事件不推企微卡片，
+# 否则 ask_user 中途提问会绕过「≥5 分钟长任务才通知」的终态门禁；expand
+# 资格判断对 wecom_app target 在既有偏好/事件集合判定之上 AND 本白名单，
+# 其他渠道不受影响。adapter 渲染层同样只留终态映射（fail loud 兜底）。
+PROVIDER_ALLOWED_EVENT_TYPES = {'wecom_app': ('task.completed', 'task.failed')}
+
+
 def mask_tenant_configuration(channel, configuration):
     """租户渠道配置回显：webhook 属凭证脱敏（保留 scheme://host + 末4位）；
     邮箱非机密信息，完整回显。"""
@@ -299,8 +307,12 @@ class NotificationRepository:
             for identity in sorted((body.installation_ref, digest)):
                 cursor.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
                                ('notification:target:'+body.provider+':'+identity,))
-            cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND identity_digest=%s FOR UPDATE''',
-                           (body.provider, digest))
+            # digest 查重按 scope 收敛（唯一约束 UNIQUE(provider,identity_digest,
+            # scope_key,rule_id) 本就按 scope 隔离）：同一 endpoint（如同一企微
+            # 成员）可在不同租户 scope 各自绑定 target，同 scope 内他人绑定仍 409。
+            cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND identity_digest=%s
+                AND scope_key=%s FOR UPDATE''',
+                (body.provider, digest, subject.scope_key))
             endpoint = cursor.fetchone()
             if endpoint and not owned(endpoint, subject):
                 raise NotificationError('NOTIFICATION_TARGET_OWNED', 409)
@@ -1379,7 +1391,9 @@ class NotificationRepository:
                                     eligible = (target['preference_enabled'] and target['preference_since'] is not None
                                         and target['preference_since'] <= message['accepted_at']
                                         and target['enabled_since'] <= message['accepted_at']
-                                        and message['event_type'] in _effective_event_types(target['event_types']))
+                                        and message['event_type'] in _effective_event_types(target['event_types'])
+                                        and (target['provider'] != 'wecom_app' or
+                                             message['event_type'] in PROVIDER_ALLOWED_EVENT_TYPES['wecom_app']))
                                 if not eligible:
                                     continue
                                 if message['policy_key'] == 'tenant_admin_event' and target['recipient_user_id'] is None:

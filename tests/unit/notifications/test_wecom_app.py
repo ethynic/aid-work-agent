@@ -1,7 +1,9 @@
 """企微应用通知 Adapter（Phase 3，设计 §4.3）测试：
 
 - validate_target：userid 校验与稳定摘要（sha256 唯一性口径）
-- render：textcard 文案/回跳 url（含 ref query）、字节上限截断、无域名失败留痕
+- render：textcard 文案/回跳 url（含 ref query，租户消息追加 tenant）、
+  字节上限截断、无域名失败留痕；企微渠道仅终态事件可渲染（评审回炉 P2-5，
+  非终态 fail loud）
 - errcode 分类：0→accepted；40031/43004/81013→target_invalid；42009/45009→
   retryable；其余 errcode→permanent（im_webhook 兜底语义）
 - send：fake 连接全分支（限流/5xx/传输错误/gettoken 失败）、token 缓存与
@@ -13,17 +15,20 @@
 """
 import hashlib
 import json
+from contextlib import contextmanager
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 from loguru import logger
 from pydantic import SecretStr, ValidationError
 
-from src.config.settings import WecomAppConfig
+from src.config.settings import NotificationsConfig, WecomAppConfig
 from src.notifications import wecom_app
-from src.notifications.contracts import (AdapterRegistry, NotificationError,
-                                         WecomAppConfiguration)
-from src.notifications.repository import NotificationRepository, unprotect
+from src.notifications.contracts import (AdapterCapabilities, AdapterRegistry,
+                                         NotificationError, WecomAppConfiguration)
+from src.notifications.repository import (TASK_EVENT_TYPES, NotificationRepository,
+                                          protected, unprotect)
 from src.notifications.wecom_app import WecomAppAdapter
 
 
@@ -190,33 +195,17 @@ class TestRender:
                                        {'session_title': '帮我看下数据', 'event_kind': 'failed'}))
         assert payload['title'] == '帮我看下数据相关任务执行失败'
 
-    def test_waiting_input_textcard(self):
-        payload = self._render(message('task.waiting_input', {
-            'session_title': '日报会话', 'event_kind': 'waiting_input',
-            'question_title': '请确认报表口径', 'session_id': 'sess1'}))
-        assert payload['title'] == '日报会话有新提问等待回答'
-        assert '请确认报表口径' in payload['description']
-
-    @pytest.mark.parametrize('event_type,title_contains', [
-        ('task.paused', '定时任务「日报任务」已暂停'),
-        ('task.needs_action', '定时任务「日报任务」需要处理'),
-        ('task.manual_rejected', '「日报任务」手动执行未成功'),
+    @pytest.mark.parametrize('event_type', [
+        'task.waiting_input', 'task.paused', 'task.needs_action',
+        'task.manual_rejected', 'notification.test', 'billing.credit_low',
     ])
-    def test_scheduled_event_textcards(self, event_type, title_contains):
-        params = {'session_title': '日报会话', 'event_kind': 'completed',
-                  'task_id': 'sched_1', 'task_name': '日报任务',
-                  'reason_label': '连续失败', 'action_label': '需要人工处理'}
-        payload = self._render(message(event_type, params))
-        assert title_contains in payload['title']
-
-    def test_test_event_textcard(self):
-        payload = self._render(message('notification.test',
-                                       {'session_title': '浏览器通知测试', 'event_kind': 'test'}))
-        assert payload['title'] == '通知渠道测试'
-
-    def test_unsupported_event_rejected(self):
+    def test_non_terminal_events_unsupported_fail_loud(self, event_type):
+        """评审回炉 P2-5：企微渠道仅终态通知（设计决策 3/§4.3），waiting_input/
+        paused/needs_action/manual_rejected/test 等非终态映射已删除，误接 fail loud。"""
         with pytest.raises(ValueError, match='NOTIFICATION_EVENT_UNSUPPORTED'):
-            self._render(message('billing.credit_low', {}))
+            self._render(message(event_type, {'session_title': '日报会话',
+                                              'event_kind': 'completed',
+                                              'task_name': '日报任务'}))
 
     def test_long_title_clipped_to_protocol_limit(self):
         payload = self._render(message('task.completed',
@@ -234,6 +223,19 @@ class TestRender:
         with patch('src.config.settings.settings', fake_settings()):
             escaped = WecomAppAdapter(CONFIG).render(unsafe_ref, {})['url']
         tail = escaped.split('ref=', 1)[1]
+        assert '?' not in tail and '/' not in tail
+
+    def test_tenant_message_url_appends_tenant(self):
+        """评审回炉 P1-2：租户消息回跳 url 追加 &tenant=，落地页按其选租户
+        凭证（缺省会读平台凭证把租户用户送登录页）。"""
+        tenant_msg = dict(message(), tenant_id='tenant-1')
+        payload = self._render(tenant_msg)
+        assert payload['url'] == 'https://console.example.test/notification?ref=ref1&tenant=tenant-1'
+
+    def test_tenant_id_escaped_in_url(self):
+        tenant_msg = dict(message(), tenant_id='a/b?c')
+        payload = self._render(tenant_msg)
+        tail = payload['url'].split('tenant=', 1)[1]
         assert '?' not in tail and '/' not in tail
 
 
@@ -513,3 +515,95 @@ class TestDeliveryWrite:
         assert route == []
         assert not [call for call in cursor.execute.call_args_list
                     if 'notification_deliveries' in str(call.args[0])]
+
+
+# ============== expand 渠道事件白名单（评审回炉 P2-5） ==============
+
+class StubWebPushAdapter:
+    """expand 资格对照用：web_push 渠道桩（不参与白名单）。"""
+    channel = provider = 'web_push'
+    capabilities = AdapterCapabilities()
+
+    def available(self):
+        return True
+
+    def render(self, message, target):
+        return {'ref': message['notification_ref']}
+
+
+def expand_message(event_type):
+    now = datetime(2026, 11, 13, 10, 0, 0)
+    waiting = event_type == 'task.waiting_input'
+    params = ({'session_title': '日报会话', 'question_title': '请确认报表口径'}
+              if waiting else {'session_title': '日报会话', 'event_kind': 'completed',
+                               'duration_seconds': 600})
+    return {'notification_id': 'notification_1', 'notification_ref': 'ref1',
+            'schema_version': 1, 'producer': 'agent_runner', 'event_type': event_type,
+            'event_key': 'evt_1', 'scope_key': 'tenant:t1', 'tenant_id': 't1',
+            'recipient_user_id': 'u1', 'category': 'task', 'priority': 0,
+            'policy_key': 'accepted_before_enabled', 'expansion_state': 'pending',
+            'route_snapshot': [], 'read_at': None, 'created_at': now,
+            'resource_ref': {'type': 'runner_waiting' if waiting else 'runner_result',
+                             'id': 'runner_1'},
+            'template_key': None, 'template_version': 1,
+            'parameters_encrypted': protected(params),
+            'occurred_at': now, 'accepted_at': now, 'expires_at': now + timedelta(minutes=5),
+            'database_now': now}
+
+
+def expand_target(channel):
+    return {'target_id': 'target_w1', 'scope_key': 'tenant:t1', 'tenant_id': 't1',
+            'recipient_user_id': 'u1', 'channel': channel, 'provider': channel,
+            'installation_ref': 'inst_1', 'binding_version': 1, 'state': 'active',
+            'rule_id': None, 'enabled_since': datetime(2026, 1, 1),
+            'preference_enabled': True, 'preference_since': datetime(2026, 1, 1),
+            'event_types': list(TASK_EVENT_TYPES)}
+
+
+class TestExpandProviderEventGate:
+    """企微渠道仅终态通知（设计决策 3/§4.3）：waiting_input 等过程事件即使偏好
+    启用也不产生 delivery；其他渠道与企微终态事件不受影响。"""
+
+    def _expand(self, event_type, channel='wecom_app'):
+        repo = NotificationRepository.__new__(NotificationRepository)
+        repo.config = NotificationsConfig(batch_size=10)
+        repo.registry = AdapterRegistry([WecomAppAdapter(CONFIG), StubWebPushAdapter()])
+        cursor = MagicMock()
+        state = {'inserted': 0}
+
+        def execute_dispatch(sql, params=None):
+            if "expansion_state='pending'" in sql:
+                cursor.fetchall = lambda: [expand_message(event_type)]
+            elif 'FROM users' in sql:
+                cursor.fetchone = lambda: {'user_id': 'u1', 'tenant_id': 't1',
+                                           'role': 'user', 'status': 'active'}
+            elif "FROM tenants WHERE tenant_id=%s AND status='active'" in sql:
+                cursor.fetchone = lambda: {'ok': 1}
+            elif 'FROM agent_runners' in sql:
+                cursor.fetchone = lambda: {'runner_id': 'runner_1', 'session_id': 'sess_1'}
+            elif 'FROM notification_targets' in sql:
+                cursor.fetchall = lambda: [expand_target(channel)]
+            elif 'INSERT INTO notification_deliveries' in sql:
+                state['inserted'] += 1
+
+        cursor.execute.side_effect = execute_dispatch
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        @contextmanager
+        def factory():
+            yield conn
+
+        repo.connection_factory = factory
+        with patch('src.config.settings.settings', fake_settings()):
+            repo.expand()
+        return state['inserted']
+
+    def test_waiting_input_not_delivered_to_enabled_wecom_app_target(self):
+        assert self._expand('task.waiting_input', 'wecom_app') == 0
+
+    def test_waiting_input_still_delivered_to_web_push_target(self):
+        assert self._expand('task.waiting_input', 'web_push') == 1
+
+    def test_completed_still_delivered_to_wecom_app_target(self):
+        assert self._expand('task.completed', 'wecom_app') == 1

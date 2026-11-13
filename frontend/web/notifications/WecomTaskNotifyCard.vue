@@ -28,20 +28,14 @@
   </BaseCard>
   <BaseModal v-model="bindOpen" title="绑定企业微信" size="sm" :show-fullscreen="false">
     <div class="space-y-3 text-sm">
-      <template v-if="bindInfo?.qr_data_url">
-        <img :src="bindInfo.qr_data_url" alt="企微绑定二维码" class="mx-auto w-48 h-48">
-        <p class="text-muted text-center">请用企业微信扫描二维码并确认授权，完成后本页自动更新。</p>
-      </template>
-      <p v-else-if="bindInfo" class="text-muted text-center">
-        二维码生成失败，请从企业微信内打开
-        <a :href="bindInfo.qr_url" class="text-primary-600 break-all hover:underline" rel="noopener">授权链接</a>
-        完成绑定。
-      </p>
+      <p v-if="bindInfo && !inWeCom" class="text-muted">将在新窗口打开企业微信授权页，在企微中扫码确认后本页将自动完成绑定。</p>
+      <p v-else-if="bindInfo" class="text-muted">将跳转到企业微信授权页，授权完成后自动返回。</p>
       <p v-if="bindError" role="alert" class="text-danger-600">{{ bindError }}</p>
     </div>
     <template #footer>
       <div class="flex items-center gap-3">
         <BaseButton v-if="inWeCom && bindInfo" intent="primary" @click="openOauth">在企业微信中授权</BaseButton>
+        <BaseButton v-else-if="bindInfo" intent="primary" @click="openQrAuth">打开企微授权页</BaseButton>
         <BaseButton intent="secondary" :disabled="busy" @click="refreshStatus">刷新绑定状态</BaseButton>
         <BaseButton intent="ghost" :disabled="busy" @click="closeBind">关闭</BaseButton>
       </div>
@@ -59,16 +53,20 @@ import { getTenantScopedKey } from '@/api/tenantStorage'
 import { notificationsAPI, type WecomBindStatus, type WecomBindUrl, type WecomBindSuggest } from '@/api/notifications'
 
 // 企微任务通知卡片（wecom-app-task-notification-design §4.5）：复用浏览器通知
-// 卡片骨架——未绑定走绑定流程（PC 扫码 / 手机号预填确认），已绑定提供开关与解绑。
+// 卡片骨架——未绑定走绑定流程（PC 新窗口打开企微扫码授权页 / 手机号预填确认，
+// 企微内嵌环境直接跳授权链接），已绑定提供开关与解绑。
 // 开关只控制 wecom_app 偏好行；target 由服务端绑定落库时登记（设计 §4.3）。
 
 // OAuth 回调落地页(/notification/wecom-bind)与发起页路径不同，token key 需在发起时
-// 存入 sessionStorage 供落地页取用（仅存 key 名，不存凭证本身）
+// 存入 localStorage 供落地页取用（仅存 key 名，不存凭证本身）；PC 流程授权页在
+// 新窗口打开并重定向回落地页，sessionStorage 按标签页隔离，新窗口读不到
 const BIND_CONTEXT_KEY = 'wecom-bind-context'
 // 企业微信内置浏览器 UA 标识：内嵌环境直接跳授权链接，不展示二维码
 const WECOM_UA_PATTERN = /wxwork|wecom/i
 const POLL_INTERVAL_MS = 3000
 const POLL_MAX_TICKS = 100 // ≈state TTL 5 分钟，超时后停止轮询由用户手动刷新
+// 绑定落库成功但通知 target 登记失败（评审回炉 P2-4）：显式警示，不再乐观提示成功
+const REGISTER_FAILED_TEXT = '绑定成功，但通知目标登记失败，请稍后在通知设置页重试解绑后重新绑定。'
 
 // 绑定/偏好操作错误码 → 用户提示（其余错误展示通用文案，不暴露原始错误码）
 const ERROR_TEXT: Record<string, string> = {
@@ -126,7 +124,7 @@ async function refresh() {
 
 function rememberBindContext() {
   // OAuth 回调落地页用发起页的 token 调 confirm（state 绑定发起用户）
-  sessionStorage.setItem(BIND_CONTEXT_KEY, JSON.stringify({
+  localStorage.setItem(BIND_CONTEXT_KEY, JSON.stringify({
     token_key: getTenantScopedKey('saas_token'),
     return_path: route.fullPath,
   }))
@@ -149,6 +147,15 @@ function openOauth() {
   window.location.href = bindInfo.value.oauth_url
 }
 
+function openQrAuth() {
+  // PC 扫码绑定（评审回炉 P1-3）：新窗口打开企微扫码授权页，用户手机扫码
+  // 确认后该窗口带 code+state 重定向回落地页（同源 localStorage 有登录态）
+  // 完成绑定；本页轮询 status 收起弹窗
+  if (!bindInfo.value) return
+  rememberBindContext()
+  window.open(bindInfo.value.qr_url, '_blank', 'noopener')
+}
+
 // ---------- 扫码等待：轮询绑定状态，授权完成自动收起弹窗 ----------
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let pollTicks = 0
@@ -164,8 +171,8 @@ function startPolling() {
       if (current.bound) {
         stopPolling()
         bindOpen.value = false
-        notice.value = '企微绑定成功。'
         await refresh()
+        notice.value = targetActive.value ? '企微绑定成功。' : REGISTER_FAILED_TEXT
       }
     } catch { /* 轮询失败静默，等待下一轮或手动刷新 */ }
   }, POLL_INTERVAL_MS)
@@ -177,7 +184,10 @@ function stopPolling() {
 
 function refreshStatus() {
   return refresh().then(() => {
-    if (bound.value) { bindOpen.value = false; notice.value = '企微绑定成功。' }
+    if (bound.value) {
+      bindOpen.value = false
+      notice.value = targetActive.value ? '企微绑定成功。' : REGISTER_FAILED_TEXT
+    }
     else bindError.value = ''
   })
 }
@@ -189,8 +199,11 @@ async function confirmBind() {
   busy.value = true; error.value = ''
   try {
     const result = await notificationsAPI.wecomBindConfirm(suggest.value.userid)
-    notice.value = `已绑定企微账号「${result.name || result.userid}」。`
     await refresh()
+    // 绑定落库成功但 target 登记失败时显式警示，不乐观提示成功（评审回炉 P2-4）；
+    // 先 refresh 再置提示，避免被 refresh 清空
+    if (result.target_registered === false) error.value = REGISTER_FAILED_TEXT
+    else notice.value = `已绑定企微账号「${result.name || result.userid}」。`
   } catch (e) { error.value = describe(e, '确认绑定失败，请重试。') }
   finally { busy.value = false }
 }

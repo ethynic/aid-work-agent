@@ -512,3 +512,18 @@ def test_wecom_bind_target_registration_queryable_and_rebind_idempotent(boundary
         owner, wecom_registration(actors['a'].user_id, version=first['binding_version'] + 1))
     assert revived['target_id'] == first['target_id']
     assert revived['state'] == 'active' and revived['binding_version'] == 3
+
+
+def test_wecom_same_member_binds_targets_in_different_tenants(boundary_repo, actors):
+    """评审回炉 P2-4：同一企微成员（同 wecom_userid，digest 相同）可在不同租户
+    scope 各自绑定 target（digest 查重按 scope_key 收敛，唯一约束本就含 scope）；
+    同租户内他人绑定同一企微身份仍 409。"""
+    boundary_repo.registry.register(WecomAppStubAdapter())
+    # 两个租户的用户绑定同一企微成员 zhangsan（installation_ref 按各自 user_id）
+    first = boundary_repo.register_target(subject(actors['a']), wecom_registration(actors['a'].user_id))
+    second = boundary_repo.register_target(subject(actors['b']), wecom_registration(actors['b'].user_id))
+    assert second['target_id'] != first['target_id']
+    assert second['scope_key'] == 'tenant:' + actors['b'].tenant_id
+    # 同租户他人绑定同企微身份：endpoint 摘要命中 a 的 target → 仍 TARGET_OWNED
+    with pytest.raises(NotificationError, match='NOTIFICATION_TARGET_OWNED'):
+        boundary_repo.register_target(subject(actors['a_other']), wecom_registration(actors['a_other'].user_id))

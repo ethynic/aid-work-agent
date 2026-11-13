@@ -4,6 +4,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 const status = vi.hoisted(() => vi.fn())
 const preferences = vi.hoisted(() => vi.fn())
 const suggest = vi.hoisted(() => vi.fn())
+const bindUrl = vi.hoisted(() => vi.fn())
 const bindConfirm = vi.hoisted(() => vi.fn())
 const setPreference = vi.hoisted(() => vi.fn())
 const unbind = vi.hoisted(() => vi.fn())
@@ -13,6 +14,7 @@ vi.mock('@/api/notifications', () => ({
     wecomBindStatus: status,
     preferences,
     wecomBindSuggest: suggest,
+    wecomBindUrl: bindUrl,
     wecomBindConfirm: bindConfirm,
     wecomSetPreference: setPreference,
     wecomBindUnbind: unbind,
@@ -29,10 +31,10 @@ function makeCard() {
 }
 
 beforeEach(() => {
-  status.mockReset(); preferences.mockReset(); suggest.mockReset()
+  status.mockReset(); preferences.mockReset(); suggest.mockReset(); bindUrl.mockReset()
   bindConfirm.mockReset(); setPreference.mockReset(); unbind.mockReset()
   preferences.mockResolvedValue({ preferences: [] })
-  sessionStorage.clear()
+  localStorage.clear(); sessionStorage.clear()
 })
 
 afterEach(() => vi.useRealTimers())
@@ -70,6 +72,34 @@ describe('wecom task notify card', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('该企微账号已被其他账号绑定')
     expect(wrapper.text()).not.toContain('NOTIFICATION_BIND_TAKEN')
+  })
+
+  it('warns instead of optimistic success when target registration fails', async () => {
+    status.mockResolvedValue(availableUnbound)
+    suggest.mockResolvedValue({ matched: true, userid: 'zhangsan', name: '张三' })
+    bindConfirm.mockResolvedValue({ success: true, userid: 'zhangsan', name: '张三', target_registered: false })
+    const wrapper = makeCard()
+    await flushPromises()
+    await wrapper.findAll('button').find(b => b.text().includes('确认绑定'))!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('绑定成功，但通知目标登记失败')
+    expect(wrapper.text()).not.toContain('已绑定企微账号「张三」')
+  })
+
+  it('opens the wecom authorize page in a new window on PC instead of rendering a QR code', async () => {
+    status.mockResolvedValue(availableUnbound)
+    bindUrl.mockResolvedValue({ success: true, state: 's', oauth_url: 'https://open.weixin.qq.com/connect/oauth2/authorize',
+      qr_url: 'https://open.work.weixin.qq.com/wwopen/sso/qrConnect' })
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const wrapper = makeCard()
+    await flushPromises()
+    await wrapper.findAll('button').find(b => b.text() === '绑定企微')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('在企微中扫码确认后本页将自动完成绑定')
+    expect(wrapper.text()).not.toContain('企微绑定二维码')
+    await wrapper.findAll('button').find(b => b.text() === '打开企微授权页')!.trigger('click')
+    expect(open).toHaveBeenCalledWith('https://open.work.weixin.qq.com/wwopen/sso/qrConnect', '_blank', 'noopener')
+    open.mockRestore()
   })
 
   it('enables and disables the wecom preference when bound', async () => {

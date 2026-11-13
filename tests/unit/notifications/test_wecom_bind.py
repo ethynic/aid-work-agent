@@ -481,18 +481,13 @@ class TestBindUrl:
         assert 'scope=snsapi_base' in body['oauth_url']
         assert 'redirect_uri=https%3A%2F%2Fx.example.com%2Fnotification%2Fwecom-bind' in body['oauth_url']
         assert 'agentid=1000001' in body['qr_url']
-        # Phase 4：PC 展示用二维码字段恒存在（生成失败为空串由前端兜底展示链接）
-        assert 'qr_data_url' in body
+        # 评审回炉 P1-3：扫码授权页域名 open.work.weixin.qq.com（open.weixin.qq.com
+        # 的 qrConnect 路径 404）；不再返回 qr_data_url（前端新窗口打开授权页，
+        # 不把登录页链接编码成二维码给手机扫）
+        assert body['qr_url'].startswith('https://open.work.weixin.qq.com/wwopen/sso/qrConnect')
+        assert 'qr_data_url' not in body
         # state 已入 Redis：发起人可被回调一次性消费
         assert store.consume(body['state'], 'user_1') is True
-
-    def test_qr_data_url_is_png(self):
-        """qrcode 库可用时 qr_data_url 为 qr_url 的 PNG data URL（容器环境含该依赖）。"""
-        pytest.importorskip('qrcode')
-        resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
-                        ).get('/api/notifications/wecom/bind/url', headers=AUTH)
-        assert resp.status_code == 200
-        assert resp.json()['qr_data_url'].startswith('data:image/png;base64,')
 
     def test_disabled_config_unavailable(self):
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},

@@ -13,6 +13,7 @@
 | Phase 3 | 企微应用 Adapter：textcard 发送、errcode 分类、出站安全 | ✅ 完成（2026-11-13） | 0d0644a8（含 master 同步 8f4e750c）；Adapter+绑定登记接线（幂等 upsert，失败不回滚绑定、响应可见）+TerminalParameters.duration_seconds 时长渲染（其他渠道零影响有专项测试）；99 新增 + 434 回归全绿；integration 真 PG 用例待容器；CR P2 遗留：设计 §4.3 登记事务措辞待 Phase 4 文档修订同步 |
 | Phase 4 | 通知设置页：企微通知卡片（绑定/开关/解绑）+ 点击回跳定位 | ✅ 完成（2026-11-13） | 2fdf51c2；设置卡片+落地页+status 端点+偏好接线；后端 424+前端 vitest 131+build 全绿；测试棒修 401 死代码（err.status）；CR 仅 P3 卫生项；视觉走查待人工 |
 | Phase 5 | 回归测试 + agent2 真机验收 | 🔧 进行中（组合回归完成，待真机） | notifications+db 480 过；agent_runner 577 过（3 失败宿主机预存已基线核实）；前端全量 915 过（12 失败与 master 逐字节同集，预存）；integration 真 PG 与真机验收待部署环境（由用户指示） |
+| 评审回炉（外部 CR 5 项） | P1 存量库缺列/卡片 URL 缺 tenant/扫码域名与二维码语义；P2 跨租户绑定冲突+登记失败显示/waiting_input 绕过时长门禁 | 🔧 进行中 | 修复：db_update.yaml+nuodu init 补 wecom_userid；_notification_url 追加 tenant；qrConnect 域名改 open.work.weixin.qq.com、删 qr_data_url、前端 PC 改新窗口授权页（context 存 localStorage）；digest 查重加 scope_key+前端 target_registered=false 警示；wecom_app 事件白名单仅终态+adapter 非终态 fail loud。notifications 429 + wecom_bind/app 113 + 前端 vitest 136 + build 全绿；新增 integration 真 PG 用例因本机 5432 非直连 PG 未跑 |
 
 前置（用户/运维）：企微管理端创建独立通知应用（agentid+secret）、可信域名与 OAuth 回调域名、可见范围；配置写入 `configs/config.yaml` `notifications.wecom_app`。
 

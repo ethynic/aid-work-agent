@@ -16,7 +16,8 @@ notifications.wecom_app）的 textcard 应用消息，touser 为单个 wecom_use
   点击查看结果（失败用「已执行 X 后失败」口径；时长取事件参数
   duration_seconds，由触发判定随终态事件带入，缺省/0=未知时旧文案兜底）；
   url={public_base_url}/notification?ref={notification_ref}（ref 解析端点
-  Phase 4 接，url 语义与 web push 设计 §5 的 notification_ref 一致）。
+  Phase 4 接，url 语义与 web push 设计 §5 的 notification_ref 一致；租户消息
+  追加 &tenant= 供落地页选租户凭证）。
 安全：secret/access_token 仅出现在请求路径，日志只含接口名与 errcode。
 """
 import hashlib
@@ -115,13 +116,11 @@ class WecomAppAdapter:
 
     @staticmethod
     def _textcard_text(event_type, parameters):
-        """textcard 文案（设计 §4.3）：description=任务已执行 {时长}，点击查看
-        结果（失败事件用「已执行 X 后失败」口径）。会话名快照沿用事件参数
+        """textcard 文案（设计 §4.3，评审回炉 P2-5）：企微渠道仅终态通知
+        （PROVIDER_ALLOWED_EVENT_TYPES），只渲染 completed/failed；waiting_input
+        等非终态映射已删除，误接事件 fail loud。会话名快照沿用事件参数
         （生产者已按 contracts.session_title 清洗），Adapter 不查库；时长取
-        事件参数 duration_seconds（触发判定带入，0/缺省=未知）走旧文案兜底。
-        非终态任务事件沿用既有事件渲染口径给动作提示。"""
-        if event_type == 'notification.test':
-            return '通知渠道测试', '收到即表示企微应用通知链路有效。'
+        事件参数 duration_seconds（触发判定带入，0/缺省=未知）走旧文案兜底。"""
         session = parameters.get('session_title') or '任务'
         duration = _duration_label(parameters.get('duration_seconds'))
         if event_type == 'task.completed':
@@ -132,28 +131,23 @@ class WecomAppAdapter:
             description = (f'任务已执行 {duration} 后失败，点击查看结果。' if duration
                            else '任务执行失败，点击查看结果。')
             return f'{session}相关任务执行失败', description
-        if event_type == 'task.waiting_input':
-            question = parameters.get('question_title') or '新的提问'
-            return f'{session}有新提问等待回答', f'{question}，点击前往处理。'
-        name = parameters.get('task_name') or session
-        if event_type == 'task.paused':
-            return f'定时任务「{name}」已暂停', f'{parameters.get("reason_label") or "需要处理后恢复"}，点击查看。'
-        if event_type == 'task.needs_action':
-            return f'定时任务「{name}」需要处理', f'{parameters.get("action_label") or "需要人工处理"}，点击前往。'
-        if event_type == 'task.manual_rejected':
-            return f'「{name}」手动执行未成功', f'{parameters.get("reason_label") or "任务保持原状态"}，点击查看。'
         raise ValueError('NOTIFICATION_EVENT_UNSUPPORTED')
 
     @staticmethod
     def _notification_url(message):
-        """点击回跳（设计 §4.4）：{public_base_url}/notification?ref={ref}；
-        ref 解析端点 Phase 4 接。未配置公网域名时无可用落地页，渲染失败留痕。"""
+        """点击回跳（设计 §4.4）：{public_base_url}/notification?ref={ref}；租户
+        消息追加 &tenant={tenant_id}（落地页按 tenant 选租户凭证，缺省读平台
+        凭证会把租户用户送登录页）。未配置公网域名时无可用落地页，渲染失败留痕。"""
         from src.config.settings import settings
         base = (getattr(settings.app, 'public_base_url', '') or '').strip().rstrip('/')
         ref = str(message.get('notification_ref') or '')
         if not base or not ref:
             raise ValueError('NOTIFICATION_PUBLIC_URL_REQUIRED')
-        return base + '/notification?ref=' + quote(ref, safe='')
+        url = base + '/notification?ref=' + quote(ref, safe='')
+        tenant_id = str(message.get('tenant_id') or '').strip()
+        if tenant_id:
+            url += '&tenant=' + quote(tenant_id, safe='')
+        return url
 
     def _request_body(self, configuration, payload):
         """message/send textcard 组装：touser 单 userid（设计决策 1，一对一）。"""

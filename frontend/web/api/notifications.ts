@@ -264,10 +264,8 @@ export interface WecomBindUrl {
   state: string
   /** 企业内浏览器 OAuth 授权链接 */
   oauth_url: string
-  /** PC 扫码授权链接 */
+  /** PC 扫码授权页链接（新窗口打开，手机扫码确认后该窗口重定向回落地页） */
   qr_url: string
-  /** qr_url 的二维码 PNG data URL（Phase 4 PC 展示用）；生成失败为空串 */
-  qr_data_url?: string
 }
 
 export interface WecomBindSuggest {
@@ -280,6 +278,8 @@ export interface WecomBindSuccess {
   success: boolean
   userid: string
   name: string
+  /** 通知 target 是否登记成功；false 时绑定已落库但需回设置页重试登记 */
+  target_registered: boolean
 }
 
 export interface TaskDeliveryRecord {
