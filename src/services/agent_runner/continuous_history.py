@@ -187,6 +187,7 @@ def compact_facts(state,retire_resources=None):
             continue
         state.tools.pop(key)
         state.resources.get('tool_cursor_orders',{}).pop(key,None)
+        state.resources.get('server_recovery_replies',{}).pop(key,None)
         state.resources['archived_tool_count'] = state.resources.get('archived_tool_count',0)+1
         state.resources.get('plan_tasks',{}).pop(key,None)
         phases = state.resources.get('local_domain_phases') or {}

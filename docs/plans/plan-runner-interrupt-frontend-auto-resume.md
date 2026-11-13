@@ -46,6 +46,8 @@ continuous 任务服务端已有自动恢复（recovery_repository.py next_conti
 
 ## 方案
 
+2026-11-13 补充：继续入口沿用，点击后立即收起，待服务端确认再次中断或可重试失败后恢复。续跑定位和原会话核对由 Runner 处理。详见 [Runner 检查点恢复设计](../system/agent-application-architecture-design.md#58-runner-按检查点继续执行2026-11-13已实现) 和 [开发计划](plan-runner-server-skill-interruption-recovery.md)。
+
 纯前端 5 文件，不动 wire schema（已交付客户端兼容原则）：
 
 1. `frontend/web/api/runner.ts`：新增共享谓词 `runnerResumable(row)`——

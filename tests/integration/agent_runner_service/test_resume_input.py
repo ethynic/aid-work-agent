@@ -128,7 +128,12 @@ def test_resume_input_rejects_before_consuming_or_dispatching(
     gate = threading.Event()
     fixture = workers.root / "budget-original-read.txt"
     fixture.write_text("fictional old read")
-    initial = tool_reply("read", {"file_path": str(fixture)}, call_id="budget-old-read")
+    # A legacy device send with no original binding cannot be verified.
+    # Supplemental input cannot authorize a replacement send.
+    initial = (tool_reply("wecom_message_send", {"target_name":"Fictional contact",
+                                                 "text":"Fictional message"}, call_id="unknown-delivery")
+               if rejection == "unknown_effect" else
+               tool_reply("read", {"file_path": str(fixture)}, call_id="budget-old-read"))
     initial.release = gate
     marker = workers.provider.register(initial)
     accepted = accept(workers.api, actors["a"], marker)
@@ -147,7 +152,7 @@ def test_resume_input_rejects_before_consuming_or_dispatching(
         checkpoint["execution"]["iteration"] = checkpoint["execution"]["max_iterations"]
         expected = "CONTINUATION_LIMIT_REACHED"
     elif rejection == "unknown_effect":
-        checkpoint["execution"]["tools"]["budget-old-read"]["phase"] = "dispatching"
+        checkpoint["execution"]["tools"]["unknown-delivery"]["phase"] = "dispatching"
         expected = "RECOVERY_TOOL_VERIFICATION_REQUIRED"
     else:
         foreign_id = uuid.uuid4().hex

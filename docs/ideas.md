@@ -34,6 +34,7 @@
 | 20261110-1524 | 管理后台系统健康监控页面 | 🔧 部分完成（四级状态徽标改版+网络 IO；重试占比口径 bug 已修待部署，待真机验收） | 平台后台新增 /portal/system-health 健康监控页（登录默认页）：四组指标+AI 研判，无曲线无历史，手机端一等公民 | [设计](system/system-health-monitor-design.md) | — |
 | 20261110-2201 | 系统健康真实模型错误率 | 📋 待规划 | 模型网关侧 LLM 调用失败率统计（KeyPool/CircuitBreaker 补失败计数），发现「限流被重试兜住、对话未失败」隐患；替代已删除的同源重复行（2026-11-10） | — | — |
 | 20261106-1010 | 定时任务结果免登录链接 | 📋 设计完成，待开发 | 定时任务终态通知链接免登录化（复用回复分享的公开路由/ticket/只读渲染）：只读结果页+登录入口、无密码链接即凭证、实时读跟随任务生命周期、web push/站内信/IM webhook 三处全换、产物文件免登录可下载。10 项决策已与用户逐条定稿（2026-11-06）。 | [设计](system/design-task-result-share-link.md) | [计划](plans/plan-task-result-share-link.md) |
+| 20261113-1000 | Runner 重工具服务化 | 📋 设计完成，待评审 | 5 个重工具剥离 LLM 后入独立容器，轻容器 4×5=20 执行体；analyze_data 文件介导改造列 B2；load_class 退役两步走。 | [设计](system/runner-heavy-tool-service-design.md) | — |
 | 20261111-1100 | Runner 容量与轻重负载分离 | 🔧 部分完成（Phase 7 已发布 agent2） | 11-12 agent2 压测通过轻重分离/槽内并发/重判/看门狗验收；to_md 大文件守门 P0 已整改并对话级回归通过；入队判型信号重构草案（travel-consultant 过判实证）定稿待实施，见设计 §10。 | [设计](system/runner-capacity-and-load-separation-design.md) | [开发计划](plans/plan-runner-capacity-load-separation.md) |
 | 20261105-1902 | Runner 执行槽隔离与运行告警 | 🔧 部分完成（agent3 初验） | 混合负载与 Excel 重负载专项已验：隔离性与告警达成，新发现取消挂死/心跳锁超时/假异步 3 个 P0 待整改。 | [设计](system/agent-application-architecture-design.md#10-runner-执行槽隔离与运行告警2026-11-05) | [计划](plans/plan-runner-execution-slot-isolation-and-alerts.md) |
 | 20261104-1639 | 知识库多轮检索新鲜度与结果去重 | 🔧 部分完成 | 工具说明对照无差异，待 Web 与正式微信 KF 复验。 | [设计](system/knowledge-base/knowledge-search-freshness-design.md) | [计划](plans/plan-knowledge-search-freshness.md) |
@@ -55,7 +56,7 @@
 |---|------|------|------|---------|---------|
 | 20261112-1500 | 子智能体思考模式排查与批量关闭（enable_thinking） | 🔧 部分完成（配置贯通+3 个内置关闭已提交，候选实测后再定） | 关思考实测省 35~40% 积分（标书 trace 根因）；配置贯通含自定义数字员工三态开关。已关：ai-bid-assistant/ai-contract-assistant/auto-form-filler/contract-archive-review；6 个候选待 trace 实测，统计时须含自定义数字员工实例三态占比。 | [排查清单](audit/enable-thinking-review-20261112.md) | — |
 | 20261112-1620 | AI投标助手扩容（bid-opportunity-evaluator 技能移植 + 子智能体改造） | 🔧 部分完成（开发+单测完成，待提交部署真机验收） | 移植 workbuddy bid-opportunity-evaluator 技能 v1.0.0（四步法投标可行性评估，规则化 0 模型调用产出 Word 评估报告，负载等级判 light）；ai-bid-assistant 显示名改「AI投标助手」，挂载该技能并定两阶段分流（先评估决策后编标）；7 单测绿 + 容器端到端冒烟通过。 | — | — |
-| 20261110-2030 | 采购比价助手（quote-price-comparison 技能移植 + 薄壳子智能体） | 🔧 部分完成（上游 v1.2.0 已合并，待提交部署） | 已合并 workbuddy v1.2.0（金额守恒单位换算修复 + run_pipeline 一键流水线 + 自带单测）；我方适配层重移植，5 单测+既有回归 32 全绿，待部署真机验收。 | — | — |
+| 20261110-2030 | 采购比价助手（quote-price-comparison 技能移植 + 薄壳子智能体） | 🔧 部分完成（上游 v1.2.1 已合并，待提交部署） | 已合并 v1.2.0（金额守恒单位换算 + run_pipeline 流水线）与 v1.2.1（摘要改 Word summary.docx，python-docx 直出正式交付物）；脚本与上游逐字节一致零补丁，13 单测容器内全绿 + CLI 冒烟通过，待部署真机验收。 | — | — |
 | 20261111-0945 | 项目进度管家（project-progress-tracker 技能移植 + 薄壳子智能体） | 🔧 部分完成（已合并 master 1608eda6，待部署真机验收） | 移植 workbuddy 同名技能 v1.2.0（多源归集→三态研判→离线单文件看板→增量闭环）+ 薄壳子智能体；9 单测绿，待真机验收。 | — | — |
 | 20261110-1440 | AI标书助手（bid-doc-generator 技能移植 + 薄壳子智能体） | 🔧 部分完成（v1.0.2 加轮次纪律，待提交部署重测） | 移植 bid-doc-generator 技能 + 薄壳子智能体；11-10 兰香园测试包实测对齐上游；11-11 agent2 真机首验 ITERATION_LIMIT，SKILL.md 升 v1.0.2 增「轮次预算纪律」，10 单测绿。 | [测试基准与实测记录](tests/fixtures/bid_doc_lxy/README.md) | — |
 | 20261110-1100 | 供应商资质审查（技能移植 + 薄壳子智能体） | 🔧 部分完成（开发+单测完成，待提交部署） | 移植 workbuddy supplier-qualification-review 技能 v1.1.0（四阶段：视觉抽取→真实性审查→外部核查→两份 Word 交付）并新建同名薄壳子智能体；USCC 校验脚本修上游 REG_DEPT「9=金融」错标为「市场监管（工商）」。8 单测绿，待部署真机对话验收。 | — | — |
@@ -106,6 +107,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261113-1126 | 长任务企业微信应用通知 | 📋 待开发 | web 渠道长任务（≥5 分钟可配）完成/失败时经企微独立通知应用一对一推送 textcard，点击回原会话；OAuth 为主+手机号确认兜底绑定身份；替换 web push 投递渠道（保留停用）。6 项决策已逐条确认。 | [设计](system/wecom-app-task-notification-design.md) | [计划](plans/plan-wecom-app-task-notification.md) |
 | 20261106-1145 | wecom_kf 人工超时智能体接管 | 📋 待开发（设计待评审） | 转人工后人工超时限无发言且客户来新消息时，自动结束人工会话切回智能体接待（企业微信状态图 3 只能转 4，无热切换）；含 reason 白名单豁免、接管标记与审计字段、配置字段及前端表单。 | [设计](channel/wecom_kf/wecom_kf_design.md)（§十五） | — |
 | 20261109-2203 | 三渠道入站文件消息支持（飞书/钉钉/企微应用） | 💡 灵感 | 非图片文件输出侧三渠道已具备（textcard/文件消息直发），输入侧缺文件消息分支；机制与图片分支同构（媒体模块已有下载接口），有实际需求时按图片模式补齐。 | — | — |
 | 20261109-2159 | 多渠道图片收发支持（飞书/钉钉/企微应用，对齐 wecom_kf） | 🔧 部分完成（开发+单测完成，待真机验收） | 复刻 wecom_kf 图片链路到三渠道：入站图片下载落盘 -> attachment 入 Runner；出站公共 helper（ImageRef/files 解析+租户校验）+ 企微补 images 直发（>2MB 降级 textcard）+ 飞书/钉钉对齐口径。真机缺口：飞书 image_key、钉钉 downloadCode/photoURL、企微 media_id 收发待各渠道租户配置验证。 | — | — |

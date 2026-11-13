@@ -23,7 +23,7 @@
   comparison.xlsx      横向对比 / 明细数据 / 异常与不可比 / 口径与图例
   comparison.json      结构化结果
   marks.json           标色指令
-  summary.md           摘要
+  summary.docx         摘要（Word 格式）
   *_marked.*           带红绿标记的源报价单副本
   run_report.json      ★ 机器可读的执行报告（大模型只读这一个文件即可）
 """
@@ -294,7 +294,7 @@ def main():
         sys.argv = argv
         compare_prices.main()
 
-    ok = run_step("[2/3] 归一化与比价 → comparison.xlsx / summary.md",
+    ok = run_step("[2/3] 归一化与比价 → comparison.xlsx / summary.docx",
                   _do_compare, report, t0, desc="compare_prices.py --quotes quotes.json")
     if not ok:
         report["errors"].append("比价失败")
@@ -350,7 +350,7 @@ def main():
     report["elapsed_seconds"] = round(time.time() - t0, 2)
     report["deliverables"] = sorted(
         os.path.basename(p) for p in [
-            os.path.join(work, "comparison.xlsx"), os.path.join(work, "summary.md"),
+            os.path.join(work, "comparison.xlsx"), os.path.join(work, "summary.docx"),
             os.path.join(work, "comparison.json"), os.path.join(work, "marks.json"),
         ] if os.path.isfile(p))
     report["deliverables"] += sorted(

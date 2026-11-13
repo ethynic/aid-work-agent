@@ -187,6 +187,14 @@ Desktop 的 Electron adapter 转换 IPC/凭证/选择器；Runtime 的 platform 
 
 创建 202 只表示接单；相同请求键绑定不可变意图。事件游标用于补读，snapshot/result 是展示基础。新增 binding 字段尚不在 WebSubmission 中，不能自行塞进 request_data 充当已验证授权。
 
+#### Runner 检查点恢复共同检查点
+
+2026-11-13 · 已实现并通过独立验证，实体旧 Runtime＋CLI 组合待验。详见 [Runner 恢复设计 §5.8](agent-application-architecture-design.md#58-runner-按检查点继续执行2026-11-13已实现) 和 [开发计划](../plans/plan-runner-server-skill-interruption-recovery.md)。
+
+- 公开 Runner API 保持 major 1。复用 `status`、`resume_requested`、现有控制回执和会话提问 `snapshot.waiting`。沿原 `reply` 的等待 ID、执行节点 ID、文本、答案和附件提交用户核对或补传；继续和核对的受理、消费及执行状态沿现有接口。Web 复用现有状态和提问组件，设备核对仍依据已有 `local_recovery*` 事实。无需增加公开的报价步骤或恢复状态枚举。
+- Runner 后端是中断定位、恢复执行和核对等待的唯一写入者。内部核对绑定沿既有 checkpoint 添加版本 1 的可选记录，至少关联当前待处理调用和原等待，存放用户选择及来源。原调用参数、旧回执与用量记录保持各自含义。客户端和模型不能提供受信执行结果或凭答复改变原调用归属。旧检查点缺可选记录时，由现有模型/工具调用记录导出续跑位置，无需补造历史结果。
+- 发布前验证生产者与现有 Web/桌面消费路径，包含旧响应、原设备核对、BOSS 迟到结果和旧 Runtime＋CLI 的结果与计费。Device API、设备绑定、能力协商及旧设备工具协议沿原接口。需要新私有格式的恢复流程启用前，确认同一领取池版本一致。回退时先停用新格式生产并保留能处理在途等待的 Worker，待其完成或安全结束。兼容与回退证据写入开发计划。
+
 ### 3.2 新 Host 管理接口的最小共同面
 
 下面冻结操作语义，非已有 IPC 方法名；实际 DTO、schema、编码和 IPC channel 由第 8 节第一项产出统一冻结。

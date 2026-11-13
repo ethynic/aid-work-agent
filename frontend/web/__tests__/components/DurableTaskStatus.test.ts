@@ -58,6 +58,27 @@ describe('Durable task controls use server state', () => {
     expect(wrapper.emitted('control')).toEqual([['resume']])
     wrapper.unmount()
   })
+  it('hides continuation while the same task is submitting or resuming', async () => {
+    const row = runnerView({ status:'interrupted' })
+    const wrapper = mount(DurableTaskStatus, { props: { busy:false, resumePending:false, row } })
+    expect(wrapper.text()).toContain('继续任务')
+    await wrapper.setProps({ busy:true, resumePending:true })
+    expect(wrapper.text()).not.toContain('继续任务')
+    await wrapper.setProps({ busy:false, resumePending:false, row:{ ...row, resume_requested:true } })
+    expect(wrapper.text()).not.toContain('继续任务')
+    await wrapper.setProps({ row:{ ...row, resume_requested:false } })
+    expect(wrapper.text()).toContain('继续任务')
+    await wrapper.setProps({ row:{ ...row, status:'running', snapshot:{ waiting:timer } } })
+    expect(wrapper.text()).not.toContain('立即继续')
+    wrapper.unmount()
+  })
+  it('keeps the continuation button hidden while the task waits for a reply', () => {
+    const wrapper = mount(DurableTaskStatus, { props: { busy:false, row:runnerView({ status:'waiting',
+      snapshot:{ waiting:{ kind:'clarification', wait_id:'recovery-wait', target_execution_id:'root' } } }) } })
+    expect(wrapper.text()).toContain('等待你的回复')
+    expect(wrapper.findAll('button').map(button => button.text())).toEqual(['暂停','停止任务'])
+    wrapper.unmount()
+  })
   it('keeps a local recovery interruption on its own card without a resume shortcut', () => {
     const wrapper = mount(DurableTaskStatus, { props: { busy:false, row:runnerView({ status:'interrupted', local_recovery:true,
       local_recovery_kind:'dispatch_unconfirmed', local_recovery_actions:['resume','end'] }) } })

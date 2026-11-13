@@ -186,7 +186,7 @@ services:
     <<: *runner-worker
     mem_limit: ${AGENT_RUNNER_LIGHT_MEMORY:-1g}
     deploy:
-      replicas: ${AGENT_RUNNER_LIGHT_SLOTS:-12}
+      replicas: ${AGENT_RUNNER_LIGHT_SLOTS:-4}
     environment:
       - SERVER_MODE=agent-runner-worker
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -200,7 +200,7 @@ services:
   runner-worker-general:
     <<: *runner-worker
     deploy:
-      replicas: ${AGENT_RUNNER_GENERAL_SLOTS:-8}
+      replicas: ${AGENT_RUNNER_GENERAL_SLOTS:-4}
     environment:
       - SERVER_MODE=agent-runner-worker
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

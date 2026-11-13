@@ -20,7 +20,7 @@
   comparison.xlsx   横向对比 + 明细数据 + 异常与不可比 + 口径与图例
   comparison.json   结构化结果
   marks.json        源报价单标色指令（交给 mark_sources.py）
-  summary.md        可直接贴给用户的对比结果摘要
+  summary.docx      可直接交付给用户的对比结果摘要（Word 格式）
 """
 from __future__ import annotations
 
@@ -620,8 +620,17 @@ def write_excel(path, results, cfg, quotes_meta, anomalies, suspicious):
     return path
 
 
-# ---------- 摘要 ----------
+# ---------- 摘要（Word .docx 格式，不用 Markdown） ----------
 def write_summary(path, results, cfg, quotes_meta, anomalies, suspicious, marks):
+    """生成 Word 摘要（summary.docx）。
+
+    与旧版 Markdown 摘要信息完全等价，仅输出格式改为 .docx，
+    便于直接作为正式交付物给用户。python-docx 在函数内 import，
+    未安装时给出明确错误提示。
+    """
+    from docx import Document
+    from docx.shared import Pt
+
     uploads = [i for r in results for i in r["rows"] if i.get("source_type") == "upload"]
     libs = [i for r in results for i in r["rows"] if i.get("source_type") == "library"]
     webs = [i for r in results for i in r["rows"] if i.get("source_type") == "web"]
@@ -648,59 +657,95 @@ def write_summary(path, results, cfg, quotes_meta, anomalies, suspicious, marks)
             complete.append((r, per))
     totals = {sn: sum(per[sn] for _, per in complete) for sn in up_sources} if complete else {}
 
-    lines = [
-        "# 报价横向比价结果摘要", "",
-        f"- 生成日期：{today()}",
-        f"- 数据范围：上传报价单 {len(set(i.get('source_file') for i in uploads))} 份 / {len(up_sources)} 家供应商；"
-        f"资料库来源 {len(set(i.get('supplier') for i in libs))} 个；网络价格 {len(webs)} 条",
-        f"- 条目归并：{sum(len(r['rows']) for r in results)} 条报价 → {len(results)} 个品项组；"
-        f"不可比/无基准 {n_uncomparable} 条；未报出价格 {n_noquote} 条",
-        f"- 判定口径：基准 = {'+'.join(sorted(set(cfg['baseline_sources'])))} 归一化单价的 {cfg['baseline']}；容差 ±{cfg['tolerance']:.0%}；"
-        f"统一为{'含税' if cfg['tax_basis'] == 'incl' else '未税' if cfg['tax_basis'] == 'excl' else '原口径'} {cfg['target_currency']}；"
-        "同量纲单位自动换算且单价×数量金额守恒",
-        "", "## 核心结论", "",
-    ]
+    def bullet(text, bold_prefix=""):
+        p = doc.add_paragraph(style="List Bullet")
+        if bold_prefix:
+            p.add_run(bold_prefix).bold = True
+        p.add_run(text)
+        return p
+
+    doc = Document()
+    doc.add_heading("报价横向比价结果摘要", level=0)
+
+    # 概览（标签加粗，便于扫读）
+    p = doc.add_paragraph()
+    p.add_run(f"生成日期：{today()}").bold = True
+    doc.add_paragraph(
+        f"数据范围：上传报价单 {len(set(i.get('source_file') for i in uploads))} 份 / {len(up_sources)} 家供应商；"
+        f"资料库来源 {len(set(i.get('supplier') for i in libs))} 个；网络价格 {len(webs)} 条")
+    doc.add_paragraph(
+        f"条目归并：{sum(len(r['rows']) for r in results)} 条报价 → {len(results)} 个品项组；"
+        f"不可比/无基准 {n_uncomparable} 条；未报出价格 {n_noquote} 条")
+    doc.add_paragraph(
+        f"判定口径：基准 = {'+'.join(sorted(set(cfg['baseline_sources'])))} 归一化单价的 {cfg['baseline']}；"
+        f"容差 ±{cfg['tolerance']:.0%}；统一为{'含税' if cfg['tax_basis'] == 'incl' else '未税' if cfg['tax_basis'] == 'excl' else '原口径'} {cfg['target_currency']}；"
+        "同量纲单位自动换算且单价×数量金额守恒")
+
+    # 核心结论
+    doc.add_heading("核心结论", level=1)
     if totals:
         best = min(totals, key=totals.get)
         worst = max(totals, key=totals.get)
         save = totals[worst] - totals[best]
         save_pct = save / totals[worst] if totals[worst] else 0
-        lines += [
-            f"- **综合最优：{best}**，在 {len(complete)} 个各家均有报价的可比品项上合计 "
-            f"**{totals[best]:,.2f} {cfg['target_currency']}**；比最高的 {worst} 低 {save:,.2f}"
-            f"（{save_pct:.1%}）。",
-            "- 各来源可比合计：" + "；".join(f"{k} {v:,.2f}" for k, v in sorted(totals.items(), key=lambda x: x[1])),
-        ]
+        pb = doc.add_paragraph(style="List Bullet")
+        pb.add_run(f"综合最优：{best}").bold = True
+        pb.add_run(f"，在 {len(complete)} 个各家均有报价的可比品项上合计 "
+                   f"{totals[best]:,.2f} {cfg['target_currency']}；比最高的 {worst} 低 {save:,.2f}（{save_pct:.1%}）。")
+        bullet("各来源可比合计：" + "；".join(f"{k} {v:,.2f}" for k, v in sorted(totals.items(), key=lambda x: x[1])))
     else:
-        lines.append("- 上传来源之间没有足够「共同可比品项」，无法给出综合总价排名；已按单项逐一判定红绿。")
-    lines += [
-        f"- 源报价单标记：**偏贵 {n_red} 处标红、偏便宜 {n_green} 处标绿**（共 {len(marks)} 处），均写入 `*_marked.*` 副本，原件未改动。",
-        "",
-        "## 价差最大的品项", "",
-        "| 组号 | 品名 | 规格 | 标准单位 | 基准价 | 最低价 | 最高价 | 最大价差 | 最优来源 |",
-        "|---|---|---|---|---|---|---|---|---|",
-    ]
+        bullet("上传来源之间没有足够「共同可比品项」，无法给出综合总价排名；已按单项逐一判定红绿。")
+    bullet(f"源报价单标记：偏贵 {n_red} 处标红、偏便宜 {n_green} 处标绿（共 {len(marks)} 处），"
+           "均写入 *_marked.* 副本，原件未改动。")
+
+    # 价差最大的品项（表格）
+    doc.add_heading("价差最大的品项", level=1)
+    table = doc.add_table(rows=1, cols=9)
+    table.style = "Table Grid"
+    hdrs = ["组号", "品名", "规格", "标准单位", "基准价", "最低价", "最高价", "最大价差", "最优来源"]
+    for c, h in zip(table.rows[0].cells, hdrs):
+        c.text = h
+        if c.paragraphs[0].runs:
+            c.paragraphs[0].runs[0].bold = True
     for r in sorted([r for r in results if r["gap"]], key=lambda x: -x["gap"])[:8]:
-        lines.append(f"| {r['group_id']} | {r['name']} | {(r['spec'] or '')[:30]} | {r['uom']} | "
-                     f"{r['baseline'] or 0:,.2f} | {r['min_price'] or 0:,.2f} | {r['max_price'] or 0:,.2f} | "
-                     f"{r['gap']:,.2f} | {r['best_source'] or '-'} |")
+        vals = [str(r['group_id']), r['name'], (r['spec'] or '')[:30], r['uom'],
+                f"{r['baseline'] or 0:,.2f}", f"{r['min_price'] or 0:,.2f}",
+                f"{r['max_price'] or 0:,.2f}", f"{r['gap']:,.2f}", r['best_source'] or '-']
+        for c, v in zip(table.add_row().cells, vals):
+            c.text = str(v)
+
+    # 网络参考价
     if webs:
-        lines += ["", "## 网络参考价", "",
-                  f"- 共 {len(webs)} 条网络价格，仅作参考列展示，**不参与基准、红绿判定与价差统计**（零售/挂牌价与采购成交价口径不同）。",
-                  "- 明细及 URL 见 `comparison.xlsx` →「明细数据」的「来源依据」列。"]
-    lines += ["", "## 需要注意", ""]
+        doc.add_heading("网络参考价", level=1)
+        doc.add_paragraph(
+            f"共 {len(webs)} 条网络价格，仅作参考列展示，不参与基准、红绿判定与价差统计"
+            "（零售/挂牌价与采购成交价口径不同）。")
+        doc.add_paragraph("明细及 URL 见 comparison.xlsx →「明细数据」的「来源依据」列。")
+
+    # 需要注意
+    doc.add_heading("需要注意", level=1)
     notes = list(dict.fromkeys(anomalies + suspicious + quotes_meta.get("warnings", [])))
     if n_amt_bad:
         notes.insert(0, f"金额自检：{n_amt_bad} 条「单价×数量」与源报价单金额列不符，请复核数量与单位口径。")
-    lines += [f"- {a}" for a in notes[:15]] if notes else ["- 本次未发现口径异常。"]
-    if len(notes) > 15:
-        lines.append(f"- 另有 {len(notes) - 15} 条提示，见 Excel「异常与不可比」sheet。")
-    lines += ["", "## 交付物", "",
-              "- `comparison.xlsx`：横向对比 / 明细数据 / 异常与不可比 / 口径与图例",
-              "- `*_marked.*`：带红绿标记与批注的源报价单副本",
-              "- `comparison.json`、`marks.json`：结构化结果与标色指令",
-              "- `summary.md`：本摘要", ""]
-    return dump_text(path, "\n".join(lines))
+    if notes:
+        for a in notes[:15]:
+            bullet(a)
+        if len(notes) > 15:
+            bullet(f"另有 {len(notes) - 15} 条提示，见 Excel「异常与不可比」sheet。")
+    else:
+        bullet("本次未发现口径异常。")
+
+    # 交付物
+    doc.add_heading("交付物", level=1)
+    bullet("comparison.xlsx：横向对比 / 明细数据 / 异常与不可比 / 口径与图例", "")
+    bullet("*_marked.*：带红绿标记与批注的源报价单副本", "")
+    bullet("comparison.json、marks.json：结构化结果与标色指令", "")
+    bullet("summary.docx：本摘要（Word 格式）", "")
+
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    doc.save(path)
+    print(f"[OK] 已生成 Word 摘要：{path}")
+    return path
 
 
 def main():
@@ -752,7 +797,7 @@ def main():
         "green_fill": GREEN_FILL, "green_font": GREEN_FONT,
         "count": len(marks), "items": marks,
     })
-    write_summary(os.path.join(args.out_dir, "summary.md"), results, cfg, meta, anomalies, suspicious, marks)
+    write_summary(os.path.join(args.out_dir, "summary.docx"), results, cfg, meta, anomalies, suspicious, marks)
 
     n_red = sum(1 for m in marks if m["flag"] == "expensive")
     n_green = sum(1 for m in marks if m["flag"] == "cheap")
