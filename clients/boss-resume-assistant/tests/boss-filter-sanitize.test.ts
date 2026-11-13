@@ -1,10 +1,11 @@
 /**
- * boss_filter 输入清洗（设计「BOSS 筛选参数容错」/ 计划 Phase 2）：单一规则服务
- * MCP z.preprocess、CLI filter 命令与 operation 入口三处。
+ * boss_filter 输入清洗（设计「BOSS 筛选参数容错」/ 计划 Phase 2+R5）：单一规则服务
+ * MCP z.preprocess（filters/age/引用类维持）、CLI filter 命令与 operation 入口三处。
  *
  * 覆盖：归一化规则表逐字段（experience/salary/educations/filters/age/first_degree_only/
- * options_ref/membership_hint/membership_account_ref）、零输入结构化回执（不触达 Chrome）、
- * 清洗告知进入回执 message/data、CLI 命令级同规则。
+ * options_ref/membership_hint/membership_account_ref）、R5 跳过证据 filter_evidence
+ * （version 1，field/path 定位）、零输入结构化回执（不触达 Chrome）、清洗告知进入回执
+ * message/data、CLI 命令级同规则与同证据。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -13,6 +14,7 @@ import { sanitizeBossFilterInput } from '../src/main/operations/bossFilter.js'
 import { createBossFilterOperation } from '../src/main/operations/bossFilter.js'
 import { filterCommand, type FilterCommandOptions } from '../src/cli/commands/filter.js'
 import { OPERATIONS } from '../src/main/operations/index.js'
+import type { OperationResult } from '../src/main/operations/types.js'
 import type { BossSession } from '../src/main/operations/bossContext.js'
 import type { OpContext } from '../src/main/operations/types.js'
 import type { DomSnapshot } from '../src/main/boss/domSnapshot.js'
@@ -52,21 +54,41 @@ test('experience/salary：null、空串、纯空白、非字符串删除维度�
     assert.equal(s.input.experience, undefined, `experience=${JSON.stringify(raw)} 应删除`)
     assert.equal(s.input.salary, undefined, `salary=${JSON.stringify(raw)} 应删除`)
     assert.deepEqual(s.notices, [], '经验/薪资维度删除不告知')
+    assert.deepEqual(s.evidence.skipped, [
+      { field: 'experience', path: 'experience', reason: 'invalid_value' },
+      { field: 'salary', path: 'salary', reason: 'invalid_value' },
+    ], `experience/salary=${JSON.stringify(raw)} 删除须出具跳过证据（R5 回执核对豁免依据）`)
   }
   const s = sanitizeBossFilterInput({ experience: ' 5-10年 ', salary: ' 10-20K ' })
   assert.equal(s.input.experience, '5-10年')
   assert.equal(s.input.salary, '10-20K')
   assert.equal(s.hasAnyCondition, true)
+  assert.deepEqual(s.evidence.skipped, [], '有效值不出具跳过证据')
 })
 
-test('educations：非数组删除；数组仅留去空白非空字符串项；清洗后空删除', () => {
-  assert.equal(sanitizeBossFilterInput({ educations: '本科' }).input.educations, undefined)
-  assert.equal(sanitizeBossFilterInput({ educations: {} }).input.educations, undefined)
-  assert.equal(sanitizeBossFilterInput({ educations: 123 }).input.educations, undefined)
-  assert.equal(sanitizeBossFilterInput({ educations: [] }).input.educations, undefined)
-  assert.equal(sanitizeBossFilterInput({ educations: ['', '  ', null, 7] }).input.educations, undefined)
+test('educations：null 与非数组均视为无条件；数组仅留去空白非空字符串项；清洗后空删除', () => {
+  const nulled = sanitizeBossFilterInput({ educations: null })
+  assert.equal(nulled.input.educations, undefined, 'null 按未填写处理（云端 Optional 语义，与 experience/salary null 对齐）')
+  assert.deepEqual(nulled.evidence.skipped, [], 'null 是「未填写」语义，静默省略不出具证据')
+  assert.deepEqual(nulled.notices, [])
+  for (const raw of ['本科', {}, 123]) {
+    const s = sanitizeBossFilterInput({ educations: raw })
+    assert.equal(s.input.educations, undefined)
+    assert.deepEqual(s.evidence.skipped, [{ field: 'educations', path: 'educations', reason: 'invalid_value' }], '非 null 的垃圾类型仍属无效值，出具证据')
+  }
+  const empty = sanitizeBossFilterInput({ educations: [] })
+  assert.equal(empty.input.educations, undefined)
+  assert.deepEqual(empty.evidence.skipped, [], '空数组没有请求项，不出具证据')
+  const all = sanitizeBossFilterInput({ educations: ['', '  ', null, 7] })
+  assert.equal(all.input.educations, undefined)
+  assert.deepEqual(all.evidence.skipped, [0, 1, 2, 3].map((index) => ({ field: 'educations', path: `educations[${index}]`, reason: 'invalid_value' })))
   const s = sanitizeBossFilterInput({ educations: [' 本科 ', '', '硕士', null, 7, '博士'] })
   assert.deepEqual(s.input.educations, ['本科', '硕士', '博士'])
+  assert.deepEqual(s.evidence.skipped, [
+    { field: 'educations', path: 'educations[1]', reason: 'invalid_value' },
+    { field: 'educations', path: 'educations[3]', reason: 'invalid_value' },
+    { field: 'educations', path: 'educations[4]', reason: 'invalid_value' },
+  ], '被跳过项按原数组下标出具定位证据')
   assert.equal(s.hasAnyCondition, true)
 })
 
@@ -118,18 +140,37 @@ test('age：非法实际值（超范围/倒序/错误类型/非整数）删除�
   assert.equal(reversed.notices.length, 1)
 })
 
-test('first_degree_only：仅布尔保留（false 保留），其余删除并告知；未提供不告知', () => {
+test('first_degree_only：布尔保留（false 保留）；null 按未填写静默省略并出具证据；其余类型删除并告知', () => {
   assert.deepEqual(sanitizeBossFilterInput({ first_degree_only: true }).input.first_degree_only, true)
   assert.deepEqual(sanitizeBossFilterInput({ first_degree_only: false }).input.first_degree_only, false)
-  for (const raw of ['true', null, 1]) {
+  assert.deepEqual(sanitizeBossFilterInput({ first_degree_only: true }).evidence.skipped, [], '有效值不出具证据')
+  for (const raw of ['true', 1]) {
     const s = sanitizeBossFilterInput({ first_degree_only: raw, educations: ['本科'] })
     assert.equal(s.input.first_degree_only, undefined, `first_degree_only=${JSON.stringify(raw)} 应删除`)
     assert.equal(s.notices.length, 1, `first_degree_only=${JSON.stringify(raw)} 应告知`)
     assert.ok(s.notices[0]!.includes('first_degree_only'))
+    assert.deepEqual(s.evidence.skipped, [{ field: 'first_degree_only', path: 'first_degree_only', reason: 'invalid_value' }])
   }
+  const nulled = sanitizeBossFilterInput({ first_degree_only: null, educations: ['本科'] })
+  assert.equal(nulled.input.first_degree_only, undefined, 'null 按未填写处理（放宽后的合法显式形态）')
+  assert.deepEqual(nulled.notices, [], 'null 与「省略」同义，静默省略不告知')
+  assert.deepEqual(nulled.evidence.skipped, [{ field: 'first_degree_only', path: 'first_degree_only', reason: 'invalid_value' }], 'null 省略仍须出具证据')
   const absent = sanitizeBossFilterInput({ first_degree_only: undefined, educations: ['本科'] })
   assert.equal(absent.input.first_degree_only, undefined)
   assert.deepEqual(absent.notices, [], '未提供等同未填写，不告知')
+  assert.deepEqual(absent.evidence.skipped, [], '未提供不出具证据')
+})
+
+test('filter_evidence：version 1，skipped 项含 field/path/reason；无跳过为空数组', () => {
+  const s = sanitizeBossFilterInput({ experience: null, educations: ['本科', ' '] })
+  assert.deepEqual(s.evidence, {
+    version: 1,
+    skipped: [
+      { field: 'experience', path: 'experience', reason: 'invalid_value' },
+      { field: 'educations', path: 'educations[1]', reason: 'invalid_value' },
+    ],
+  }, 'R5 复现场景（experience:null + educations 空白项）的完整证据')
+  assert.deepEqual(sanitizeBossFilterInput({ experience: '5-10年' }).evidence, { version: 1, skipped: [] })
 })
 
 test('options_ref/membership_hint/membership_account_ref：空值按未提供，非空值原样保留（格式错误仍由原规则拒绝）', () => {
@@ -188,6 +229,11 @@ test('boss_filter：清洗后全空 → 零输入结构化回执，不触达 Chr
   assert.ok(r.message.includes('没有可应用的筛选条件'))
   assert.ok(r.run_id.length > 0)
   assert.equal(f.calls.length, 0, '零输入不得发起任何页面自动化动作')
+  assert.deepEqual(r.data.filter_evidence, { version: 1, skipped: [
+    { field: 'experience', path: 'experience', reason: 'invalid_value' },
+    { field: 'salary', path: 'salary', reason: 'invalid_value' },
+    { field: 'educations', path: 'educations[0]', reason: 'invalid_value' },
+  ] }, '零输入回执同样携带本请求跳过证据（无页面动作，仅供追溯）')
 })
 
 test('boss_filter：非法年龄+同批有效条件 → 继续执行并在回执中告知', async () => {
@@ -199,6 +245,19 @@ test('boss_filter：非法年龄+同批有效条件 → 继续执行并在回执
   assert.ok(Array.isArray(notices) && notices.length === 1, '非法年龄删除须在 data 中告知')
   assert.ok(notices[0]!.includes('年龄'))
   assert.ok(r.message.includes('年龄'), '告知须进入 message')
+  assert.equal('filter_evidence' in r.data, false, 'age 在 schema 层预处理删除，operation 无该请求项证据（R5 范围外）')
+})
+
+test('boss_filter：同批有效条件继续执行时，终态回执携带 filter_evidence（R5 复现场景）', async () => {
+  const f = fakeFactory({ urlError: Object.assign(new Error('fetch failed: ECONNREFUSED'), {}) })
+  const op = createBossFilterOperation(f.factory)
+  const r = await op.execute({ experience: '  ', educations: ['本科', ' '] }, silentCtx())
+  assert.equal(r.success, false, 'fake 工厂连接失败，回执仍为终态')
+  assert.equal(f.calls.length, 1, '有效学历条件应继续执行')
+  assert.deepEqual(r.data.filter_evidence, { version: 1, skipped: [
+    { field: 'experience', path: 'experience', reason: 'invalid_value' },
+    { field: 'educations', path: 'educations[1]', reason: 'invalid_value' },
+  ] }, 'educations[1] 被跳过须凭证据声明，云端核对据此豁免')
 })
 
 // ---------- CLI filter 命令：与 MCP 同规则 ----------
@@ -238,6 +297,32 @@ test('CLI filter：混合垃圾+有效条件交由 operation 清洗（原始参�
       membership_account_ref: undefined,
       first_degree_only: undefined,
     }, '命令把原始参数透传给 operation（清洗与告知在 operation 内统一产生）')
+  } finally {
+    OPERATIONS.boss_filter!.operation = original
+  }
+})
+
+test('CLI filter：真实 operation 经命令入口同样产出 filter_evidence', async () => {
+  // 命令把原始参数透传给 operation；用真实 operation（快速失败工厂）验证命令路径的回执证据
+  const f = fakeFactory({ urlError: Object.assign(new Error('fetch failed: ECONNREFUSED'), {}) })
+  const real = createBossFilterOperation(f.factory)
+  const original = OPERATIONS.boss_filter!.operation
+  let receipt: OperationResult | undefined
+  OPERATIONS.boss_filter!.operation = {
+    name: 'boss_filter',
+    async execute(args, ctx) {
+      receipt = await real.execute(args, ctx)
+      return receipt
+    },
+  }
+  try {
+    const opts = { experience: '  ', educations: ['本科', ' '], cdpPort: 1 } as unknown as FilterCommandOptions
+    const exit = await filterCommand(opts)
+    assert.equal(exit, 1, '连接失败 → exit 1（执行到 operation）')
+    assert.deepEqual(receipt?.data.filter_evidence, { version: 1, skipped: [
+      { field: 'experience', path: 'experience', reason: 'invalid_value' },
+      { field: 'educations', path: 'educations[1]', reason: 'invalid_value' },
+    ] }, 'CLI filter 命令路径与 MCP 路径产生同一份证据')
   } finally {
     OPERATIONS.boss_filter!.operation = original
   }

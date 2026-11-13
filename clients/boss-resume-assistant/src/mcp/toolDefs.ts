@@ -15,13 +15,16 @@ import { z } from 'zod'
 import { sanitizeBossFilterInput } from '../main/operations/bossFilterSanitize.js'
 
 /**
- * boss_filter 可选筛选字段的容错预处理（设计「插件独立容错」2026-11-13）：MCP 严格校验前
- * 清洗可选筛选值，与 CLI filter 命令、operation 入口共用同一 sanitizeBossFilterInput 规则。
- * zod v4 下 preprocess 字段的 JSON Schema 输出取 inner（io:'input'，与 SDK list_tools 同源），
- * 公开 schema 与原契约逐字节等价；describe 必须留在 inner 上。
+ * boss_filter 维持预处理字段的容错预处理（设计「插件独立容错」2026-11-13）：MCP 严格校验前
+ * 清洗 filters/age/引用类字段，与 CLI filter 命令、operation 入口共用同一 sanitizeBossFilterInput 规则。
+ * zod v4 下 preprocess 字段的 JSON Schema 输出取 inner（io:'input'，与 SDK list_tools 同源）。
+ *
+ * R5（2026-11-13）：experience/salary/educations/first_degree_only 不再走预处理——这四处放宽为
+ * 云端 BossFilterInput 同形态（null / 任意字符串项）后，原始形态经 zod 到达 operation 清洗并出具
+ * filter_evidence（回执核对豁免依据）；仍在预处理层删除的值穿不过 SDK、无法出具请求项证据。
  */
-function bossFilterField(key: 'experience' | 'educations' | 'salary' | 'filters' | 'options_ref' | 'age'
-  | 'membership_hint' | 'membership_account_ref' | 'first_degree_only', inner: z.ZodTypeAny): z.ZodTypeAny {
+function bossFilterField(key: 'filters' | 'options_ref' | 'age'
+  | 'membership_hint' | 'membership_account_ref', inner: z.ZodTypeAny): z.ZodTypeAny {
   return z.preprocess((value) => sanitizeBossFilterInput({ [key]: value }).input[key], inner)
 }
 
@@ -56,9 +59,11 @@ const TOOL_DEFINITIONS: BossToolDef[] = [
       '扩展行不做模糊映射。经验/学历/求职状态可在filters中多选；先查membership/groups，未知会员有高级请求须先询问用户，再传membership_hint。' +
       '真实非VIP或确定付费证据优先于提示；只执行普通项并明确回报skipped_filters。院校附属第一学历用first_degree_only。',
     zodShape: {
-      experience: bossFilterField('experience', z.string().min(1).optional().describe('经验档位，如 "5-10年"；省略会清空该维度')),
-      educations: bossFilterField('educations', z.array(z.string().min(1)).optional().describe('学历档位列表，可多选，如 ["本科","硕士"]；省略会清空该维度')),
-      salary: bossFilterField('salary', z.string().min(1).optional().describe('薪资档位，如 "10-20K"；省略会清空该维度')),
+      // R5 放宽四处（与云端 BossFilterInput 可放行形态对齐）：null/空白串原样到达 operation，
+      // 由统一清洗跳过并出具 filter_evidence；其余无效形态（非字符串等）云端本就拒绝，不放宽
+      experience: z.string().nullable().optional().describe('经验档位，如 "5-10年"；省略会清空该维度'),
+      educations: z.array(z.string()).nullable().optional().describe('学历档位列表，可多选，如 ["本科","硕士"]；省略会清空该维度'),
+      salary: z.string().nullable().optional().describe('薪资档位，如 "10-20K"；省略会清空该维度'),
       filters: bossFilterField('filters', z.array(z.object({ label: z.string().min(1), options: z.array(z.string().min(1)).min(1) }).strict()).optional()
         .describe('当轮扩展条件，使用 boss_filter_options 返回的实际行标签和精确选项；如 [{label:"性别",options:["男"]}]。与职位默认条件合并，同一行只传一次，不回写职位库')),
       options_ref: bossFilterField('options_ref', z.string().min(1).optional().describe('云端能力探查引用，Provider接受但不消费；保持调用与恢复意图一致')),
@@ -66,7 +71,7 @@ const TOOL_DEFINITIONS: BossToolDef[] = [
         .describe('真实双端年龄范围，16至45岁；如25岁以上传{min:25,max:null}，null代表页面不限。不能将超出45岁的下限映成不限')),
       membership_hint: bossFilterField('membership_hint', z.enum(['vip', 'non_vip']).optional().describe('仅在头像无法可靠判断会员时使用用户本次明确回答；不能覆盖真实非VIP或付费证据，不能跨账号沿用')),
       membership_account_ref: bossFilterField('membership_account_ref', z.string().regex(/^[a-f0-9]{64}$/).optional().describe('使用未知会员的用户提示时必传最近boss_filter_options返回的account_ref；当前账号不匹配则动作前停止')),
-      first_degree_only: bossFilterField('first_degree_only', z.boolean().optional().describe('院校筛选附属的只看第一学历；true必须同时选择院校，需VIP权益，结果回显实际勾选值')),
+      first_degree_only: z.boolean().nullable().optional().describe('院校筛选附属的只看第一学历；true必须同时选择院校，需VIP权益，结果回显实际勾选值'),
     },
     annotations: { title: '设置筛选条件', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },

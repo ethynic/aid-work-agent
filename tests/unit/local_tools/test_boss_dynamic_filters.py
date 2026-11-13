@@ -209,3 +209,97 @@ def test_core_conditions_using_probe_reference_need_actual_selected_row_receipt(
     if not verified:
         assert result["code"] == "EXECUTION_UNKNOWN"
         assert result["effect"] == "unknown"
+
+
+def _evidence(*records):
+    return {"version": 1, "skipped": [
+        {"field": field, "path": path, "reason": "invalid_value"} for field, path in records]}
+
+
+def test_filter_evidence_declared_skips_are_exempt_from_core_row_verification():
+    """R5：CLI 回执 filter_evidence 声明跳过的请求项豁免逐行核验，不再误判 EXECUTION_UNKNOWN。"""
+    tool = BossFilterTool()
+    args = {"educations": ["本科", " "]}
+    data = {"filter_schema_version": 3, "applied_rows": [{"label": "学历要求", "options": ["本科"]}],
+            "filter_evidence": _evidence(("educations", "educations[1]"))}
+    result = tool._map_terminal({"id": REF, "state": "succeeded", "effect": "applied",
+                                 "arguments_json": args, "result_json": {"data": data}})
+    assert result["success"] is True
+    assert result["effect"] == "applied"
+
+    # 空白 experience 同理：标量项按字段路径豁免，不要求经验行出现在回执
+    args = {"experience": "  ", "educations": ["本科"]}
+    data = {"filter_schema_version": 3, "applied_rows": [{"label": "学历要求", "options": ["本科"]}],
+            "filter_evidence": _evidence(("experience", "experience"))}
+    assert tool._map_terminal({"id": REF, "state": "succeeded", "effect": "applied",
+                               "arguments_json": args, "result_json": {"data": data}})["success"] is True
+
+    # 全部学历项被声明跳过：不要求学历行存在（替换语义下该维度未被设置）
+    args = {"educations": [" ", ""], "experience": "1年以内"}
+    data = {"filter_schema_version": 3, "applied_rows": [{"label": "经验要求", "options": ["1年以内"]}],
+            "filter_evidence": _evidence(("educations", "educations[0]"), ("educations", "educations[1]"))}
+    assert tool._map_terminal({"id": REF, "state": "succeeded", "effect": "applied",
+                               "arguments_json": args, "result_json": {"data": data}})["success"] is True
+
+    # null experience（R5 放宽形态）本就不参与核对；携带其证据不影响其余核验
+    args = {"experience": None, "educations": ["本科"]}
+    data = {"filter_schema_version": 3, "applied_rows": [{"label": "学历要求", "options": ["本科"]}],
+            "filter_evidence": _evidence(("experience", "experience"))}
+    assert tool._map_terminal({"id": REF, "state": "succeeded", "effect": "applied",
+                               "arguments_json": args, "result_json": {"data": data}})["success"] is True
+
+
+def test_core_row_verification_unchanged_for_receipts_without_filter_evidence():
+    """兼容锚：旧 CLI 回执无 filter_evidence → 现有未知改判行为逐字不变。"""
+    tool = BossFilterTool()
+    args = {"educations": ["本科", " "]}
+    data = {"filter_schema_version": 3, "applied_rows": [{"label": "学历要求", "options": ["本科"]}]}
+    result = tool._map_terminal({"id": REF, "state": "succeeded", "effect": "applied",
+                                 "arguments_json": args, "result_json": {"data": data}})
+    assert result["success"] is False
+    assert result["code"] == "EXECUTION_UNKNOWN"
+    assert result["effect"] == "unknown"
+
+
+def test_filter_evidence_does_not_weaken_verification_of_remaining_conditions():
+    """豁免只覆盖声明项；其余有效条件未实际应用仍判未知（核验强度不降）。"""
+    tool = BossFilterTool()
+    evidence = _evidence(("educations", "educations[1]"))
+    base = {"filter_schema_version": 3, "filter_evidence": evidence}
+    # 同批有效经验条件未出现在回执 → 仍 EXECUTION_UNKNOWN
+    args = {"educations": ["本科", " "], "experience": "1年以内"}
+    data = {**base, "applied_rows": [{"label": "学历要求", "options": ["本科"]}]}
+    result = tool._map_terminal({"id": REF, "state": "succeeded", "effect": "applied",
+                                 "arguments_json": args, "result_json": {"data": data}})
+    assert result["success"] is False and result["effect"] == "unknown"
+    # 声明跳过 educations[1]，但 educations 实际选中与本请求不符 → 仍 EXECUTION_UNKNOWN
+    data = {**base, "applied_rows": [{"label": "学历要求", "options": ["硕士"]}]}
+    result = tool._map_terminal({"id": REF, "state": "succeeded", "effect": "applied",
+                                 "arguments_json": {"educations": ["本科", " "]},
+                                 "result_json": {"data": data}})
+    assert result["success"] is False and result["effect"] == "unknown"
+
+
+@pytest.mark.parametrize("evidence", [
+    {"version": 2, "skipped": [{"field": "educations", "path": "educations[1]", "reason": "invalid_value"}]},
+    {"version": True, "skipped": [{"field": "educations", "path": "educations[1]", "reason": "invalid_value"}]},
+    {"skipped": [{"field": "educations", "path": "educations[1]", "reason": "invalid_value"}]},
+    {"version": 1, "skipped": "bad"},
+    {"version": 1},
+    {"version": 1, "skipped": [{"field": "educations"}]},
+    {"version": 1, "skipped": [{"field": "educations", "path": "educations[1]"}]},
+    {"version": 1, "skipped": [{"field": "educations", "path": "educations[1]", "reason": "paywall"}]},
+    {"version": 1, "skipped": [{"field": "age", "path": "age", "reason": "invalid_value"}]},
+    {"version": 1, "skipped": [{"field": "educations", "path": "educations[1]", "reason": "invalid_value"}, "bad"]},
+])
+def test_malformed_filter_evidence_is_ignored_and_existing_behavior_applies(evidence):
+    """证据版本未知/形状异常 → 忽略证据，按旧回执行为逐项核验。"""
+    tool = BossFilterTool()
+    args = {"educations": ["本科", " "]}
+    data = {"filter_schema_version": 3, "applied_rows": [{"label": "学历要求", "options": ["本科"]}],
+            "filter_evidence": evidence}
+    result = tool._map_terminal({"id": REF, "state": "succeeded", "effect": "applied",
+                                 "arguments_json": args, "result_json": {"data": data}})
+    assert result["success"] is False
+    assert result["code"] == "EXECUTION_UNKNOWN"
+    assert result["effect"] == "unknown"

@@ -22,18 +22,18 @@ import { sanitizeBossFilterInput, type SanitizedBossFilterInput } from './bossFi
 export { sanitizeBossFilterInput } from './bossFilterSanitize.js'
 
 export interface BossFilterArgs {
-  /** 经验要求行选项，如 '5-10年' */
-  experience?: string
-  /** 学历要求行选项（多选），如 ['本科','硕士'] */
+  /** 经验要求行选项，如 '5-10年'；放宽后可显式传 null（R5，等同未填写） */
+  experience?: string | null
+  /** 学历要求行选项（多选），如 ['本科','硕士']；放宽后项可为任意字符串（R5，空白项清洗跳过） */
   educations?: string[]
-  /** 薪资待遇行选项（单选），如 '10-20K' */
-  salary?: string
+  /** 薪资待遇行选项（单选），如 '10-20K'；放宽后可显式传 null（R5） */
+  salary?: string | null
   filters?: FilterSpec['filters']
   options_ref?: string
   age?: FilterSpec['age']
   membership_hint?: FilterSpec['membership_hint']
   membership_account_ref?: string
-  first_degree_only?: boolean
+  first_degree_only?: boolean | null
 }
 
 function verification(value: FilterPostcondition): PageExecution['verification'] {
@@ -67,13 +67,23 @@ function zeroInputResult(sanitized: SanitizedBossFilterInput): OperationResult {
       applied: false,
       filter_count: 0,
       ...(sanitized.notices.length > 0 ? { filter_input_notices: sanitized.notices } : {}),
+      ...(sanitized.evidence.skipped.length > 0 ? { filter_evidence: sanitized.evidence } : {}),
     })
 }
 
-/** 清洗告知附加到最终回执（成功/失败均附）；无告知（如 MCP 已预处理清洗）保持原样 */
-function withFilterNotices(result: OperationResult, notices: string[]): OperationResult {
-  if (notices.length === 0) return result
-  return { ...result, message: `${result.message}；${notices.join('；')}`, data: { ...result.data, filter_input_notices: notices } }
+/** 清洗告知与跳过证据附加到最终回执（成功/失败均附）；无告知且无跳过保持原样 */
+function withFilterInputFacts(result: OperationResult, sanitized: SanitizedBossFilterInput): OperationResult {
+  const { notices, evidence } = sanitized
+  if (notices.length === 0 && evidence.skipped.length === 0) return result
+  return {
+    ...result,
+    message: notices.length > 0 ? `${result.message}；${notices.join('；')}` : result.message,
+    data: {
+      ...result.data,
+      ...(notices.length > 0 ? { filter_input_notices: notices } : {}),
+      ...(evidence.skipped.length > 0 ? { filter_evidence: evidence } : {}),
+    },
+  }
 }
 
 async function verifiedFilter<T>(setter: FilterSetter, invoke: () => Promise<T>, execution: PageExecution,
@@ -194,11 +204,11 @@ export function createBossFilterOperation(
   return {
     name: 'boss_filter',
     execute(args: BossFilterArgs, ctx: OpContext): Promise<OperationResult> {
-      // 插件独立容错：MCP 严格校验与页面动作之前清洗可选筛选值（与 z.preprocess / CLI 命令同规则）
+      // 插件独立容错：MCP 严格校验与页面动作之前清洗可选筛选值（与 z.preprocess / CLI 命令同规则），
+      // 被跳过的请求项出具 filter_evidence（R5：云端核对豁免依据）
       const sanitized = sanitizeBossFilterInput(args)
       if (!sanitized.hasAnyCondition) return Promise.resolve(zeroInputResult(sanitized))
       const cleaned = sanitized.input as BossFilterArgs
-      const notices = sanitized.notices
       let retainedSetter: FilterSetter | undefined
       let retainedExecution: PageExecution | undefined
       const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
@@ -244,7 +254,7 @@ export function createBossFilterOperation(
             age: cleaned.age,
             membership_hint: cleaned.membership_hint,
             membership_account_ref: cleaned.membership_account_ref,
-            first_degree_only: cleaned.first_degree_only,
+            first_degree_only: sanitized.input.first_degree_only,
           }
           let result: Awaited<ReturnType<FilterSetter['apply']>>
           result = await verifiedFilter(setter, () => setter.apply(spec), execution, 'boss_filter', goal, expected, ctx.progress, perf, resumeSubmitted)
@@ -273,7 +283,7 @@ export function createBossFilterOperation(
             effect: result.applied ? 'applied' as const : 'none' as const,
           }
         },
-      ).then(filterEffect).then((result) => withFilterNotices(result, notices))
+      ).then(filterEffect).then((result) => withFilterInputFacts(result, sanitized))
       if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
       return run(ctx)
     },

@@ -35,6 +35,7 @@ test('manifest 字段完整（标准 §6）', () => {
   const m = buildManifest()
   assert.equal(m.provider_id, 'ai.aidwork.boss-recruiting')
   const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
+  assert.equal(pkg.version, '1.0.2', 'R5 放宽公开 schema → digest 变化 → provider_version 1.0.2')
   assert.equal(m.provider_version, pkg.version)
   assert.equal(m.protocol, 'mcp')
   assert.equal(m.transport, 'stdio')
@@ -137,6 +138,24 @@ test('写动作硬上限进入 schema（设计 §14）：greet 最大 3 / accept
   assert.equal((reject.inputSchema.required as string[] | undefined)?.includes('_boss_expected_contact_ref') ?? false, false)
   assert.equal((reject.inputSchema.required as string[] | undefined)?.includes('_boss_target_ref') ?? false, false)
   assert.equal(TOOL_NAMES.length, 25)
+})
+
+test('boss_filter 放宽四处进入真实 manifest schema（R5）：digest 随公开 schema 更新', () => {
+  const filter = manifestTools().find((t) => t.name === 'boss_filter')!
+  const props = filter.inputSchema.properties as Record<string, {
+    anyOf?: Array<{ type?: string; items?: { type?: string; minLength?: number } }>
+    items?: { type?: string; minLength?: number }
+  } & Record<string, unknown>>
+  assert.deepEqual(props.experience!.anyOf, [{ type: 'string' }, { type: 'null' }])
+  assert.deepEqual(props.salary!.anyOf, [{ type: 'string' }, { type: 'null' }])
+  assert.deepEqual(props.educations!.anyOf, [{ type: 'array', items: { type: 'string' } }, { type: 'null' }], 'educations 接受 null（云端 Optional[List[str]] 同形态）与任意字符串项')
+  assert.deepEqual(props.first_degree_only!.anyOf, [{ type: 'boolean' }, { type: 'null' }])
+  // 其余字段保持现状，digest 变化只能来自这四处放宽
+  assert.equal((props.filters!.items as { additionalProperties?: boolean }).additionalProperties, false)
+  assert.equal(props.membership_account_ref!.pattern, '^[a-f0-9]{64}$')
+  // tool_declaration 不变（boss 全串行），digest 只覆盖 tools 数组
+  const m = buildManifest()
+  assert.deepEqual(m.tool_declaration.tools.map((t) => t.name), m.tools.map((t) => t.name))
 })
 
 test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => {

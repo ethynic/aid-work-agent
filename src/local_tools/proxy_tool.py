@@ -798,21 +798,56 @@ def _filter_probe_covers_request(data: Dict[str, Any], args: Dict[str, Any]) -> 
     return True
 
 
+def _filter_evidence_skips(data: Dict[str, Any]) -> Optional[set]:
+    """回执 data.filter_evidence（version=1）声明的「无效跳过」请求项集合 {(field, path)}。
+
+    CLI 是业务回执唯一生产者：清洗跳过的请求项凭此声明豁免逐行核验（设计「BOSS 筛选参数
+    容错」R5）。版本未知、形状异常或含未登记字段 → 返回 None，按旧回执处理不豁免任何项
+    （已交付旧 CLI 无此字段，行为逐字不变）。
+    """
+    evidence = data.get("filter_evidence")
+    if not isinstance(evidence, dict) or type(evidence.get("version")) is not int or evidence["version"] != 1:
+        return None
+    skipped = evidence.get("skipped")
+    if not isinstance(skipped, list):
+        return None
+    records = set()
+    for item in skipped:
+        if not isinstance(item, dict):
+            return None
+        field, path = item.get("field"), item.get("path")
+        if field not in ("experience", "salary", "educations", "first_degree_only") \
+                or not isinstance(path, str) or item.get("reason") != "invalid_value":
+            return None
+        records.add((field, path))
+    return records
+
+
 def _verify_core_filter_rows(args: Dict[str, Any], data: Dict[str, Any]) -> bool:
-    """高级项跳过时，普通核心条件仍须由真实逐行回执证明生效。"""
+    """高级项跳过时，普通核心条件仍须由真实逐行回执证明生效。
+
+    回执 filter_evidence 声明为「无效跳过」的请求项豁免核验（CLI 已按未填写处理并出具
+    证据）；某维度全部请求项被豁免时不要求该行出现在回执（替换语义下该维度未被设置）。
+    其余请求项照旧逐项核验，核验强度不降。
+    """
     rows = data.get("applied_rows")
     if not isinstance(rows, list):
         return False
     substitutions = data.get("substitutions", [])
     if not isinstance(substitutions, list):
         return False
+    skips = _filter_evidence_skips(data)
     for key, label in (("experience", "经验要求"), ("educations", "学历要求"), ("salary", "薪资待遇")):
         raw = args.get(key)
         if not raw:
             continue
         values = raw if isinstance(raw, list) else [raw]
         expected = []
-        for requested in values:
+        all_skipped = True
+        for index, requested in enumerate(values):
+            if skips is not None and (key, f"{key}[{index}]" if isinstance(raw, list) else key) in skips:
+                continue
+            all_skipped = False
             requested = requested.strip()
             changes = [s for s in substitutions if isinstance(s, dict) and isinstance(s.get("row"), str)
                        and _filter_label(s["row"]) == label and s.get("requested") == requested]
@@ -821,6 +856,8 @@ def _verify_core_filter_rows(args: Dict[str, Any], data: Dict[str, Any]) -> bool
             matched = changes[0]["matched"].strip() if changes else requested
             if matched != "不限":
                 expected.append(matched)
+        if all_skipped:
+            continue
         matches = [r for r in rows if isinstance(r, dict) and isinstance(r.get("label"), str) and _filter_label(r["label"]) == label]
         if len(matches) != 1 or not isinstance(matches[0].get("options"), list):
             return False
