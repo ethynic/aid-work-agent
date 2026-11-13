@@ -101,11 +101,51 @@ python scripts/fill_template.py --evaluation 03-评估/evaluation.json \
     --template <模版.docx> --out 04-报告/
 ```
 
+> **模版路径说明**：会话/资料库均无模版时，直接使用技能自带
+> `assets/投标可行性评估报告模板.docx`（技能目录内**没有** `templates/` 目录）。
+> `run_pipeline.py` **省略 `--template` 即自动用自带模版**；单独跑 `fill_template.py`
+> 时 `--template` 必填，把该自带模版的绝对路径传给它即可，不要猜其他路径。
+
 **为什么这样设计**：竞争格局、战略价值、商务可接受度这三项虽名为「主观」，
 但其**依据全部来自招标文件的客观特征**（价格分权重、业绩分权重、标段划分、
 联合体限制、品牌门槛、质保期、付款比例、卸货责任…），可规则化量化。
 规则化结果偏保守（打分略低于人工研判），但**硬门槛、决策结论、风险项完全一致**——
 这正是应当由机器做、而不该每次调用模型做的部分。
+
+### 脚本接口速查（禁止读源码）
+
+**禁止用 `grep`/`sed` 翻看 `scripts/*.py` 源码来理解接口或评分逻辑**——所有命令行
+签名与输出结构以本节为准；输入档案字段细节读 `references/assessment-guide.md` §七，
+模版机制读 `references/template-mechanism.md`。读源码既慢又费轮次。
+
+**脚本 CLI 一览**：
+
+| 脚本 | 用途 | 关键参数 |
+|---|---|---|
+| `run_pipeline.py` | 一键全流程 | `--tender`（必需）`--company`（必需）`--out`（必需）；可选 `--announce` `--template`（**缺省即用自带模版**）`--assessment` `--competitors` `--today` |
+| `tender_intel.py` | 解析公告/招标文件 | 子命令 `announce` / `document`；`<file>` + `--out`（必需）；`--from-text` 传正文 |
+| `competitor_intel.py` | 竞品情报 | 子命令 `probe`（`--profile` `--out`）/ `verify`（`--input` `--out`） |
+| `auto_assess.py` | 规则化研判 | `--profile` `--company` `--out`（必需）；可选 `--competitors` |
+| `evaluate_bid.py` | 评估决策 | `--profile` `--company` `--out`（必需）；可选 `--assessment`（缺省自动规则化）`--today` |
+| `fill_template.py` | 模版填充 | `--evaluation` `--template` `--out`（均必需）；可选 `--mapping` `--layout` `--title` |
+| `inspect_template.py` | 模版结构解析 | `<模版.docx>` + `--out` |
+
+**输出 JSON 顶层结构**（修订时直接改对应字段后重跑，不读源码）：
+
+- `assessment_draft.json`（auto_assess 产出，可人工修订后作 `--assessment` 传入）：
+  `product_match_rate` / `product_match_basis` / `commercial_scores`（键值分数字典）/
+  `commercial_basis` / `competition{score,basis}` / `competitors`（清单）/
+  `competitors_by_type` / `competitor_source` / `strategy{score,basis}` / `risks` /
+  `recommendations`。
+- `evaluation.json`（evaluate_bid 产出，fill_template 的输入，一般不手改）：
+  `company_name` / `project`（项目要素字典）/ `decision{code,label,reason,failed_gates}` /
+  `score_total` / `scorecard`（六维分数）/ `gates`（硬门槛逐项 `{gate,requirement,our_status,passed}`）/
+  `economics`（控制价/保证金/资金占用/建议报价区间等）/ `time` / `risks` / `recommendations`。
+
+**修订流向**：招标文件特征（如评分办法、规模指标、商务条款）的解析偏差改
+`tender_profile.json` 对应键后重跑 `auto_assess.py` / `evaluate_bid.py`（`evaluation.json`
+的 `project` 字典每次重跑由 profile 重建，**直接补键会在重跑时被覆盖**）；研判结论偏差改
+`assessment_draft.json` 后重跑 `evaluate_bid.py`。
 
 ## 四、Inputs
 
@@ -333,6 +373,9 @@ python scripts/fill_template.py \
     --out 输出目录/ \
     [--mapping work/template/mapping.json]
 ```
+
+> 走 ③ 兜底时 `--template` 传技能自带模版的**绝对路径**
+> `assets/投标可行性评估报告模板.docx`；技能内不存在 `templates/` 目录，不要猜路径。
 
 填充规则详见 `references/template-mechanism.md`：
 
