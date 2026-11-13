@@ -179,4 +179,5 @@
 2. **wecom-cli localdb-fingerprint 确定性红**（范围外）：魔数不匹配用例期望 false 实得 true，与本任务改动无交集（diff 仅 server.ts 指令排序），已登记移交第四包治理。
 3. **提速余项**：browser-page-recovery（13.8s）等可沿 `opts.sleep` 注入模式继续收敛（§4.3 #5）；powershell-path 两文件可移 integration 桶。均为可选后续，不影响本轮验收。
 4. **ensure-build 的保守口径**：极端场景（新增源文件后又有旧产物被触碰）可能漏判，`test:full` 兜底；日常改动源码必然触发重建，不会跑旧产物。
-5. **CR 复验建议命令**：`npm run test`（boss，预期 ~15s 全绿）、`node scripts/run-tests.mjs`（runtime，预期 ~2m40s 全绿）、`npm run test`（host-core，预期 ~11s 全绿）、`node --test dist/tests/mcp-server.test.js dist/tests/mcp-conformance.test.js`（boss，预期 ~14s 全绿不挂死）。
+5. **CR 复验建议命令**：`npm run test`（boss，预期 ~15s 全绿）、`node scripts/run-tests.mjs`（runtime，预期 ~2m40s 全绿）、`npm run test`（host-core，预期 ~11s 全绿）、`node --test dist/tests/mcp-server.test.js dist/tests/mcp-conformance.test.js`（boss，预期 ~14s 全绿不挂死）。| R7 | 构建指纹纳入编译配置链（tsconfig 原始字节哈希 + extends 递归） | ✅ 完成（2026-11-13，独立审查通过，commit 0df04a84） | 外部复审 P1：改 tsconfig 后旧产物假绿。三包五态门禁实测（迁移重建→跳过→改配置必重建→还原重建→收敛跳过）+ extends 递归夹具验证 + 独立审查复现一致 |
+
