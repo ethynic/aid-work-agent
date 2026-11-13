@@ -189,7 +189,7 @@ Desktop 的 Electron adapter 转换 IPC/凭证/选择器；Runtime 的 platform 
 
 #### Runner 检查点恢复共同检查点
 
-2026-11-13 · 决策已确认，待实施。详见 [Runner 恢复设计 §5.8](agent-application-architecture-design.md#58-runner-按检查点继续执行2026-11-13待开发) 和 [开发计划](../plans/plan-runner-server-skill-interruption-recovery.md)。
+2026-11-13 · 已实现并通过独立验证，实体旧 Runtime＋CLI 组合待验。详见 [Runner 恢复设计 §5.8](agent-application-architecture-design.md#58-runner-按检查点继续执行2026-11-13已实现) 和 [开发计划](../plans/plan-runner-server-skill-interruption-recovery.md)。
 
 - 公开 Runner API 保持 major 1。复用 `status`、`resume_requested`、现有控制回执和会话提问 `snapshot.waiting`。沿原 `reply` 的等待 ID、执行节点 ID、文本、答案和附件提交用户核对或补传；继续和核对的受理、消费及执行状态沿现有接口。Web 复用现有状态和提问组件，设备核对仍依据已有 `local_recovery*` 事实。无需增加公开的报价步骤或恢复状态枚举。
 - Runner 后端是中断定位、恢复执行和核对等待的唯一写入者。内部核对绑定沿既有 checkpoint 添加版本 1 的可选记录，至少关联当前待处理调用和原等待，存放用户选择及来源。原调用参数、旧回执与用量记录保持各自含义。客户端和模型不能提供受信执行结果或凭答复改变原调用归属。旧检查点缺可选记录时，由现有模型/工具调用记录导出续跑位置，无需补造历史结果。

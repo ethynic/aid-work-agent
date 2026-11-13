@@ -7,9 +7,9 @@
 | Phase 0 | agent2 只读取证及设计 | ✅ 完成（2026-11-13） | 核对两次中断及 12 次拒绝，逐条确认通用恢复、用户核对与最小交互 |
 | Phase 1 | 通用检查点续跑与继续入口 | ✅ 完成（2026-11-13） | 132 后端单测、16 核心隔离集成、85 前端测试通过，构建和宽窄屏交互通过，CR 复审通过 |
 | Phase 2 | 同会话补传与外部操作核对 | ✅ 完成（2026-11-13） | 补传、核对、等价外发防重通过独立验证与 CR；隔离集成 19 项、Web 113 项 |
-| Phase 3 | 独立回归、发布兼容及环境验收 | 🔧 进行中 | 独立回归通过，待环境验收 |
+| Phase 3 | 独立回归、发布兼容及环境验收 | 🔧 进行中 | 独立回归通过，待用户发版至 agent2 及实体旧 Runtime＋CLI 验收 |
 
-设计见 [Runner 架构 §5.8](../system/agent-application-architecture-design.md#58-runner-按检查点继续执行2026-11-13待开发)。接口及版本见 [共同契约](../system/runner-desktop-runtime-integration-contract.md#runner-检查点恢复共同检查点)。
+设计见 [Runner 架构 §5.8](../system/agent-application-architecture-design.md#58-runner-按检查点继续执行2026-11-13已实现)。接口及版本见 [共同契约](../system/runner-desktop-runtime-integration-contract.md#runner-检查点恢复共同检查点)。
 
 ## 1. 现场基线
 
