@@ -4,7 +4,7 @@
 
 2026-11-12 · 契约 2.20 候选，待实施。适用 BOSS 网页任务。规则见 [筛选输入](../design/recruiting/resume-job-matching-design.md#boss-筛选参数容错)、[恢复交互](agent-application-architecture-design.md#boss-本机操作恢复) 和 [计划](../plans/plan-boss-filter-input-and-local-recovery.md)。
 
-- **筛选参数**由 BOSS 服务端代理唯一写入新 invocation 的规范参数，已持久化的调用保持其原绑定及摘要。CLI 在自身入口归一化可选筛选条件，且是业务回执的唯一生产者。Device 请求结构、授权、目标绑定和业务回执外层保持兼容。若 MCP 容错改变公开 schema，BOSS 发布同时生成真实 tools schema 和 manifest 摘要，按现有能力发现及签名包规则验证。服务端传给旧插件的参数始终符合旧 schema。
+- **筛选参数**由 BOSS 服务端代理唯一写入新 invocation 的规范参数，已持久化的调用保持其原绑定及摘要。CLI 在自身入口归一化可选筛选条件，且是业务回执的唯一生产者。Device 请求结构、授权、目标绑定和业务回执外层保持兼容。若 MCP 容错改变公开 schema，BOSS 发布同时生成真实 tools schema 和 manifest 摘要，按现有能力发现及签名包规则验证。服务端传给旧插件的参数始终符合旧 schema。**2026-11-13 决策修订：服务端不做筛选参数归一化**（按工具写字段级判断属写死补丁，原规范参数写入路径否决、实现已回退）；容错由 BOSS CLI 在自身入口实现（插件独立容错），云端按模型原参数传递。
 - **正常结束的事实**由 Runtime Host/Core 唯一附加。候选 v1 在既有受权结果 `data` 内保留 `_runtime_completion: {version: 1}`，仅适用于声明 `runtime_boss_completion_v1`、并在领取时确认为该能力的 BOSS 调用。只有原可信 Provider 的结构化终态已到达且此次调用相关执行已退出、锁已释放才写入，插件原回执同名字段先剥离。Host 合成错误、取消信号、超时、崩溃、无法确认退出的路径不得写入。服务端核验原设备、领取凭据、原调用、能力与版本，按原幂等入口持久化和消费。结束事实只解除该调用的资源占用，原 `state` / `effect`、原始业务回执和计费依据按原规则保留，迟到可信回执单独核定。该内部证据不得由模型或网页提交。
 - **停止与接续**由 Runner 服务端唯一写入。拟在原 Web/内部 `verify-local` 增加可选 `continue_after_stop: true`，只开放原对话任务的主人，沿原请求 ID 和停稳核验的冻结范围，服务端负责协作停止、必要的受管停止和接续。可选公开动作 `stop_and_continue` 只在服务端可受理时投影。旧入口的请求/响应、已有 v2 观察和 `runtime_recovery_stop_v1` v3 停止证明继续兼容。前端仅依据服务端动作和进度展示按钮。
 - **升级兼容**。Device API、H1/H3 及全局最低客户端版本保持原接口。缺少新版回执证据时沿已有可信终态和原设备停止证明处理。只更新服务端即可修复旧插件收到空筛选值的问题，已经交付的旧 Runtime＋旧 BOSS 仍能使用原工具、恢复、上报和计费。验收按 [开发计划](../plans/plan-boss-filter-input-and-local-recovery.md) 跑通旧端组合、新证据和竞态。
