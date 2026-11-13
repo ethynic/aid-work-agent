@@ -1,0 +1,218 @@
+{
+  "run_id": "20261112T110740Z",
+  "base_url": "https://agent2.aidingyi.cn",
+  "concurrency": 2,
+  "data_doc_id": null,
+  "excel_attachment": null,
+  "excel_rows": null,
+  "results": [
+    {
+      "case": "main_short",
+      "profile": "main",
+      "session_id": "session_85873e366f03",
+      "runner_id": "runner_75552c4687964cdebdfc8f99fa67a3d5",
+      "status": "completed",
+      "settlement_status": "settled",
+      "attempt": 1,
+      "error_code": null,
+      "started_at": "2026-11-12T11:07:41+00:00",
+      "accepted_at": "2026-11-12T19:07:38.939788+08:00",
+      "finished_at": "2026-11-12T19:07:45.802935+08:00",
+      "observed_at": "2026-11-12T11:07:50+00:00",
+      "poll_errors": 0,
+      "cancel_observation": null,
+      "accept_seconds": 0.42,
+      "elapsed_seconds": 9.85
+    },
+    {
+      "case": "travel_short",
+      "profile": "travel-consultant",
+      "session_id": "session_b49a9e1903d9",
+      "runner_id": "runner_5af76232735545fc843af83a0c9a6a70",
+      "status": "completed",
+      "settlement_status": "settled",
+      "attempt": 1,
+      "error_code": null,
+      "started_at": "2026-11-12T11:07:41+00:00",
+      "accepted_at": "2026-11-12T19:07:39.305947+08:00",
+      "finished_at": "2026-11-12T19:07:57.735725+08:00",
+      "observed_at": "2026-11-12T11:07:59+00:00",
+      "poll_errors": 0,
+      "cancel_observation": null,
+      "accept_seconds": 0.76,
+      "elapsed_seconds": 22.18
+    }
+  ],
+  "samples": [
+    {
+      "at": "2026-11-12T11:07:41+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_75552c4687964cdebdfc8f99fa67a3d5",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_f9bc1676d7f046b89a45dde0cc6ae1c9",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:07:39.125332+08"
+        },
+        {
+          "runner_id": "runner_5af76232735545fc843af83a0c9a6a70",
+          "status": "queued",
+          "attempt": "0",
+          "worker_id": "",
+          "load_class": "heavy",
+          "execution_started_at": ""
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "2.69%",
+          "memory": "88.01MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "1.70%",
+          "memory": "88.03MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "97.54%",
+          "memory": "189.4MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "96.85%",
+          "memory": "200.8MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.15%",
+          "memory": "87.29MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.67MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "7.44%",
+          "memory": "514.4MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "63.36%",
+          "memory": "767MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:07:51+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_75552c4687964cdebdfc8f99fa67a3d5",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:07:39.125332+08"
+        },
+        {
+          "runner_id": "runner_5af76232735545fc843af83a0c9a6a70",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:07:39.409953+08"
+        }
+      ],
+      "db_connections": 25,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.54%",
+          "memory": "88.01MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.44%",
+          "memory": "88.03MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.36%",
+          "memory": "222.1MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.42%",
+          "memory": "220MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.32%",
+          "memory": "87.3MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.67MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "4.51%",
+          "memory": "517.4MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "48.07%",
+          "memory": "756MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:08:00+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_75552c4687964cdebdfc8f99fa67a3d5",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:07:39.125332+08"
+        },
+        {
+          "runner_id": "runner_5af76232735545fc843af83a0c9a6a70",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:07:39.409953+08"
+        }
+      ],
+      "db_connections": 25,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.51%",
+          "memory": "88.01MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.30%",
+          "memory": "88.03MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.52%",
+          "memory": "224.1MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.49%",
+          "memory": "220MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.37%",
+          "memory": "87.3MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.67MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "0.69%",
+          "memory": "517.4MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "41.05%",
+          "memory": "757.6MiB / 4GiB"
+        }
+      }
+    }
+  ],
+  "sample_errors": [],
+  "token_cleanup_failed_tenants": []
+}

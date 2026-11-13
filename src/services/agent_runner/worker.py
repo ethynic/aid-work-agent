@@ -24,6 +24,43 @@ from .usage_repository import UsageRepository
 from .source_receipts import SourceUnavailable
 from .slot_capacity import LoopWatchdog, resolve_slot_concurrency
 
+# worker 内存治理（2026-11-12 agent2 压测整改）：worker 常驻进程存在内存棘轮
+# 效应（任务峰值后 RSS 不回落），RSS 达 cgroup 上限该比例且空闲时退出触发容器
+# recycle；任务高峰限频告警避免刷屏。
+WORKER_RSS_RECYCLE_RATIO = 0.85
+WORKER_MEMORY_WARN_INTERVAL = 60.0
+
+
+def _worker_rss_bytes():
+    """当前进程 RSS（VmRSS，字节）；/proc 不可读（非 Linux）时返回 None。"""
+    try:
+        with open('/proc/self/status', encoding='ascii') as stream:
+            for line in stream:
+                if line.startswith('VmRSS:'):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _cgroup_memory_limit_bytes():
+    """容器 cgroup 内存上限（v1/v2 双路径探测，agent2 宿主为 v1 主导）；
+    不可读或未设限（max/极大值）时返回 None。"""
+    for path in ('/sys/fs/cgroup/memory/memory.limit_in_bytes',
+                 '/sys/fs/cgroup/memory.max'):
+        try:
+            raw = Path(path).read_text().strip()
+        except OSError:
+            continue
+        if raw and raw != 'max':
+            try:
+                value = int(raw)
+            except ValueError:
+                continue
+            if 0 < value < (1 << 62):
+                return value
+    return None
+
 
 def channel_verbose_config(source, request_data, base_config):
     """按来源 + request_data 构造最终 verbose 配置。
@@ -292,6 +329,8 @@ class RunnerWorker:
         self._timer_scan_after = 0
         self._continuous_scan_after = 0
         self._acquisition_turn = 0
+        self._memory_limit = None
+        self._memory_warn_at = 0.0
 
     async def _park(self,control,state,status):
         row=await control.park(state,status)
@@ -698,6 +737,7 @@ class RunnerWorker:
                     await asyncio.to_thread(guard.unlink,missing_ok=True)
                 except OSError as error:
                     logger.opt(exception=True).warning('AgentRunner guard cleanup unavailable')
+                await asyncio.to_thread(self._reclaim_process_memory)
             finally:
                 if self.slot_state is not None:
                     self.slot_state.idle(attempt)
@@ -736,6 +776,56 @@ class RunnerWorker:
             cleanup((row.get('checkpoint') or {}).get('execution') or {},row['runner_id'])
         except Exception as error:
             logger.opt(exception=True).warning('AgentRunner resource cleanup unavailable')
+
+    @staticmethod
+    def _reclaim_process_memory():
+        """任务收尾主动归还内存（2026-11-12 agent2 棘轮整改）：gc 释放对象后
+        malloc_trim 把 glibc 堆空闲页归还 OS，抑制常驻 RSS 滞留历史峰值。
+        仅影响本进程，失败静默降级，不阻断任务收尾链（slot_state.idle 仍执行）。"""
+        try:
+            import gc
+            import ctypes
+            collected = gc.collect()
+            trimmed = None
+            try:
+                trimmed = bool(ctypes.CDLL(None).malloc_trim(0))
+            except Exception:
+                pass
+            logger.debug('AgentRunner worker memory reclaim collected={} trimmed={}',
+                         collected, trimmed)
+        except Exception:
+            logger.opt(exception=True).debug('AgentRunner worker memory reclaim unavailable')
+
+    def _maybe_recycle_on_memory(self, active_tasks):
+        """RSS 水位监控：逼近 cgroup 上限且无在跑任务时优雅退出本 worker，
+        交监督进程走容器重启路径换新进程；有任务时仅限频告警。cgroup 上限
+        不可读时不启用 recycle（只依赖定期重启兜底）。"""
+        rss = _worker_rss_bytes()
+        if rss is None:
+            return
+        # getattr 兜底兼容绕过 __init__ 的单测构造（与 watchdog 同款）
+        limit = getattr(self, '_memory_limit', None)
+        if limit is None:
+            limit = _cgroup_memory_limit_bytes()
+            self._memory_limit = limit
+        threshold = int(limit * WORKER_RSS_RECYCLE_RATIO) if limit else 0
+        if not threshold or rss < threshold:
+            return
+        if active_tasks:
+            now = time.monotonic()
+            if now - getattr(self, '_memory_warn_at', 0.0) >= WORKER_MEMORY_WARN_INTERVAL:
+                self._memory_warn_at = now
+                logger.warning('AgentRunner worker RSS {}MB over recycle threshold {}MB '
+                               'with {} active task(s); recycle deferred to idle',
+                               rss // (1024 * 1024), threshold // (1024 * 1024), active_tasks)
+            return
+        from src.core.temp_logger import tlog
+        tlog("runner内存回收", "worker RSS={rss}MB 达 cgroup 上限比例阈值 {threshold}MB，空闲退出触发容器重启 recycle",
+             rss=rss // (1024 * 1024), threshold=threshold // (1024 * 1024), level="WARNING")
+        logger.warning('AgentRunner worker RSS recycle triggered rss={}MB threshold={}MB; '
+                       'exiting for container restart', rss // (1024 * 1024),
+                       threshold // (1024 * 1024))
+        raise RuntimeError('AGENT_RUNNER_WORKER_MEMORY_RECYCLE')
 
     @staticmethod
     def _agent_user(user_id, tenant_id, *, source=None, channel_user_id=None):
@@ -842,6 +932,9 @@ class RunnerWorker:
             while not self.stopping.is_set():
                 await asyncio.to_thread(self.executions.reap_expired)
                 await asyncio.to_thread(self.finalizer.settle_ready)
+                # RSS 水位监控（内存棘轮整改）：空闲逼近上限即退出换新进程；
+                # 抛出走 finally 优雅收尾后由监督进程触发容器重启。
+                self._maybe_recycle_on_memory(len(tasks))
                 while len(tasks) < self.slot_concurrency and (max_tasks is None or completed+len(tasks)<max_tasks):
                     row = await self._acquire_next()
                     if row is None:

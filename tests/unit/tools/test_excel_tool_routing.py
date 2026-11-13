@@ -655,3 +655,46 @@ class TestMultiOpSpillKeyNoConflict:
         assert len(spilled_text) == merged["full_size"] > PREVIEW_LIMIT
         assert "条目00" in spilled_text  # 落盘为转换全文（转换的是 export 产物）
         assert merged["markdown_file_path"] != merged["file_path"]
+
+
+# ============================================================
+# 规则路由：分块读取意图不得被 to_md 劫持（2026-11-12 agent2 压测回归）
+# 1M 行 Excel 被 to_md 短路成整簿转换，MarkItDown 全量加载顶死 1GiB cgroup
+# ============================================================
+
+
+def test_rule_route_chunked_read_intent_falls_through_to_llm():
+    """分块/按范围/前N行读取意图不命中 to_md 规则，交给 LLM 路由判 read+range"""
+    from src.tools.excel.excel_router import ExcelRouter
+
+    router = ExcelRouter()
+    chunked_contexts = [
+        "分块读取这个大表格的数据",
+        "把附件分段读取，每次读2000行",
+        "按 A1:D2000 的范围读取表格内容",
+        "读取表格前100行看看结构",
+        "数据太多，分批读取后做汇总",
+        "逐段读取整个表格，统计总数",
+    ]
+    for ctx in chunked_contexts:
+        res = router._rule_based_route(ctx, ["big.xlsx"])
+        assert res.get("task") == "", f"分块读取指令被 to_md 规则劫持: {ctx} -> {res}"
+
+
+def test_chunked_intent_regex_not_confused_by_file_id():
+    """range 正则不得命中文件 ID 内部的字母数字段（如 file_a1b2c3d4:e5f6）"""
+    from src.tools.excel.excel_router import _is_chunked_read_intent
+
+    assert _is_chunked_read_intent("查看附件 file_90ec1c11ef49 的内容") is False
+    assert _is_chunked_read_intent("读取这个表格的内容") is False
+    assert _is_chunked_read_intent("按 a1:c2000 读取") is True
+    assert _is_chunked_read_intent("读取前 500 行") is True
+
+
+def test_rule_route_chunked_read_normal_read_still_works():
+    """无分块意图的普通读取/to_md 短路保持不变"""
+    from src.tools.excel.excel_router import ExcelRouter
+
+    router = ExcelRouter()
+    assert router._rule_based_route("读取这个附件的内容", ["a.xlsx"])["task"] == "to_md"
+    assert router._rule_based_route("查看表格内容", ["a.xlsx"])["task"] == "to_md"
