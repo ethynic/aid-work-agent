@@ -198,7 +198,9 @@ export const notificationsAPI = {
 
   /** OAuth 回调确认（重定向落地页携 code+state 回调，需登录态；state 一次性消费）。
    *  auth：落地页路径 /notification/... 下的 token key 与发起页不同，显式传入
-   *  发起页存于 sessionStorage 的 Authorization 头，覆盖 request 内的路径推断 */
+   *  发起页存于 localStorage 的额外请求头——Authorization，及发起租户上下文
+   *  X-Tenant-Id（复审 3：平台管理员的 subject 租户由该头决定），覆盖 request
+   *  内的路径推断 */
   wecomBindCallback: (code: string, state: string, auth?: Record<string, string>) => {
     const q = new URLSearchParams({ code, state })
     return request<WecomBindSuccess>(`/wecom/bind/callback?${q.toString()}`, {

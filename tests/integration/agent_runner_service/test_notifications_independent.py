@@ -484,12 +484,12 @@ class WecomAppStubAdapter:
         return SendResult('accepted')
 
 
-def wecom_registration(user_id, version=None):
+def wecom_registration(user_id, version=None, userid='zhangsan'):
     """服务端绑定后登记载体（与 wecom_bind._register_target 同构）。"""
     from src.notifications.contracts import WecomAppTargetRegistration
     return WecomAppTargetRegistration(
         installation_ref='wecom_bind_' + user_id, expected_binding_version=version,
-        configuration={'wecom_userid': 'zhangsan', 'bound_user_name': '张三', 'tenant_id': ''})
+        configuration={'wecom_userid': userid, 'bound_user_name': '张三', 'tenant_id': ''})
 
 
 def test_wecom_bind_target_registration_queryable_and_rebind_idempotent(boundary_repo, actors):
@@ -514,16 +514,60 @@ def test_wecom_bind_target_registration_queryable_and_rebind_idempotent(boundary
     assert revived['state'] == 'active' and revived['binding_version'] == 3
 
 
-def test_wecom_same_member_binds_targets_in_different_tenants(boundary_repo, actors):
+def test_wecom_same_member_binds_targets_in_different_tenants(boundary_repo, service_database, actors):
     """评审回炉 P2-4：同一企微成员（同 wecom_userid，digest 相同）可在不同租户
     scope 各自绑定 target（digest 查重按 scope_key 收敛，唯一约束本就含 scope）；
-    同租户内他人绑定同一企微身份仍 409。"""
+    同租户内他人绑定同一企微身份仍 409。复审 4：归属从库直查断言（public_target
+    不透出 scope_key，不再读返回字典）。"""
     boundary_repo.registry.register(WecomAppStubAdapter())
     # 两个租户的用户绑定同一企微成员 zhangsan（installation_ref 按各自 user_id）
     first = boundary_repo.register_target(subject(actors['a']), wecom_registration(actors['a'].user_id))
     second = boundary_repo.register_target(subject(actors['b']), wecom_registration(actors['b'].user_id))
     assert second['target_id'] != first['target_id']
-    assert second['scope_key'] == 'tenant:' + actors['b'].tenant_id
-    # 同租户他人绑定同企微身份：endpoint 摘要命中 a 的 target → 仍 TARGET_OWNED
+    # 归属从库直查：b 的 target 落在自己租户 scope、属主为 b
+    row = service_database.rows('SELECT scope_key,recipient_user_id FROM notification_targets WHERE target_id=%s',
+                                (second['target_id'],))[0]
+    assert row['scope_key'] == 'tenant:' + actors['b'].tenant_id
+    assert row['recipient_user_id'] == actors['b'].user_id
+    # 同租户他人绑定同企微身份：endpoint 摘要命中 a 的 active target → 仍 TARGET_OWNED
     with pytest.raises(NotificationError, match='NOTIFICATION_TARGET_OWNED'):
         boundary_repo.register_target(subject(actors['a_other']), wecom_registration(actors['a_other'].user_id))
+    # 各自视角只看得到本人 target（scope 断言兜底）
+    assert [item['target_id'] for item in boundary_repo.targets(subject(actors['a']))] == [first['target_id']]
+    assert [item['target_id'] for item in boundary_repo.targets(subject(actors['b']))] == [second['target_id']]
+
+
+def test_wecom_target_takeover_after_unbind_in_same_tenant(boundary_repo, service_database, actors):
+    """复审 1（同租户接手）：A 绑定后解绑（revoked 行保留 digest），同租户 B 绑定
+    同一企微身份接手该行（改属主/安装引用并复活）而非 409；A active 时 B 绑定仍
+    409；B 接手后重复绑定幂等；B 自己的 stale revoked 行（其他身份）不阻塞接手
+    （installation 冲突仅 active 判定）。"""
+    boundary_repo.registry.register(WecomAppStubAdapter())
+    a, b = subject(actors['a']), subject(actors['a_other'])
+    # B 先绑另一身份再解绑：留下 B 的 stale revoked installation 行
+    stale = boundary_repo.register_target(b, wecom_registration(actors['a_other'].user_id, userid='lisi'))
+    boundary_repo.revoke_target(b, stale['target_id'], stale['binding_version'])
+    # A 绑定 zhangsan
+    first = boundary_repo.register_target(a, wecom_registration(actors['a'].user_id))
+    # A active 时同租户 B 绑定 → 409 不变（必须先解绑）
+    with pytest.raises(NotificationError, match='NOTIFICATION_TARGET_OWNED'):
+        boundary_repo.register_target(b, wecom_registration(actors['a_other'].user_id))
+    # A 解绑：行保留（state=revoked，digest 不变）
+    boundary_repo.revoke_target(a, first['target_id'], first['binding_version'])
+    # B 绑定同一身份 → 接手 A 的行（同 target_id，非新增），版本 +1
+    taken = boundary_repo.register_target(b, wecom_registration(actors['a_other'].user_id))
+    assert taken['target_id'] == first['target_id']
+    assert taken['state'] == 'active' and taken['binding_version'] == first['binding_version'] + 2
+    row = service_database.rows('SELECT scope_key,recipient_user_id,installation_ref FROM notification_targets WHERE target_id=%s',
+                                (first['target_id'],))[0]
+    assert row['scope_key'] == 'tenant:' + actors['a'].tenant_id
+    assert row['recipient_user_id'] == actors['a_other'].user_id
+    assert row['installation_ref'] == 'wecom_bind_' + actors['a_other'].user_id
+    # 可见性随属主切换：B 可查到 active target，A 不再可见
+    assert [item['target_id'] for item in boundary_repo.targets(b)] == [first['target_id']]
+    assert boundary_repo.targets(a) == []
+    # 接手后重复绑定幂等：同配置回传当前版本，版本不变
+    again = boundary_repo.register_target(
+        b, wecom_registration(actors['a_other'].user_id, version=taken['binding_version']))
+    assert again['target_id'] == first['target_id']
+    assert again['binding_version'] == taken['binding_version']

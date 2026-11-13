@@ -43,21 +43,26 @@ class BindStateStore:
     def __init__(self, ttl_seconds=300):
         self.ttl_seconds = ttl_seconds
 
-    def issue(self, user_id):
-        """签发 state 并绑定发起用户：state 值存 user_id，回调时校验同一登录用户。"""
+    def issue(self, user_id, tenant_id):
+        """签发 state 并绑定发起用户与发起租户：state 值存 {user_id, tenant_id}，
+        回调时校验两者一致（复审 3：平台管理员的 subject 租户由 X-Tenant-Id
+        决定，state 必须把发起时的租户上下文一并锁定，否则从租户设置页发起的
+        绑定会被登记到 global scope）。"""
         state = uuid.uuid4().hex
-        set_cached(CacheKeys.WECOM_BIND_STATE, state, value=user_id, ttl=self.ttl_seconds)
+        set_cached(CacheKeys.WECOM_BIND_STATE, state,
+                   value={'user_id': user_id, 'tenant_id': tenant_id}, ttl=self.ttl_seconds)
         return state
 
-    def consume(self, state, user_id):
-        """校验并一次性消费；非法格式/不存在/已消费/过期/非发起用户均拒绝。
+    def consume(self, state, user_id, tenant_id):
+        """校验并一次性消费；非法格式/不存在/已消费/过期/发起用户或租户不匹配均拒绝。
 
-        用户不匹配时视为无效但不删除键：state 仍归发起用户，本人可继续完成绑定。
+        用户或租户不匹配时视为无效但不删除键：state 仍归发起方，本人可继续完成绑定。
         """
         if not state or not _STATE_PATTERN.fullmatch(state):
             return False
         stored = get_cached(CacheKeys.WECOM_BIND_STATE, state)
-        if stored is None or stored != user_id:
+        if (not isinstance(stored, dict) or stored.get('user_id') != user_id
+                or stored.get('tenant_id') != tenant_id):
             return False
         delete_cached(CacheKeys.WECOM_BIND_STATE, state)
         return True
@@ -211,8 +216,12 @@ def create_bind_router(config=None, repository=None, user_loader=None,
         版本），解绑后重绑复活 revoked target；installation_ref 按用户确定
         生成，endpoint 摘要 sha256(wecom_userid) 由 adapter.validate_target
         产出保持唯一性口径。"""
-        existing = next((item for item in repository.targets(current)
-                         if item.get('channel') == 'wecom_app'), None)
+        rows = [item for item in repository.targets(current)
+                if item.get('channel') == 'wecom_app']
+        # 复审 1：existing 优先 active 行回传版本，避免 B 有 stale revoked 行时
+        # expected_binding_version 取错触发 BINDING_CHANGED
+        existing = next((item for item in rows if item.get('state') == 'active'),
+                        rows[0] if rows else None)
         body = WecomAppTargetRegistration(
             installation_ref='wecom_bind_' + str(current.user_id),
             expected_binding_version=existing['binding_version'] if existing else None,
@@ -240,7 +249,7 @@ def create_bind_router(config=None, repository=None, user_loader=None,
         redirect = _redirect_uri(app_config)
         if not redirect:
             raise NotificationError('NOTIFICATION_WECOM_APP_UNAVAILABLE', 503)
-        state = state_store.issue(current.user_id)
+        state = state_store.issue(current.user_id, current.tenant_id)
         encoded_redirect = quote(redirect, safe='')
         oauth_url = (f'{_OAUTH_AUTHORIZE_URL}?appid={quote(app_config.corp_id)}'
                      f'&redirect_uri={encoded_redirect}&response_type=code'
@@ -266,8 +275,10 @@ def create_bind_router(config=None, repository=None, user_loader=None,
     @router.get('/wecom/bind/callback')
     def wecom_bind_callback(request: Request, current: Subject = Depends(subject)):
         _require_app()
-        # state 绑定发起用户：与当前登录用户不一致按无效 state 拒绝
-        if not state_store.consume(request.query_params.get('state', ''), current.user_id):
+        # state 绑定发起用户与发起租户：与当前登录 subject 不一致按无效 state 拒绝
+        # （复审 3：平台管理员的租户由 X-Tenant-Id 决定，带发起租户头才能命中）
+        if not state_store.consume(request.query_params.get('state', ''),
+                                   current.user_id, current.tenant_id):
             raise NotificationError('NOTIFICATION_BIND_STATE_INVALID')
         userid = wecom_client.oauth_userid(request.query_params.get('code', ''))
         if not userid:

@@ -156,30 +156,40 @@ def saved(monkeypatch):
 class TestBindState:
     def test_issue_and_single_consumption(self):
         store = BindStateStore()
-        state = store.issue('user_1')
+        state = store.issue('user_1', 't1')
         assert state
-        assert store.consume(state, 'user_1') is True
+        assert store.consume(state, 'user_1', 't1') is True
         # 重放拒绝
-        assert store.consume(state, 'user_1') is False
+        assert store.consume(state, 'user_1', 't1') is False
 
     def test_other_user_rejected_and_owner_unaffected(self):
         """CR P2：state 绑定发起用户——用户 B 消费用户 A 的 state 被拒，且不烧掉 A 的 state。"""
         store = BindStateStore()
-        state = store.issue('user_1')
-        assert store.consume(state, 'user_2') is False
+        state = store.issue('user_1', 't1')
+        assert store.consume(state, 'user_2', 't1') is False
         # 发起人本人仍可正常消费
-        assert store.consume(state, 'user_1') is True
-        assert store.consume(state, 'user_1') is False
+        assert store.consume(state, 'user_1', 't1') is True
+        assert store.consume(state, 'user_1', 't1') is False
+
+    def test_other_tenant_rejected_and_owner_unaffected(self):
+        """复审 3：state 绑定发起租户——同用户在不同租户上下文回调被拒
+        （平台管理员经 X-Tenant-Id 决定租户，防止发起租户绑定登记到 global）。"""
+        store = BindStateStore()
+        state = store.issue('user_1', 't1')
+        assert store.consume(state, 'user_1', 't2') is False
+        assert store.consume(state, 'user_1', None) is False
+        # 发起租户本人仍可正常消费
+        assert store.consume(state, 'user_1', 't1') is True
 
     def test_expired_rejected(self):
         store = BindStateStore(ttl_seconds=0)
-        state = store.issue('user_1')
-        assert store.consume(state, 'user_1') is False
+        state = store.issue('user_1', 't1')
+        assert store.consume(state, 'user_1', 't1') is False
 
     def test_malformed_rejected(self):
         store = BindStateStore()
-        assert store.consume('', 'user_1') is False
-        assert store.consume('not-a-state', 'user_1') is False
+        assert store.consume('', 'user_1', 't1') is False
+        assert store.consume('not-a-state', 'user_1', 't1') is False
 
 
 # ============== callback ==============
@@ -188,7 +198,7 @@ class TestCallback:
     def test_success_persists_userid(self, saved):
         wecom = FakeWecomClient()
         store = BindStateStore()
-        state = store.issue('user_1')
+        state = store.issue('user_1', 't1')
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
                         wecom=wecom, store=store).get(
             f'/api/notifications/wecom/bind/callback?code=goodcode&state={state}', headers=AUTH)
@@ -201,7 +211,7 @@ class TestCallback:
 
     def test_state_replay_rejected(self, saved):
         store = BindStateStore()
-        state = store.issue('user_1')
+        state = store.issue('user_1', 't1')
         client = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'}, store=store)
         first = client.get(f'/api/notifications/wecom/bind/callback?code=c&state={state}', headers=AUTH)
         assert first.status_code == 200
@@ -222,7 +232,7 @@ class TestCallback:
         """CR P2：用户 B 拿用户 A 签发的 state 调 callback 被拒；A 本人随后仍绑定成功。"""
         wecom = FakeWecomClient()
         store = BindStateStore()
-        state_a = store.issue('user_1')
+        state_a = store.issue('user_1', 't1')
         client_b = make_app(user={'user_id': 'user_2', 'tenant_id': 't1', 'role': 'user'},
                             wecom=wecom, store=store)
         resp_b = client_b.get(f'/api/notifications/wecom/bind/callback?code=c&state={state_a}',
@@ -240,10 +250,63 @@ class TestCallback:
                                  'target_registered': True}
         assert saved['saved'] == [('user_1', 'zhangsan')]
 
+    def test_callback_tenant_mismatch_rejected(self, saved):
+        """复审 3：回调 subject 租户与发起租户不一致 → STATE_INVALID（不消费 state）。"""
+        wecom = FakeWecomClient()
+        store = BindStateStore()
+        state = store.issue('user_1', 't1')
+        # 同用户在另一租户上下文回调（普通用户租户来自登录态）
+        client = make_app(user={'user_id': 'user_1', 'tenant_id': 't2', 'role': 'user'},
+                          wecom=wecom, store=store)
+        resp = client.get(f'/api/notifications/wecom/bind/callback?code=c&state={state}',
+                          headers=AUTH)
+        assert resp.status_code == 400
+        assert resp.json() == {'error': 'NOTIFICATION_BIND_STATE_INVALID'}
+        assert saved['saved'] == []
+        # state 未被烧掉，发起租户本人仍可完成绑定
+        owner = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
+                         wecom=wecom, store=store)
+        assert owner.get(f'/api/notifications/wecom/bind/callback?code=c&state={state}',
+                         headers=AUTH).status_code == 200
+
+    def test_platform_admin_without_tenant_header_rejected(self, saved):
+        """复审 3：平台管理员从租户设置页发起（state 锁定发起租户）但回调不带
+        X-Tenant-Id → STATE_INVALID，不再把绑定登记进 global scope。"""
+        wecom = FakeWecomClient()
+        store = BindStateStore()
+        state = store.issue('admin_1', 't1')
+        client = make_app(user={'user_id': 'admin_1', 'tenant_id': None, 'role': 'platform_admin'},
+                          wecom=wecom, store=store)
+        resp = client.get(f'/api/notifications/wecom/bind/callback?code=c&state={state}',
+                          headers=AUTH)
+        assert resp.status_code == 400
+        assert resp.json() == {'error': 'NOTIFICATION_BIND_STATE_INVALID'}
+        assert saved['saved'] == []
+
+    def test_platform_admin_with_tenant_header_registers_to_tenant(self, saved):
+        """复审 3：平台管理员带发起租户 X-Tenant-Id 回调 → subject 租户=发起租户，
+        state 校验通过，target 登记到发起租户 scope。"""
+        wecom = FakeWecomClient()
+        repository = StubBindRepository()
+        store = BindStateStore()
+        state = store.issue('admin_1', 't1')
+        client = make_app(user={'user_id': 'admin_1', 'tenant_id': None, 'role': 'platform_admin'},
+                          wecom=wecom, store=store, repository=repository)
+        resp = client.get(f'/api/notifications/wecom/bind/callback?code=goodcode&state={state}',
+                          headers={**AUTH, 'X-Tenant-Id': 't1'})
+        assert resp.status_code == 200
+        assert resp.json() == {'success': True, 'userid': 'zhangsan', 'name': '张三',
+                               'target_registered': True}
+        assert saved['saved'] == [('admin_1', 'zhangsan')]
+        # 登记到发起租户（subject 租户与配置 tenant_id 均为发起租户）
+        subject, body = repository.registered[0]
+        assert (subject.user_id, subject.tenant_id) == ('admin_1', 't1')
+        assert body.configuration.tenant_id == 't1'
+
     def test_wecom_errcode_nonzero_rejected(self, saved):
         wecom = FakeWecomClient(oauth_userid=None)  # errcode 非零 → 客户端返回 None
         store = BindStateStore()
-        state = store.issue('user_1')
+        state = store.issue('user_1', 't1')
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
                         wecom=wecom, store=store).get(
             f'/api/notifications/wecom/bind/callback?code=bad&state={state}', headers=AUTH)
@@ -254,7 +317,7 @@ class TestCallback:
     def test_member_out_of_scope_rejected(self, saved):
         wecom = FakeWecomClient(member=None)  # user/get errcode 非零（不在可见范围/不存在）
         store = BindStateStore()
-        state = store.issue('user_1')
+        state = store.issue('user_1', 't1')
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
                         wecom=wecom, store=store).get(
             f'/api/notifications/wecom/bind/callback?code=c&state={state}', headers=AUTH)
@@ -265,7 +328,7 @@ class TestCallback:
     def test_member_disabled_rejected(self, saved):
         wecom = FakeWecomClient(member={'userid': 'zhangsan', 'name': '张三', 'status': 2})
         store = BindStateStore()
-        state = store.issue('user_1')
+        state = store.issue('user_1', 't1')
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
                         wecom=wecom, store=store).get(
             f'/api/notifications/wecom/bind/callback?code=c&state={state}', headers=AUTH)
@@ -276,7 +339,7 @@ class TestCallback:
     def test_taken_by_other_user_rejected(self, saved):
         saved['taken_by'] = 'user_2'
         store = BindStateStore()
-        state = store.issue('user_1')
+        state = store.issue('user_1', 't1')
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
                         store=store).get(
             f'/api/notifications/wecom/bind/callback?code=c&state={state}', headers=AUTH)
@@ -287,7 +350,7 @@ class TestCallback:
     def test_rebind_same_user_ok(self, saved):
         saved['taken_by'] = 'user_1'  # 已绑定的就是本人 → 幂等重绑
         store = BindStateStore()
-        state = store.issue('user_1')
+        state = store.issue('user_1', 't1')
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
                         store=store).get(
             f'/api/notifications/wecom/bind/callback?code=c&state={state}', headers=AUTH)
@@ -376,7 +439,7 @@ class TestConfirm:
 class TestTargetRegistration:
     def _bind_via_callback(self, saved, repository):
         store = BindStateStore()
-        state = store.issue('user_1')
+        state = store.issue('user_1', 't1')
         return make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
                         store=store, repository=repository).get(
             f'/api/notifications/wecom/bind/callback?code=goodcode&state={state}',
@@ -412,6 +475,16 @@ class TestTargetRegistration:
         assert resp.status_code == 200
         _, body = repository.registered[0]
         assert body.expected_binding_version == 2
+
+    def test_existing_selection_prefers_active_row(self, saved):
+        """复审 1：existing 优先 active 行回传 binding_version，避免 stale
+        revoked 行取错 expected_binding_version 触发 BINDING_CHANGED。"""
+        repository = StubBindRepository(targets=[_wecom_target(version=9, state='revoked'),
+                                                 _wecom_target(version=5)])
+        resp = self._bind_via_callback(saved, repository)
+        assert resp.status_code == 200
+        _, body = repository.registered[0]
+        assert body.expected_binding_version == 5
 
     def test_register_failure_does_not_break_bind(self, saved):
         """登记失败不影响绑定落库本身：绑定成功 + 响应 target_registered=False 可见。"""
@@ -487,7 +560,7 @@ class TestBindUrl:
         assert body['qr_url'].startswith('https://open.work.weixin.qq.com/wwopen/sso/qrConnect')
         assert 'qr_data_url' not in body
         # state 已入 Redis：发起人可被回调一次性消费
-        assert store.consume(body['state'], 'user_1') is True
+        assert store.consume(body['state'], 'user_1', 't1') is True
 
     def test_disabled_config_unavailable(self):
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},

@@ -59,8 +59,10 @@ import { notificationsAPI, type WecomBindStatus, type WecomBindUrl, type WecomBi
 
 // OAuth 回调落地页(/notification/wecom-bind)与发起页路径不同，token key 需在发起时
 // 存入 localStorage 供落地页取用（仅存 key 名，不存凭证本身）；PC 流程授权页在
-// 新窗口打开并重定向回落地页，sessionStorage 按标签页隔离，新窗口读不到
-const BIND_CONTEXT_KEY = 'wecom-bind-context'
+// 新窗口打开并重定向回落地页，sessionStorage 按标签页隔离，新窗口读不到。
+// 复审 2：上下文按 state 分键——两个标签页各拿不同 state 互不覆盖，回调页只
+// 消费自己 state 的键
+const bindContextKey = (state: string) => `wecom-bind-context:${state}`
 // 企业微信内置浏览器 UA 标识：内嵌环境直接跳授权链接，不展示二维码
 const WECOM_UA_PATTERN = /wxwork|wecom/i
 const POLL_INTERVAL_MS = 3000
@@ -122,19 +124,23 @@ async function refresh() {
   finally { loading.value = false }
 }
 
-function rememberBindContext() {
-  // OAuth 回调落地页用发起页的 token 调 confirm（state 绑定发起用户）
-  localStorage.setItem(BIND_CONTEXT_KEY, JSON.stringify({
+function rememberBindContext(state: string) {
+  // OAuth 回调落地页用发起页的 token 调 confirm（state 绑定发起用户+租户）；
+  // tenant 取发起页路由的租户段（/t/:tenant_id/...；portal 全局发起为空），
+  // 回调页据此带 X-Tenant-Id（复审 3：平台管理员 subject 租户由该头决定）
+  localStorage.setItem(bindContextKey(state), JSON.stringify({
     token_key: getTenantScopedKey('saas_token'),
     return_path: route.fullPath,
+    tenant: typeof route.params.tenant_id === 'string' ? route.params.tenant_id : '',
   }))
 }
 
 async function startBind() {
   busy.value = true; error.value = ''; bindError.value = ''
   try {
-    bindInfo.value = await notificationsAPI.wecomBindUrl()
-    rememberBindContext()
+    const info = await notificationsAPI.wecomBindUrl()
+    bindInfo.value = info
+    rememberBindContext(info.state)
     bindOpen.value = true
     startPolling()
   } catch (e) { error.value = describe(e, '获取绑定链接失败，请稍后重试。') }
@@ -143,7 +149,7 @@ async function startBind() {
 
 function openOauth() {
   if (!bindInfo.value) return
-  rememberBindContext()
+  rememberBindContext(bindInfo.value.state)
   window.location.href = bindInfo.value.oauth_url
 }
 
@@ -152,7 +158,7 @@ function openQrAuth() {
   // 确认后该窗口带 code+state 重定向回落地页（同源 localStorage 有登录态）
   // 完成绑定；本页轮询 status 收起弹窗
   if (!bindInfo.value) return
-  rememberBindContext()
+  rememberBindContext(bindInfo.value.state)
   window.open(bindInfo.value.qr_url, '_blank', 'noopener')
 }
 

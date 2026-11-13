@@ -102,6 +102,43 @@ describe('wecom task notify card', () => {
     open.mockRestore()
   })
 
+  it('stores bind context per state so concurrent tabs do not overwrite each other', async () => {
+    // 复审 2：两个标签页各拿不同 state，上下文按 state 分键互不覆盖
+    status.mockResolvedValue(availableUnbound)
+    const bindInfo = (state: string) => ({ success: true, state, oauth_url: 'https://oauth', qr_url: 'https://qr' })
+    bindUrl.mockResolvedValueOnce(bindInfo('s1'))
+    bindUrl.mockResolvedValueOnce(bindInfo('s2'))
+    const first = makeCard()
+    await flushPromises()
+    await first.findAll('button').find(b => b.text() === '绑定企微')!.trigger('click')
+    await flushPromises()
+    const second = makeCard()
+    await flushPromises()
+    await second.findAll('button').find(b => b.text() === '绑定企微')!.trigger('click')
+    await flushPromises()
+    expect(JSON.parse(localStorage.getItem('wecom-bind-context:s1')!).token_key).toBe('saas_token')
+    expect(JSON.parse(localStorage.getItem('wecom-bind-context:s2')!).token_key).toBe('saas_token')
+    expect(localStorage.getItem('wecom-bind-context')).toBeNull()
+  })
+
+  it('stores the initiating tenant from the tenant-scoped route', async () => {
+    // 复审 3：租户设置页发起时存租户段，回调页据此带 X-Tenant-Id
+    status.mockResolvedValue(availableUnbound)
+    bindUrl.mockResolvedValue({ success: true, state: 's', oauth_url: 'https://oauth', qr_url: 'https://qr' })
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/t/:tenant_id/notifications', component: { template: '<div />' }, children: [{ path: '', component: { template: '<div />' } }] },
+      { path: '/:pathMatch(.*)*', component: { template: '<div />' } },
+    ] })
+    await router.push('/t/tenant-9/notifications'); await router.isReady()
+    const wrapper = mount(WecomTaskNotifyCard, { global: { plugins: [router], stubs: { teleport: true } } })
+    await flushPromises()
+    await wrapper.findAll('button').find(b => b.text() === '绑定企微')!.trigger('click')
+    await flushPromises()
+    const context = JSON.parse(localStorage.getItem('wecom-bind-context:s')!)
+    expect(context.tenant).toBe('tenant-9')
+    expect(context.return_path).toBe('/t/tenant-9/notifications')
+  })
+
   it('enables and disables the wecom preference when bound', async () => {
     status.mockResolvedValue(availableBound)
     setPreference.mockResolvedValue({ category: 'task', channel: 'wecom_app', provider: 'wecom_app', enabled: true, enabled_since: null })

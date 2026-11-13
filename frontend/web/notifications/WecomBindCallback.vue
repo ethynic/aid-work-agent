@@ -27,8 +27,8 @@ import { notificationsAPI } from '@/api/notifications'
 // sessionStorage 按标签页隔离读不到，故发起侧存 localStorage 同源共享）。
 // 未登录场景不越过认证，提示先登录后重新发起。
 
-// 与 WecomTaskNotifyCard 的发起侧约定一致
-const BIND_CONTEXT_KEY = 'wecom-bind-context'
+// 与 WecomTaskNotifyCard 的发起侧约定一致（复审 2：上下文按 state 分键）
+const bindContextKey = (state: string) => `wecom-bind-context:${state}`
 
 // 回调处理错误码 → 用户提示（与设置卡片同口径）
 const ERROR_TEXT: Record<string, string> = {
@@ -56,10 +56,13 @@ function describe(error: unknown, fallback: string): string {
 async function resolve(): Promise<void> {
   const code = typeof route.query.code === 'string' ? route.query.code : ''
   const state = typeof route.query.state === 'string' ? route.query.state : ''
-  let context: { token_key?: string; return_path?: string } | null = null
-  try { context = JSON.parse(localStorage.getItem(BIND_CONTEXT_KEY) || 'null') } catch { context = null }
+  // 复审 2：按回调 state 读取对应上下文并只删该键——其他标签页并发绑定
+  // 各持不同 state，互不影响；找不到该 state 的上下文走未登录提示路径
+  const contextKey = bindContextKey(state)
+  let context: { token_key?: string; return_path?: string; tenant?: string } | null = null
+  try { context = JSON.parse(localStorage.getItem(contextKey) || 'null') } catch { context = null }
   // 一次性消费：避免残留旧 return_path / token key 指向
-  localStorage.removeItem(BIND_CONTEXT_KEY)
+  localStorage.removeItem(contextKey)
   const path = typeof context?.return_path === 'string' ? context.return_path : ''
   if (/^\/(t|portal)\//.test(path)) returnPath.value = path
   if (!code || !state) {
@@ -76,7 +79,11 @@ async function resolve(): Promise<void> {
     return
   }
   try {
-    const result = await notificationsAPI.wecomBindCallback(code, state, { Authorization: `Bearer ${token}` })
+    // 复审 3：带发起租户 X-Tenant-Id——平台管理员的 subject 租户由该头决定，
+    // 缺失会把绑定登记进 global scope（普通用户租户恒取登录态，不受影响）
+    const headers: Record<string, string> = { Authorization: `Bearer ${token}` }
+    if (context?.tenant) headers['X-Tenant-Id'] = context.tenant
+    const result = await notificationsAPI.wecomBindCallback(code, state, headers)
     ok.value = true
     // 绑定落库成功但 target 登记失败时显式警示，不乐观提示成功（评审回炉 P2-4）
     if (result.target_registered === false) {

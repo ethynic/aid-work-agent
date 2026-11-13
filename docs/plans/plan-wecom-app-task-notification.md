@@ -14,6 +14,7 @@
 | Phase 4 | 通知设置页：企微通知卡片（绑定/开关/解绑）+ 点击回跳定位 | ✅ 完成（2026-11-13） | 2fdf51c2；设置卡片+落地页+status 端点+偏好接线；后端 424+前端 vitest 131+build 全绿；测试棒修 401 死代码（err.status）；CR 仅 P3 卫生项；视觉走查待人工 |
 | Phase 5 | 回归测试 + agent2 真机验收 | 🔧 进行中（组合回归完成，待真机） | notifications+db 480 过；agent_runner 577 过（3 失败宿主机预存已基线核实）；前端全量 915 过（12 失败与 master 逐字节同集，预存）；integration 真 PG 与真机验收待部署环境（由用户指示） |
 | 评审回炉（外部 CR 5 项） | P1 存量库缺列/卡片 URL 缺 tenant/扫码域名与二维码语义；P2 跨租户绑定冲突+登记失败显示/waiting_input 绕过时长门禁 | ✅ 完成（2026-11-13） | 6df89112；5 项均属实（主控者逐项源码核实，含 404 域名实测复现）；notifications 429 + 前端 136 + build 全绿；integration 真 PG 跨租户用例待隔离库环境 |
+| 复审回炉（外部 CR 4 项） | 同租户接手死锁（revoked 行无条件 409）/绑定上下文单键双标签覆盖/平台管理员回调登记 global/integration 用例读未透出字段 KeyError | 🔧 进行中（复审通过，integration 真 PG 与真机回归待环境） | repository 接手语义+冲突收紧、state 锁定发起租户（BindStateStore+X-Tenant-Id）、上下文按 state 分键、integration 归属改库直查+新增接手用例；notifications 434 + 前端 140 + build 全绿（CR 复跑核验）；integration 真 PG 未跑（本机缺隔离库环境，非代码）。复审遗留登记后续优化：①无 active 行时多 revoked 行版本错位可致重绑登记 BINDING_CHANGED（P2：绑定成功但 target_registered=False，UI 不可自愈，登记侧按 digest 行取版本或非 active 放宽版本钉扎可解）；②有 active 行切换身份须先解绑（BINDING_CONFLICT 语义边界，解绑重绑可恢复）；③wecom-bind-context:${state} 孤儿键累积（P3 卫生，可在 startBind 顺带清理）；④state 值格式变更使升级窗口内存量 state（TTL 5 分钟）失效一次，重发即可，确认可接受 |
 
 前置（用户/运维）：企微管理端创建独立通知应用（agentid+secret）、可信域名与 OAuth 回调域名、可见范围；配置写入 `configs/config.yaml` `notifications.wecom_app`。
 

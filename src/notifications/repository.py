@@ -314,15 +314,35 @@ class NotificationRepository:
                 AND scope_key=%s FOR UPDATE''',
                 (body.provider, digest, subject.scope_key))
             endpoint = cursor.fetchone()
-            if endpoint and not owned(endpoint, subject):
+            # 复审 1（同租户接手）：active 行他人绑定仍 409（必须先解绑）；
+            # 非 active（revoked/invalid）行允许同 scope 用户接手——身份已由
+            # wecom_bind 服务端 member() 核验，无条件 409 会造成「A 解绑后
+            # B 绑同一身份被 A 的废弃行卡死」死循环。
+            if endpoint and not owned(endpoint, subject) and endpoint['state'] == 'active':
                 raise NotificationError('NOTIFICATION_TARGET_OWNED', 409)
             cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND installation_ref=%s
                 ORDER BY (state='active') DESC,updated_at DESC LIMIT 1 FOR UPDATE''', (body.provider, body.installation_ref))
             installation = cursor.fetchone()
             if installation and installation['state'] == 'active' and not owned(installation, subject):
                 raise NotificationError('NOTIFICATION_INSTALLATION_OWNED', 409)
-            if endpoint and installation and endpoint['target_id'] != installation['target_id']:
+            # installation 仅 active 时才与 endpoint 行冲突；接手人自己的 stale
+            # revoked 行（如曾绑过其他身份后解绑）忽略，继续接手
+            if (endpoint and installation and installation['state'] == 'active'
+                    and endpoint['target_id'] != installation['target_id']):
                 raise NotificationError('NOTIFICATION_BINDING_CONFLICT', 409)
+            if endpoint and not owned(endpoint, subject):
+                # 接手：改属主/安装引用/配置并复活；identity_digest 不变（同一
+                # 身份）。跳过 expected_binding_version 校验——旧版本号属于前任
+                # 属主，对绑定发起人无并发意义。
+                cursor.execute('''UPDATE notification_targets SET recipient_user_id=%s,
+                    installation_ref=%s,configuration_encrypted=%s,state='active',
+                    binding_version=binding_version+1,enabled_since=clock_timestamp(),
+                    verified_at=clock_timestamp(),updated_at=clock_timestamp()
+                    WHERE target_id=%s RETURNING *''',
+                    (subject.user_id, body.installation_ref, protected(configuration), endpoint['target_id']))
+                result = public_target(cursor.fetchone())
+                conn.commit()
+                return result
             row = endpoint or (installation if owned(installation, subject) else None)
             if row:
                 if (row['installation_ref'] != body.installation_ref
