@@ -13,6 +13,7 @@
 | Phase 5 | 测试脚本去强制重建（test / test:full 拆分） | ✅ 完成（2026-11-13） | ensure-build mtime 门禁 + test:full，三包验证 stale→build / fresh→skip |
 | Phase 6 | 并行度检查 | ✅ 完成（2026-11-13） | 默认文件级并发未被人为限制；仅存设计使然的串行桶，见 §4.5 |
 | Phase 7 | 前后对照表与验收 | ✅ 完成（2026-11-13） | 见 §5；四包全绿（boss 1132/0、runtime 372/0、host-core 131/0、desktop 111/0） |
+| R6 | 外部复审 P1：失败构建残留产物被当有效缓存（假绿） | ✅ 完成（2026-11-13） | 成功戳+指纹门禁（§4.6）；三包两态验收：注入 TS2322 连续两次 npm test 均非 0 退出且无「跳过重建」；正常源码两连跑跳过保持；test:full 不变 |
 
 ## 1. 目标数字（达成情况）
 
@@ -138,6 +139,21 @@
 - node --test 默认文件级并发 = `os.availableParallelism() - 1`（本机 27），boss/runtime 收集器未传 `--test-concurrency`（并行批）→ 无人为上限；实测 boss 基线逐文件合计 131.8s vs wall 25.5s，并行生效。
 - 唯二的串行点都是跨文件真实资源约束，非并发缺陷：runtime `pair/hostIndependent`（OS 用户级 pairing 现场污染）、host-core `wecomGroupPoll/wecomSendStatus`（wecom-cli 会话级跨进程互斥锁，本次实证）。
 - 结论：无需也无法安全再开更大并发；瓶颈为最长文件（boss 现 browser-page-recovery 13.8s，见 §4.3 余项）。
+
+### 4.6 R6：失败构建残留产物假绿修复（外部复审 P1）
+
+- **缺陷**：tsc 默认 `noEmitOnError=false`，编译报错仍写出部分 JS 产物；ensure-build 仅按「产物 mtime 新于源码」判跳过 → 失败构建留下的产物被当成有效缓存，同一份带类型错误的源码第一次 `npm test` 退出码 2、第二次「产物新鲜，跳过重建」退出码 0（假绿）。
+- **修法**（三份同款脚本一致：boss / agent-tool-runtime / host-core，agent-desktop 无同款）：
+  1. 成功戳 `<dist>/.build-ok.json`：构建命令退出码 0 才写戳（记录源侧输入指纹：src/tests 最大 mtime+文件数、各 `--pairs` 的 src/dist mtime+文件数；本包 dist 不进指纹——戳在 dist 内，计入自引用失配；指纹在构建完成后采样——build 命令本身会重建 pairs 依赖包，预采样会导致下次永不匹配）；失败（非零退出/命令不存在）删既有成功戳并透传退出码。
+  2. 跳过条件收紧为「产物新鲜 且 戳在场且指纹一致」，二者缺一不可；`test:full` 不走 ensure-build，强制重建语义不变。
+  3. 双保险：三包 tsconfig 加 `noEmitOnError: true`（无 incremental/tsBuildInfoFile，无消费者依赖部分输出；typecheck 本就 --noEmit；失败时旧好产物残留但 ensure-build 非零退出先于 run-tests，不会被执行）。
+- **stamp 落点审计**：runtime-plugin-packaging 只 stage `dist/src`（stamp 在 dist 根，不进包）；agent-tool-runtime 发布走 `npm pack`（`files: ["dist/src"]`，不进包）；boss `pack-release.sh` 整拷 dist → 已加 `rm -f "$stage/dist/.build-ok.json"` 排除；host-core `files:["dist"]` 仅作为 file: 依赖被 install-links 复制，stamp 即便带入 node_modules 也无消费方（私有包不单独发布）。
+- **验收证据**（2026-11-13，三包全过）：
+  - 机制隔离（复现原缺陷场景：dist mtime 新鲜 + 删戳后伪构建命令 `node -e "process.exit(3)"` 连跑两次）：三包均两次重建、两次退出码 3、零次「跳过重建」、戳保持缺席——旧脚本第二次会退出 0。
+  - 真实两态（注入 `const __r6Probe: number = 'r6'` → TS2322）：三包第一次 `npm test` 非 0 退出（boss/runtime exit 1、host-core exit 1）；不改源码第二次仍非 0 且「跳过重建」出现 0 次、测试未被执行。
+  - 恢复：revert 探针后 `npm test` 重建 + 全绿（boss 1127/0、runtime 22+349/0、host-core 7+124/0）。
+  - 提速保持：正常源码两连跑第二次均打印「产物新鲜且上次构建成功，跳过重建」且全绿。
+  - `test:full`：三包退出 0 全绿，无 ensure-build 参与（强制重建路径不变）。
 
 ## 5. 前后对照表（交付物）
 
