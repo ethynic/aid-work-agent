@@ -8,7 +8,7 @@ description: >
   脚本只做确定性的解析、归一化、计算、写文件；知识库检索、联网比价、规格判断由上级
   智能体在对话中完成。适用于采购比价、多家报价对比、货比三家、报价单价格审核等场景。
 metadata:
-  version: "1.2.0"
+  version: "1.2.1"
   author: aid-work-agent
 dependencies:
   - openpyxl
@@ -230,7 +230,7 @@ skill_execute(skill="quote-price-comparison",
 ```
 
 产出：`comparison.xlsx`（横向对比 / 明细数据 / 异常与不可比 / 口径与图例）、
-`comparison.json`、`marks.json`、`summary.md`。
+`comparison.json`、`marks.json`、`summary.docx`（Word 格式摘要）。
 
 检查「异常与不可比」sheet 与 `comparison.json.anomalies`：
 
@@ -261,8 +261,8 @@ skill_execute(skill="quote-price-comparison",
 
 #### 5. 交付
 
-用 `cp` 工具把 `comparison.xlsx`、`summary.md`、全部 `*_marked.*` 副本注册下载链接交付用户
-（`summary.md` 可作为附件交付或摘取要点写入回复）。
+用 `cp` 工具把 `comparison.xlsx`、`summary.docx`（Word 格式摘要）、全部 `*_marked.*` 副本注册下载链接交付用户
+（`summary.docx` 可作为正式交付物附件，摘取要点写入回复）。
 聊天回复只给简短结论（8~12 行）：综合最优来源与节约额、偏贵/偏便宜处数、价差最大品项、
 口径风险（不可比条数、网络价仅供参考）、交付文件下载链接。详细表格一律放 Excel，不粘贴大段正文。
 
