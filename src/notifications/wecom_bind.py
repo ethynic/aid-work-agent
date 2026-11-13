@@ -6,6 +6,10 @@
   手机号重新核实后才落库，不信任前端传的 userid。
 - 解绑：DELETE /wecom/bind 清空 wecom_userid 并撤销既有 wecom_app target。
 
+通知应用凭据租户自备（五轮：租户级配置改造，2026-11-13）：绑定相关端点按
+subject 租户解析连接中心渠道配置 wecom_app_notify（corp_id/agentid/secret），
+未配置租户 503；redirect_uri 保留平台全局（站点域名，非租户凭据）。
+
 出站走 pinned HTTPS（域名白名单 + 公网地址校验，复用 web_push 防护），固定
 qyapi.weixin.qq.com；secret/access_token 不落日志。target 登记（Phase 3，
 设计 §4.3）：绑定落库成功后由服务端登记 channel='wecom_app' target，幂等
@@ -71,15 +75,16 @@ class BindStateStore:
 class WecomClient:
     """企微通知应用 API 封装（gettoken / OAuth 换 userid / 通讯录读成员 / 手机号查 userid）。
 
-    通知应用独立 corp secret（config notifications.wecom_app），不复用渠道应用凭据。
-    网络/HTTP/解析失败与 errcode 非零统一返回 None，由路由映射为业务错误码；
-    日志只含接口名与 errcode，不含 secret/access_token。
+    通知应用凭据租户自备（连接中心渠道配置 wecom_app_notify，五轮租户级配置
+    改造），不复用渠道应用凭据。网络/HTTP/解析失败与 errcode 非零统一返回
+    None，由路由映射为业务错误码；日志只含接口名与 errcode，不含 secret/
+    access_token。
     """
 
-    def __init__(self, config, timeout_seconds=10):
-        self.corp_id = config.corp_id
-        self.agentid = config.agentid
-        self._secret = config.secret.get_secret_value()
+    def __init__(self, credentials, timeout_seconds=10):
+        self.corp_id = credentials.corp_id
+        self.agentid = credentials.agentid
+        self._secret = credentials.secret
         self.timeout_seconds = timeout_seconds
 
     def _call(self, name, method, path, body=None):
@@ -155,8 +160,14 @@ class WecomClient:
 
 
 def create_bind_router(config=None, repository=None, user_loader=None,
-                       state_store=None, wecom_client=None):
-    """企微绑定路由（无前缀，由 notifications.api.create_router 挂到 /api/notifications 下）。"""
+                       state_store=None, wecom_client=None, credentials_source=None):
+    """企微绑定路由（无前缀，由 notifications.api.create_router 挂到 /api/notifications 下）。
+
+    credentials_source：tenant_id → 通知应用凭据（WecomAppCredentials）或 None。
+    缺省经 repository.registry 的 WecomAppAdapter.credentials_for_tenant 解析
+    （租户渠道配置 wecom_app_notify）；wecom_client 注入（测试）时仍以凭据解析
+    结果作为可用性 gate。
+    """
     from .api import NotificationRoute, resolve_subject
     from src.db.models import UserDB
 
@@ -168,25 +179,36 @@ def create_bind_router(config=None, repository=None, user_loader=None,
         from src.services.auth_service import fresh_web_subject
         user_loader = fresh_web_subject
     state_store = state_store or BindStateStore()
-    wecom_client = wecom_client or WecomClient(config.wecom_app, config.timeout_seconds)
 
     router = APIRouter(route_class=NotificationRoute)
 
     def subject(request: Request):
         return resolve_subject(user_loader, request)
 
-    def _require_app():
-        """通知应用未启用/凭据不全时拒绝绑定相关操作。"""
-        app_config = config.wecom_app
-        if (not app_config.enabled or not app_config.corp_id
-                or not app_config.secret.get_secret_value()):
-            raise NotificationError('NOTIFICATION_WECOM_APP_UNAVAILABLE', 503)
-        return app_config
+    def _credentials_for(tenant_id):
+        """按 subject 租户解析通知应用凭据；未配置/凭据不全返回 None。"""
+        if credentials_source is not None:
+            return credentials_source(tenant_id)
+        adapter = repository.registry.get('wecom_app', 'wecom_app')
+        resolver = getattr(adapter, 'credentials_for_tenant', None)
+        return resolver(tenant_id) if resolver else None
 
-    def _redirect_uri(app_config):
+    def _require_app(current):
+        """当前租户未配置通知应用（或凭据不全）时拒绝绑定相关操作。"""
+        credentials = _credentials_for(current.tenant_id)
+        if not credentials:
+            raise NotificationError('NOTIFICATION_WECOM_APP_UNAVAILABLE', 503)
+        return credentials
+
+    def _wecom_client(current):
+        """按租户凭据构造企微 API 客户端；测试可注入固定 wecom_client。"""
+        credentials = _require_app(current)
+        return wecom_client if wecom_client is not None else WecomClient(
+            credentials, config.timeout_seconds)
+
+    def _redirect_uri():
+        # redirect_uri 保留平台全局（站点域名，非租户凭据）：回退 app.public_base_url
         from src.config.settings import settings
-        if app_config.redirect_uri:
-            return app_config.redirect_uri
         base = settings.app.public_base_url
         return base.rstrip('/') + '/notification/wecom-bind' if base else ''
 
@@ -199,7 +221,7 @@ def create_bind_router(config=None, repository=None, user_loader=None,
 
     def _bind(current, userid):
         """可见范围校验 + 租户内唯一性校验 + 落库，返回成员姓名。"""
-        member = wecom_client.member(userid)
+        member = _wecom_client(current).member(userid)
         if not member or member.get('status') != WECOM_MEMBER_STATUS_ACTIVE:
             raise NotificationError('NOTIFICATION_BIND_NOT_IN_SCOPE')
         existing = UserDB.get_by_wecom_userid_in_tenant(userid, current.tenant_id)
@@ -249,60 +271,60 @@ def create_bind_router(config=None, repository=None, user_loader=None,
 
     @router.get('/wecom/bind/url')
     def wecom_bind_url(current: Subject = Depends(subject)):
-        app_config = _require_app()
-        redirect = _redirect_uri(app_config)
+        credentials = _require_app(current)
+        redirect = _redirect_uri()
         if not redirect:
             raise NotificationError('NOTIFICATION_WECOM_APP_UNAVAILABLE', 503)
         state = state_store.issue(current.user_id, current.tenant_id)
         encoded_redirect = quote(redirect, safe='')
-        oauth_url = (f'{_OAUTH_AUTHORIZE_URL}?appid={quote(app_config.corp_id)}'
+        oauth_url = (f'{_OAUTH_AUTHORIZE_URL}?appid={quote(credentials.corp_id)}'
                      f'&redirect_uri={encoded_redirect}&response_type=code'
                      f'&scope=snsapi_base&state={state}#wechat_redirect')
-        qr_url = (f'{_OAUTH_QR_URL}?appid={quote(app_config.corp_id)}'
-                  f'&agentid={app_config.agentid}&redirect_uri={encoded_redirect}&state={state}')
+        qr_url = (f'{_OAUTH_QR_URL}?appid={quote(credentials.corp_id)}'
+                  f'&agentid={credentials.agentid}&redirect_uri={encoded_redirect}&state={state}')
         return {'success': True, 'state': state, 'oauth_url': oauth_url, 'qr_url': qr_url}
 
     @router.get('/wecom/bind/status')
     def wecom_bind_status(current: Subject = Depends(subject)):
-        """绑定状态（Phase 4，设计 §4.5 设置页）：应用可用性 + 绑定态 +
-        姓名快照 + target 状态。不发企微出站请求，直接读本地事实。"""
+        """绑定状态（Phase 4，设计 §4.5 设置页）：应用可用性（按当前 subject
+        租户的渠道配置）+ 绑定态 + 姓名快照 + target 状态。不发企微出站请求，
+        直接读本地事实。"""
         repository.assert_schema()
-        adapter = repository.registry.get('wecom_app', 'wecom_app')
         row = UserDB.get_by_id(current.user_id) or {}
         bound = bool(row.get('wecom_userid'))
         profile = (repository.wecom_bind_profile(current) if bound
                    else {'target_state': None, 'name': None})
-        return {'app_available': bool(adapter and adapter.available()),
+        return {'app_available': _credentials_for(current.tenant_id) is not None,
                 'bound': bound, 'name': profile.get('name'),
                 'target_state': profile.get('target_state')}
 
     @router.get('/wecom/bind/callback')
     def wecom_bind_callback(request: Request, current: Subject = Depends(subject)):
-        _require_app()
+        _require_app(current)
         # state 绑定发起用户与发起租户：与当前登录 subject 不一致按无效 state 拒绝
         # （复审 3：平台管理员的租户由 X-Tenant-Id 决定，带发起租户头才能命中）
         if not state_store.consume(request.query_params.get('state', ''),
                                    current.user_id, current.tenant_id):
             raise NotificationError('NOTIFICATION_BIND_STATE_INVALID')
-        userid = wecom_client.oauth_userid(request.query_params.get('code', ''))
+        userid = _wecom_client(current).oauth_userid(request.query_params.get('code', ''))
         if not userid:
             raise NotificationError('NOTIFICATION_BIND_FAILED')
         return _bind_and_register(current, userid)
 
     @router.get('/wecom/bind/suggest')
     def wecom_bind_suggest(current: Subject = Depends(subject)):
-        _require_app()
-        userid = wecom_client.userid_by_phone(_current_phone(current))
+        wecom_client_for_tenant = _wecom_client(current)
+        userid = wecom_client_for_tenant.userid_by_phone(_current_phone(current))
         if not userid:
             return {'matched': False}
-        member = wecom_client.member(userid)
+        member = wecom_client_for_tenant.member(userid)
         return {'matched': True, 'userid': userid, 'name': (member or {}).get('name') or ''}
 
     @router.post('/wecom/bind/confirm')
     def wecom_bind_confirm(body: WecomBindConfirm, current: Subject = Depends(subject)):
-        _require_app()
+        wecom_client_for_tenant = _wecom_client(current)
         # 服务端以登录用户手机号重查核实，不信任前端传的 userid
-        server_userid = wecom_client.userid_by_phone(_current_phone(current))
+        server_userid = wecom_client_for_tenant.userid_by_phone(_current_phone(current))
         if not server_userid or server_userid != body.userid:
             raise NotificationError('NOTIFICATION_BIND_MISMATCH')
         return _bind_and_register(current, server_userid)

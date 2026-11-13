@@ -145,6 +145,18 @@ class NotificationRepository:
         return (subject.tenant_id is None or self.config.allowed_tenants is None
                 or subject.tenant_id in self.config.allowed_tenants)
 
+    def provider_available(self, adapter, tenant_id):
+        """渠道可用性统一判定（五轮：租户级配置改造）：租户自备凭据的渠道
+        （wecom_app 通知应用，凭据=连接中心渠道配置 wecom_app_notify）按目标
+        租户解析 available_for_tenant；其余渠道沿用平台全局 available。
+        tenant_id 缺失（global scope/租户级事件无归属）对租户渠道即不可用。"""
+        if not adapter:
+            return False
+        resolver = getattr(adapter, 'available_for_tenant', None)
+        if resolver is not None:
+            return bool(tenant_id) and bool(resolver(tenant_id))
+        return adapter.available()
+
     def guard(self, cursor, subject):
         user = assert_subject_in_tx(cursor, subject)
         if not self.allowed(subject):
@@ -306,7 +318,7 @@ class NotificationRepository:
         必须 409，不得把已关闭目标复活为 opt-in（四轮回炉 Web Push 回归）。
         """
         adapter = self.registry.get(body.channel, body.provider)
-        if not adapter or not adapter.available():
+        if not self.provider_available(adapter, subject.tenant_id):
             raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
         configuration = body.configuration.model_dump()
         digest = adapter.validate_target(configuration)  # DNS/validation outside DB transaction.
@@ -768,7 +780,7 @@ class NotificationRepository:
         if subject.tenant_id is None:
             raise NotificationError('NOTIFICATION_TENANT_REQUIRED', 400)
         adapter = self.registry.get(body.channel, body.provider)
-        if not adapter or not adapter.available():
+        if not self.provider_available(adapter, subject.tenant_id):
             raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
         configuration = body.configuration.model_dump()
         digest = adapter.validate_target(configuration)
@@ -834,7 +846,7 @@ class NotificationRepository:
                     or target['binding_version'] != body.binding_version):
                 raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
             adapter = self.registry.get(target['channel'],target['provider'])
-            if not adapter or not adapter.available():
+            if not self.provider_available(adapter, target['tenant_id']):
                 raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
             lock_subject(cursor, subject)
             cursor.execute('''SELECT 1 FROM notification_messages WHERE scope_key=%s AND recipient_user_id=%s
@@ -864,7 +876,7 @@ class NotificationRepository:
 
     def set_preference(self, subject, body):
         adapter = self.registry.get(body.channel, body.provider)
-        if body.enabled and (not adapter or not adapter.available()):
+        if body.enabled and not self.provider_available(adapter, getattr(subject, 'tenant_id', None)):
             raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
         with self.connection_factory() as conn:
             cursor = conn.cursor()
@@ -921,7 +933,7 @@ class NotificationRepository:
             if not owned(target, subject) or target['state'] != 'active' or target['binding_version'] != body.binding_version:
                 raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
             adapter = self.registry.get(target['channel'],target['provider'])
-            if not adapter or not adapter.available():
+            if not self.provider_available(adapter, target['tenant_id']):
                 raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
             lock_subject(cursor, subject)
             cursor.execute('''SELECT 1 FROM notification_messages WHERE scope_key=%s AND recipient_user_id=%s
@@ -1202,7 +1214,8 @@ class NotificationRepository:
             target_rows = []
             for target in self._rule_event_targets(cursor, rule, tenant_id):
                 adapter = self.registry.get(target['channel'],target['provider'])
-                if not adapter or not adapter.available() or message['schema_version'] not in adapter.capabilities.notification_schema_versions:
+                if (not self.provider_available(adapter, target.get('tenant_id'))
+                        or message['schema_version'] not in adapter.capabilities.notification_schema_versions):
                     continue
                 delivery_state,error = 'pending',None
                 try:
@@ -1274,7 +1287,8 @@ class NotificationRepository:
                          and self.platform_runner_message(message, message.get('parameters')))):
             return
         adapter = self.registry.get(target['channel'],target['provider'])
-        if not adapter or not adapter.available() or message['schema_version'] not in adapter.capabilities.notification_schema_versions:
+        if (not self.provider_available(adapter, target.get('tenant_id'))
+                or message['schema_version'] not in adapter.capabilities.notification_schema_versions):
             return
         delivery_state,error = 'pending',None
         try:
@@ -1577,7 +1591,7 @@ class NotificationRepository:
                             or message['event_type'] not in _effective_event_types(pref['event_types'])):
                         reason = 'preference_changed'
                 adapter = self.registry.get(target['channel'], target['provider'])
-                if not reason and (not adapter or not adapter.available()):
+                if not reason and not self.provider_available(adapter, target['tenant_id']):
                     reason = 'provider_disabled'
             if reason:
                 cursor.execute('''UPDATE notification_deliveries SET state=%s,error_class=%s,

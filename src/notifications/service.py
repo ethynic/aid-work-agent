@@ -17,8 +17,9 @@ def notification_repository(config=None):
         DingtalkBotAdapter(config.timeout_seconds),
         WecomBotAdapter(config.timeout_seconds),
         SmtpEmailAdapter(),
-        # 企微应用通知（wecom-app-task-notification-design §4.3）：enabled/凭据
-        # gate 在 WecomAppAdapter.available，未启用时 registry 命中但 available
-        # 为 False，repository 既有 gate 不投递
-        WecomAppAdapter(config.wecom_app, config.timeout_seconds),
+        # 企微应用通知（wecom-app-task-notification-design §4.3；五轮：租户级
+        # 配置改造）：凭据租户自备（连接中心渠道配置 wecom_app_notify），可用性
+        # gate 走 WecomAppAdapter.available_for_tenant（repository 租户感知点），
+        # 全局 available 恒 False；未配置租户 registry 命中但不投递
+        WecomAppAdapter(config.timeout_seconds),
     ]))

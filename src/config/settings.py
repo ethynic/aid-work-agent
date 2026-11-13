@@ -807,20 +807,6 @@ class WebPushConfig(BaseModel):
     timeout_seconds: int = Field(default=10, ge=1, le=30)
 
 
-class WecomAppConfig(BaseModel):
-    """企微通知应用（长任务企微应用通知，独立于渠道对话应用；设计 §4.3/§4.6）
-
-    docs/system/wecom-app-task-notification-design.md
-    """
-    enabled: bool = False
-    corp_id: str = ''
-    agentid: int = 0
-    # 通知应用独立 corpsecret；SecretStr 防止配置 dump 打印明文
-    secret: SecretStr = Field(default_factory=lambda: SecretStr(''))
-    # OAuth 回跳地址（前端绑定结果页）；空时回退 app.public_base_url + /notification/wecom-bind
-    redirect_uri: str = ''
-
-
 class NotificationsConfig(BaseModel):
     rate_per_second: int = Field(default=5, ge=1, le=100)
     ttl_seconds: int = Field(default=86400, ge=60, le=604800)
@@ -839,7 +825,6 @@ class NotificationsConfig(BaseModel):
     tenant_credit_low_days: int = Field(default=7, ge=1, le=90)  # 预计耗尽日不足该天数才提醒
     tenant_expiry_thresholds: List[int] = Field(default_factory=lambda: [30, 7, 1])
     web_push: WebPushConfig = Field(default_factory=WebPushConfig)
-    wecom_app: WecomAppConfig = Field(default_factory=WecomAppConfig)
     # 手动任务时长阈值（秒，wecom-app-task-notification-design §4.2）：
     # source=chat 的 runner 本次执行时长达到该值才发布 task.completed/failed，
     # 避免快问快答被推送；定时任务（scheduled）不受此限；0 表示不设阈值

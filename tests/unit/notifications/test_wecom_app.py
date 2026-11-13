@@ -1,4 +1,4 @@
-"""企微应用通知 Adapter（Phase 3，设计 §4.3）测试：
+"""企微应用通知 Adapter（Phase 3，设计 §4.3；五轮：租户级配置改造）测试：
 
 - validate_target：userid 校验与稳定摘要（sha256 唯一性口径）
 - render：textcard 文案/回跳 url（含 ref query，租户消息追加 tenant）、
@@ -7,8 +7,11 @@
 - errcode 分类：0→accepted；40031/43004/81013→target_invalid；42009/45009→
   retryable；其余 errcode→permanent（im_webhook 兜底语义）
 - send：fake 连接全分支（限流/5xx/传输错误/gettoken 失败）、token 缓存与
-  40014/42001 刷新重试一次
-- available gate（未启用/缺凭据）；delivery 写入走通知核心既有机制
+  40014/42001 刷新重试一次；凭据按 target 租户解析（corp_id/agentid/secret
+  来自租户配置，租户未配置 permanent）
+- available：租户自备配置后全局 available() 恒 False（fail-closed）；
+  available_for_tenant 有配置可用/无配置不可用/凭据不全不可用；凭据 TTL 缓存
+- delivery 写入走通知核心既有机制
 - secret/access_token 不落日志
 
 参照 test_im_webhook.py 的 Fake 连接/monkeypatch 风格。
@@ -21,25 +24,34 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from loguru import logger
-from pydantic import SecretStr, ValidationError
+from pydantic import ValidationError
 
-from src.config.settings import NotificationsConfig, WecomAppConfig
+from src.config.settings import NotificationsConfig
 from src.notifications import wecom_app
 from src.notifications.contracts import (AdapterCapabilities, AdapterRegistry,
                                          NotificationError, WecomAppConfiguration)
 from src.notifications.repository import (TASK_EVENT_TYPES, NotificationRepository,
                                           protected, unprotect)
-from src.notifications.wecom_app import WecomAppAdapter
+from src.notifications.wecom_app import WecomAppAdapter, WecomAppCredentials
+
+# t1 租户自备的通知应用凭据（连接中心渠道配置 wecom_app_notify 解密后形态）
+CREDENTIALS = WecomAppCredentials(tenant_id='t1', corp_id='corp123',
+                                  agentid=1000001, secret='app-secret')
 
 
-def enabled_config(**overrides):
-    values = {'enabled': True, 'corp_id': 'corp123', 'agentid': 1000001,
-              'secret': SecretStr('app-secret')}
-    values.update(overrides)
-    return WecomAppConfig(**values)
+def tenant_source(configured=True, tenant_id='t1', credentials=None):
+    """凭据解析桩：configured=True 时指定租户返回凭据，否则 None。"""
+    fixed = credentials or CREDENTIALS
+    if configured:
+        return lambda tid: fixed if tid == tenant_id else None
+    return lambda tid: None
 
 
-CONFIG = enabled_config()
+def make_adapter(configured=True, timeout_seconds=10):
+    return WecomAppAdapter(timeout_seconds=timeout_seconds,
+                           credentials_source=tenant_source(configured))
+
+
 TARGET = {'wecom_userid': 'zhangsan', 'bound_user_name': '张三', 'tenant_id': 't1'}
 TEXTCARD = {'title': '销售日报相关任务已完成', 'description': '任务已执行完成，点击查看结果。',
             'url': 'https://console.example.test/notification?ref=ref1', 'btntxt': '点击查看'}
@@ -130,14 +142,14 @@ def make_api(monkeypatch, send_responder):
 
 class TestValidateTarget:
     def test_valid_userid_returns_stable_digest(self):
-        adapter = WecomAppAdapter(CONFIG)
+        adapter = WecomAppAdapter()
         first = adapter.validate_target(TARGET)
         second = adapter.validate_target(dict(TARGET, bound_user_name='改名'))
         assert first == second
         assert first == hashlib.sha256(b'zhangsan').hexdigest()
 
     def test_invalid_userid_rejected(self):
-        adapter = WecomAppAdapter(CONFIG)
+        adapter = WecomAppAdapter()
         with pytest.raises(NotificationError, match='NOTIFICATION_INVALID_WECOM_USERID'):
             adapter.validate_target({'wecom_userid': 'a b'})       # 含空白
         with pytest.raises(NotificationError, match='NOTIFICATION_INVALID_WECOM_USERID'):
@@ -159,18 +171,82 @@ class TestValidateTarget:
             WecomAppConfiguration.model_validate({'bound_user_name': '张三'})
 
 
-# ============== available gate ==============
+# ============== available（租户自备配置：按租户判定，五轮） ==============
 
-class TestAvailable:
-    @pytest.mark.parametrize('overrides,expected', [
-        ({}, True),
-        ({'enabled': False}, False),
-        ({'corp_id': ''}, False),
-        ({'agentid': 0}, False),
-        ({'secret': SecretStr('')}, False),
-    ])
-    def test_gate(self, overrides, expected):
-        assert WecomAppAdapter(enabled_config(**overrides)).available() is expected
+class TestAvailableForTenant:
+    def test_tenant_with_credentials_available(self):
+        assert make_adapter().available_for_tenant('t1') is True
+
+    def test_tenant_without_credentials_unavailable(self):
+        assert make_adapter(configured=False).available_for_tenant('t1') is False
+
+    def test_other_tenant_unavailable(self):
+        """凭据按租户隔离：t1 的配置不给 t2 用。"""
+        assert make_adapter().available_for_tenant('t2') is False
+
+    @pytest.mark.parametrize('tenant_id', ['', None])
+    def test_blank_tenant_unavailable(self, tenant_id):
+        """无租户上下文（global scope）不可用：fail-closed。"""
+        assert make_adapter().available_for_tenant(tenant_id) is False
+
+    def test_global_available_gate_always_false(self):
+        """平台无全局通知应用：available() 恒 False（不带租户上下文的 gate
+        一律不可用），租户感知点必须走 available_for_tenant。"""
+        adapter = make_adapter()
+        assert adapter.available() is False
+        assert adapter.available_for_tenant('t1') is True
+
+    def test_incomplete_tenant_config_unavailable(self):
+        """默认解析：corp_id/agentid/secret 任一缺失 → 无凭据不可用。"""
+        incomplete_rows = [
+            {'config': {'corp_id': 'ww123', 'agentid': 1000002, 'secret': ''}},
+            {'config': {'corp_id': 'ww123', 'agentid': 0, 'secret': 's'}},
+            {'config': {'corp_id': '', 'agentid': 1000002, 'secret': 's'}},
+            {'config': {'corp_id': 'ww123', 'agentid': 'not-a-number', 'secret': 's'}},
+            None,  # 租户无 wecom_app_notify 渠道配置
+        ]
+
+        def fake_get(tenant_id, channel_type):
+            assert channel_type == 'wecom_app_notify'
+            return incomplete_rows.pop(0)
+
+        with patch('src.saas.db.channel_config_db.ChannelConfigDB.get_by_tenant_and_type_decrypted',
+                   staticmethod(fake_get)):
+            for _ in range(5):
+                assert wecom_app._default_credentials_source('t1') is None
+
+    def test_default_source_builds_credentials_from_tenant_config(self):
+        """默认解析：租户渠道配置（解密后）→ WecomAppCredentials；agentid 字符串可强转。"""
+        with patch('src.saas.db.channel_config_db.ChannelConfigDB.get_by_tenant_and_type_decrypted',
+                   staticmethod(lambda tenant_id, channel_type:
+                                {'config': {'corp_id': 'ww123', 'agentid': '1000002',
+                                            'secret': 'tenant-secret'} })):
+            credentials = wecom_app._default_credentials_source('t9')
+        assert credentials == WecomAppCredentials(tenant_id='t9', corp_id='ww123',
+                                                  agentid=1000002, secret='tenant-secret')
+
+    def test_credentials_resolved_fresh_each_call(self):
+        """凭据实时解析（不缓存）：租户保存/删除配置立即生效。"""
+        calls = []
+        state = {'credentials': CREDENTIALS}
+
+        def counting_source(tenant_id):
+            calls.append(tenant_id)
+            return state['credentials']
+
+        adapter = WecomAppAdapter(credentials_source=counting_source)
+        assert adapter.available_for_tenant('t1') is True
+        state['credentials'] = None  # 租户删除配置
+        assert adapter.available_for_tenant('t1') is False
+        assert len(calls) == 2
+
+    def test_source_failure_treated_as_unconfigured(self):
+        """配置读取异常按未配置处理（不阻断通知主流程）。"""
+        def broken_source(tenant_id):
+            raise RuntimeError('db down')
+
+        adapter = WecomAppAdapter(credentials_source=broken_source)
+        assert adapter.available_for_tenant('t1') is False
 
 
 # ============== render（textcard 文案与回跳） ==============
@@ -178,7 +254,7 @@ class TestAvailable:
 class TestRender:
     def _render(self, msg, base='https://console.example.test'):
         with patch('src.config.settings.settings', fake_settings(base)):
-            return WecomAppAdapter(CONFIG).render(msg, {'installation_ref': 'inst'})
+            return make_adapter().render(msg, {'installation_ref': 'inst'})
 
     def test_completed_textcard_fields(self):
         payload = self._render(message())
@@ -221,7 +297,7 @@ class TestRender:
         unsafe_ref = message('task.completed', {'session_title': 's', 'event_kind': 'completed'})
         unsafe_ref['notification_ref'] = 'a/b?c'
         with patch('src.config.settings.settings', fake_settings()):
-            escaped = WecomAppAdapter(CONFIG).render(unsafe_ref, {})['url']
+            escaped = make_adapter().render(unsafe_ref, {})['url']
         tail = escaped.split('ref=', 1)[1]
         assert '?' not in tail and '/' not in tail
 
@@ -244,7 +320,7 @@ class TestRender:
 class TestDurationDescription:
     def _render(self, parameters, event_type='task.completed'):
         with patch('src.config.settings.settings', fake_settings()):
-            return WecomAppAdapter(CONFIG).render(message(event_type, parameters), {})
+            return make_adapter().render(message(event_type, parameters), {})
 
     def test_completed_description_carries_duration(self):
         params = {'session_title': '销售日报', 'event_kind': 'completed', 'duration_seconds': 332}
@@ -329,16 +405,16 @@ class TestInterpret:
         (40058, 'permanent_failure', 'provider_rejected'),
     ])
     def test_errcode_mapping(self, errcode, expected, reason):
-        result = WecomAppAdapter(CONFIG)._interpret(errcode, {'errcode': errcode})
+        result = make_adapter()._interpret(errcode, {'errcode': errcode})
         assert (result.outcome, result.error_class) == (expected, reason)
 
     def test_accepted_carries_msgid(self):
-        result = WecomAppAdapter(CONFIG)._interpret(0, {'errcode': 0, 'msgid': 'msg_9'})
+        result = make_adapter()._interpret(0, {'errcode': 0, 'msgid': 'msg_9'})
         assert result.provider_id == 'msg_9'
-        assert WecomAppAdapter(CONFIG)._interpret(0, {'errcode': 0}).provider_id is None
+        assert make_adapter()._interpret(0, {'errcode': 0}).provider_id is None
 
     def test_unparseable_body_is_permanent(self):
-        result = WecomAppAdapter(CONFIG)._interpret(None, None)
+        result = make_adapter()._interpret(None, None)
         assert (result.outcome, result.error_class) == ('permanent_failure', 'provider_rejected')
 
 
@@ -347,7 +423,7 @@ class TestInterpret:
 class TestSend:
     def test_accepted_payload_shape(self, monkeypatch):
         calls, _ = make_api(monkeypatch, lambda call, state: (200, {'errcode': 0, 'msgid': 'm1'}))
-        result = WecomAppAdapter(CONFIG, timeout_seconds=7).send(TARGET, TEXTCARD, 20)
+        result = make_adapter(timeout_seconds=7).send(TARGET, TEXTCARD, 20)
         assert (result.outcome, result.provider_id) == ('accepted', 'm1')
         gettoken = next(call for call in calls if 'gettoken' in call[1])
         # secret 只进请求路径（不落日志由日志测试覆盖）；corpid/secret 已编码
@@ -367,22 +443,22 @@ class TestSend:
     ])
     def test_errcode_outcomes(self, monkeypatch, errcode, expected, reason):
         make_api(monkeypatch, lambda call, state: (200, {'errcode': errcode}))
-        result = WecomAppAdapter(CONFIG).send(TARGET, TEXTCARD, 20)
+        result = make_adapter().send(TARGET, TEXTCARD, 20)
         assert (result.outcome, result.error_class) == (expected, reason)
 
     def test_http_5xx_retryable(self, monkeypatch):
         make_api(monkeypatch, lambda call, state: (500, None))
-        result = WecomAppAdapter(CONFIG).send(TARGET, TEXTCARD, 20)
+        result = make_adapter().send(TARGET, TEXTCARD, 20)
         assert (result.outcome, result.error_class) == ('retryable', 'provider_unavailable')
 
     def test_http_429_retryable(self, monkeypatch):
         make_api(monkeypatch, lambda call, state: (429, None))
-        result = WecomAppAdapter(CONFIG).send(TARGET, TEXTCARD, 20)
+        result = make_adapter().send(TARGET, TEXTCARD, 20)
         assert (result.outcome, result.error_class) == ('retryable', 'rate_limited')
 
     def test_http_4xx_permanent(self, monkeypatch):
         make_api(monkeypatch, lambda call, state: (403, None))
-        result = WecomAppAdapter(CONFIG).send(TARGET, TEXTCARD, 20)
+        result = make_adapter().send(TARGET, TEXTCARD, 20)
         assert (result.outcome, result.error_class) == ('permanent_failure', 'provider_rejected')
 
     def test_transport_error_retryable(self, monkeypatch):
@@ -395,13 +471,13 @@ class TestSend:
 
         monkeypatch.setattr(wecom_app, 'PinnedHTTPSConnection', BrokenConnection)
         monkeypatch.setattr(wecom_app, 'public_addresses', lambda host: ['93.184.216.34'])
-        result = WecomAppAdapter(CONFIG).send(TARGET, TEXTCARD, 20)
+        result = make_adapter().send(TARGET, TEXTCARD, 20)
         assert (result.outcome, result.error_class) == ('retryable', 'transport_unavailable')
 
     def test_gettoken_failure_is_retryable_without_send(self, monkeypatch):
         calls = install_fake_api(
             monkeypatch, lambda call: (200, {'errcode': 40013, 'errmsg': 'invalid corpid'}))
-        result = WecomAppAdapter(CONFIG).send(TARGET, TEXTCARD, 20)
+        result = make_adapter().send(TARGET, TEXTCARD, 20)
         assert (result.outcome, result.error_class) == ('retryable', 'provider_authentication')
         assert not [call for call in calls if 'message/send' in call[1]]
 
@@ -410,13 +486,55 @@ class TestSend:
             raise NotificationError('NOTIFICATION_ENDPOINT_FORBIDDEN')
 
         monkeypatch.setattr(wecom_app, 'public_addresses', forbidden)
-        result = WecomAppAdapter(CONFIG).send(TARGET, TEXTCARD, 20)
+        result = make_adapter().send(TARGET, TEXTCARD, 20)
         assert (result.outcome, result.error_class) == ('permanent_failure', 'endpoint_forbidden')
 
     def test_bad_configuration_is_permanent(self, monkeypatch):
         install_fake_api(monkeypatch, lambda call: (200, {'errcode': 0}))
-        result = WecomAppAdapter(CONFIG).send({'bound_user_name': '缺 userid'}, TEXTCARD, 20)
+        result = make_adapter().send({'bound_user_name': '缺 userid'}, TEXTCARD, 20)
         assert (result.outcome, result.error_class) == ('permanent_failure', 'provider_configuration')
+
+    def test_send_uses_tenant_credentials(self, monkeypatch):
+        """五轮（租户级配置）：send 凭据按 target 配置的 tenant_id 解析——
+        corp_id/agentid/secret 全部来自该租户的渠道配置。"""
+        captured = {}
+        credentials = WecomAppCredentials(tenant_id='tenant-9', corp_id='corp999',
+                                          agentid=2000002, secret='tenant-secret')
+
+        def source(tenant_id):
+            captured['tenant_id'] = tenant_id
+            return credentials if tenant_id == 'tenant-9' else None
+
+        calls, _ = make_api(monkeypatch, lambda call, state: (200, {'errcode': 0}))
+        target = dict(TARGET, tenant_id='tenant-9')
+        result = WecomAppAdapter(credentials_source=source).send(target, TEXTCARD, 20)
+        assert result.outcome == 'accepted'
+        assert captured['tenant_id'] == 'tenant-9'
+        gettoken = next(call for call in calls if 'gettoken' in call[1])
+        assert gettoken[1].startswith('/cgi-bin/gettoken?corpid=corp999&corpsecret=tenant-secret')
+        body = json.loads(calls[-1][2])
+        assert body['agentid'] == 2000002 and body['touser'] == 'zhangsan'
+
+    def test_send_without_tenant_credentials_permanent(self, monkeypatch):
+        """租户未配置通知应用（凭据解析 None）：配置类失败不重试。"""
+        make_api(monkeypatch, lambda call, state: (200, {'errcode': 0}))
+        result = make_adapter(configured=False).send(TARGET, TEXTCARD, 20)
+        assert (result.outcome, result.error_class) == ('permanent_failure', 'provider_configuration')
+
+    def test_send_without_tenant_in_configuration_permanent(self, monkeypatch):
+        """target 配置缺 tenant_id（无租户上下文）：fail-closed 不外呼。"""
+        calls = install_fake_api(monkeypatch, lambda call: (200, {'errcode': 0}))
+        result = make_adapter().send({'wecom_userid': 'zhangsan'}, TEXTCARD, 20)
+        assert (result.outcome, result.error_class) == ('permanent_failure', 'provider_configuration')
+        assert calls == []  # 未解析到凭据，连 gettoken 都不发
+
+    def test_tenant_token_cached_across_sends(self, monkeypatch):
+        """同一租户两次发送：token 按租户缓存复用（第二次发送不重新 gettoken）。"""
+        calls, state = make_api(monkeypatch, lambda call, state: (200, {'errcode': 0}))
+        adapter = make_adapter()
+        assert adapter.send(TARGET, TEXTCARD, 20).outcome == 'accepted'
+        assert adapter.send(TARGET, TEXTCARD, 20).outcome == 'accepted'
+        assert state['count'] == 1
 
 
 # ============== token 缓存与刷新重试（设计 §4.3） ==============
@@ -424,7 +542,7 @@ class TestSend:
 class TestTokenHandling:
     def test_token_cached_across_sends(self, monkeypatch):
         calls, state = make_api(monkeypatch, lambda call, state: (200, {'errcode': 0}))
-        adapter = WecomAppAdapter(CONFIG)
+        adapter = make_adapter()
         assert adapter.send(TARGET, TEXTCARD, 20).outcome == 'accepted'
         assert adapter.send(TARGET, TEXTCARD, 20).outcome == 'accepted'
         assert state['count'] == 1  # 第二次发送复用缓存 token
@@ -437,7 +555,7 @@ class TestTokenHandling:
             return (200, {'errcode': 40014}) if attempts['count'] == 1 else (200, {'errcode': 0})
 
         calls, state = make_api(monkeypatch, responder)
-        result = WecomAppAdapter(CONFIG).send(TARGET, TEXTCARD, 20)
+        result = make_adapter().send(TARGET, TEXTCARD, 20)
         assert result.outcome == 'accepted'
         assert attempts['count'] == 2 and state['count'] == 2  # 刷新后用新 token 重试一次
         tokens = [call[1].split('access_token=', 1)[1] for call in calls if 'message/send' in call[1]]
@@ -451,11 +569,11 @@ class TestTokenHandling:
             return (200, {'errcode': 42001}) if attempts['count'] == 1 else (200, {'errcode': 0})
 
         make_api(monkeypatch, responder)
-        assert WecomAppAdapter(CONFIG).send(TARGET, TEXTCARD, 20).outcome == 'accepted'
+        assert make_adapter().send(TARGET, TEXTCARD, 20).outcome == 'accepted'
 
     def test_persistent_token_expired_stays_retryable(self, monkeypatch):
         make_api(monkeypatch, lambda call, state: (200, {'errcode': 42001}))
-        result = WecomAppAdapter(CONFIG).send(TARGET, TEXTCARD, 20)
+        result = make_adapter().send(TARGET, TEXTCARD, 20)
         assert (result.outcome, result.error_class) == ('retryable', 'token_expired')
 
 
@@ -466,7 +584,7 @@ def test_secret_and_token_never_logged(monkeypatch):
     sink = logger.add(lambda msg: records.append(str(msg)), level='WARNING')
     try:
         install_fake_api(monkeypatch, lambda call: (200, {'errcode': 40013}))
-        adapter = WecomAppAdapter(CONFIG)
+        adapter = make_adapter()
         result = adapter.send(TARGET, TEXTCARD, 20)
         assert result.outcome == 'retryable'
     finally:
@@ -478,19 +596,20 @@ def test_secret_and_token_never_logged(monkeypatch):
 
 # ============== delivery 写入（通知核心既有机制） ==============
 
-def _repo_with_adapter(config):
+def _repo_with_adapter(configured=True):
     repo = NotificationRepository.__new__(NotificationRepository)
-    repo.registry = AdapterRegistry([WecomAppAdapter(config)])
+    repo.registry = AdapterRegistry([make_adapter(configured=configured)])
     return repo
 
 
 class TestDeliveryWrite:
     TARGET_ROW = {'target_id': 'target_w1', 'channel': 'wecom_app', 'provider': 'wecom_app',
+                  'tenant_id': 't1',
                   'binding_version': 2, 'installation_ref': 'wecom_bind_u1'}
 
     def test_append_delivery_writes_notification_core_row(self):
         cursor = MagicMock()
-        repo = _repo_with_adapter(CONFIG)
+        repo = _repo_with_adapter()
         route = []
         with patch('src.config.settings.settings', fake_settings()):
             repo._append_delivery(cursor, message(), self.TARGET_ROW, route)
@@ -507,11 +626,24 @@ class TestDeliveryWrite:
                           'provider': 'wecom_app', 'binding_version': 2}]
 
     def test_append_delivery_skips_unavailable_adapter(self):
+        """target 租户未配置通知应用（凭据解析 None）→ 不产生 delivery。"""
         cursor = MagicMock()
-        repo = _repo_with_adapter(WecomAppConfig())  # 未启用
+        repo = _repo_with_adapter(configured=False)
         route = []
         with patch('src.config.settings.settings', fake_settings()):
             repo._append_delivery(cursor, message(), self.TARGET_ROW, route)
+        assert route == []
+        assert not [call for call in cursor.execute.call_args_list
+                    if 'notification_deliveries' in str(call.args[0])]
+
+    def test_append_delivery_skips_target_without_tenant(self):
+        """无租户上下文（global scope 行）即使有配置也不投递：fail-closed。"""
+        cursor = MagicMock()
+        repo = _repo_with_adapter()
+        route = []
+        target_row = dict(self.TARGET_ROW, tenant_id=None)
+        with patch('src.config.settings.settings', fake_settings()):
+            repo._append_delivery(cursor, message(), target_row, route)
         assert route == []
         assert not [call for call in cursor.execute.call_args_list
                     if 'notification_deliveries' in str(call.args[0])]
@@ -562,12 +694,13 @@ def expand_target(channel):
 
 class TestExpandProviderEventGate:
     """企微渠道仅终态通知（设计决策 3/§4.3）：waiting_input 等过程事件即使偏好
-    启用也不产生 delivery；其他渠道与企微终态事件不受影响。"""
+    启用也不产生 delivery；其他渠道与企微终态事件不受影响。五轮（租户级配置）：
+    expand 投递可用性按 target 租户判定——租户未配置通知应用不投递。"""
 
-    def _expand(self, event_type, channel='wecom_app'):
+    def _expand(self, event_type, channel='wecom_app', configured=True, target_tenant='t1'):
         repo = NotificationRepository.__new__(NotificationRepository)
         repo.config = NotificationsConfig(batch_size=10)
-        repo.registry = AdapterRegistry([WecomAppAdapter(CONFIG), StubWebPushAdapter()])
+        repo.registry = AdapterRegistry([make_adapter(configured=configured), StubWebPushAdapter()])
         cursor = MagicMock()
         state = {'inserted': 0}
 
@@ -582,7 +715,7 @@ class TestExpandProviderEventGate:
             elif 'FROM agent_runners' in sql:
                 cursor.fetchone = lambda: {'runner_id': 'runner_1', 'session_id': 'sess_1'}
             elif 'FROM notification_targets' in sql:
-                cursor.fetchall = lambda: [expand_target(channel)]
+                cursor.fetchall = lambda: [dict(expand_target(channel), tenant_id=target_tenant)]
             elif 'INSERT INTO notification_deliveries' in sql:
                 state['inserted'] += 1
 
@@ -607,3 +740,11 @@ class TestExpandProviderEventGate:
 
     def test_completed_still_delivered_to_wecom_app_target(self):
         assert self._expand('task.completed', 'wecom_app') == 1
+
+    def test_completed_not_delivered_when_tenant_unconfigured(self):
+        """五轮（租户级配置）：target 租户没有通知应用配置 → 不产生 delivery。"""
+        assert self._expand('task.completed', 'wecom_app', configured=False) == 0
+
+    def test_completed_not_delivered_when_target_tenant_unconfigured(self):
+        """凭据按 target 租户隔离：t1 配置不给 t2 的 target 用。"""
+        assert self._expand('task.completed', 'wecom_app', target_tenant='t2') == 0

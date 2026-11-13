@@ -17,8 +17,16 @@
 | 复审回炉（外部 CR 4 项） | 同租户接手死锁（revoked 行无条件 409）/绑定上下文单键双标签覆盖/平台管理员回调登记 global/integration 用例读未透出字段 KeyError | 🔧 进行中（复审通过，integration 真 PG 与真机回归待环境） | repository 接手语义+冲突收紧、state 锁定发起租户（BindStateStore+X-Tenant-Id）、上下文按 state 分键、integration 归属改库直查+新增接手用例；notifications 434 + 前端 140 + build 全绿（CR 复跑核验）；integration 真 PG 未跑（本机缺隔离库环境，非代码）。复审遗留登记后续优化：①无 active 行时多 revoked 行版本错位可致重绑登记 BINDING_CHANGED（P2：绑定成功但 target_registered=False，UI 不可自愈，登记侧按 digest 行取版本或非 active 放宽版本钉扎可解）；②有 active 行切换身份须先解绑（BINDING_CONFLICT 语义边界，解绑重绑可恢复）；③wecom-bind-context:${state} 孤儿键累积（P3 卫生，可在 startBind 顺带清理）；④state 值格式变更使升级窗口内存量 state（TTL 5 分钟）失效一次，重发即可，确认可接受 |
 | 三轮回炉（外部复审 3 项） | profile 遮蔽/换绑死循环/集成用例断言 | ✅ 完成（2026-11-13） | ab8f45c4；钉扎仅 active 行生效（非激活跳过，advisory 锁+锁后判定闭合并发边界）；profile active 优先排序；接手/换绑 integration 真 PG 用例改按状态断言。单测 439（红先验证）+ 真 PG 隔离库 wecom 5 用例独立复现全绿；logout 用例失败为 master 预存签名漂移（初始提交即 4 参） |
 | 四轮回炉（外部复审 1 项：Web Push 回归） | stale 请求复活用户刚关闭的浏览器通知 | ✅ 完成（2026-11-13） | dfd527c1；register_target 增 identity_preverified 门控（默认 False=web_push 完全恢复回归前语义，wecom_bind 传 True 保留企微接手/换绑/跳钉扎）；红先 3 用例复现回归后转绿，445 passed；CR 独立复现红先+与 2fdf51c2 基线逐分支等价；integration 真 PG 待隔离库环境 |
+| 五轮：租户级配置改造（用户否决平台全局配置） | 企微应用通知凭据从全局 `notifications.wecom_app` 改为租户自备（连接中心渠道配置 wecom_app_notify） | 🔧 进行中（开发+单测+独立测试+CR 完成，integration 真 PG 与真机验收待环境） | 详见下方「五轮」节；notifications 460 + channel_config_db 79 + task_result_sharing 回归 19 = 558 全绿（CR 独立复跑一致）；前端 build + vitest notifications 140 全绿；E2E 旧全局配置口径作废（后续教程走租户配置页）；integration 真 PG 与真机验收待环境 |
 
-前置（用户/运维）：企微管理端创建独立通知应用（agentid+secret）、可信域名与 OAuth 回调域名、可见范围；配置写入 `configs/config.yaml` `notifications.wecom_app`。
+## 五轮：租户级配置改造（2026-11-13，设计 §3 决策 7）
+
+- 背景：每个租户的企微通知应用凭据互不相同，且后续钉钉/飞书同模式复用；全局 `notifications.wecom_app` 节删除（`wecom_task_min_seconds` 保留在 NotificationsConfig——平台行为参数非租户凭据；redirect_uri 保留平台站点域名 `app.public_base_url`）。
+- 渠道配置：`tenant_channel_configs` 新类型 `wecom_app_notify`（corp_id/agentid/secret 三项，选择该类型即代表启用；secret 复用 wechat_mp codec Fernet 加密落库+掩码回显+不可清空保护；保存即可用，不做主动验证），API 白名单与必填校验同步；通知目标 channel 保持 `wecom_app` 全链不动。
+- 运行时：WecomAppAdapter 增 `available_for_tenant/credentials_for_tenant`（凭据实时读库——租户保存配置立即生效；access_token 按租户缓存），全局 `available()` 恒 False fail-closed；repository 新增 `provider_available(adapter, tenant_id)` 统一判定，expand/_append_delivery/prepare_send/register_target/set_preference/test/tenant_test 及 wecom_bind（bind/status/suggest/confirm/url 按 subject 租户）全部租户感知。
+- 前端：ChannelConfig.vue 新增「企业微信应用通知」类型（corp_id/agentid/secret，secret 密码框+掩码回显；无回调地址、无验证连接、不绑定数字员工）。
+
+前置（用户/运维，五轮更新）：各租户管理员在企业微信后台创建本租户的独立通知应用（agentid+secret）、配置可信域名与可见范围，凭据填入连接中心「企业微信应用通知」渠道；OAuth 回跳域名仍由平台站点域名承载。E2E 按旧文档准备的 `notifications.wecom_app` 全局配置作废。
 
 ## Phase 1 — 身份绑定（设计 §4.1）
 

@@ -87,9 +87,19 @@ _REQUIRED_FIELDS = {
     # 安全模式下 appid 缺失由 _validate_wechat_mp_safe_mode 条件校验拦截）。
     # callback_token 也不在此表——默认服务端生成，WP11 起支持可选自定义
     # （config.callback_token，3~32 位字母数字，见 _validate_wechat_mp_custom_token）
+    # 企业微信应用通知（wecom_app_notify，长任务企微应用消息）：corp_id/agentid/secret
+    # 三项即用，无回调链路，secret 加密落库（channel_config_db 敏感字段机制）
+    "wecom_app_notify": {
+        "corp_id": "企业ID（在「我的企业」页面获取，格式 ww 开头）",
+        "agentid": "通知应用AgentId（在应用详情页获取）",
+        "secret": "通知应用Secret（在应用详情页获取）",
+    }
 }
 
 _WECHAT_MP_CHANNEL_TYPE = "wechat_mp"
+# 企业微信应用通知（长任务企微应用消息，租户自备凭据；与消息渠道 wecom_app
+# target/delivery 全链无关，仅是租户渠道配置类型名）
+_WECOM_APP_NOTIFY_CHANNEL_TYPE = "wecom_app_notify"
 
 
 def _build_wechat_mp_callback_url(request: Request, config_id: str) -> str:
@@ -185,7 +195,8 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
     """新增渠道配置"""
     admin = require_admin(request)
 
-    if body.channel_type not in ("wecom", "wecom_kf", "dingtalk", "feishu", _WECHAT_MP_CHANNEL_TYPE):
+    if body.channel_type not in ("wecom", "wecom_kf", "dingtalk", "feishu",
+                                 _WECHAT_MP_CHANNEL_TYPE, _WECOM_APP_NOTIFY_CHANNEL_TYPE):
         raise HTTPException(status_code=400, detail=f"不支持的渠道类型: {body.channel_type}")
 
     required = _REQUIRED_FIELDS.get(body.channel_type, {})
