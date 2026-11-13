@@ -1,7 +1,7 @@
 """企微应用身份绑定（长任务企微应用通知 Phase 1，设计 §4.1）。
 
 - OAuth 主路径：/wecom/bind/url 生成授权链接（state 入 Redis 防 CSRF，TTL 5 分钟，
-  回调一次性消费）→ /wecom/bind/callback 用 code 换 userid → 可见范围校验 → 落库。
+  绑定发起用户、回调一次性消费）→ /wecom/bind/callback 用 code 换 userid → 可见范围校验 → 落库。
 - 手机号兜底：/wecom/bind/suggest 只读预填；/wecom/bind/confirm 服务端按登录用户
   手机号重新核实后才落库，不信任前端传的 userid。
 - 解绑：DELETE /wecom/bind 清空 wecom_userid 并撤销既有 wecom_app target。
@@ -39,16 +39,21 @@ class BindStateStore:
     def __init__(self, ttl_seconds=300):
         self.ttl_seconds = ttl_seconds
 
-    def issue(self):
+    def issue(self, user_id):
+        """签发 state 并绑定发起用户：state 值存 user_id，回调时校验同一登录用户。"""
         state = uuid.uuid4().hex
-        set_cached(CacheKeys.WECOM_BIND_STATE, state, value='1', ttl=self.ttl_seconds)
+        set_cached(CacheKeys.WECOM_BIND_STATE, state, value=user_id, ttl=self.ttl_seconds)
         return state
 
-    def consume(self, state):
-        """校验并一次性消费；非法格式/不存在/已消费/过期均拒绝。"""
+    def consume(self, state, user_id):
+        """校验并一次性消费；非法格式/不存在/已消费/过期/非发起用户均拒绝。
+
+        用户不匹配时视为无效但不删除键：state 仍归发起用户，本人可继续完成绑定。
+        """
         if not state or not _STATE_PATTERN.fullmatch(state):
             return False
-        if get_cached(CacheKeys.WECOM_BIND_STATE, state) is None:
+        stored = get_cached(CacheKeys.WECOM_BIND_STATE, state)
+        if stored is None or stored != user_id:
             return False
         delete_cached(CacheKeys.WECOM_BIND_STATE, state)
         return True
@@ -200,7 +205,7 @@ def create_bind_router(config=None, repository=None, user_loader=None,
         redirect = _redirect_uri(app_config)
         if not redirect:
             raise NotificationError('NOTIFICATION_WECOM_APP_UNAVAILABLE', 503)
-        state = state_store.issue()
+        state = state_store.issue(current.user_id)
         encoded_redirect = quote(redirect, safe='')
         oauth_url = (f'{_OAUTH_AUTHORIZE_URL}?appid={quote(app_config.corp_id)}'
                      f'&redirect_uri={encoded_redirect}&response_type=code'
@@ -212,7 +217,8 @@ def create_bind_router(config=None, repository=None, user_loader=None,
     @router.get('/wecom/bind/callback')
     def wecom_bind_callback(request: Request, current: Subject = Depends(subject)):
         _require_app()
-        if not state_store.consume(request.query_params.get('state', '')):
+        # state 绑定发起用户：与当前登录用户不一致按无效 state 拒绝
+        if not state_store.consume(request.query_params.get('state', ''), current.user_id):
             raise NotificationError('NOTIFICATION_BIND_STATE_INVALID')
         userid = wecom_client.oauth_userid(request.query_params.get('code', ''))
         if not userid:

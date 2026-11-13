@@ -130,26 +130,35 @@ def saved(monkeypatch):
     return state
 
 
-# ============== state 一次性消费 ==============
+# ============== state 一次性消费（绑定发起用户） ==============
 
 class TestBindState:
     def test_issue_and_single_consumption(self):
         store = BindStateStore()
-        state = store.issue()
+        state = store.issue('user_1')
         assert state
-        assert store.consume(state) is True
+        assert store.consume(state, 'user_1') is True
         # 重放拒绝
-        assert store.consume(state) is False
+        assert store.consume(state, 'user_1') is False
+
+    def test_other_user_rejected_and_owner_unaffected(self):
+        """CR P2：state 绑定发起用户——用户 B 消费用户 A 的 state 被拒，且不烧掉 A 的 state。"""
+        store = BindStateStore()
+        state = store.issue('user_1')
+        assert store.consume(state, 'user_2') is False
+        # 发起人本人仍可正常消费
+        assert store.consume(state, 'user_1') is True
+        assert store.consume(state, 'user_1') is False
 
     def test_expired_rejected(self):
         store = BindStateStore(ttl_seconds=0)
-        state = store.issue()
-        assert store.consume(state) is False
+        state = store.issue('user_1')
+        assert store.consume(state, 'user_1') is False
 
     def test_malformed_rejected(self):
         store = BindStateStore()
-        assert store.consume('') is False
-        assert store.consume('not-a-state') is False
+        assert store.consume('', 'user_1') is False
+        assert store.consume('not-a-state', 'user_1') is False
 
 
 # ============== callback ==============
@@ -158,7 +167,7 @@ class TestCallback:
     def test_success_persists_userid(self, saved):
         wecom = FakeWecomClient()
         store = BindStateStore()
-        state = store.issue()
+        state = store.issue('user_1')
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
                         wecom=wecom, store=store).get(
             f'/api/notifications/wecom/bind/callback?code=goodcode&state={state}', headers=AUTH)
@@ -170,7 +179,7 @@ class TestCallback:
 
     def test_state_replay_rejected(self, saved):
         store = BindStateStore()
-        state = store.issue()
+        state = store.issue('user_1')
         client = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'}, store=store)
         first = client.get(f'/api/notifications/wecom/bind/callback?code=c&state={state}', headers=AUTH)
         assert first.status_code == 200
@@ -187,10 +196,31 @@ class TestCallback:
         assert resp.json() == {'error': 'NOTIFICATION_BIND_STATE_INVALID'}
         assert saved['saved'] == []
 
+    def test_state_from_other_user_rejected_owner_unaffected(self, saved):
+        """CR P2：用户 B 拿用户 A 签发的 state 调 callback 被拒；A 本人随后仍绑定成功。"""
+        wecom = FakeWecomClient()
+        store = BindStateStore()
+        state_a = store.issue('user_1')
+        client_b = make_app(user={'user_id': 'user_2', 'tenant_id': 't1', 'role': 'user'},
+                            wecom=wecom, store=store)
+        resp_b = client_b.get(f'/api/notifications/wecom/bind/callback?code=c&state={state_a}',
+                              headers=AUTH)
+        assert resp_b.status_code == 400
+        assert resp_b.json() == {'error': 'NOTIFICATION_BIND_STATE_INVALID'}
+        assert saved['saved'] == []
+        # 发起人 A 用同一 state 正常走完绑定
+        client_a = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
+                            wecom=wecom, store=store)
+        resp_a = client_a.get(f'/api/notifications/wecom/bind/callback?code=goodcode&state={state_a}',
+                              headers=AUTH)
+        assert resp_a.status_code == 200
+        assert resp_a.json() == {'success': True, 'userid': 'zhangsan', 'name': '张三'}
+        assert saved['saved'] == [('user_1', 'zhangsan')]
+
     def test_wecom_errcode_nonzero_rejected(self, saved):
         wecom = FakeWecomClient(oauth_userid=None)  # errcode 非零 → 客户端返回 None
         store = BindStateStore()
-        state = store.issue()
+        state = store.issue('user_1')
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
                         wecom=wecom, store=store).get(
             f'/api/notifications/wecom/bind/callback?code=bad&state={state}', headers=AUTH)
@@ -201,7 +231,7 @@ class TestCallback:
     def test_member_out_of_scope_rejected(self, saved):
         wecom = FakeWecomClient(member=None)  # user/get errcode 非零（不在可见范围/不存在）
         store = BindStateStore()
-        state = store.issue()
+        state = store.issue('user_1')
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
                         wecom=wecom, store=store).get(
             f'/api/notifications/wecom/bind/callback?code=c&state={state}', headers=AUTH)
@@ -212,7 +242,7 @@ class TestCallback:
     def test_member_disabled_rejected(self, saved):
         wecom = FakeWecomClient(member={'userid': 'zhangsan', 'name': '张三', 'status': 2})
         store = BindStateStore()
-        state = store.issue()
+        state = store.issue('user_1')
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
                         wecom=wecom, store=store).get(
             f'/api/notifications/wecom/bind/callback?code=c&state={state}', headers=AUTH)
@@ -223,7 +253,7 @@ class TestCallback:
     def test_taken_by_other_user_rejected(self, saved):
         saved['taken_by'] = 'user_2'
         store = BindStateStore()
-        state = store.issue()
+        state = store.issue('user_1')
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
                         store=store).get(
             f'/api/notifications/wecom/bind/callback?code=c&state={state}', headers=AUTH)
@@ -234,7 +264,7 @@ class TestCallback:
     def test_rebind_same_user_ok(self, saved):
         saved['taken_by'] = 'user_1'  # 已绑定的就是本人 → 幂等重绑
         store = BindStateStore()
-        state = store.issue()
+        state = store.issue('user_1')
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
                         store=store).get(
             f'/api/notifications/wecom/bind/callback?code=c&state={state}', headers=AUTH)
@@ -354,8 +384,8 @@ class TestBindUrl:
         assert 'scope=snsapi_base' in body['oauth_url']
         assert 'redirect_uri=https%3A%2F%2Fx.example.com%2Fnotification%2Fwecom-bind' in body['oauth_url']
         assert 'agentid=1000001' in body['qr_url']
-        # state 已入 Redis：可被回调一次性消费
-        assert store.consume(body['state']) is True
+        # state 已入 Redis：发起人可被回调一次性消费
+        assert store.consume(body['state'], 'user_1') is True
 
     def test_disabled_config_unavailable(self):
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
