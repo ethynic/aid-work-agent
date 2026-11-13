@@ -83,10 +83,10 @@ class ExecutionRepository:
         self._source_dispatch(cursor,row,prepared)
         return lock_runner(cursor,attempt.runner_id,attempt,dispatch=True)
 
-    def acquire_priority(self,worker_id,lease_seconds,*,role='general'):
-        return self.acquire(worker_id,lease_seconds,priority_only=True,role=role)
+    def acquire_priority(self,worker_id,lease_seconds):
+        return self.acquire(worker_id,lease_seconds,priority_only=True)
 
-    def acquire(self, worker_id, lease_seconds, *, priority_only=False, role='general'):
+    def acquire(self, worker_id, lease_seconds, *, priority_only=False):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
             cursor.execute("""SELECT r.* FROM agent_runners r WHERE (
@@ -105,9 +105,8 @@ class ExecutionRepository:
                     AND (r.lease_until IS NULL OR r.lease_until<=clock_timestamp())
                     AND EXISTS (SELECT 1 FROM agent_runner_session_claims c WHERE c.owner_runner_id=r.runner_id)))
                 AND (NOT %s OR r.status<>'queued')
-                AND (%s <> 'light' OR r.load_class='light')
                 ORDER BY r.queue_order FOR UPDATE OF r SKIP LOCKED LIMIT 1""",
-                (priority_only, role))
+                (priority_only,))
             row = decoded(cursor.fetchone())
             if row is None:
                 return None
@@ -211,7 +210,7 @@ class ExecutionRepository:
             return self._final_dispatch(cursor,attempt,source_prepared)
 
     def save_checkpoint(self, attempt, revision, checkpoint, snapshot=None, *, dispatch=False,
-                        source_prepared=None, heavy_used=False):
+                        source_prepared=None):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
             row = lock_runner(cursor, attempt.runner_id, attempt, dispatch=dispatch)
@@ -228,12 +227,11 @@ class ExecutionRepository:
             snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,snapshot=snapshot)
             cursor.execute("""UPDATE agent_runners SET checkpoint=%s::jsonb,
                 public_snapshot=COALESCE(%s::jsonb,public_snapshot),
-                load_class=CASE WHEN %s THEN 'heavy' ELSE load_class END,
                 revision=revision+1,
                 view_revision=view_revision+1,updated_at=CURRENT_TIMESTAMP WHERE runner_id=%s RETURNING *""",
                 (capped_checkpoint_dumps(checkpoint),
                  capped_snapshot_dumps(snapshot) if snapshot is not None else None,
-                 heavy_used, attempt.runner_id))
+                 attempt.runner_id))
             result = decoded(cursor.fetchone())
             result = sync_public_display(cursor,result,advance_view=False)
             result = EventRepository.notify_in_tx(cursor,row,after=result)

@@ -235,7 +235,8 @@ def test_dead_worker_exits_slot_container_before_any_new_child(monkeypatch):
         def poll(self): return 1
     monkeypatch.setattr(settings, 'agent_runner', SimpleNamespace(
         enabled=True, peers={'bridge': object()}, web_service_token='fixture',
-        concurrency=1, lease_seconds=30, cancel_grace_seconds=1200))
+        concurrency=1, lease_seconds=30, cancel_grace_seconds=1200,
+        slot_concurrency=1))
     monkeypatch.setattr('src.db.database.init_postgres_pool',
                         lambda **kwargs: calls.append(('pool', kwargs)))
     monkeypatch.setattr('src.db.database.close_postgres_pool', lambda: None)

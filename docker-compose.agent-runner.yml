@@ -2,41 +2,47 @@
 #
 # 用法（叠加到目标环境主 compose，例如生产）：
 #   docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml config   # 纯语法/插值校验
-#   docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml up -d runner-api runner-worker-light runner-worker-general
+#   docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml up -d runner-api runner-worker heavy-tools
 #   # 微信客服使用原主 API 渠道入口，不再部署独立 KF ingress/admission。
 #
 # ⚠️ 红线：本文件只是部署配置。执行 up/down/restart/recreate 即激活 AgentRunner 接线并变更
 # 用户环境（configs/config.yaml 为三环境共享挂载，agent_runner.enabled 当前为本地验证态 true），
 # 一切启动/回退都必须由用户当场明确授权后按 deploy/agent-runner-deploy-checklist.md 执行。
 #
+# 2026-11-13 重工具服务化（docs/system/runner-heavy-tool-service-design.md §6/§9）：
+#   - 原 light/general 双池合并为单一 runner-worker 服务
+#     （§9 池路由退役：角色机制/判型删除，全部 worker 等价全量领取）；
+#   - 新增 heavy-tools 服务（同镜像不同入口）：excel handlers / paddleocr / upload 解析
+#     在独立容器执行，轻容器经 HTTP 调用（HEAVY_TOOLS_MODE=remote）。
+#     重容器零 DB 连接、零 LLM 凭证——刻意不挂 .env（env_file 不注入），仅注入
+#     服务级配置与 PADDLEOCR 服务 token（云 API 调用凭据，非租户/LLM 凭证）。
+#
 # 宿主路径/网络/容器名变量经 .env 或命令行注入（默认值对齐生产 docker-compose.prod.yml）：
 #   AGENT_RUNNER_NETWORK            容器网络：prod=aid-network / test=aid-network2 / dev=aid-network3
 #   AGENT_RUNNER_UPLOADS_HOST_DIR   上传宿主目录（与目标环境主 compose 的 uploads 挂载同一路径）
 #   AGENT_RUNNER_STORAGE_HOST_DIR   产物宿主目录（与目标环境主 compose 的 storage 挂载同一路径）
 #   AGENT_RUNNER_API_CONTAINER      runner-api 容器名（默认 aid-runner-api）
-#   AGENT_RUNNER_LIGHT_SLOTS        轻专用池 worker 副本数（默认 12，AGENT_RUNNER_ROLE=light）
-#   AGENT_RUNNER_GENERAL_SLOTS      通用池 worker 副本数（默认 8，无过滤领取）
+#   AGENT_RUNNER_WORKER_SLOTS       runner-worker 副本数（默认 4；单一服务，副本即容器数）
+#   AGENT_RUNNER_SLOT_CONCURRENCY   每副本槽内并发执行体数（默认 5；重工具服务化后 4×5=20 执行体）
+#   AGENT_RUNNER_WORKER_MEMORY      每副本内存限额（默认 1.5g：重病理移出后 5×~0.29GiB 忙时 ≈1.45GiB）
 #   AGENT_RUNNER_WORKER_CPUS        每副本 CPU 限额（默认 1）
-#   AGENT_RUNNER_WORKER_MEMORY      通用池每副本内存限额（默认 1g，重池 1GiB cgroup 病理钉死；
-#                                   拆双池前的旧变量名沿用为通用池限额，无 GENERAL_MEMORY 变量）
-#   AGENT_RUNNER_LIGHT_MEMORY       轻池每副本内存限额（默认 1g；A 方案 4 并发下须 2g，
-#                                   设计 §6.3：4×0.29GiB 忙时 ≈1.16GiB）
-# 轻重负载分离（设计 §4.4）：原 runner-worker 单服务拆为 light/general 双池；
-# AGENT_RUNNER_ROLE 由服务 environment 固定注入，不经变量。
-# A 方案槽内并发（Phase 7，设计 §6）：light 池 worker 进程内并发
-# AGENT_RUNNER_SLOT_CONCURRENCY（默认 4，置 1 回退现行拓扑）个执行体；
-# general 池代码强制 1 槽 1 任务（slot_capacity.effective_slot_concurrency 兜底）。
-# agent2 测试环境（Phase 7.3 重配）：1 轻（×4）+ 3 通用，轻池 cgroup 2g。
-# worker DB 池上限由代码按 slot_concurrency+2 派生（轻 4+2=6、通用 1+2=3），
-# 无 DB_POOL_MAX 配置项；监督进程独立小池 (1,2) 硬编码，扩槽无需重算连接预算
-# 之外仅按 副本×(并发+2+2) 增量核对 PG max_connections。
+#   HEAVY_TOOLS_MODE                远程派发开关（worker 端）：remote=代理远程派发 / local=全本地执行。
+#                                   ⚠️ 经 .env 注入，compose 不给默认值——漏配即 fail-fast（agent3/agent1 设 local）
+#   HEAVY_TOOLS_URL                 重工具服务地址（默认 http://heavy-tools:8093，跨机部署改内网 IP）
+#   HEAVY_TOOLS_REPLICAS            heavy-tools 副本数（默认 1；agent2 固定 1，生产起步 2）
+#   HEAVY_TOOLS_CONCURRENCY         单副本信号量并发（默认 1；2×病理 1GiB 贴 2g 上限，实测互拖则降 1）
+#   HEAVY_TOOLS_MEMORY              heavy-tools 每副本内存限额（默认 2g：2 个并发重 job × 1GiB 病理上限）
+#   HEAVY_TOOLS_CPUS                heavy-tools 每副本 CPU 限额（默认 2，即 200%）
+#   HEAVY_TOOLS_ENABLED             heavy-tools 服务是否启动（true/false，默认 true；
+#                                   agent3 开发环境设 false 且 HEAVY_TOOLS_MODE=local，设计 §6）
+# 调整副本数走 `docker compose ... up -d --scale heavy-tools=N`（只动该服务）；
+# 改 HEAVY_TOOLS_CONCURRENCY 需重建 heavy-tools 容器。deploy 脚本不 export 环境变量
+# （既定裁决），上述差异值一律写服务器 .env。
+# worker DB 池上限由代码按 slot_concurrency+2 派生（默认 5+2=7）；
+# 监督进程独立小池 (1,2) 硬编码，扩槽按 副本×(并发+2+2) 增量核对 PG max_connections。
 # worker 容器名由 Compose 按 project/service/副本序号生成；同机多环境以 project 隔离。
-# 这些变量仅参与 compose 插值，src/config/settings.py 不读取（应用读取的 AGENT_RUNNER_* 见
-# settings.py 的 env 覆盖段，二者命名不冲突）。
 
-# AgentRunner 执行 worker 共享基座（Compose 扩展字段，顶层声明供双池 anchor 合并；
-# 不作为服务运行）。每副本 = 一监督进程（python -m supervisor）管一单并发 Worker。
-# 锚点必须定义在引用之前（YAML 别名只能指向已解析的节点）。
+# AgentRunner 执行 worker 共享基座（Compose 扩展字段，不作为服务运行）。
 x-runner-worker: &runner-worker
   build:
     context: .
@@ -45,7 +51,7 @@ x-runner-worker: &runner-worker
   restart: unless-stopped
   stop_grace_period: 75s
   cpus: ${AGENT_RUNNER_WORKER_CPUS:-1}
-  mem_limit: ${AGENT_RUNNER_WORKER_MEMORY:-1g}
+  mem_limit: ${AGENT_RUNNER_WORKER_MEMORY:-1.5g}
   shm_size: 512m
   # 先起独立 API（schema 断言/接单面就绪）再起 worker；worker 自身也会 assert_schema，
   # 该依赖只为启动顺序确定性，不构成运行时耦合（worker 只访问 DB，不调用 API）。
@@ -175,38 +181,90 @@ services:
         max-file: "3"
 
   # AgentRunner 执行 worker：认领/心跳/执行/恢复，全部经共享数据库，不监听 HTTP。
-  # 轻重负载分离（设计 §4.1 非对称双池）：light 池领取时过滤 load_class='light'
-  # 绝不领重任务；general 池无过滤领取（重任务仅在此跑，轻低谷时可支援轻任务）。
-  # 双池共享配置收敛到顶层 anchor x-runner-worker；environment 因 AGENT_RUNNER_ROLE
-  # 不同各自全量声明（YAML merge 对列表整体替换，无法部分合并）。
-  # 每副本限额可配置；正式槽数与限额须按实测校准。
-  # 轻专用池：保底轻任务容量，对重任务突发免疫（heavy 行对此池不可见）；
-  # 槽内并发 N=4（A 方案 Phase 7），cgroup 默认 1g、agent2 按重配升至 2g
-  runner-worker-light:
+  # §9 池路由退役：单一服务全量领取（原 light/general 双池合并）；
+  # 槽内并发 AGENT_RUNNER_SLOT_CONCURRENCY（默认 5），副本数 AGENT_RUNNER_WORKER_SLOTS。
+  runner-worker:
     <<: *runner-worker
-    mem_limit: ${AGENT_RUNNER_LIGHT_MEMORY:-1g}
     deploy:
-      replicas: ${AGENT_RUNNER_LIGHT_SLOTS:-4}
+      replicas: ${AGENT_RUNNER_WORKER_SLOTS:-4}
     environment:
       - SERVER_MODE=agent-runner-worker
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - AGENT_RUNNER_API_URL=http://runner-api:8091
       - AGENT_RUNNER_STORAGE_ROOT=/app/storage
       - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
-      - AGENT_RUNNER_ROLE=light
-      - AGENT_RUNNER_SLOT_CONCURRENCY=${AGENT_RUNNER_SLOT_CONCURRENCY:-4}
+      # 重工具远程派发（设计 §4.2）：remote=命中 heavy_tools 白名单即走代理远程派发；
+      # local=全本地执行（agent3/回退形态）。值经 .env 注入，漏配即 worker 拒启。
+      - HEAVY_TOOLS_MODE=${HEAVY_TOOLS_MODE}
+      - HEAVY_TOOLS_URL=${HEAVY_TOOLS_URL:-http://heavy-tools:8093}
 
-  # 通用池：无过滤领取（缺省角色 general），重任务唯一执行池
-  runner-worker-general:
-    <<: *runner-worker
+  # 重工具服务（同镜像不同入口）：excel handlers / paddleocr / upload 解析。
+  # 纯计算服务：零 DB 连接、零 LLM 凭证——刻意不挂 env_file .env，仅注入服务级
+  # 配置与 PADDLEOCR 服务 token（云 API 凭据，非租户/LLM 凭证，设计 §2「不含凭证」
+  # 的唯一例外，已在 heavy_tool_service 注释登记）。
+  heavy-tools:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aid-agent-api:latest
+    restart: unless-stopped
+    container_name: ${HEAVY_TOOLS_CONTAINER:-aid-heavy-tools}
     deploy:
-      replicas: ${AGENT_RUNNER_GENERAL_SLOTS:-4}
+      replicas: ${HEAVY_TOOLS_REPLICAS:-1}
+    cpus: ${HEAVY_TOOLS_CPUS:-2}
+    mem_limit: ${HEAVY_TOOLS_MEMORY:-2g}
+    shm_size: 512m
+    depends_on:
+      runner-api:
+        condition: service_healthy
     environment:
-      - SERVER_MODE=agent-runner-worker
+      - SERVER_MODE=heavy-tools
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - AGENT_RUNNER_API_URL=http://runner-api:8091
-      - AGENT_RUNNER_STORAGE_ROOT=/app/storage
-      - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
+      - HEAVY_TOOLS_CONCURRENCY=${HEAVY_TOOLS_CONCURRENCY:-1}
+      - HEAVY_TOOLS_STORAGE_ROOT=/app/storage
+      - HEAVY_TOOLS_UPLOADS_ROOT=/app/uploads
+      # 服务间认证（恒等比较）：与 runner 服务间凭据同一 .env 值，无新增 secret。
+      - AGENT_RUNNER_WEB_SERVICE_TOKEN=${AGENT_RUNNER_WEB_SERVICE_TOKEN}
+      # PaddleOCR 云 API 凭据（paddleocr 工具整体远程后在此调用，服务级例外见上）
+      - PADDLEOCR_DOC_PARSING_API_URL=${PADDLEOCR_DOC_PARSING_API_URL:-}
+      - PADDLEOCR_ACCESS_TOKEN=${PADDLEOCR_ACCESS_TOKEN:-}
+      - PADDLEOCR_DOC_PARSING_TIMEOUT=${PADDLEOCR_DOC_PARSING_TIMEOUT:-600}
+    # 覆盖镜像默认 gunicorn 入口：跑重工具 FastAPI 服务（uvicorn 单进程）
+    entrypoint: ["sh", "-c"]
+    command: ["/usr/local/bin/fix_tmp.sh && exec gosu appuser python -m src.services.heavy_tool_service.server --host 0.0.0.0 --port 8093"]
+    volumes:
+      - .:/app
+      - ./log:/app/log
+      - ./configs:/app/configs
+      # 共享 storage 卷（读写）：workspace 绝对路径直接交接文件（设计 §4.1 文件不走 HTTP）
+      - ${AGENT_RUNNER_UPLOADS_HOST_DIR:-/var/www/qb3_upload/agent_uploads}:/app/uploads:ro
+      - ${AGENT_RUNNER_STORAGE_HOST_DIR:-/var/www/qb3_upload/agent_storage}:/app/storage
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          mode: 1777
+          size: 200m
+      - type: tmpfs
+        target: /home/appuser/tmp
+        tmpfs:
+          mode: 1777
+          size: 1g
+    networks:
+      - ${AGENT_RUNNER_NETWORK:-aid-network}
+    # /internal/heavy-tools/health 免认证（仅返回非敏感计数），liveness 探测用
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8093/internal/heavy-tools/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # agent3 开发环境不部署重容器（设计 §6）：.env 设 HEAVY_TOOLS_REPLICAS=0
+    # 即不创建容器（compose 支持 scale to zero），服务定义保留便于随时拉起。
 
   # 独立扫描进程：只读 Runner 状态，写告警/通知事件/扫描状态；异常退出由 restart policy 拉起。
   runner-monitor:

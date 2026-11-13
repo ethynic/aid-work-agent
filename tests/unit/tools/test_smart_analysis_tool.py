@@ -642,7 +642,9 @@ class TestBatchSelectAndLoad:
         })
 
         assert table_id == "12"
-        assert len(analyzer._tables["12"]) == 2
+        # §5.1 状态介导：load_table 落状态文件，行数在写盘时记录
+        assert analyzer.table_rows("12") == 2
+        assert isinstance(analyzer._tables["12"], str)
 
 
 # ============================================================

@@ -17,7 +17,7 @@ class TimerRepository:
     def __init__(self,connection_factory=get_db_connection):
         self.connection_factory = connection_factory
 
-    def next_candidates(self,*,after_queue_order=0,limit=16,role='general'):
+    def next_candidates(self,*,after_queue_order=0,limit=16):
         if type(limit) is not int or not 1<=limit<=32:
             raise ValueError('TIMER_CANDIDATE_LIMIT_INVALID')
         with self.connection_factory() as connection:
@@ -40,9 +40,8 @@ class TimerRepository:
                 AND EXISTS (SELECT 1 FROM agent_runner_session_claims c
                     WHERE c.scope_key=r.scope_key AND c.session_kind=r.session_kind
                     AND c.session_id=r.session_id AND c.owner_runner_id=r.runner_id)
-                AND (%s <> 'light' OR r.load_class='light')
                 AND r.queue_order>%s ORDER BY r.queue_order LIMIT %s''',
-                (role, after_queue_order, limit))
+                (after_queue_order, limit))
             return [decoded(row) for row in cursor.fetchall()]
 
     def claim(self,expected,worker_id,lease_seconds,checkpoint,*,source_port=None,prepared_source=None):

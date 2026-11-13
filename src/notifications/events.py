@@ -326,13 +326,11 @@ def render_message_text(event_type, parameters):
         return '通知渠道测试', '这是一条测试通知，收到即表示外发渠道配置有效。'
     if event_type == 'runner.long_running':
         minutes = parameters['duration_seconds'] // 60
-        load_class = parameters.get('load_class')
-        pool = {'light': '轻专用池', 'heavy': '通用池'}.get(load_class)
+        # 2026-11-13 重工具服务化 §9：池路由退役，不再区分负载池归属。
         return 'Runner 运行较久', (
             f'Runner ID：{parameters["runner_id"]}\n'
             f'租户标识：{parameters.get("tenant_id") or "无"}\n'
             f'数字员工：{parameters["profile_id"]}\n'
-            + (f'负载池：{pool}\n' if pool else '')
             + f'本次执行时长：{minutes} 分钟。')
     return render_inbox_text(event_type, parameters)
 

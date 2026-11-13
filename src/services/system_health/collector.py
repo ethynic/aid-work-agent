@@ -119,26 +119,19 @@ def _collect_runner_section() -> "tuple[Dict[str, Any], List[str]]":
     section: Dict[str, Any] = {}
     with get_db_connection() as cur:
         cur.execute(
-            "SELECT status, load_class, COUNT(*) AS cnt FROM agent_runners "
-            "WHERE status = ANY(%s) GROUP BY status, load_class",
+            "SELECT status, COUNT(*) AS cnt FROM agent_runners "
+            "WHERE status = ANY(%s) GROUP BY status",
             (list(ACTIVE_STATUSES),),
         )
-        counts = {}
-        for r in cur.fetchall():
-            key = r["status"] + ("_light" if (r["load_class"] or "light") == "light" else "_heavy")
-            counts[key] = counts.get(key, 0) + r["cnt"]
-        section["queued"] = counts.get("queued_light", 0) + counts.get("queued_heavy", 0)
-        section["running"] = counts.get("running_light", 0) + counts.get("running_heavy", 0)
-        section["finalizing"] = counts.get("finalizing_light", 0) + counts.get("finalizing_heavy", 0)
+        counts = {r["status"]: r["cnt"] for r in cur.fetchall()}
+        # 2026-11-13 重工具服务化 §9：池路由退役，全部 worker 等价，不再按
+        # load_class 拆分池占用（DB 列保留恒 light，仅历史行可读）。
+        section["queued"] = counts.get("queued", 0)
+        section["running"] = counts.get("running", 0)
+        section["finalizing"] = counts.get("finalizing", 0)
         section["waiting"] = counts.get("waiting", 0)
         section["paused"] = counts.get("paused", 0)
         section["interrupted"] = counts.get("interrupted", 0)
-        # 池占用按 load_class 近似：轻池只领 light，通用池两者都能兜领，
-        # light 行可能溢出到通用槽（判型分布 ≠ 精确槽位归属，claim 未记录领取池）
-        section["running_light"] = counts.get("running_light", 0)
-        section["finalizing_light"] = counts.get("finalizing_light", 0)
-        section["running_heavy"] = counts.get("running_heavy", 0)
-        section["finalizing_heavy"] = counts.get("finalizing_heavy", 0)
 
         cur.execute(
             "SELECT COALESCE(MAX(EXTRACT(EPOCH FROM (clock_timestamp()-execution_started_at))"
@@ -188,26 +181,56 @@ def _collect_runner_section() -> "tuple[Dict[str, Any], List[str]]":
         cur.execute("SELECT COUNT(*) AS cnt FROM agent_runner_alerts WHERE ended_at IS NULL")
         section["active_alerts"] = int(cur.fetchone()["cnt"])
 
-    # 槽位 = 双池部署配置口径（与 worker 容器共用同一 .env）；
+    # 槽位 = 部署配置口径（与 worker 容器共用同一 .env）；
     # 配置值非容器实况（副本崩溃不扣减），仅作容量对照展示。
-    # 轻槽每槽并发（AGENT_RUNNER_SLOT_CONCURRENCY，槽内协程 A 方案）未配置时为 4，
-    # 与 settings.py slot_concurrency 默认值、compose worker 插值默认值保持一致
-    # （此前默认 1 与后两者不一致，导致健康页轻槽并发显示失真），
-    # 容量自动按执行体换算（槽位 × 并发）
+    # 2026-11-13 重工具服务化 §9：单一 runner-worker 服务，执行体容量
+    # = worker 副本 × 每副本并发（AGENT_RUNNER_SLOT_CONCURRENCY）；
+    # 重工具服务指标走 _probe_heavy_tools（配置 + best-effort 健康探测）。
     def _env_int(name: str, default: int) -> int:
         try:
             return int(os.environ.get(name, str(default)))
         except ValueError:
             return default
 
-    light_slots = _env_int("AGENT_RUNNER_LIGHT_SLOTS", 12)
-    general_slots = _env_int("AGENT_RUNNER_GENERAL_SLOTS", 8)
-    section["light_slots"] = light_slots
-    section["general_slots"] = general_slots
+    section["worker_replicas"] = _env_int("AGENT_RUNNER_WORKER_SLOTS", 4)
     section["light_concurrency"] = _env_int("AGENT_RUNNER_SLOT_CONCURRENCY", 4)
-    section["worker_slots"] = max(1, light_slots + general_slots)
+    section["worker_slots"] = max(1, section["worker_replicas"] * section["light_concurrency"])
+    section["heavy_tools"] = _probe_heavy_tools(_env_int)
 
     return section, fingerprint
+
+
+def _probe_heavy_tools(_env_int) -> Dict[str, Any]:
+    """重工具服务指标：部署配置口径 + best-effort 健康探测（失败不阻断采集）。
+
+    remote 模式才发 HTTP 探测（local 模式无重容器，仅报告模式与配置）；
+    探测返回 running/busy 等服务实况，供健康页容量对照与告警研判。"""
+    mode = (os.environ.get("HEAVY_TOOLS_MODE") or "local").strip().lower()
+    section: Dict[str, Any] = {
+        "mode": mode,
+        "replicas": _env_int("HEAVY_TOOLS_REPLICAS", 1),
+        "concurrency": _env_int("HEAVY_TOOLS_CONCURRENCY", 1),
+    }
+    if mode != "remote":
+        section["available"] = None
+        return section
+    try:
+        import httpx
+
+        from src.services.heavy_tool_service.client import heavy_tools_url
+        response = httpx.get(
+            f"{heavy_tools_url().rstrip('/')}/internal/heavy-tools/health", timeout=2.0
+        )
+        if response.status_code == 200:
+            body = response.json()
+            section["available"] = True
+            section["running_jobs"] = body.get("running_jobs")
+            section["busy"] = body.get("busy")
+        else:
+            section["available"] = False
+    except Exception:
+        section["available"] = False
+    return section
 
 
 def _collect_system_section(prev_snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]:

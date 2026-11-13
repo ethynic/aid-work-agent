@@ -288,14 +288,25 @@ class ExcelProcessTool(BaseTool):
             data=data,
         )
 
+        # 重工具服务远程派发（2026-11-13 设计 §3）：Router 留本地，openpyxl
+        # handler 远程执行；模式开关 HEAVY_TOOLS_MODE=local 时全部本地执行。
+        remote_mode = self._remote_dispatch_enabled()
+        if remote_mode:
+            try:
+                ctx.file_paths = [self._resolve_file(fp) for fp in ctx.file_paths]
+            except FileNotFoundError as e:
+                return {"success": False, "error": str(e)}
+
         # 按序执行
         for op in operations:
-            handler = self._get_handler(op)
-            if not handler:
-                return {"success": False, "error": f"操作 {op} 处理器未实现"}
-
             try:
-                step_result = await handler(ctx, params)
+                if remote_mode:
+                    step_result = await self._dispatch_remote(op, ctx, params)
+                else:
+                    handler = self._get_handler(op)
+                    if not handler:
+                        return {"success": False, "error": f"操作 {op} 处理器未实现"}
+                    step_result = await handler(ctx, params)
             except FileNotFoundError as e:
                 return {"success": False, "error": str(e)}
             except Exception as e:
@@ -311,6 +322,113 @@ class ExcelProcessTool(BaseTool):
             self._update_context(ctx, op, step_result)
 
         return self._merge_results(ctx)
+
+    def _remote_dispatch_enabled(self) -> bool:
+        """远程派发开关（设计 §4.1/§9）：HEAVY_TOOLS_MODE=remote 且本工具在
+        agent_runner.heavy_tools 白名单。开关三重角色之一：故障回退切 local 零代码。"""
+        from src.services.heavy_tool_service.config import is_remote_mode
+
+        if not is_remote_mode():
+            return False
+        try:
+            from src.config.settings import settings
+
+            return "excel_process" in set(settings.agent_runner.heavy_tools or [])
+        except Exception:
+            return False
+
+    async def _dispatch_remote(self, op: str, ctx: PipelineContext, params: Dict) -> Dict:
+        """单 handler 远程执行（§4.1 协议）：文件已解析为共享卷绝对路径，
+        结果透传（业务级失败与本地执行错误路径同构）。"""
+        from src.services.heavy_tool_service import client
+        from src.services.heavy_tool_service.client import HeavyToolBusy, HeavyToolUnavailable
+
+        # fill_template data（智能填充）模式拆两段（§3）：结构分析段（LLM 直连
+        # 链路 excel_template_ai._default_llm）必须留在轻容器（计费前提 §7），
+        # 仅 openpyxl 渲染段远程
+        if op == "fill_template" and (params.get("data") or ctx.data):
+            return await self._fill_template_remote(ctx, params)
+
+        route_params = dict(params)
+        template_file = route_params.get("template_file")
+        if op == "fill_template" and template_file:
+            route_params["template_file"] = self._resolve_file(template_file)
+
+        payload = {
+            "file_paths": list(ctx.file_paths),
+            "content": ctx.content,
+            "content_type": ctx.content_type,
+            "instruction": ctx.instruction,
+            "output_name": ctx.output_name,
+            "data": ctx.data,
+            "route_params": route_params,
+        }
+        try:
+            return await client.execute(
+                tool="excel_process", handler=op, params=payload,
+                timeout_seconds=600)
+        except HeavyToolBusy as e:
+            # busy 透传（§8）：message 已带「稍后重试」引导，代理不做自动立即重试
+            logger.warning(f"[ExcelProcess] 重工具服务繁忙 op={op}: {e}")
+            return {"success": False, "error": str(e)}
+        except HeavyToolUnavailable as e:
+            # 中性失败（§8）：不红叉口径，错误细节进日志
+            logger.error(f"[ExcelProcess] 重工具服务不可用 op={op}: {e}")
+            return {"success": False, "error": "处理未完成，请稍后重试"}
+
+    async def _fill_template_remote(self, ctx: PipelineContext, params: Dict) -> Dict:
+        """fill_template 拆分远程路径：本地结构分析（LLM）→ 远程渲染（纯 openpyxl）。"""
+        from src.services.heavy_tool_service import client
+        from src.services.heavy_tool_service.client import HeavyToolBusy, HeavyToolUnavailable
+
+        template_file = params.get("template_file")
+        if template_file:
+            try:
+                template_path = self._resolve_file(template_file)
+            except FileNotFoundError as e:
+                return {"success": False, "error": str(e)}
+        elif ctx.file_paths:
+            template_path = ctx.file_paths[0]
+        else:
+            return {"success": False, "error": "fill_template 需要指定模板（template_file / file_paths）"}
+
+        output_name = params.get("output_name") or ctx.output_name
+        data = params.get("data") or ctx.data
+        if not (isinstance(data, dict) and isinstance(data.get("rows"), list) and data["rows"]):
+            return await self._fill_template_needs_data(
+                template_path,
+                shape_hint=(
+                    "当前传入的 data 不含可填充的数据行（rows 为空或不是列表）。两种改法："
+                    "1) 若要把表格数据填入模板，构造 data={'rows': [{'列名': '值', ...}, ...]} 后重调；"
+                    "2) 若只需填写个别单元格并保留模板其余内容与样式，重新调本工具并改用修改类指令，"
+                    "instruction 中写明『修改模板』及目标坐标与值，"
+                    '如 "修改模板：将 B4 单元格填写为2026年11月10日，B5 单元格填写为XX"，'
+                    "本工具会路由为 modify（内部生成 write_cell 操作），不要用 fill_template。"
+                ),
+            )
+
+        from src.tools.excel.excel_template_ai import analyze_structure_safe
+
+        analysis = await asyncio.to_thread(analyze_structure_safe, template_path, data)
+        if not analysis.get("success"):
+            return {"success": False, "error": analysis.get("error")}
+
+        try:
+            return await client.execute(
+                tool="excel_process", handler="fill_template_render",
+                params={
+                    "template_file": template_path,
+                    "data": data,
+                    "structure": analysis["structure"],
+                    "output_name": output_name,
+                },
+                timeout_seconds=600)
+        except HeavyToolBusy as e:
+            logger.warning(f"[ExcelProcess] 重工具服务繁忙 fill_template 渲染: {e}")
+            return {"success": False, "error": str(e)}
+        except HeavyToolUnavailable as e:
+            logger.error(f"[ExcelProcess] 重工具服务不可用 fill_template 渲染: {e}")
+            return {"success": False, "error": "处理未完成，请稍后重试"}
 
     def _normalize_input(
         self,
