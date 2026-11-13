@@ -14,7 +14,7 @@ from src.memory.manager import MemoryManager
 from src.prompts import PromptManager
 from src.prompts.style_manager import get_style_manager
 from src.services.agent_runner.runtime.resource_cache import (
-    cached_builtin_subagent_registry, cached_skill_registry)
+    allowed_skill_names, cached_builtin_subagent_registry, cached_skill_registry)
 from src.tools.assembly import AgentToolBundle, ToolAssemblyRequest, ToolAssemblyRole, assemble_agent_tools
 from src.tools.executor import ToolExecutor
 
@@ -67,9 +67,7 @@ class RuntimeResources:
         self.memory = MemoryManager(max_short_term_messages=settings.memory.short_term.max_messages,
                                     short_term_ttl=settings.memory.short_term.ttl)
         root = Path(__file__).resolve().parents[4]
-        allowed = settings.skills.master_agent.allowed or None if self.is_master else None
-        if not self.is_master and subagent_config:
-            allowed = subagent_config.get_allowed_skills() or None
+        allowed = allowed_skill_names(self.is_master, subagent_config)
         self.skill_registry = cached_skill_registry(allowed)
         self.skill_executor = SkillExecutor(self.skill_registry)
         self.resource_directory = Path(resource_directory) if resource_directory is not None else root

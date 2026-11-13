@@ -26,6 +26,13 @@ _db_signatures: dict = {}
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
+def allowed_skill_names(is_master, subagent_config):
+    if is_master:
+        from src.config.settings import settings
+        return settings.skills.master_agent.allowed or None
+    return subagent_config.get_allowed_skills() or None if subagent_config else None
+
+
 def cached_skill_registry(allowed):
     """Skill registry with plugin-approval signature refresh (M1, plan §3.6).
 

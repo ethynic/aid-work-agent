@@ -604,6 +604,41 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     expect(external.legacy).not.toHaveBeenCalled()
   })
 
+  it('keeps continue hidden while resolving a lost resume and shows a server-tool rejection without device instructions', async () => {
+    await discoverParked(runnerView({ status:'interrupted' }))
+    const resuming = agent.controlDurableTask('resume'); await flush()
+    const posted = request('/runners/runner-A/controls', 'POST')
+    const key = JSON.parse(posted.body!).client_request_id
+    expect(agent.resumePending.value).toBe('runner-A')
+    expect(agent.resumableTask.value).toBeUndefined()
+    posted.reject(new TypeError('fictional lost response')); await resuming
+    expect(agent.resumePending.value).toBe('runner-A')
+    expect(agent.resumableTask.value).toBeUndefined()
+    await agent.controlDurableTask('resume')
+    await vi.advanceTimersByTimeAsync(2000)
+    const retried = request('/runners/runner-A/controls', 'POST')
+    expect(retried.body).toBe(posted.body)
+    retried.respond({ success:true, runner:runnerView({ status:'interrupted', resume_requested:true, view_revision:2 }),
+      control:{ control_id:'fixture-resume', runner_id:'runner-A', action:'resume', client_request_id:key,
+        status:'accepted' } }, 202)
+    await flush()
+    expect(agent.resumableTask.value).toBeUndefined()
+    request('/runners/runner-A').respond({ success:true, runner:runnerView({ status:'interrupted', view_revision:3 }) })
+    await flush()
+    // The Runner snapshot can clear resume_requested before the separate
+    // control receipt arrives. The original click still owns this slot.
+    expect(agent.resumableTask.value).toBeUndefined()
+    await agent.controlDurableTask('resume')
+    request('/runners/runner-A/controls/fixture-resume').respond({ success:true, control:{
+      control_id:'fixture-resume', runner_id:'runner-A', action:'resume', client_request_id:key,
+      status:'rejected', error_code:'RECOVERY_TOOL_VERIFICATION_REQUIRED' } })
+    await flush()
+    expect(agent.resumableTask.value?.runner_id).toBe('runner-A')
+    expect(agent.error.value).toContain('任务暂时无法继续')
+    expect(agent.error.value).not.toContain('Runtime')
+    expect(network.requests.filter(item => item.method === 'POST' && item.url.endsWith('/controls'))).toHaveLength(2)
+  })
+
   it('a release-interrupted runner still rejects plain text while the resume control is in flight', async () => {
     await discoverParked(runnerView({ status:'interrupted', resume_requested:true,
       snapshot:{ waiting:{ kind:'verification', question:'执行服务正在停止，已保留原任务进度；本机操作仍按原回执核对。' } } }))

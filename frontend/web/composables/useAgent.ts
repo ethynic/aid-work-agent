@@ -124,9 +124,14 @@ const LOCAL_RECOVERY_MESSAGES = {
   unavailable: '原操作暂不能结束等待。请保持原 Runtime 连接以回传结果，再核对原操作；补充消息和附件仍保留。',
 } as const
 
-function recoveryControlMessage(code?: string | null) {
-  if (code === 'RECOVERY_TOOL_VERIFICATION_REQUIRED' || code === 'LOCAL_DEADLINE_VERIFICATION_REQUIRED')
+function recoveryControlMessage(code?: string | null, row?: RunnerView) {
+  if ((row?.local_recovery || row?.local_verification_available)
+      && (code === 'RECOVERY_TOOL_VERIFICATION_REQUIRED' || code === 'LOCAL_DEADLINE_VERIFICATION_REQUIRED'))
     return LOCAL_RECOVERY_MESSAGES.verification
+  if (code === 'RECOVERY_INPUT_UNAVAILABLE')
+    return '原文件暂时无法读取，任务尚未继续。'
+  if (code === 'RECOVERY_TOOL_UNAVAILABLE')
+    return '原工具当前不可用于恢复。请检查工具配置后继续，或停止任务。'
   return '任务暂时无法继续，补充消息和附件已保留，但尚未应用。'
 }
 
@@ -223,6 +228,15 @@ export function useAgent() {
       || rows.find(row => !runnerTerminal(row.status) && ['paused','interrupted'].includes(row.status))
   })
   const durableTaskBusy = ref(false)
+  const resumePending = computed(() => {
+    const state = getStreamState(sessionId.value)
+    void state.isProcessing.value
+    void state.messages.value
+    if (state.pendingControl?.body.action === 'resume') return state.pendingControl.runnerId
+    return [...state.controlViews.values()].find(control => control.action === 'resume'
+      && (control.status === 'accepted' || control.status === 'claimed')
+      && state.liveControlKeys.has(control.client_request_id))?.runner_id
+  })
   async function controlDurableTask(action: 'pause' | 'resume' | 'cancel', targetRunnerId?: string) {
     const sid = sessionId.value
     const state = getStreamState(sid)
@@ -230,7 +244,7 @@ export function useAgent() {
     if (!row || durableTaskBusy.value || state.pendingControl || row.resume_requested
       || row.cancel_requested || runnerTerminal(row.status)) return
     const wait = runnerWaitLeaf(row.snapshot.waiting)
-    if (action === 'resume' && !runnerResumable(row)) return
+    if (action === 'resume' && (resumePending.value === row.runner_id || !runnerResumable(row))) return
     const headers = getEffectiveAuthHeader()
     const generation = state.runnerGeneration
     durableTaskBusy.value = true
@@ -243,6 +257,7 @@ export function useAgent() {
           ...(action === 'resume' && (wait?.kind === 'timer' || wait?.kind === 'continuous_guard')
             ? { wait_id:wait.wait_id, target_execution_id:wait.target_execution_id } : {}) }
         state.pendingControl = { runnerId:row.runner_id, body }
+        if (action === 'resume') state.isProcessing.value = true
         await submitControl(state,row.runner_id,body,headers)
       }
     } catch {
@@ -329,7 +344,7 @@ export function useAgent() {
     void state.isProcessing.value
     const parked = [...state.runnerViews.values()].sort((a,b) => a.queue_order-b.queue_order)
       .find(row => ['waiting','paused','interrupted'].includes(row.status))
-    return parked && runnerResumable(parked) ? parked : undefined
+    return parked && resumePending.value !== parked.runner_id && runnerResumable(parked) ? parked : undefined
   })
   const canStop = computed(() => {
     const state = getStreamState(sessionId.value)
@@ -403,6 +418,9 @@ export function useAgent() {
       ...Object.values(LOCAL_RECOVERY_MESSAGES),
       '消息操作未成功，请稍后重试。',
       '任务暂时无法继续，补充消息和附件已保留，但尚未应用。',
+      '原文件暂时无法读取，任务尚未继续。',
+      '原工具当前不可用于恢复。请检查工具配置后继续，或停止任务。',
+      '暂时无法确认继续请求，正在查询任务状态。',
       '暂时无法确认原任务状态，本次消息和附件已保留。',
       '请先完成原任务的人工协助，本次输入已保留。',
       '原任务需要恢复核对，本次输入已保留。',
@@ -675,7 +693,7 @@ export function useAgent() {
           : { ...item, status: 'accepted', applied: control.status === 'consumed' })
       }
       if (control.status==='rejected') {
-        state.controlIssue = recoveryControlMessage(control.error_code)
+        state.controlIssue = recoveryControlMessage(control.error_code,state.runnerViews.get(runnerId))
         runnerError(sid,new Error(state.controlIssue),
           (!!previous && previous.status !== 'rejected') || state.liveControlKeys.has(control.client_request_id))
       }
@@ -882,7 +900,7 @@ export function useAgent() {
       observeRunner(state,result.runner,headers)
       state.controlViews.set(result.control.control_id,result.control)
       if (result.control.status==='rejected') {
-        state.controlIssue = recoveryControlMessage(result.control.error_code)
+        state.controlIssue = recoveryControlMessage(result.control.error_code,state.runnerViews.get(runnerId))
         runnerError(sid,new Error(state.controlIssue))
         state.liveControlKeys.delete(body.client_request_id)
         return false
@@ -893,14 +911,17 @@ export function useAgent() {
       return true
     } catch (issue) {
       if (!currentRunnerContext(state,sid,generation,headers)) return
-      runnerError(sid,new Error('补充消息暂时无法确认接收，请稍后重试。'))
       if (issue instanceof RunnerRequestError && issue.status < 500) {
         state.liveControlKeys.delete(body.client_request_id)
         state.pendingControl = undefined
-        state.isProcessing.value = false
+        state.isProcessing.value = [...state.runnerViews.values()].some(
+          row => row.resume_requested || ['queued','running','finalizing'].includes(row.status))
         state.inputHintState.value = 'idle'
+        runnerError(sid,issue)
         return false
       } else {
+        runnerError(sid,new Error(body.action === 'resume'
+          ? '暂时无法确认继续请求，正在查询任务状态。' : '补充消息暂时无法确认接收，请稍后重试。'))
         state.submitFailures++
         state.submitTimer = setTimeout(() => void submitControl(state,runnerId,body,headers),
           Math.min(30000,1000*2**Math.min(state.submitFailures,5)))
@@ -1254,6 +1275,9 @@ export function useAgent() {
     const canResume = !!parked && (['paused','interrupted'].includes(parked.status) && !resumeWait
       || timerResume || guardResume || runnerResumable(parked))
     if (parked && (canReply || canResume) && !parked.resume_requested) {
+      if (resumePending.value === parked.runner_id) {
+        return { restoreInput:true, canRestore:() => currentRunnerContext(state,effectiveSessionId,generation,headers) }
+      }
       if (parked.local_recovery && !canReply) {
         runnerError(effectiveSessionId,new Error(LOCAL_RECOVERY_MESSAGES.instruction))
         return { restoreInput:true, canRestore:() => currentRunnerContext(state,effectiveSessionId,generation,headers) }
@@ -1808,6 +1832,7 @@ export function useAgent() {
     durableHistory,
     loadDurableHistory,
     durableTaskBusy,
+    resumePending,
     controlDurableTask,
     resumeResumableTask,
     localRecovery,

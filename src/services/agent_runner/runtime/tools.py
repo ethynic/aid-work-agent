@@ -86,6 +86,24 @@ class ToolDispatcher:
                 raise CheckpointFailure('LOCAL_TOOL_MISSING_RESULT')
             await self._finish_plan_task(state,call,terminal)
             return terminal
+        if getattr(self.control,'durable_owner',False) and self.defer_names is None:
+            from ..server_tool_recovery import (QUOTATION_SKILL, TOOL_UNAVAILABLE,
+                ServerToolRecoveryInterrupted, can_repeat_server_call, is_builtin_quotation_skill)
+            if can_repeat_server_call(state.tools[call.id]):
+                if call.name == 'knowledge_file_search':
+                    from src.tools.knowledge.knowledge_file_search_tool import KnowledgeFileSearchTool
+                    available = type(tool) is KnowledgeFileSearchTool
+                else:
+                    available = is_builtin_quotation_skill(self.skills.skill_registry.get(QUOTATION_SKILL))
+                if not available or call.name not in {definition['name'] for definition in self.definitions()}:
+                    raise ServerToolRecoveryInterrupted(TOOL_UNAVAILABLE)
+                terminal = None
+                async for item in self.dispatch(state,call,replay=True):
+                    if isinstance(item,DispatchResult):
+                        terminal = item
+                if terminal is None:
+                    raise CheckpointFailure('RECOVERY_TOOL_MISSING_RESULT')
+                return terminal
         # Unknown side effects are never silently dispatched again. M4 recovery
         # adapters resolve known invocation/continuation IDs before re-entering.
         return DispatchResult(None, wait={"kind": "verification", "tool_call_id": call.id,
@@ -125,7 +143,7 @@ class ToolDispatcher:
             for pending in state.pending], self.verbose_config, self.verbose_state)
         return [event] if event else []
 
-    async def dispatch(self,state,call):
+    async def dispatch(self,state,call,*,replay=False):
         control=self.control
         source=None
         while control is not None:
@@ -138,12 +156,12 @@ class ToolDispatcher:
             else:
                 async with source.tool_scope(state,call):yield
         async with scope():
-            async for item in self._dispatch(state,call):
+            async for item in self._dispatch(state,call,replay=replay):
                 if source is not None and isinstance(item,DispatchResult):
                     item=await source.complete(state,call,item)
                 yield item
 
-    async def _dispatch(self, state, call):
+    async def _dispatch(self, state, call, *, replay=False):
         authorize = getattr(self.control, "authorize_dispatch", None)
         if authorize is not None:
             await authorize()
@@ -154,6 +172,27 @@ class ToolDispatcher:
             yield DispatchResult(None, wait={"kind": "remote_tool", "tool_call_id": call.id})
             return
         execution_call = call
+        if replay and call.name == 'skill_execute':
+            from ..server_tool_recovery import (INPUT_UNAVAILABLE, ServerToolRecoveryInterrupted,
+                create_recovery_workspace, quotation_call, quotation_input, stage_quotation_call)
+            root = self.control
+            while hasattr(root,'parent_control'):
+                root = root.parent_control
+            match = quotation_call(call)
+            source = await asyncio.to_thread(quotation_input,match,state,root.attempt.runner_id,
+                                             root.repository.connection_factory)
+            if source is None:
+                raise ServerToolRecoveryInterrupted(INPUT_UNAVAILABLE)
+            workspace = await asyncio.to_thread(create_recovery_workspace,state,root.resource_directory)
+            state.resources.setdefault('reply_workspaces',[]).append(str(workspace))
+            # Register the directory before writing workbook bytes, so any
+            # later interruption can recover or clean it with the checkpoint.
+            await self.control.save(state,'tool_replay_workspace')
+            try:
+                execution_call = await asyncio.to_thread(stage_quotation_call,call,match,source,workspace)
+            except OSError as error:
+                raise ServerToolRecoveryInterrupted(INPUT_UNAVAILABLE) from error
+            await authorize()
         if call.name not in {definition["name"] for definition in self.definitions()}:
             skill = self.skills.skill_registry.get(call.name)
             if skill:

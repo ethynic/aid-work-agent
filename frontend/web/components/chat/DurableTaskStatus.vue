@@ -28,17 +28,17 @@ import { computed } from 'vue'
 import BaseButton from '../ui/BaseButton.vue'
 import { runnerResumable, runnerTerminal, runnerWaitLeaf, type RunnerView } from '@/api/runner'
 
-const props = defineProps<{ row: RunnerView; busy: boolean }>()
+const props = defineProps<{ row: RunnerView; busy: boolean; resumePending?: boolean }>()
 defineEmits<{ control: [action: 'pause' | 'resume' | 'cancel'] }>()
 const terminal = computed(() => runnerTerminal(props.row.status))
 const wait = computed(() => runnerWaitLeaf(props.row.snapshot.waiting))
 const timer = computed(() => wait.value?.kind === 'timer' ? wait.value : undefined)
 // 与 sendMessage/播放按钮同一恢复判定（含发版中断的 verification 等待）
-const canResume = computed(() => !props.row.local_recovery && runnerResumable(props.row))
-const disabled = computed(() => props.busy || props.row.cancel_requested || !!props.row.resume_requested)
+const canResume = computed(() => !props.resumePending && runnerResumable(props.row))
+const disabled = computed(() => props.busy || props.resumePending || props.row.cancel_requested || !!props.row.resume_requested)
 const title = computed(() => props.row.cancel_requested && !terminal.value ? '正在停止任务'
   : props.row.pause_requested && props.row.status !== 'paused' ? '正在暂停任务'
-  : props.row.resume_requested ? '正在恢复任务'
+  : props.resumePending || props.row.resume_requested ? '正在恢复任务'
   : props.row.sleep_blocked ? '自动继续已暂停'
   : wait.value?.kind === 'continuous_guard' ? '连续执行已暂停'
   : ({ paused:'任务已暂停', interrupted:'任务已中断，请核对执行记录', completed:'任务已完成',

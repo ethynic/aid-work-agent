@@ -222,7 +222,9 @@ class BrowserRecoveryProof:
 
 class ApplicationToolRecovery:
     """Finite installed capabilities; the scheduling/kernel ports stay neutral."""
-    def __init__(self,process,connection_factory):
+    def __init__(self,process,connection_factory,profiles):
+        self.connection_factory=connection_factory
+        self.profiles=profiles
         self.local=LocalRecoveryProof(connection_factory)
         self.browser=BrowserRecoveryProof(process,connection_factory)
 
@@ -236,8 +238,19 @@ class ApplicationToolRecovery:
         return self.browser.apply_completion(row,control,states)
 
     def can_restore(self,row,state,fact):
-        return (self.browser.can_restore(row,state,fact) if self.browser.supports(fact)
-                else self.local.can_restore(row,state,fact))
+        if self.browser.supports(fact):
+            return self.browser.can_restore(row,state,fact)
+        from .server_tool_recovery import (INPUT_UNAVAILABLE, TOOL_UNAVAILABLE, can_repeat_server_call,
+            quotation_available, quotation_call, quotation_input)
+        if can_repeat_server_call(fact):
+            if fact.call.name == 'skill_execute':
+                if not quotation_available(state,self.profiles):
+                    raise RunnerError(TOOL_UNAVAILABLE,409)
+                match = quotation_call(fact.call)
+                if quotation_input(match,state,row['runner_id'],self.connection_factory) is None:
+                    raise RunnerError(INPUT_UNAVAILABLE,409)
+            return True
+        return self.local.can_restore(row,state,fact)
 
     def hold(self,row,error):
         return self.browser.hold(row,error)

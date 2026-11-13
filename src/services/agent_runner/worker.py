@@ -88,7 +88,7 @@ class RuntimeFactory:
     def recovery_port(self,connection_factory):
         """Install this application's finite capabilities for the scheduler."""
         from .browser_recovery import ApplicationToolRecovery
-        return ApplicationToolRecovery(self.browser_process,connection_factory)
+        return ApplicationToolRecovery(self.browser_process,connection_factory,self.profiles)
 
     def source_capabilities(self,config,connection_factory):
         from .application_sources import build_source_capabilities
