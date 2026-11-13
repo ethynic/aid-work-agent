@@ -8,7 +8,7 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
-| Phase 1 | 绑定：users.wecom_userid 字段 + OAuth 绑定回调 + 手机号预填确认 + 解绑 | 📋 待开发 | — |
+| Phase 1 | 绑定：users.wecom_userid 字段 + OAuth 绑定回调 + 手机号预填确认 + 解绑 | ✅ 完成（2026-11-13） | 4424f65c + a06c6f70（CR P2：state 绑定发起用户）；26 用例 + notifications 326 + UserDB 回归 283 全绿，vue-tsc 通过；真机 OAuth/企微外呼待部署清单 |
 | Phase 2 | 触发判定：runner 终态 web 会话 + 时长阈值（默认 300s） | 📋 待开发 | — |
 | Phase 3 | 企微应用 Adapter：textcard 发送、errcode 分类、出站安全 | 📋 待开发 | — |
 | Phase 4 | 通知设置页：企微通知卡片（绑定/开关/解绑）+ 点击回跳定位 | 📋 待开发 | — |

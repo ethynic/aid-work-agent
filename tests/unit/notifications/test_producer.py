@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import timedelta, datetime, timezone
 from unittest.mock import MagicMock
 import pytest
 
@@ -8,9 +8,13 @@ from src.notifications.repository import unprotect
 
 
 def runner(**kw):
+    # Phase 2 触发判定（设计 §4.2）：终态通知需时长 ≥ wecom_task_min_seconds
+    # （默认 300s），fixture 给 600s 执行时长以走发布路径。
     return dict(source='chat',session_kind='web',actor_kind='user',actor_id='user',
         user_id='user',tenant_id='tenant',scope_key='tenant:tenant',status='completed',
-        session_id='session',runner_id='runner',finished_at=datetime.now(timezone.utc),
+        session_id='session',runner_id='runner',
+        execution_started_at=datetime.now(timezone.utc)-timedelta(seconds=600),
+        finished_at=datetime.now(timezone.utc),
         accepted_at=datetime.now(timezone.utc),**kw)
 
 

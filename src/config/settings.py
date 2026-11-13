@@ -840,6 +840,10 @@ class NotificationsConfig(BaseModel):
     tenant_expiry_thresholds: List[int] = Field(default_factory=lambda: [30, 7, 1])
     web_push: WebPushConfig = Field(default_factory=WebPushConfig)
     wecom_app: WecomAppConfig = Field(default_factory=WecomAppConfig)
+    # 手动任务时长阈值（秒，wecom-app-task-notification-design §4.2）：
+    # source=chat 的 runner 本次执行时长达到该值才发布 task.completed/failed，
+    # 避免快问快答被推送；定时任务（scheduled）不受此限；0 表示不设阈值
+    wecom_task_min_seconds: int = Field(default=300, ge=0, le=86400)
 
 
 class AntiAbuseTenantDefaultPolicy(BaseModel):

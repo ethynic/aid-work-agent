@@ -102,12 +102,15 @@ class TestScheduledTerminalParametersAccepted:
             return {'notification_ref': 'ref_c1'}
 
         runner = {
+            # chat 来源受时长门禁（设计 §4.2）：execution_started_at 提供 360s
+            # 执行时长以过默认阈值（300s）
             'runner_id': 'runner_c1', 'session_id': 'sess_c1', 'status': 'failed',
             'source': 'chat', 'session_kind': 'web',
             'user_id': 'u1', 'tenant_id': 'tenant_1', 'scope_key': 'tenant:tenant_1',
             'actor_kind': 'user', 'actor_id': 'u1',
+            'execution_started_at': datetime(2026, 10, 28, 9, 0),
             'accepted_at': datetime(2026, 10, 28, 9, 0),
-            'finished_at': datetime(2026, 10, 28, 9, 2), 'input': {},
+            'finished_at': datetime(2026, 10, 28, 9, 6), 'input': {},
         }
         cursor = MagicMock()
         cursor.fetchone.side_effect = [{'title': '普通会话'},
