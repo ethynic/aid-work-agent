@@ -11,10 +11,15 @@
  * 跳过还要求 dist/.build-ok.json 成功戳在场且与当前输入指纹一致：构建命令成功才写戳，
  * 失败（非零退出/命令不存在）即删戳并透传退出码——连续两次失败必然两次都失败。
  *
+ * 编译配置指纹（R7 修复）：编译配置不在 src/tests mtime 口径内，改编译配置后旧产物
+ * 依旧「新鲜」，会沿用旧产物假绿。因此把 build 命令实际 `-p` 的 tsconfig 原始字节哈希
+ * 纳入输入指纹，并沿 extends 递归纳入被继承文件；配置字节一变指纹即失配，触发重建。
+ *
  * 用法：node scripts/ensure-build.mjs [--pairs <源目录>:<产物目录>,...] -- <build命令...>
  *   --pairs：追加检查对（如依赖包 src 与其 dist），任一对过旧即执行重建。
  */
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,8 +50,57 @@ const pairsFlag = (key) => { const i = flags.indexOf(key); return i >= 0 ? flags
 
 const extraPairs = (pairsFlag('--pairs') ?? '').split(',').map((s) => s.trim()).filter(Boolean)
 
+const toPosix = (p) => p.split(path.sep).join('/')
+
 /**
- * 采样源侧输入指纹：src/tests 最大 mtime 与文件数 + 各 --pairs 的 src/dist mtime 与文件数。
+ * 定位 build 命令实际使用的 tsconfig（R7）：从 package.json scripts 提取首个
+ * `tsc -p/--project <file>`（boss/runtime: tsconfig.main.json，host-core: tsconfig.json，
+ * 以 package.json 为准自动定位，三份脚本保持同款）。找不到时按 tsc 无 -p 的默认约定
+ * 回退 tsconfig.json；该文件也不存在时配置指纹按空处理（不抛错）。
+ */
+function resolveConfigEntry() {
+  let scripts = []
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
+    scripts = Object.values(pkg.scripts ?? {}).filter((s) => typeof s === 'string')
+  } catch { /* package.json 不可读时按无显式配置处理 */ }
+  for (const cmd of scripts) {
+    const m = cmd.match(/tsc\s+(?:[\w:@=-]+\s+)*?(?:-p|--project)\s+([^\s&|]+)/)
+    if (m) return m[1]
+  }
+  return 'tsconfig.json'
+}
+
+/**
+ * 采样编译配置指纹链（R7）：首层为 build 实际 `-p` 的 tsconfig，之后沿 extends 递归纳入。
+ * tsconfig 允许 JSONC（注释/尾逗号），故不做 JSON 解析：直接对原始字节取哈希，
+ * extends 值用容错正则从原文提取字符串。相对 extends 按 TS 语义相对当前文件目录解析；
+ * 包名式 extends（如 @tsconfig/...）本仓库无此用法，非相对路径不做 node_modules 解析，
+ * 跳过该层（简单方案留档）。链上文件缺失/不可读 → 到此为止按空处理，不抛错；
+ * 深度封顶 5 层防环。
+ */
+function sampleConfigChain() {
+  const chain = []
+  const seen = new Set()
+  let entry = resolveConfigEntry()
+  for (let depth = 0; entry && depth < 5; depth++) {
+    const full = path.resolve(root, entry)
+    const rel = toPosix(path.relative(root, full))
+    if (seen.has(rel)) break
+    seen.add(rel)
+    let bytes
+    try { bytes = readFileSync(full) } catch { break }
+    chain.push({ file: rel, hash: createHash('sha256').update(bytes).digest('hex') })
+    const m = bytes.toString('utf8').match(/"extends"\s*:\s*"([^"]+)"/)
+    if (!m || !m[1].startsWith('.')) break
+    entry = path.join(path.dirname(full), m[1])
+  }
+  return chain
+}
+
+/**
+ * 采样源侧输入指纹：src/tests 最大 mtime 与文件数 + 编译配置链字节哈希（R7） +
+ * 各 --pairs 的 src/dist mtime 与文件数。
  * 在调用时采样而非只采一次：build 命令本身会重建 --pairs 依赖包（更新其 dist mtime），
  * 成功戳必须记录构建完成后的输入状态，否则下次指纹永不匹配、跳过提速失效。
  * 本包 dist 不进指纹：成功戳写在 dist 内，计入会导致自引用失配。
@@ -58,12 +112,14 @@ function sampleFingerprint() {
     const [sourceDir, distDir] = pair.split(':')
     return { src: newestMtime(path.resolve(root, sourceDir)), dist: newestMtime(path.resolve(root, distDir)) }
   })
+  const config = sampleConfigChain()
   const fingerprint = JSON.stringify({
     srcMtime: Math.max(src.mtime, testsDir.mtime),
     srcCount: src.count + testsDir.count,
+    config,
     pairs: pairs.map(({ src, dist }) => ({ srcMtime: src.mtime, srcCount: src.count, distMtime: dist.mtime, distCount: dist.count })),
   })
-  return { src, testsDir, pairs, fingerprint }
+  return { src, testsDir, pairs, config, fingerprint }
 }
 
 // —— 跳过判定：产物新鲜 且 成功戳在场且指纹一致，二者缺一不可 ——
