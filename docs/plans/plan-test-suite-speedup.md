@@ -18,7 +18,7 @@
 
 | 套件 | 基线 | 目标 | 结果 |
 |------|------|------|------|
-| boss 全量（npm test） | 挂死永不结束（含 2 红基线） | 稳定跑完+全绿 | ✅ 14.1s，1132 pass / 0 fail |
+| boss 全量（npm test） | 挂死永不结束（含 2 红基线） | 稳定跑完+全绿 | ✅ 14.1s，1132 tests（1127 pass + 5 既有环境 skip）/ 0 fail |
 | runtime 全量（不含 build） | 2m38s，3 fail | 0 fail | ✅ 2m39s/2m41s 两次复跑 0 fail（1 环境跳过保留） |
 | host-core build+test | 13.6s，1 fail + 摇摆 | 0 fail 稳定 | ✅ 连续 4 次全量 0 fail |
 | agent-desktop test | 27.6s，0 fail | 保持 | ✅ 24.6s，111 pass / 0 fail |
@@ -143,7 +143,7 @@
 
 | 指标 | 前（d4a60fa7 基线） | 后（本工作区） |
 |------|--------------------|----------------|
-| boss `npm run test`（全量 91 文件） | 挂死永不结束；bounded（手排 2 文件）25.5s、2 fail | **14.1s，1132 pass / 0 fail**（含原挂死 2 文件 7.5s/7.1s） |
+| boss `npm run test`（全量 91 文件） | 挂死永不结束；bounded（手排 2 文件）25.5s、2 fail | **14.1s，1132 tests（1127 pass + 5 既有环境 skip）/ 0 fail**（含原挂死 2 文件 7.5s/7.1s） |
 | boss 逐文件合计 | 131.8s（Top1 operations-result 24.0s） | 105.0s（Top1 browser-page-recovery 13.8s；operations-result 0.17s） |
 | runtime 全量测试 | 2m38s，3 fail + 1 skip | **2m39s / 2m41s 两次复跑，0 fail** + 1 skip（环境跳过保留） |
 | runtime `build:main`（冷） | 8.5s | 不变（构建本身不慢）；`npm test` 产物新鲜时跳过重建 |
