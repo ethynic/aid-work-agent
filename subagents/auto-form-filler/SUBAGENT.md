@@ -23,8 +23,6 @@ skills:
   allowed:
     - form-filling-api
     - sms-verification
-# 接口代填表单字段映射为主，流程固定，思考 token 占输出大头且回传历史膨胀上下文，显式关闭
-enable_thinking: false
 context:
   max_input_tokens: 8000
   max_output_tokens: 4000

@@ -1,0 +1,944 @@
+{
+  "run_id": "20261112T111328Z",
+  "base_url": "https://agent2.aidingyi.cn",
+  "concurrency": 1,
+  "data_doc_id": 13567,
+  "excel_attachment": null,
+  "excel_rows": null,
+  "results": [
+    {
+      "case": "data_trend",
+      "profile": "data-analysis",
+      "session_id": "session_b9a04444799c",
+      "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+      "status": "completed",
+      "settlement_status": "settled",
+      "attempt": 1,
+      "error_code": null,
+      "started_at": "2026-11-12T11:13:33+00:00",
+      "accepted_at": "2026-11-12T19:13:31.849105+08:00",
+      "finished_at": "2026-11-12T19:16:06.052955+08:00",
+      "observed_at": "2026-11-12T11:16:09+00:00",
+      "poll_errors": 0,
+      "cancel_observation": null,
+      "accept_seconds": 0.2,
+      "elapsed_seconds": 165.07
+    }
+  ],
+  "samples": [
+    {
+      "at": "2026-11-12T11:13:34+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.49%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.49%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "22.85%",
+          "memory": "234.8MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.55%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.60%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.65MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "1.77%",
+          "memory": "532.4MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "41.62%",
+          "memory": "786.8MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:13:42+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.47%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "2.33%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.32%",
+          "memory": "238.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.56%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "2.32%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.11%",
+          "memory": "42.65MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "2.24%",
+          "memory": "533.4MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "30.71%",
+          "memory": "785MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:13:50+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.52%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.45%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.32%",
+          "memory": "238.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.42%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.57%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.65MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "0.67%",
+          "memory": "533.4MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "28.61%",
+          "memory": "786.6MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:13:59+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.55%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.49%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.30%",
+          "memory": "238.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.46%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.47%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.65MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "2.37%",
+          "memory": "533.4MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "36.41%",
+          "memory": "786.3MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:14:08+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.52%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.52%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "18.14%",
+          "memory": "246.5MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.54%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.51%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.65MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "3.80%",
+          "memory": "533.4MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "28.89%",
+          "memory": "786.9MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:14:15+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.14%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.40%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.23%",
+          "memory": "251.4MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.13%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.55%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.65MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "2.73%",
+          "memory": "533.4MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "24.82%",
+          "memory": "787.3MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:14:24+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.17%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.46%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "1.15%",
+          "memory": "251.4MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.47%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.50%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.65MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "0.70%",
+          "memory": "533.4MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "25.36%",
+          "memory": "793.8MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:14:33+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.53%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.47%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.32%",
+          "memory": "251.4MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.47%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.50%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.71MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "1.18%",
+          "memory": "533.4MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "29.76%",
+          "memory": "789.7MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:14:42+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.54%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.50%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.39%",
+          "memory": "251.4MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "2.85%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.50%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.12%",
+          "memory": "42.71MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "1.93%",
+          "memory": "534.5MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "33.10%",
+          "memory": "788.4MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:14:49+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.55%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.47%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.36%",
+          "memory": "251.4MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.47%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.48%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.71MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "0.51%",
+          "memory": "534.5MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "28.98%",
+          "memory": "787.7MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:14:58+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.47%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.54%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.14%",
+          "memory": "279.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.46%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.24%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.71MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "2.91%",
+          "memory": "534.5MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "106.72%",
+          "memory": "779.8MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:15:07+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 25,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.50%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.41%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "7.17%",
+          "memory": "254.8MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.53%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.53%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.71MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "0.72%",
+          "memory": "534.5MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "36.99%",
+          "memory": "779.8MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:15:15+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.47%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.44%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "8.62%",
+          "memory": "254.8MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.50%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.46%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.71MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "1.87%",
+          "memory": "534.6MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "33.52%",
+          "memory": "785.8MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:15:23+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.45%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.38%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.36%",
+          "memory": "254.8MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.46%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.54%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.71MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "1.16%",
+          "memory": "534.5MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "31.24%",
+          "memory": "787.7MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:15:32+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.49%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.50%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.30%",
+          "memory": "254.8MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.57%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.64%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "24.99%",
+          "memory": "72.01MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "4.83%",
+          "memory": "534.5MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "31.42%",
+          "memory": "787.5MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:15:41+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 25,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "2.46%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "2.31%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.30%",
+          "memory": "254.8MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.50%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.53%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.7MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "1.74%",
+          "memory": "534.6MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "37.55%",
+          "memory": "779.3MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:15:49+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.50%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.46%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "6.34%",
+          "memory": "254.8MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.44%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.46%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.7MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "3.90%",
+          "memory": "534.6MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "78.07%",
+          "memory": "781.4MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:15:58+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 25,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.45%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.42%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.37%",
+          "memory": "254.8MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.41%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.26%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.7MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "2.91%",
+          "memory": "534.6MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "49.74%",
+          "memory": "782.1MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:16:07+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_b82a6b8723854fe5a79446145f1ef2e4",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "heavy",
+          "execution_started_at": "2026-11-12 19:13:32.023551+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.44%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.49%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.50%",
+          "memory": "254.8MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.52%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.50%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.7MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "2.23%",
+          "memory": "534.6MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "35.41%",
+          "memory": "782.4MiB / 4GiB"
+        }
+      }
+    }
+  ],
+  "sample_errors": [],
+  "token_cleanup_failed_tenants": []
+}

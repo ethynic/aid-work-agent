@@ -1,0 +1,574 @@
+{
+  "run_id": "20261112T111228Z",
+  "base_url": "https://agent2.aidingyi.cn",
+  "concurrency": 8,
+  "data_doc_id": null,
+  "excel_attachment": null,
+  "excel_rows": null,
+  "results": [
+    {
+      "case": "main_long",
+      "profile": "main",
+      "session_id": "session_72d049baf031",
+      "runner_id": "runner_c33733fe5204400d8e323fb3596e22a9",
+      "status": "completed",
+      "settlement_status": "settled",
+      "attempt": 1,
+      "error_code": null,
+      "started_at": "2026-11-12T11:12:29+00:00",
+      "accepted_at": "2026-11-12T19:12:29.680176+08:00",
+      "finished_at": "2026-11-12T19:12:39.474358+08:00",
+      "observed_at": "2026-11-12T11:12:42+00:00",
+      "poll_errors": 0,
+      "cancel_observation": null,
+      "accept_seconds": 0.66,
+      "elapsed_seconds": 13.1
+    },
+    {
+      "case": "main_long",
+      "profile": "main",
+      "session_id": "session_470d66768da6",
+      "runner_id": "runner_29c500a4d6bb4f5cbf642015004744cc",
+      "status": "completed",
+      "settlement_status": "settled",
+      "attempt": 1,
+      "error_code": null,
+      "started_at": "2026-11-12T11:12:29+00:00",
+      "accepted_at": "2026-11-12T19:12:29.713806+08:00",
+      "finished_at": "2026-11-12T19:12:41.253847+08:00",
+      "observed_at": "2026-11-12T11:12:42+00:00",
+      "poll_errors": 0,
+      "cancel_observation": null,
+      "accept_seconds": 0.61,
+      "elapsed_seconds": 13.1
+    },
+    {
+      "case": "main_long",
+      "profile": "main",
+      "session_id": "session_e372262b860a",
+      "runner_id": "runner_1d47f82d0a2a42a9a21bdcc0068029f6",
+      "status": "completed",
+      "settlement_status": "settled",
+      "attempt": 1,
+      "error_code": null,
+      "started_at": "2026-11-12T11:12:29+00:00",
+      "accepted_at": "2026-11-12T19:12:29.687955+08:00",
+      "finished_at": "2026-11-12T19:12:40.779291+08:00",
+      "observed_at": "2026-11-12T11:12:42+00:00",
+      "poll_errors": 0,
+      "cancel_observation": null,
+      "accept_seconds": 0.6,
+      "elapsed_seconds": 13.06
+    },
+    {
+      "case": "main_long",
+      "profile": "main",
+      "session_id": "session_653bf26c49f6",
+      "runner_id": "runner_eea87cc3df9d452883c15a652e65642c",
+      "status": "completed",
+      "settlement_status": "settled",
+      "attempt": 1,
+      "error_code": null,
+      "started_at": "2026-11-12T11:12:29+00:00",
+      "accepted_at": "2026-11-12T19:12:29.709143+08:00",
+      "finished_at": "2026-11-12T19:12:41.014735+08:00",
+      "observed_at": "2026-11-12T11:12:42+00:00",
+      "poll_errors": 0,
+      "cancel_observation": null,
+      "accept_seconds": 0.61,
+      "elapsed_seconds": 13.1
+    },
+    {
+      "case": "main_long",
+      "profile": "main",
+      "session_id": "session_f3b26eb788db",
+      "runner_id": "runner_479854a5435548899017136cdefa9d51",
+      "status": "completed",
+      "settlement_status": "settled",
+      "attempt": 1,
+      "error_code": null,
+      "started_at": "2026-11-12T11:12:29+00:00",
+      "accepted_at": "2026-11-12T19:12:29.686107+08:00",
+      "finished_at": "2026-11-12T19:12:49.687250+08:00",
+      "observed_at": "2026-11-12T11:12:51+00:00",
+      "poll_errors": 0,
+      "cancel_observation": null,
+      "accept_seconds": 0.57,
+      "elapsed_seconds": 22.29
+    },
+    {
+      "case": "main_long",
+      "profile": "main",
+      "session_id": "session_1b4f956aebee",
+      "runner_id": "runner_f8a99b96d62b4f10ad8dfdfcab221e81",
+      "status": "completed",
+      "settlement_status": "settled",
+      "attempt": 1,
+      "error_code": null,
+      "started_at": "2026-11-12T11:12:29+00:00",
+      "accepted_at": "2026-11-12T19:12:29.686811+08:00",
+      "finished_at": "2026-11-12T19:12:40.470688+08:00",
+      "observed_at": "2026-11-12T11:12:42+00:00",
+      "poll_errors": 0,
+      "cancel_observation": null,
+      "accept_seconds": 0.6,
+      "elapsed_seconds": 13.1
+    },
+    {
+      "case": "main_long",
+      "profile": "main",
+      "session_id": "session_0ea440debf26",
+      "runner_id": "runner_319baa8cd5bc4c5d9c3a7dd2aa8efd66",
+      "status": "completed",
+      "settlement_status": "settled",
+      "attempt": 1,
+      "error_code": null,
+      "started_at": "2026-11-12T11:12:29+00:00",
+      "accepted_at": "2026-11-12T19:12:29.686358+08:00",
+      "finished_at": "2026-11-12T19:12:41.229886+08:00",
+      "observed_at": "2026-11-12T11:12:42+00:00",
+      "poll_errors": 0,
+      "cancel_observation": null,
+      "accept_seconds": 0.57,
+      "elapsed_seconds": 13.07
+    },
+    {
+      "case": "main_long",
+      "profile": "main",
+      "session_id": "session_9f824bc1646d",
+      "runner_id": "runner_a99e77b2cebc45b697f622e284b3a006",
+      "status": "completed",
+      "settlement_status": "settled",
+      "attempt": 1,
+      "error_code": null,
+      "started_at": "2026-11-12T11:12:29+00:00",
+      "accepted_at": "2026-11-12T19:12:29.648781+08:00",
+      "finished_at": "2026-11-12T19:12:38.253222+08:00",
+      "observed_at": "2026-11-12T11:12:39+00:00",
+      "poll_errors": 0,
+      "cancel_observation": null,
+      "accept_seconds": 0.55,
+      "elapsed_seconds": 9.79
+    }
+  ],
+  "samples": [
+    {
+      "at": "2026-11-12T11:12:30+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_1d47f82d0a2a42a9a21bdcc0068029f6",
+          "status": "queued",
+          "attempt": "0",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": ""
+        },
+        {
+          "runner_id": "runner_319baa8cd5bc4c5d9c3a7dd2aa8efd66",
+          "status": "queued",
+          "attempt": "0",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": ""
+        },
+        {
+          "runner_id": "runner_479854a5435548899017136cdefa9d51",
+          "status": "queued",
+          "attempt": "0",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": ""
+        },
+        {
+          "runner_id": "runner_f8a99b96d62b4f10ad8dfdfcab221e81",
+          "status": "queued",
+          "attempt": "0",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": ""
+        },
+        {
+          "runner_id": "runner_eea87cc3df9d452883c15a652e65642c",
+          "status": "queued",
+          "attempt": "0",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": ""
+        },
+        {
+          "runner_id": "runner_c33733fe5204400d8e323fb3596e22a9",
+          "status": "queued",
+          "attempt": "0",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": ""
+        },
+        {
+          "runner_id": "runner_29c500a4d6bb4f5cbf642015004744cc",
+          "status": "queued",
+          "attempt": "0",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": ""
+        },
+        {
+          "runner_id": "runner_a99e77b2cebc45b697f622e284b3a006",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_f9bc1676d7f046b89a45dde0cc6ae1c9",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:29.953511+08"
+        }
+      ],
+      "db_connections": 28,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "1.27%",
+          "memory": "240.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.85%",
+          "memory": "238.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "31.83%",
+          "memory": "229.6MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.15%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.36%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.64MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "12.48%",
+          "memory": "527.1MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "19.83%",
+          "memory": "780.4MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:12:36+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_479854a5435548899017136cdefa9d51",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_e045c893ac9e4ab99f7c44782295cc41",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.688925+08"
+        },
+        {
+          "runner_id": "runner_319baa8cd5bc4c5d9c3a7dd2aa8efd66",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_e045c893ac9e4ab99f7c44782295cc41",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.189911+08"
+        },
+        {
+          "runner_id": "runner_f8a99b96d62b4f10ad8dfdfcab221e81",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_e045c893ac9e4ab99f7c44782295cc41",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.375874+08"
+        },
+        {
+          "runner_id": "runner_a99e77b2cebc45b697f622e284b3a006",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_f9bc1676d7f046b89a45dde0cc6ae1c9",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:29.953511+08"
+        },
+        {
+          "runner_id": "runner_eea87cc3df9d452883c15a652e65642c",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_5cacf60d7f9b459c94cd550872a305b1",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.709288+08"
+        },
+        {
+          "runner_id": "runner_1d47f82d0a2a42a9a21bdcc0068029f6",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_98e4e83c84f047d889e4a3b710de409f",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.526086+08"
+        },
+        {
+          "runner_id": "runner_29c500a4d6bb4f5cbf642015004744cc",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_444ddef5c0df4d468ee4784a2c455f4b",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.9787+08"
+        },
+        {
+          "runner_id": "runner_c33733fe5204400d8e323fb3596e22a9",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_5cacf60d7f9b459c94cd550872a305b1",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.923556+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.74%",
+          "memory": "240.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.72%",
+          "memory": "238.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.13%",
+          "memory": "229.6MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "13.43%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.29%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.64MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "5.13%",
+          "memory": "527.1MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "19.03%",
+          "memory": "782.9MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:12:42+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_a99e77b2cebc45b697f622e284b3a006",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:29.953511+08"
+        },
+        {
+          "runner_id": "runner_c33733fe5204400d8e323fb3596e22a9",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.923556+08"
+        },
+        {
+          "runner_id": "runner_f8a99b96d62b4f10ad8dfdfcab221e81",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.375874+08"
+        },
+        {
+          "runner_id": "runner_1d47f82d0a2a42a9a21bdcc0068029f6",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.526086+08"
+        },
+        {
+          "runner_id": "runner_eea87cc3df9d452883c15a652e65642c",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.709288+08"
+        },
+        {
+          "runner_id": "runner_29c500a4d6bb4f5cbf642015004744cc",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.9787+08"
+        },
+        {
+          "runner_id": "runner_479854a5435548899017136cdefa9d51",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_e045c893ac9e4ab99f7c44782295cc41",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.688925+08"
+        },
+        {
+          "runner_id": "runner_319baa8cd5bc4c5d9c3a7dd2aa8efd66",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.189911+08"
+        }
+      ],
+      "db_connections": 27,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "0.48%",
+          "memory": "241.9MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.51%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.49%",
+          "memory": "229.7MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.53%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "2.33%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.64MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "3.60%",
+          "memory": "527.1MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "39.18%",
+          "memory": "782.1MiB / 4GiB"
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T11:12:48+00:00",
+      "runners": [
+        {
+          "runner_id": "runner_a99e77b2cebc45b697f622e284b3a006",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:29.953511+08"
+        },
+        {
+          "runner_id": "runner_c33733fe5204400d8e323fb3596e22a9",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.923556+08"
+        },
+        {
+          "runner_id": "runner_f8a99b96d62b4f10ad8dfdfcab221e81",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.375874+08"
+        },
+        {
+          "runner_id": "runner_1d47f82d0a2a42a9a21bdcc0068029f6",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.526086+08"
+        },
+        {
+          "runner_id": "runner_eea87cc3df9d452883c15a652e65642c",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.709288+08"
+        },
+        {
+          "runner_id": "runner_29c500a4d6bb4f5cbf642015004744cc",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.9787+08"
+        },
+        {
+          "runner_id": "runner_319baa8cd5bc4c5d9c3a7dd2aa8efd66",
+          "status": "completed",
+          "attempt": "1",
+          "worker_id": "",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.189911+08"
+        },
+        {
+          "runner_id": "runner_479854a5435548899017136cdefa9d51",
+          "status": "running",
+          "attempt": "1",
+          "worker_id": "worker_e045c893ac9e4ab99f7c44782295cc41",
+          "load_class": "light",
+          "execution_started_at": "2026-11-12 19:12:30.688925+08"
+        }
+      ],
+      "db_connections": 25,
+      "containers": {
+        "agent2-runner-worker-light-4": {
+          "cpu": "14.06%",
+          "memory": "242.2MiB / 1GiB"
+        },
+        "agent2-runner-worker-light-5": {
+          "cpu": "0.55%",
+          "memory": "239.1MiB / 1GiB"
+        },
+        "agent2-runner-worker-general-1": {
+          "cpu": "0.05%",
+          "memory": "229.7MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-2": {
+          "cpu": "0.54%",
+          "memory": "231.3MiB / 1.5GiB"
+        },
+        "agent2-runner-worker-general-3": {
+          "cpu": "0.51%",
+          "memory": "231.5MiB / 1.5GiB"
+        },
+        "agent2-runner-monitor-1": {
+          "cpu": "0.00%",
+          "memory": "42.64MiB / 256MiB"
+        },
+        "aid-agent-api2": {
+          "cpu": "1.17%",
+          "memory": "527.1MiB / 1GiB"
+        },
+        "aid-postgres": {
+          "cpu": "34.85%",
+          "memory": "782.9MiB / 4GiB"
+        }
+      }
+    }
+  ],
+  "sample_errors": [],
+  "token_cleanup_failed_tenants": []
+}

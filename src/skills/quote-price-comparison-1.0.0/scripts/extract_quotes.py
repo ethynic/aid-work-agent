@@ -28,7 +28,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from qc_common import (  # noqa: E402
-    detect_currency, dump_json, load_json, norm_uom, s, to_float, today,
+    detect_currency, dump_json, load_json, norm_text, norm_uom, s, to_float, today,
 )
 
 # 表头角色 -> 候选关键词（按最长匹配取胜，避免"报价日期"被误判为"单价"）
@@ -60,26 +60,33 @@ SUPPORTED = (".xlsx", ".xlsm", ".csv", ".docx", ".pdf", ".json", ".txt")
 
 
 def _best_role(header: str):
+    """返回 (角色, 命中关键词长度)。长度用于全局择优，避免同角色被先出现的弱关键词抢走。"""
     from qc_common import norm_text
     h = norm_text(header)
     if not h:
-        return None
+        return None, 0
+    best_role, best_len = None, 0
     for role, kw in _ROLE_PAIRS:
         k = norm_text(kw)
-        if k and k in h:
-            return role
-    return None
+        if k and k in h and len(k) > best_len:
+            best_role, best_len = role, len(k)
+    return best_role, best_len
 
 
 def detect_header(rows, max_scan=40):
-    """返回 (表头行索引 0-based, {role: 列索引 0-based})，选命中角色最多的一行。"""
+    """返回 (表头行索引 0-based, {role: 列索引 0-based})，选命中角色最多的一行。
+
+    同一角色的多个候选列取「命中关键词最长」的那个（而非列序先到先得），
+    否则「序号」会抢走 code 角色、「金额」会抢走 price 角色。
+    """
     best, best_score = None, 0
     for i, row in enumerate(rows[:max_scan]):
         role_col = {}
+        role_len = {}
         for c, val in enumerate(row):
-            role = _best_role(s(val))
-            if role and role not in role_col:
-                role_col[role] = c
+            role, klen = _best_role(s(val))
+            if role and klen > role_len.get(role, 0):
+                role_col[role], role_len[role] = c, klen
         has_price = "price" in role_col or "total" in role_col
         has_name = "name" in role_col or "code" in role_col
         score = len(role_col)
@@ -109,9 +116,13 @@ def _tax_rate(tax_cell, default=0.13):
 
 
 def make_item(*, ctx, name, spec, code, brand, qty, uom, price, price_raw,
-              currency, tax_included, tax_rate, note, source_date, locator, warnings):
-    if price is None or price <= 0:
-        return None
+              currency, tax_included, tax_rate, note, source_date, locator, warnings,
+              amount_reported=None, amount_tax_included=None, quote_status="quoted", quote_note=""):
+    """构造一条报价行。price 为 None 时产出 quote_status=no_quote 的占位行。
+
+    「未报出价格」也是报价单的重要信息（图纸未确认、面议、暂不报价），
+    必须保留成条目，否则该品项会静默消失，两次执行的品项集合就不一致。
+    """
     std_uom, uom_known = norm_uom(uom)
     item = {
         "item_id": "",
@@ -126,29 +137,37 @@ def make_item(*, ctx, name, spec, code, brand, qty, uom, price, price_raw,
         "brand": brand,
         "qty": qty,
         "uom": uom,
+        "qty_uom": uom,
         "standard_uom": std_uom,
         "uom_known": uom_known,
-        "unit_price": round(price, 4),
+        "unit_price": round(price, 4) if price is not None else None,
         "price_raw": price_raw,
         "currency": currency,
         "tax_included": tax_included,
         "tax_rate": tax_rate,
         "unit_multiplier": 1.0,
+        "amount_reported": amount_reported,
+        "amount_tax_included": amount_tax_included,
+        "quote_status": quote_status,
+        "quote_note": quote_note,
         "note": note,
         "match_key": "",
         "match_confidence": 1.0,
         "locator": locator,
     }
+    if quote_status == "no_quote":
+        return item if (name or code) else None
+    if price is None or price <= 0:
+        return None
     if not name:
         warnings.append(f"{ctx['source_file']}: 有价格但品名为空，已用编号兜底，请复核")
     return item
 
 
 def parse_table(rows, ctx, args, warnings, sheet="", table=None):
-    """表格式解析（xlsx / csv / docx 表格共用）。"""
+    """表格式解析（xlsx / csv / docx / pdf 表格共用）。"""
     det = detect_header(rows)
     if not det:
-        warnings.append(f"{ctx['file']} [{sheet or table}] 未识别到表头，跳过；可手工构造 JSON")
         return []
     hrow, role = det
     items = []
@@ -159,19 +178,18 @@ def parse_table(rows, ctx, args, warnings, sheet="", table=None):
         price_raw = _cell(row, role.get("price")) if "price" in role else ""
         price = to_float(price_raw)
         total_raw = _cell(row, role.get("total")) if "total" in role else ""
+        amount_reported = to_float(total_raw)
         qty = to_float(_cell(row, role.get("qty")))
-        if price is None and total_raw and qty:
-            derived = to_float(total_raw)
-            price = round(derived / qty, 4) if derived and qty else None
-            if price:
-                warnings.append(f"{ctx['file']} 第{r+1}行无单价，已由金额/数量推算")
-        if price is None:
-            continue
+        note = _cell(row, role.get("note"))
+        if price is None and amount_reported and qty:
+            price = round(amount_reported / qty, 4)
+            warnings.append(f"{ctx['file']} 第{r+1}行无单价，已由金额/数量推算")
         if not name and not code:
             continue
         if SKIP_ROW_RE.search(name) or SKIP_ROW_RE.search(code):
             continue
         price_header = _cell(rows[hrow], role.get("price")) if "price" in role else ""
+        total_header = _cell(rows[hrow], role.get("total")) if "total" in role else ""
         tax_cell = _cell(row, role.get("tax"))
         cur = detect_currency(_cell(row, role.get("currency")) or price_raw, args.default_currency)
         price_col = role.get("price")
@@ -185,14 +203,22 @@ def parse_table(rows, ctx, args, warnings, sheet="", table=None):
         }
         if table is not None:
             loc["table"] = table
+        # 无价但有品名的行 → 未报出价格（如「图纸未确认」「面议」），保留为占位条目
+        no_quote = price is None or price <= 0
+        if no_quote and not (name or code):
+            continue
         it = make_item(
             ctx=ctx, name=name, spec=_cell(row, role.get("spec")), code=code,
             brand=_cell(row, role.get("brand")), qty=qty, uom=_cell(row, role.get("uom")),
             price=price, price_raw=price_raw or total_raw, currency=cur,
             tax_included=_tax_included(price_header, tax_cell, args.default_tax_included),
             tax_rate=_tax_rate(tax_cell, args.default_tax_rate),
-            note=_cell(row, role.get("note")),
-            source_date=_cell(row, role.get("date")), locator=loc, warnings=warnings,
+            note=note, source_date=_cell(row, role.get("date")), locator=loc, warnings=warnings,
+            amount_reported=amount_reported,
+            amount_tax_included=_tax_included(total_header, tax_cell, args.default_tax_included)
+            if total_header else None,
+            quote_status="no_quote" if no_quote else "quoted",
+            quote_note=(note or price_raw or "源单未报出价格") if no_quote else "",
         )
         if it:
             items.append(it)
@@ -207,6 +233,30 @@ def parse_xlsx(path, ctx, args, warnings):
     for ws in wb.worksheets:
         rows = [[c.value for c in row] for row in ws.iter_rows()]
         out += parse_table(rows, ctx, args, warnings, sheet=ws.title)
+    # 报价单编号（表头信息区）作为来源依据，便于回溯与留痕
+    if not ctx.get("source_ref"):
+        ref = ""
+        for ws in wb.worksheets:
+            for row in ws.iter_rows(max_row=14, max_col=14):
+                cells = list(row)
+                for i, c in enumerate(cells):
+                    if c.value and "报价单编号" in str(c.value):
+                        # 编号可能在同行右侧，也可能在下一行（合并单元格纵向布局）
+                        for nc in cells[i + 1:i + 3]:
+                            if nc.value and str(nc.value).strip():
+                                ref = str(nc.value).strip()
+                                break
+                        if not ref and i + 1 < len(cells) and cells[i + 1].value:
+                            ref = str(cells[i + 1].value).strip()
+                        break
+                if ref:
+                    break
+            if ref:
+                break
+        if ref:
+            for it in out:
+                it["source_ref"] = it.get("source_ref") or ref
+    wb.close()
     return out
 
 
@@ -237,14 +287,33 @@ def parse_docx(path, ctx, args, warnings):
     out = []
     for ti, tbl in enumerate(doc.tables):
         rows = [[c.text for c in row.cells] for row in tbl.rows]
-        out += parse_table(rows, ctx, args, warnings, table=ti)
+        got = parse_table(rows, ctx, args, warnings, table=ti)
+        if got:
+            out += got
+        else:
+            # 报价单通常含「表头信息表 / 报价明细表 / 合计汇总表」多张表。
+            # 未识别到表头是信息表或汇总表的正常现象，不应作为告警噪音：
+            # 只有当一张表同时出现「物料/规格」和「单价」字样（=像报价明细）时才提示人工介入。
+            head_txt = norm_text(" ".join(s(v) for r in rows[:2] for v in r))
+            looks_like_quote = (
+                any(k in head_txt for k in ("物料", "规格", "品名"))
+                and any(k in head_txt for k in ("单价", "报价"))
+            )
+            if looks_like_quote:
+                warnings.append(
+                    f"{os.path.basename(path)} [表{ti}] 疑似报价明细表但未识别到表头，"
+                    "请手工补 spec/uom 或改用 JSON 构造")
     if not out:
         out = parse_text_lines("\n".join(p.text for p in doc.paragraphs), ctx, args, warnings)
     return out
 
 
 def parse_text_lines(text, ctx, args, warnings, pages=None):
-    """无表格结构的 PDF/文本兜底：抽「文字 + 末尾数字」行，规格留空并提示人工补全。"""
+    """无表格结构的 PDF/文本兜底：抽「文字 + 末尾数字」行，规格留空并提示人工补全。
+
+    仅用于真正的纯文本报价单。文本层 PDF 报价单应优先走 find_tables 表格识别，
+    否则每个单元格会被当成独立条目。
+    """
     out = []
     for lineno, line in enumerate(text.splitlines(), 1):
         line = line.strip()
@@ -283,20 +352,50 @@ def parse_text_lines(text, ctx, args, warnings, pages=None):
 
 
 def parse_pdf(path, ctx, args, warnings):
+    """PDF：优先用 PyMuPDF 表格识别（find_tables），失败再退回文本行兜底。
+
+    文本层 PDF 的报价单几乎都是真表格，用文本行兜底会把单元格逐行当成条目
+    （价格变成 "50"、"1250" 这种碎片），必须优先走表格识别。
+    """
     try:
         import fitz
     except ImportError:
         warnings.append(f"{path}: 缺少 PyMuPDF，跳过 PDF 解析（pip install pymupdf）")
         return []
     ctx = dict(ctx, kind="pdf")
-    doc = fitz.open(path)
-    parts, pages, lineno = [], {}, 0
-    for pi, page in enumerate(doc, 1):
-        for line in page.get_text().splitlines():
-            lineno += 1
-            parts.append(line)
-            pages[lineno] = pi
-    doc.close()
+
+    out = []
+    parts, pages = [], {}
+    try:
+        # 单次打开文档：表格识别与文本提取共用，避免重复 IO
+        with fitz.open(path) as doc:
+            lineno = 0
+            for pi, page in enumerate(doc, 1):
+                for line in page.get_text().splitlines():
+                    lineno += 1
+                    parts.append(line)
+                    pages[lineno] = pi
+                finder = getattr(page, "find_tables", None)
+                if finder is None:
+                    continue
+                for tb in finder().tables:
+                    rows = tb.extract()
+                    if len(rows) < 2:
+                        continue
+                    got = parse_table(rows, ctx, args, warnings, sheet=f"p{pi}-table")
+                    for it in got:
+                        loc = dict(it.get("locator") or {})
+                        loc.setdefault("page", pi)
+                        it["locator"] = loc
+                    out += got
+    except Exception as e:
+        warnings.append(f"{path}: PDF 表格识别失败（{type(e).__name__}: {e}），退回文本行抽取")
+        out = []
+    except Exception as e:
+        warnings.append(f"{path}: PDF 表格识别失败（{type(e).__name__}: {e}），退回文本行抽取")
+
+    if out:
+        return out
     return parse_text_lines("\n".join(parts), ctx, args, warnings, pages=pages)
 
 

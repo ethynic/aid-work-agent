@@ -289,3 +289,64 @@ agent2 发布当日实测（2026-11-12 11:20 后 7 个任务）：4 个判重（
 - `AGENT_RUNNER_SLOT_CONCURRENCY` 终值（4 还是 2）与生产轻池容器数（缩容器 vs 保容器），按 agent2 A 方案试跑数据校准
 - 执行进程数动态伸缩：按容器重启生效，暂不做
 - waiting 状态存量 15 条 runner 的清理（与本方案无关，顺带登记）
+- 入队判型信号重构（白名单∩heavy 推断 → 显式声明）：草案见 §10，待 agent2 日志积累数日后实施
+
+## 10. 入队判型信号重构草案（2026-11-12，待实施）
+
+### 10.1 背景与实测数据
+
+agent2 压测观察到：travel-consultant 技能白名单含 paddleocr-doc-parsing（heavy_skills 清单项），导致其**所有**会话（含纯文本问答）入队即判 heavy，全程占通用槽；运行时重判（`state_uses_heavy`）只做 light→heavy 单向升级，从不降级，领取池早已定型。这与 2026-11-12 口径修订「轻误判重占用重池容量、不是可接受的小事」直接冲突。
+
+tlog「runner轻重分离」2026-11-12 单日样本统计（95 次入队判型；注意当日清单存在收窄变更，跨配置版本聚合，仅作方向参考）：
+
+| profile | 入队 heavy | 入队 light | 其中真命中 heavy | 判定 |
+|---|---|---|---|---|
+| data-analysis | 6 | 0 | 6 | 白名单信号准确（结构性重） |
+| procurement-comparison | 4 | 10 | 7 | 过判 + 运行时升级兜底有效 |
+| supplier-qualification-review | 4 | 5 | 3 | 同上 |
+| travel-consultant | 4 | 0 | **0** | **过判 4/4，零命中——本观察项实证** |
+| main | 0 | 31 | 4 | 运行时升级兜底有效 |
+| ai-bid-assistant | 0 | 6 | 1 | 同上 |
+| 其余（ai-lead-gen / recruiting-operator / ai-contract-assistant / project-progress-assistant） | 0 | 23 | 0 | 无 heavy 诉求 |
+
+### 10.2 问题定性
+
+白名单表达的是**能力集合，不是调用概率**，用「装配白名单 ∩ heavy 清单」推断本次会话的负载天然过判。曾考虑以「本轮是否有附件」作意图信号收窄，讨论后否决，三类反例：
+
+- 知识库文件：OCR/解析类工具可引用事先上传的 KB 文档，本轮零附件
+- 跨轮文件：runner workspace 跨轮持久，上一轮传的文件本轮继续处理
+- 纯生成类：interior-render 等文生图技能不需要任何附件
+
+即「附件 presence」只对「本轮消费外部文件」窄类成立，作为通用信号是错的；消息关键词等其它意图信号更脆弱。结论：**不在入队时预测意图，改为显式声明 + 运行时证据两层**。
+
+### 10.3 新语义设计
+
+| 层 | 信号来源 | 语义 |
+|---|---|---|
+| 入队判型 | **显式声明**：`agent_runner.heavy_profiles`（按子智能体名/profile 名列举）+ 默认 light | 只声明「结构性重」的子智能体（几乎每个会话都必然重负载，如 data-analysis）；声明错误是人工配置问题，可即时修正 |
+| 运行时重判 | 事实证据：实际调用 heavy 工具/技能 → checkpoint 边界升级 load_class（现状保留，已验证有效：main 31 次中 4 次、procurement 等） | 不变 |
+
+配置语义变化：`heavy_tools` / `heavy_skills` 保留，作用**收窄为运行时重判的判定依据**，不再参与入队判型；新增 `heavy_profiles` 参与入队判型。DB schema（`agent_runners.load_class` 列）不变；main profile（config=None）判 light 行为不变；recovery/timer 领取路径的 load_class 过滤不变。
+
+### 10.4 误判后果变化
+
+| 误判方向 | 重构后发生率 | 后果 |
+|---|---|---|
+| 重误判轻（heavy 会话入队 light） | 常态（凡未显式声明而实际命中重工具） | 占轻槽分钟级，温和降级（cgroup 统一 1GiB 不崩）；重任务改由通用槽领取仍不受轻专用池排他影响 |
+| 轻误判重 | 仅显式声明错误时发生 | 人工修正配置即消除 |
+
+方向性权衡成立的前提：轻池容量（agent2 过渡期 4 轻 ×4 并发）足以吸收偶发重任务占用；若某子智能体重命中率高到持续占轻槽，说明它该进 `heavy_profiles` 显式声明——校准闭环见 §10.5。
+
+### 10.5 观测指标与校准
+
+- `heavy_profiles` 声明校准：各声明子智能体的运行时 heavy 命中率（tlog 运行时重判触发 / 入队数），长期命中率低的移出声明
+- 轻池挤占观察：轻领取等待时长分布、被运行时升级任务占轻槽的时长（heavy 工具多为分钟级）
+- 与 §9 开放问题「池比例待 agent2 实测校准」共用同一批数据
+
+### 10.6 实施步骤（待 agent2 日志积累数日后动手）
+
+1. `configs/config.yaml` 新增 `agent_runner.heavy_profiles`（首版建议仅 `data-analysis`；travel-consultant 等 conversational 子智能体一律不声明）
+2. `src/services/agent_runner/load_class.py` `classify_profile` 改为查声明清单，移除白名单∩heavy 推断分支；`state_uses_heavy` / `_call_uses_heavy` 不动
+3. 单测：`tests/unit/services/agent_runner/test_load_class.py` 更新入队判型用例（声明命中/未声明默认 light/main profile light/清单为空）
+4. 文档同步：`.claude/rules/architecture.md`「添加工具」「添加技能」节的负载等级声明表述（heavy_tools/heavy_skills 仅运行时；结构性重子智能体登 heavy_profiles）
+5. agent2 发布后按 §10.5 观察数日，校准 heavy_profiles
