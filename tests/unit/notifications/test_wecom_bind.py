@@ -11,6 +11,7 @@
 """
 
 import pytest
+from types import SimpleNamespace
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
@@ -53,14 +54,21 @@ class FakeWecomClient:
 
 
 class StubBindRepository:
-    """unbind 撤销 + Phase 3 登记接线用：assert_schema/targets/revoke_target/
-    register_target。"""
+    """unbind 撤销 + Phase 3 登记接线 + Phase 4 状态用：assert_schema/targets/
+    revoke_target/register_target/registry/wecom_bind_profile。"""
 
-    def __init__(self, targets=(), register_error=None):
+    def __init__(self, targets=(), register_error=None, profile=None, adapter=None):
         self._targets = list(targets)
         self.revoked = []
         self.registered = []
         self.register_error = register_error
+        # Phase 4 状态端点：registry.get('wecom_app','wecom_app') 判应用可用性；
+        # wecom_bind_profile 返回 target 状态与姓名快照（None=未登记 target）
+        self.registry = SimpleNamespace(get=lambda channel, provider: adapter)
+        self._profile = profile if profile is not None else {'target_state': None, 'name': None}
+
+    def wecom_bind_profile(self, subject):
+        return dict(self._profile)
 
     def assert_schema(self):
         pass
@@ -473,14 +481,124 @@ class TestBindUrl:
         assert 'scope=snsapi_base' in body['oauth_url']
         assert 'redirect_uri=https%3A%2F%2Fx.example.com%2Fnotification%2Fwecom-bind' in body['oauth_url']
         assert 'agentid=1000001' in body['qr_url']
+        # Phase 4：PC 展示用二维码字段恒存在（生成失败为空串由前端兜底展示链接）
+        assert 'qr_data_url' in body
         # state 已入 Redis：发起人可被回调一次性消费
         assert store.consume(body['state'], 'user_1') is True
+
+    def test_qr_data_url_is_png(self):
+        """qrcode 库可用时 qr_data_url 为 qr_url 的 PNG data URL（容器环境含该依赖）。"""
+        pytest.importorskip('qrcode')
+        resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
+                        ).get('/api/notifications/wecom/bind/url', headers=AUTH)
+        assert resp.status_code == 200
+        assert resp.json()['qr_data_url'].startswith('data:image/png;base64,')
 
     def test_disabled_config_unavailable(self):
         resp = make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
                         config=NotificationsConfig()).get('/api/notifications/wecom/bind/url', headers=AUTH)
         assert resp.status_code == 503
         assert resp.json() == {'error': 'NOTIFICATION_WECOM_APP_UNAVAILABLE'}
+
+
+# ============== 绑定状态（Phase 4，设计 §4.5 设置页） ==============
+
+class AvailableAdapter:
+    """占位 adapter：registry 命中且 available()=True。"""
+    channel = provider = 'wecom_app'
+
+    def available(self):
+        return True
+
+
+class TestBindStatus:
+    def _client(self, repository=None):
+        return make_app(user={'user_id': 'user_1', 'tenant_id': 't1', 'role': 'user'},
+                        repository=repository or StubBindRepository())
+
+    def test_unbound_reports_available_without_target(self, monkeypatch):
+        monkeypatch.setattr(UserDB, 'get_by_id',
+                            staticmethod(lambda user_id: {'user_id': user_id,
+                                                          'wecom_userid': None}))
+        repository = StubBindRepository(adapter=AvailableAdapter())
+        resp = self._client(repository).get('/api/notifications/wecom/bind/status', headers=AUTH)
+        assert resp.status_code == 200
+        assert resp.json() == {'app_available': True, 'bound': False,
+                               'name': None, 'target_state': None}
+
+    def test_bound_reports_name_and_target_state(self, monkeypatch):
+        monkeypatch.setattr(UserDB, 'get_by_id',
+                            staticmethod(lambda user_id: {'user_id': user_id,
+                                                          'wecom_userid': 'zhangsan'}))
+        repository = StubBindRepository(
+            adapter=AvailableAdapter(),
+            profile={'target_state': 'active', 'name': '张三'})
+        resp = self._client(repository).get('/api/notifications/wecom/bind/status', headers=AUTH)
+        assert resp.status_code == 200
+        assert resp.json() == {'app_available': True, 'bound': True,
+                               'name': '张三', 'target_state': 'active'}
+
+    def test_adapter_unavailable_reports_false(self, monkeypatch):
+        monkeypatch.setattr(UserDB, 'get_by_id', staticmethod(lambda user_id: None))
+        # registry 无 wecom_app adapter（get 返回 None）→ 应用不可用
+        resp = self._client().get('/api/notifications/wecom/bind/status', headers=AUTH)
+        assert resp.status_code == 200
+        assert resp.json()['app_available'] is False
+
+    def test_target_invalid_after_send_failure(self, monkeypatch):
+        """投递 errcode target_invalid 后 target 置 invalid：设置页据此提示重绑。"""
+        monkeypatch.setattr(UserDB, 'get_by_id',
+                            staticmethod(lambda user_id: {'user_id': user_id,
+                                                          'wecom_userid': 'zhangsan'}))
+        repository = StubBindRepository(
+            adapter=AvailableAdapter(),
+            profile={'target_state': 'invalid', 'name': '张三'})
+        resp = self._client(repository).get('/api/notifications/wecom/bind/status', headers=AUTH)
+        assert resp.json()['target_state'] == 'invalid'
+
+    def test_unauthenticated_rejected(self):
+        resp = make_app(repository=StubBindRepository()).get('/api/notifications/wecom/bind/status')
+        assert resp.status_code == 401
+
+
+# ============== 偏好开关接线（Phase 4，设计 §4.5） ==============
+
+class TestPreferenceWiring:
+    """PreferenceRequest 已扩 wecom_app → repository.set_preference 经
+    registry.get(channel, provider) 命中 WecomAppAdapter（service.py 组合根），
+    available gate 决定启用是否放行。本组只测不依赖 DB 的链路环节。"""
+
+    def _repository(self, config):
+        from src.notifications.service import notification_repository
+        return notification_repository(config)
+
+    def test_wecom_app_adapter_registered_in_registry(self):
+        repository = self._repository(enabled_config())
+        adapter = repository.registry.get('wecom_app', 'wecom_app')
+        assert adapter is not None and adapter.available() is True
+
+    def test_preference_request_accepts_wecom_app(self):
+        from src.notifications.contracts import PreferenceRequest
+        body = PreferenceRequest.model_validate({'category': 'task', 'channel': 'wecom_app',
+                                                 'provider': 'wecom_app', 'enabled': True})
+        assert body.enabled is True
+
+    def test_preference_request_rejects_unknown_channel(self):
+        from pydantic import ValidationError
+        from src.notifications.contracts import PreferenceRequest
+        with pytest.raises(ValidationError):
+            PreferenceRequest.model_validate({'category': 'task', 'channel': 'dingtalk_bot',
+                                              'provider': 'dingtalk_bot', 'enabled': True})
+
+    def test_enable_preference_blocked_when_adapter_unavailable(self):
+        """wecom_app 未启用时启用偏好被 available gate 拒绝（DB 访问之前）。"""
+        from src.notifications.contracts import NotificationError, PreferenceRequest
+        repository = self._repository(NotificationsConfig())
+        with pytest.raises(NotificationError) as excinfo:
+            repository.set_preference(
+                None, PreferenceRequest.model_validate({'category': 'task', 'channel': 'wecom_app',
+                                                        'provider': 'wecom_app', 'enabled': True}))
+        assert excinfo.value.code == 'NOTIFICATION_PROVIDER_UNAVAILABLE'
 
 
 def test_disabled_config_blocks_suggest_and_confirm(saved):

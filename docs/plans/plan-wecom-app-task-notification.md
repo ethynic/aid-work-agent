@@ -10,8 +10,8 @@
 |------|------|------|---------|
 | Phase 1 | 绑定：users.wecom_userid 字段 + OAuth 绑定回调 + 手机号预填确认 + 解绑 | ✅ 完成（2026-11-13） | 4424f65c + a06c6f70（CR P2：state 绑定发起用户）；26 用例 + notifications 326 + UserDB 回归 283 全绿，vue-tsc 通过；真机 OAuth/企微外呼待部署清单 |
 | Phase 2 | 触发判定：runner 终态 web 会话 + 时长阈值（默认 300s） | ✅ 完成（2026-11-13） | 446ceb05；口径 B：时长门禁仅 source=chat，scheduled 沿用既有通知不收缩；14 用例 + notifications 340 + agent_runner 577（3 失败为宿主机预存）；integration 真 PG 回归 18 skipped 待容器 |
-| Phase 3 | 企微应用 Adapter：textcard 发送、errcode 分类、出站安全 | 🔧 进行中（开发+自测完成，待独立测试/CR） | wecom_app.py（token 缓存+40014/42001 刷新重试、errcode 分类、pinned HTTPS、description 渲染执行耗时）；TerminalParameters 加可选 duration_seconds（chat/scheduled 终态均带入，缺省/0 兜底不渲染，其他渠道不受影响）；绑定落库后登记 target（幂等 upsert）；PreferenceRequest 白名单扩 wecom_app；notifications 415 + task_result_sharing 19 全绿；integration 真 PG 登记 upsert 用例已备待容器 |
-| Phase 4 | 通知设置页：企微通知卡片（绑定/开关/解绑）+ 点击回跳定位 | 📋 待开发 | — |
+| Phase 3 | 企微应用 Adapter：textcard 发送、errcode 分类、出站安全 | ✅ 完成（2026-11-13） | 0d0644a8（含 master 同步 8f4e750c）；Adapter+绑定登记接线（幂等 upsert，失败不回滚绑定、响应可见）+TerminalParameters.duration_seconds 时长渲染（其他渠道零影响有专项测试）；99 新增 + 434 回归全绿；integration 真 PG 用例待容器；CR P2 遗留：设计 §4.3 登记事务措辞待 Phase 4 文档修订同步 |
+| Phase 4 | 通知设置页：企微通知卡片（绑定/开关/解绑）+ 点击回跳定位 | 🔧 进行中（开发+自测完成，待独立测试/CR） | 设置卡片（未绑定扫码/手机号确认绑定→已绑定开关+解绑；PC 二维码由 bind/url 返回 qr_data_url）+ /notification/wecom-bind 落地页 + GET /wecom/bind/status；偏好 wecom_app 接线核查（PreferenceRequest→registry 命中 WecomAppAdapter，available gate 专项测试）；点击回跳复用既有 /notification?ref= 链路（NotificationEntry + ChatContainer `_load_session`，不裸拼 _sid）；Phase 3 CR 遗留已同步：设计 §4.3 措辞改为「绑定落库成功后另起事务登记，失败不回滚绑定、响应 target_registered 可见」；wecom_bind 41 过 1 跳过（qrcode 库仅容器有）、notifications vitest 131 过、build 通过；页面视觉待浏览器人工走查 |
 | Phase 5 | 回归测试 + agent2 真机验收 | 📋 待开发 | — |
 
 前置（用户/运维）：企微管理端创建独立通知应用（agentid+secret）、可信域名与 OAuth 回调域名、可见范围；配置写入 `configs/config.yaml` `notifications.wecom_app`。

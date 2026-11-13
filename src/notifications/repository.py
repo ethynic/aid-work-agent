@@ -830,6 +830,23 @@ class NotificationRepository:
             conn.commit()
             return result
 
+    def wecom_bind_profile(self, subject):
+        """设置页绑定状态（Phase 4，设计 §4.5）：当前用户最近的 wecom_app
+        target 状态与绑定姓名快照（绑定落库时缓存于 target 配置，设计 §4.1）。
+        未登记 target 时两个字段均为 None。"""
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard(cursor, subject)
+            cursor.execute('''SELECT state,configuration_encrypted FROM notification_targets
+                WHERE scope_key=%s AND recipient_user_id=%s AND channel='wecom_app'
+                ORDER BY created_at DESC LIMIT 1''', (subject.scope_key, subject.user_id))
+            row = cursor.fetchone()
+            if not row:
+                return {'target_state': None, 'name': None}
+            configuration = unprotect(row['configuration_encrypted'])
+            return {'target_state': row['state'],
+                    'name': (configuration or {}).get('bound_user_name') or None}
+
     def test(self, subject, body):
         with self.connection_factory() as conn:
             cursor = conn.cursor()

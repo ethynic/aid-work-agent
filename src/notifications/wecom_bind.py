@@ -11,7 +11,9 @@ qyapi.weixin.qq.com；secret/access_token 不落日志。target 登记（Phase 3
 设计 §4.3）：绑定落库成功后由服务端登记 channel='wecom_app' target，幂等
 upsert；登记失败不影响绑定落库本身，结果在响应与日志可见。
 """
+import base64
 import http.client
+import io
 import json
 import re
 import uuid
@@ -33,6 +35,26 @@ WECOM_MEMBER_STATUS_ACTIVE = 1
 _OAUTH_AUTHORIZE_URL = 'https://open.weixin.qq.com/connect/oauth2/authorize'
 _OAUTH_QR_URL = 'https://open.weixin.qq.com/wwopen/sso/qrConnect'
 _STATE_PATTERN = re.compile(r'[0-9a-f]{32}')
+
+
+def _qr_data_url(text):
+    """PC 扫码绑定：qrConnect 链接 → 二维码 PNG base64 data URL（Phase 4，设计 §4.1/§4.5）。
+
+    与 saas/api/wecom_kf_account._build_qr_data_url 同一实现口径（qrcode 库，
+    无公网文件端点）；生成失败返回空串，前端兜底展示授权链接本身。
+    """
+    try:
+        import qrcode
+        qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M,
+                           box_size=10, border=2)
+        qr.add_data(text)
+        qr.make(fit=True)
+        buffer = io.BytesIO()
+        qr.make_image(fill_color='black', back_color='white').save(buffer, format='PNG')
+        return 'data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode()
+    except Exception:
+        logger.warning('企微绑定二维码生成失败')
+        return ''
 
 
 class BindStateStore:
@@ -245,7 +267,22 @@ def create_bind_router(config=None, repository=None, user_loader=None,
                      f'&scope=snsapi_base&state={state}#wechat_redirect')
         qr_url = (f'{_OAUTH_QR_URL}?appid={quote(app_config.corp_id)}'
                   f'&agentid={app_config.agentid}&redirect_uri={encoded_redirect}&state={state}')
-        return {'success': True, 'state': state, 'oauth_url': oauth_url, 'qr_url': qr_url}
+        return {'success': True, 'state': state, 'oauth_url': oauth_url, 'qr_url': qr_url,
+                'qr_data_url': _qr_data_url(qr_url)}
+
+    @router.get('/wecom/bind/status')
+    def wecom_bind_status(current: Subject = Depends(subject)):
+        """绑定状态（Phase 4，设计 §4.5 设置页）：应用可用性 + 绑定态 +
+        姓名快照 + target 状态。不发企微出站请求，直接读本地事实。"""
+        repository.assert_schema()
+        adapter = repository.registry.get('wecom_app', 'wecom_app')
+        row = UserDB.get_by_id(current.user_id) or {}
+        bound = bool(row.get('wecom_userid'))
+        profile = (repository.wecom_bind_profile(current) if bound
+                   else {'target_state': None, 'name': None})
+        return {'app_available': bool(adapter and adapter.available()),
+                'bound': bound, 'name': profile.get('name'),
+                'target_state': profile.get('target_state')}
 
     @router.get('/wecom/bind/callback')
     def wecom_bind_callback(request: Request, current: Subject = Depends(subject)):

@@ -95,8 +95,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
-    const err = new Error((data as any).error || `HTTP_${res.status}`) as Error & { code?: string }
+    const err = new Error((data as any).error || `HTTP_${res.status}`) as Error & { code?: string; status?: number }
     err.code = (data as any).error
+    // 与 notifications/api.ts NotificationApiError 同口径：落地页按 status
+    // 区分登录失效（401 → 提示重新登录）与业务失败
+    err.status = res.status
     throw err
   }
   return data as T
@@ -187,17 +190,25 @@ export const notificationsAPI = {
     return request<TaskDeliverySummary>(`/task-deliveries?${q.toString()}`)
   },
 
-  /** ---------- 企微应用身份绑定（长任务企微通知 Phase 1，设计 §4.1；页面在 Phase 4） ---------- */
+  /** ---------- 企微应用身份绑定（长任务企微通知 Phase 1，设计 §4.1；设置页 Phase 4） ---------- */
 
   /** OAuth 授权链接（企业内 oauth2/authorize + PC 扫码 qrConnect，共用同一 state） */
   wecomBindUrl: () =>
     request<WecomBindUrl>('/wecom/bind/url'),
 
-  /** OAuth 回调确认（重定向落地页携 code+state 回调，需登录态；state 一次性消费） */
-  wecomBindCallback: (code: string, state: string) => {
+  /** OAuth 回调确认（重定向落地页携 code+state 回调，需登录态；state 一次性消费）。
+   *  auth：落地页路径 /notification/... 下的 token key 与发起页不同，显式传入
+   *  发起页存于 sessionStorage 的 Authorization 头，覆盖 request 内的路径推断 */
+  wecomBindCallback: (code: string, state: string, auth?: Record<string, string>) => {
     const q = new URLSearchParams({ code, state })
-    return request<WecomBindSuccess>(`/wecom/bind/callback?${q.toString()}`)
+    return request<WecomBindSuccess>(`/wecom/bind/callback?${q.toString()}`, {
+      headers: auth,
+    })
   },
+
+  /** 绑定状态（Phase 4 设置页）：应用可用性 + 绑定态 + 姓名快照 + target 状态 */
+  wecomBindStatus: () =>
+    request<WecomBindStatus>('/wecom/bind/status'),
 
   /** 手机号预填（只读）：按当前登录用户手机号匹配企微通讯录 */
   wecomBindSuggest: () =>
@@ -214,6 +225,38 @@ export const notificationsAPI = {
   /** 解绑：清空 wecom_userid 并撤销既有 wecom_app target */
   wecomBindUnbind: () =>
     request<{ success: boolean }>('/wecom/bind', { method: 'DELETE' }),
+
+  /** ---------- 通知偏好（Phase 4 企微任务通知开关，设计 §4.5） ---------- */
+
+  /** 当前用户偏好列表（task 通知渠道开关状态） */
+  preferences: () =>
+    request<{ preferences: NotificationPreference[] }>('/preferences'),
+
+  /** 企微任务通知开关：启用=创建/启用 wecom_app 偏好行，关闭=停用 */
+  wecomSetPreference: (enabled: boolean) =>
+    request<NotificationPreference>('/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: 'task', channel: 'wecom_app', provider: 'wecom_app', enabled }),
+    }),
+}
+
+export interface WecomBindStatus {
+  /** 通知应用可用（enabled + 完整凭据）；不可用时绑定与开关均不开放 */
+  app_available: boolean
+  bound: boolean
+  /** 绑定成员姓名快照（绑定落库时缓存于 target 配置），未绑定/未登记为 null */
+  name: string | null
+  /** 最近 wecom_app target 状态；target_invalid 撤销后为 'invalid' 提示重绑 */
+  target_state: 'active' | 'revoked' | 'invalid' | null
+}
+
+export interface NotificationPreference {
+  category: string
+  channel: string
+  provider: string
+  enabled: boolean
+  enabled_since: string | null
 }
 
 export interface WecomBindUrl {
@@ -223,6 +266,8 @@ export interface WecomBindUrl {
   oauth_url: string
   /** PC 扫码授权链接 */
   qr_url: string
+  /** qr_url 的二维码 PNG data URL（Phase 4 PC 展示用）；生成失败为空串 */
+  qr_data_url?: string
 }
 
 export interface WecomBindSuggest {

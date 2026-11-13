@@ -55,7 +55,7 @@ BOSS 直聘爬虫等长任务在 web 控制台执行，完成后当前实现会�
 
 新增 `src/notifications/wecom_app.py`，实现既有 `Adapter` 协议，channel=`wecom_app`：
 
-- **目标配置**：`{wecom_userid, bound_user_name, tenant_id}`；`validate_target` 校验 userid 格式。目标注册 = 绑定成功后由服务端登记（OAuth/确认绑定同一事务），非用户手填。
+- **目标配置**：`{wecom_userid, bound_user_name, tenant_id}`；`validate_target` 校验 userid 格式。目标注册 = 绑定落库成功后另起事务登记（失败不回滚绑定，响应 `target_registered` 可见），非用户手填。
 - **发送**：独立通知应用的 `corp_id + agentid + secret`（新配置节 `notifications.wecom_app`，与渠道应用隔离）；token 缓存与 40014/42001 刷新重试参考渠道实现；`message/send` msgtype=`textcard`，`touser=单 userid`，`url=控制台通知回跳地址`。
 - **文案**：title=`{会话名称}相关任务已完成/执行失败`（会话名快照与清洗口径沿用 web push 设计 §5）；description=`任务已执行 {时长}，点击查看结果`；不含简历内容、回复正文等业务数据（脱敏口径同既有设计）。
 - **结果规范化**：errcode 映射 SendResult——0 成功；40031/43004/81013（userid 不存在/无权限/不在可见范围）→ target_invalid（撤销目标并标记绑定失效，引导重新绑定）；42009/45009 限流 → retryable；网络/5xx → 有限重试。每个目标独立 delivery 记录（通知核心既有机制），保证一对一可追溯。
@@ -67,7 +67,7 @@ BOSS 直聘爬虫等长任务在 web 控制台执行，完成后当前实现会�
 
 ### 4.5 开启与偏好（决策 6）
 
-- 通知设置页（复用既有 web push 开关页面骨架）新增"企微任务通知"卡片：未绑定→绑定流程；已绑定→开关（启用=注册 wecom_app target 并启用偏好，关闭=停用偏好，解绑=撤销 target）。
+- 通知设置页（复用既有 web push 开关页面骨架）新增"企微任务通知"卡片：未绑定→绑定流程；已绑定→开关（target 已随绑定登记；启用=启用偏好，关闭=停用偏好，解绑=撤销 target）。
 - 开启后新接单任务才纳入；不补发历史（沿用 web push 设计口径）。
 - 企微应用可见范围即天然开关：不在范围内的成员 OAuth/匹配绑定直接失败并提示。
 

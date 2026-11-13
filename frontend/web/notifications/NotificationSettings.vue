@@ -20,6 +20,7 @@
             <BaseButton intent="ghost" :disabled="busy || loading" @click="refresh">刷新</BaseButton>
           </div>
         </BaseCard>
+        <WecomTaskNotifyCard />
         <p class="text-sm text-muted">同一浏览器一次提醒一个账号和租户；关闭仅影响本浏览器。测试发送成功表示已加入投递队列，请以收到系统通知为准。</p>
       </div>
     </div>
@@ -34,6 +35,7 @@ import BaseBadge from '@/components/ui/BaseBadge.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { notificationApi, type NotificationCapabilities } from './api'
 import { cleanupPending, disableNotifications, enableNotifications, ownsBinding, readBinding, currentSubject, supportsNotifications, registerNotificationWorker, syncRevokedTarget, type BrowserBinding } from './client'
+import WecomTaskNotifyCard from './WecomTaskNotifyCard.vue'
 const { admin, isLoggedIn, logout, init } = useTenantAuth()
 const toggleSidebar = inject<() => void>('toggleSidebar')
 const loading = ref(true), busy = ref(false), error = ref(''), notice = ref('')
