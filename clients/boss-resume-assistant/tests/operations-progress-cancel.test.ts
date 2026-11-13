@@ -17,6 +17,9 @@ import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
 /** 依调用序返回 snapshot 队列，用完后重复最后一个。
  * 默认 URL 是沟通页（accept 的 ensureChatPage 用）；greet 用例必须显式传推荐页 URL——
  * greet 前置校验按 URL 判定（坑 17），默认沟通页会被 WRONG_PAGE 拒绝 */
+/** 测试提速：executor 节奏 sleep 注入空实现（断言不含时序语义） */
+const noSleep = { sleep: async () => {} }
+
 function fakeSession(snaps: DomSnapshot[], opts: { url?: string } = {}) {
   const clicks: ClickPoint[] = []
   let i = 0
@@ -67,7 +70,7 @@ test('greet：onProgress 逐人回调，current/total 逐人推进', async () =>
     ],
     { url: 'https://www.zhipin.com/web/chat/recommend' },
   )
-  const op = createBossGreetOperation(async () => session)
+  const op = createBossGreetOperation(async () => session, noSleep)
   const r = await op.execute({ limit: 3 }, ctx)
   assert.equal(r.success, true)
   assert.equal(r.data.greeted, 3)
@@ -103,7 +106,7 @@ test('greet：打完 2 人后 abort → CANCELLED + partial + completed=2', asyn
     ],
     { url: 'https://www.zhipin.com/web/chat/recommend' },
   )
-  const op = createBossGreetOperation(async () => session)
+  const op = createBossGreetOperation(async () => session, noSleep)
   const r = await op.execute({ limit: 5 }, ctx)
   assert.equal(r.success, false)
   assert.equal(r.code, 'CANCELLED')
@@ -130,7 +133,7 @@ test('accept：onProgress 逐人回调，1 人后 abort → CANCELLED + partial'
     actionSnapshot({ extra: [text('点击预览附件简历',700,800,180,25)] }),
     actionSnapshot({ extra: [text('点击预览附件简历',700,800,180,25)] }),
   ])
-  const op = createBossAcceptResumeOperation(async () => session)
+  const op = createBossAcceptResumeOperation(async () => session, noSleep)
   const r = await op.execute({ limit: 5, preview: false }, ctx)
   assert.equal(r.success, false)
   assert.equal(r.code, 'CANCELLED')

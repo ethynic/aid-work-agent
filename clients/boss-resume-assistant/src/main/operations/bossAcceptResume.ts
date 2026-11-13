@@ -27,6 +27,8 @@ const CHAT_LIST_SCROLL_POINT = { x: 550, y: 900 }
 
 export function createBossAcceptResumeOperation(
   sessionFactory: BossSessionFactory = defaultSessionFactory,
+  /** 可注入 sleep（测试提速）：透传给 ResumeConsentExecutor，缺省真实 setTimeout（风控节奏不变） */
+  opts?: { sleep?: (ms: number) => Promise<void> },
 ): BossOperation<BossAcceptResumeArgs> {
   return {
     name: 'boss_accept_resume',
@@ -59,6 +61,7 @@ export function createBossAcceptResumeOperation(
               tracker.completed = done
               ctx.progress({ stage: 'execute', current: done, total: limit, message: `已同意接收 ${done}/${limit} 人` })
             },
+            sleep: opts?.sleep,
           })
           ctx.progress({ stage: 'execute', message: '逐个打开会话并点击「同意」' })
           const result = await executor.acceptAll({ limit, preview, expectedContactRef: ctx.expectedContactRef })

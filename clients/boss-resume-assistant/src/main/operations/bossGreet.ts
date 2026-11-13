@@ -36,6 +36,8 @@ const NAMES_MAX = 3
 
 export function createBossGreetOperation(
   sessionFactory: BossSessionFactory = defaultSessionFactory,
+  /** 可注入 sleep（测试提速）：透传给 GreetExecutor，缺省真实 setTimeout（风控节奏不变） */
+  opts?: { sleep?: (ms: number) => Promise<void> },
 ): BossOperation<BossGreetArgs> {
   return {
     name: 'boss_greet',
@@ -110,6 +112,7 @@ export function createBossGreetOperation(
                   })
                 }
               : undefined,
+            sleep: opts?.sleep,
           })
           const result = await executor.greetVisible({ limit: effectiveLimit, names: targetNames })
           tracker.completed = result.greeted

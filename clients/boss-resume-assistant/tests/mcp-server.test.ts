@@ -173,8 +173,15 @@ test('call_tool：参数非法被 schema 拦截（isError），不触达 Chrome'
 })
 
 test('并发单飞：第一个 call 卡住时第二个立即返回 BUSY 结构化结果', async () => {
-  // 悬挂 TCP 服务器：接受连接但永不响应（子进程被杀时连接 reset 属预期，吞掉 socket error）
-  const hang = net.createServer((sock) => sock.on('error', () => {}))
+  // 悬挂 TCP 服务器：接受连接但永不响应（子进程被杀时连接 reset 属预期，吞掉 socket error）。
+  // 追踪 socket：被取消的 CDP connect 会半关闭（对端发 FIN 后本侧停在 CLOSE_WAIT），
+  // 而 net.Server.close 的回调要等全部连接真正结束才触发——不主动 destroy 会挂死整个测试文件。
+  const hangSockets = new Set<net.Socket>()
+  const hang = net.createServer((sock) => {
+    hangSockets.add(sock)
+    sock.on('error', () => {})
+    sock.on('close', () => hangSockets.delete(sock))
+  })
   await new Promise<void>((r) => hang.listen(0, '127.0.0.1', r))
   const hangPort = (hang.address() as net.AddressInfo).port
   const client = await startClient([CLI, 'mcp', '--stdio', '--cdp-port', String(hangPort)])
@@ -208,7 +215,11 @@ test('并发单飞：第一个 call 卡住时第二个立即返回 BUSY 结构�
     assert.ok('timeout' in outcome, `取消后第三个 call 仍快速返回（疑似 BUSY）：${JSON.stringify(outcome).slice(0, 200)}`)
   } finally {
     await client.close().catch(() => {})
-    await new Promise<void>((r) => hang.close(() => r()))
+    await new Promise<void>((r) => {
+      hang.close(() => r())
+      // 清掉仍停在 CLOSE_WAIT 的半开连接，close 回调才能完成（见上方 socket 追踪注释）
+      for (const sock of hangSockets) sock.destroy()
+    })
   }
 })
 

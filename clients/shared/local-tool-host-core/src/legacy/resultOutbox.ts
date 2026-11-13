@@ -261,11 +261,18 @@ async function deliverOriginalOutboxEntry(
   let attempt = 0
   for (;;) {
     attempt += 1
+    // 终态回传本体不受已中止的关闭信号影响：shutdown 协作式中止产生 CANCELLED 终态时，
+    // 信号在 flush 之前就已 abort——若带着它发请求，首个尝试必然被 AbortLoopError 打断，
+    // backoffSleep 立即放弃，终态永远无法在本次运行送达（只能等下次启动重投），
+    // 与「stop() 等待终态回传完成后才退出」的契约冲突。已中止场景改用无信号尝试
+    // （ApiClient 自身 15s 超时兜底，stop 仍有界）；信号未中止时维持原语义（可中断在途等待），
+    // 且信号继续用于中断退避重试（见下方 backoffSleep）。
+    const attemptSignal = opts.shutdownSignal?.aborted ? undefined : opts.shutdownSignal
     try {
       if (entry.endpoint === 'result') {
-        await api.result(entry.invocation_id, entry.payload, opts.shutdownSignal)
+        await api.result(entry.invocation_id, entry.payload, attemptSignal)
       } else if (entry.endpoint === 'operation-result') {
-        const ack = await api.operationResult(entry.invocation_id, entry.payload, opts.shutdownSignal)
+        const ack = await api.operationResult(entry.invocation_id, entry.payload, attemptSignal)
         // Persist original ACK evidence before deleting the only pending receipt.
         recordOperationAck(path.dirname(outbox.dir), entry.invocation_id, entry.payload, ack)
       } else {

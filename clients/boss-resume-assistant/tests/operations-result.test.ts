@@ -34,6 +34,9 @@ import { DetailGreetError } from '../src/main/boss/DetailGreetExecutor.js'
 import { actionSnapshot, text } from './chatActionFixture.js'
 import { WinClickError } from '../src/main/input/WinMouseClicker.js'
 
+/** 测试提速：executor 风控节奏 sleep 注入空实现（断言不含时序语义，分级不删断言） */
+const noSleep = { sleep: async () => {} }
+
 function silentCtx(): OpContext {
   return { signal: new AbortController().signal, progress: () => {} }
 }
@@ -106,7 +109,7 @@ test('Win32 输入后异常（含超时及登录关键词）回执 unknown，输
       attempts++
       throw new WinClickError(`原生输入失败(exit=${failure.afterInput ? 1 : 2}): ${failure.message}`, failure.afterInput ? 1 : 2)
     }
-    const result = await createBossGreetOperation(f.factory).execute({ limit: 1 }, silentCtx())
+    const result = await createBossGreetOperation(f.factory, noSleep).execute({ limit: 1 }, silentCtx())
     assert.equal(result.success, false)
     assert.equal(result.code, failure.afterInput ? 'EXECUTION_UNKNOWN' : 'UI_CHANGED')
     assert.equal(result.effect, failure.afterInput ? 'unknown' : 'none')
@@ -211,7 +214,7 @@ test('boss_goto：非法 target → INVALID_ARGUMENT', async () => {
 
 test('boss_greet：limit 超上限/非整数 → INVALID_ARGUMENT', async () => {
   const f = fakeFactory([])
-  const op = createBossGreetOperation(f.factory)
+  const op = createBossGreetOperation(f.factory, noSleep)
   for (const limit of [0, 101, 1.5, -3]) {
     const r = await op.execute({ limit }, silentCtx())
     assert.equal(r.code, 'INVALID_ARGUMENT', `limit=${limit}`)
@@ -221,7 +224,7 @@ test('boss_greet：limit 超上限/非整数 → INVALID_ARGUMENT', async () => 
 
 test('boss_accept_resume：limit 非法 → INVALID_ARGUMENT', async () => {
   const f = fakeFactory([])
-  const op = createBossAcceptResumeOperation(f.factory)
+  const op = createBossAcceptResumeOperation(f.factory, noSleep)
   const r = await op.execute({ limit: 200 }, silentCtx())
   assert.equal(r.code, 'INVALID_ARGUMENT')
   assert.equal(f.calls.length, 0)
@@ -390,7 +393,7 @@ test('greet 前置校验：URL 是沟通页 → WRONG_PAGE，不执行任何点�
   // 带「筛选」与「打招呼」按钮，只有 URL 判定能拦住
   const BTN: [number, number, number, number] = [1690, 208, 64, 32]
   const f = fakeFactory([greetSnap([BTN])], { url: 'https://www.zhipin.com/web/chat/index' })
-  const r = await createBossGreetOperation(f.factory).execute({ limit: 5 }, silentCtx())
+  const r = await createBossGreetOperation(f.factory, noSleep).execute({ limit: 5 }, silentCtx())
   assert.equal(r.success, false)
   assert.equal(r.code, 'WRONG_PAGE')
   assert.equal(r.retryable, true)
@@ -406,7 +409,7 @@ test('greet 前置校验：URL 是推荐页 → 通过 URL 判定正常执行', 
     [greetSnap([BTN]), greetSnap([BTN]), greetSnap([], [], [BTN]), greetSnap([], [], [BTN]), greetSnap([], [], [BTN])],
     { url: 'https://www.zhipin.com/web/chat/recommend' },
   )
-  const r = await createBossGreetOperation(f.factory).execute({ limit: 5 }, silentCtx())
+  const r = await createBossGreetOperation(f.factory, noSleep).execute({ limit: 5 }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.code, 'OK')
   assert.equal(r.effect, 'applied')
@@ -421,7 +424,7 @@ test('greet 付费墙（未成功任何人）→ PAYWALL，effect=none，retryab
     greetSnap([[1690, 208, 64, 32]]),
     greetSnap([[1690, 208, 64, 32]], ['该职位无开聊权益']),
   ])
-  const r = await createBossGreetOperation(f.factory).execute({ limit: 1 }, silentCtx())
+  const r = await createBossGreetOperation(f.factory, noSleep).execute({ limit: 1 }, silentCtx())
   assert.equal(r.success, false)
   assert.equal(r.code, 'PAYWALL')
   assert.equal(r.effect, 'none')
@@ -439,7 +442,7 @@ test('greet 付费墙（已成功 1 人后触发）→ PAYWALL，effect=partial'
     greetSnap([BTN2], [], [BTN1]),
     greetSnap([BTN2], ['该职位无开聊权益'], [BTN1]),
   ])
-  const r = await createBossGreetOperation(f.factory).execute({ limit: 3 }, silentCtx())
+  const r = await createBossGreetOperation(f.factory, noSleep).execute({ limit: 3 }, silentCtx())
   assert.equal(r.success, false)
   assert.equal(r.code, 'PAYWALL')
   assert.equal(r.effect, 'partial')
@@ -457,7 +460,7 @@ test('greet 成功路径：effect=applied，data 含 greeted/reached_end', async
     greetSnap([], [], [BTN1]),
     greetSnap([], [], [BTN1]),
   ])
-  const r = await createBossGreetOperation(f.factory).execute({ limit: 5 }, silentCtx())
+  const r = await createBossGreetOperation(f.factory, noSleep).execute({ limit: 5 }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.code, 'OK')
   assert.equal(r.effect, 'applied')
@@ -475,7 +478,7 @@ function greetNamedSnap(rows: Array<{ name: string | null; buttonY: number; cont
 
 test('boss_greet：names 非法（空数组/超 3 个/含空串）→ INVALID_ARGUMENT，不连 Chrome', async () => {
   const f = fakeFactory([])
-  const op = createBossGreetOperation(f.factory)
+  const op = createBossGreetOperation(f.factory, noSleep)
   assert.equal((await op.execute({ names: [] }, silentCtx())).code, 'INVALID_ARGUMENT')
   assert.equal((await op.execute({ names: ['刘草威', '张三丰', '王五', '赵六'] }, silentCtx())).code, 'INVALID_ARGUMENT')
   assert.equal((await op.execute({ names: ['刘草威', '  '] }, silentCtx())).code, 'INVALID_ARGUMENT')
@@ -487,7 +490,7 @@ test('greet 定向成功：names=[张三丰] 只点张三丰的按钮，data 含
   const B = { name: '张三丰', buttonY: 330 }
   // probe（含筛选）→ 定位[A,B]（只点 B）→ 校验[A]（B 变继续沟通）→ 名单完成
   const f = fakeFactory([greetNamedSnap([A, B]), greetNamedSnap([A, B]), greetNamedSnap([A, {...B, continued: true}])])
-  const r = await createBossGreetOperation(f.factory).execute({ names: ['张三丰'] }, silentCtx())
+  const r = await createBossGreetOperation(f.factory, noSleep).execute({ names: ['张三丰'] }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.effect, 'applied')
   // 只点了 B 行按钮 (1162, 330)：顶部的 A 被跳过（修复前会点 A——打错人）
@@ -511,7 +514,7 @@ test('greet 定向：MCP 默认 limit=1 不截断名单（operation 钳到 ≥ n
     greetNamedSnap([A, {...B, continued: true}]),
     greetNamedSnap([{...A, continued: true}, {...B, continued: true}]),
   ])
-  const r = await createBossGreetOperation(f.factory).execute({ limit: 1, names: ['刘草威', '张三丰'] }, silentCtx())
+  const r = await createBossGreetOperation(f.factory, noSleep).execute({ limit: 1, names: ['刘草威', '张三丰'] }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.data.greeted, 2)
   assert.deepEqual(r.data.greeted_names, ['张三丰', '刘草威'])
@@ -526,7 +529,7 @@ test('greet 定向缺人：页面只有 A 但要找王五 → 0人且不伪造�
   const A = { name: '刘草威', buttonY: 146 }
   // 全量已加载结构索引没有目标：零输入返回未找到，不能据此声称全列表到底。
   const f = fakeFactory([greetNamedSnap([A]), greetNamedSnap([A])])
-  const r = await createBossGreetOperation(f.factory).execute({ names: ['王五'] }, silentCtx())
+  const r = await createBossGreetOperation(f.factory, noSleep).execute({ names: ['王五'] }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.data.greeted, 0)
   assert.equal(r.data.reached_end, false)
@@ -662,7 +665,7 @@ test('confirmed acceptance survives a later preview failure as partial effect wi
  const marker='对方想发送附件简历给您，您是否同意'
  const request=text(marker,240,500,290,25),prompt=text(marker,650,1000,300,25),agree=text('同意',1050,1000,60,25),preview=text('点击预览附件简历',700,800,180,25)
  const f=fakeFactory([actionSnapshot({extra:[request]}),actionSnapshot({extra:[request,prompt,agree]}),actionSnapshot({extra:[preview]})],{url:'https://www.zhipin.com/web/chat/index'})
- const r=await createBossAcceptResumeOperation(f.factory).execute({limit:1,preview:true},silentCtx())
+ const r=await createBossAcceptResumeOperation(f.factory, noSleep).execute({limit:1,preview:true},silentCtx())
  assert.equal(r.success,false);assert.equal(r.effect,'partial');assert.equal(r.data.completed,1)
  assert.equal((r.data.confirmed_items as Array<{accepted:boolean}>)[0]?.accepted,true)
  assert.equal(((r.data.operation_recovery as Record<string,unknown>).business_effect as {status:string}).status,'confirmed')
