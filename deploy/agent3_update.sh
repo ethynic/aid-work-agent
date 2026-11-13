@@ -240,7 +240,7 @@ fi
 # 3. 后端重启（与前端编译并行；前端无变更时直接重启）
 #    不先 down：up --force-recreate 会自动 stop→remove→create，避免全停窗口
 #    AgentRunner overlay：分支含 docker-compose.agent-runner.yml 时叠加一并重建
-#    （runner-api/runner-worker-light/runner-worker-general/runner-monitor）。必须与主 compose 一起传给同一条 up，否则
+#    （runner-api/runner-worker/heavy-tools/runner-monitor）。必须与主 compose 一起传给同一条 up，否则
 #    --remove-orphans 会把 overlay 服务当孤儿容器删除。KF 恢复原主 API 渠道入口；
 #    发布前须按 agent-runner-deploy-checklist.md 完成旧 KF 存量/送达核对与 cursor 交接，
 #    停止旧 KF 消费者及仍读写 gate 的旧 Runner API/worker，清理专属凭据；
@@ -251,7 +251,7 @@ echo "[3] 重启后端服务..."
 COMPOSE_FILES=(-f docker-compose.dev.yml)
 if [ -f docker-compose.agent-runner.yml ]; then
     COMPOSE_FILES+=(-f docker-compose.agent-runner.yml)
-    echo "    叠加 AgentRunner overlay（runner-api/runner-worker-light/runner-worker-general/runner-monitor）"
+    echo "    叠加 AgentRunner overlay（runner-api/runner-worker/heavy-tools/runner-monitor）"
 else
     echo "    未发现 AgentRunner overlay，仅主 compose"
 fi

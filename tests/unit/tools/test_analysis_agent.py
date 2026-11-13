@@ -79,7 +79,7 @@ def _loaded_analyzer():
         "amount": [100, 200, 150, 250, 180, 220],
         "date": ["2025-01", "2025-02", "2025-01", "2025-02", "2025-01", "2025-02"],
     })
-    analyzer._tables["tbl_sales"] = df
+    analyzer._tables["tbl_sales"] = analyzer._write_state(df, "table_tbl_sales")
     return analyzer
 
 
@@ -737,8 +737,7 @@ class TestMergeMethod:
             "region": ["华东", "华南", "华北"],
             "manager": ["张三", "李四", "王五"],
         })
-        analyzer._tables["tbl_managers"] = df2
-
+        analyzer._tables["tbl_managers"] = analyzer._write_state(df2, "table_tbl_managers")
         ag = AnalysisAgent(
             mock_llm, analyzer, "test_merge",
             tables_metadata=_sample_metadata(),
@@ -1075,7 +1074,7 @@ class TestPreloadInstructionAndSlimLoad:
         }
         with patch.object(agent, "_fetch_single_table_metadata", return_value=new_meta), \
              patch.object(agent.analyzer, "load_table", AsyncMock(return_value="tbl_new")):
-            agent.analyzer._tables["tbl_new"] = pd.DataFrame({"city": ["A"]})
+            agent.analyzer._tables["tbl_new"] = agent.analyzer._write_state(pd.DataFrame({"city": ["A"]}), "table_tbl_new")
             result = await agent._handle_load_table("tbl_new")
 
         assert result["success"] is True
@@ -1163,7 +1162,7 @@ class TestDescribeSlimming:
                 "region": [f"区域{i}" for i in range(12)] * 2,  # 12 个唯一值 > CAP
                 "amount": range(24),
             })
-            analyzer._tables["tbl_wide"] = df
+            analyzer._tables["tbl_wide"] = analyzer._write_state(df, "table_tbl_wide")
         else:
             analyzer = _loaded_analyzer()
         return AnalysisAgent(

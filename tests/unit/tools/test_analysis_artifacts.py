@@ -709,7 +709,7 @@ class TestSourcePropagation:
     def test_merge_unions_inputs(self):
         agent = self._agent_with_table("9078")
         agent._loaded_table_ids.add("9079")
-        agent.analyzer._tables["9079"] = pd.DataFrame({"b": [2]})
+        agent.analyzer._tables["9079"] = agent.analyzer._write_state(pd.DataFrame({"b": [2]}), "table_9079")
         agent._handle_data_method("query", "q1", pd.DataFrame({"m": [1]}), {"source": "9078"})
         agent._handle_data_method("query", "q2", pd.DataFrame({"m": [1]}), {"source": "9079"})
         agent._handle_data_method(
@@ -790,8 +790,8 @@ class TestUniqueArtifactBinding:
     def test_sessions_with_same_var_load_their_own_authorized_file(self):
         public = _make_agent(session_id="public_session")
         private = _make_agent(session_id="private_session")
-        public.analyzer._tables["101"] = pd.DataFrame({"value": [1]})
-        private.analyzer._tables["202"] = pd.DataFrame({"value": [999]})
+        public.analyzer._tables["101"] = public.analyzer._write_state(pd.DataFrame({"value": [1]}), "table_101")
+        private.analyzer._tables["202"] = private.analyzer._write_state(pd.DataFrame({"value": [999]}), "table_202")
         public._handle_data_method("query", "result", pd.DataFrame({"value": [1]}), {"source": "101"})
         private._handle_data_method("query", "result", pd.DataFrame({"value": [999]}), {"source": "202"})
         public_entry = load_artifacts(TENANT, "public_session")[0]
@@ -800,7 +800,7 @@ class TestUniqueArtifactBinding:
         reader = _make_agent(session_id="public_session")
         with patch("src.tools.data_analysis.analysis_agent.filter_available_table_ids", return_value={"101"}):
             assert reader._handle_load_output("result")["success"]
-        assert reader.analyzer._variables["result"]["value"].tolist() == [1]
+        assert reader.analyzer._resolve_source("result")["value"].tolist() == [1]
 
     def test_same_session_overwrite_cannot_change_an_already_read_entry_file(self):
         first, second = _make_agent(), _make_agent()

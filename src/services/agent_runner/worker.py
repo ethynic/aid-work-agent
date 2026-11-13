@@ -288,17 +288,13 @@ class RunnerWorker:
                  tool_recovery=None, slot_state=None, slot_concurrency=None):
         self.config = config
         self.worker_id = worker_id or 'worker_' + uuid.uuid4().hex
-        # 轻重负载分离（设计 §4.3）：领取角色由容器环境变量声明，
-        # 非 light/general 的值一律归 general（不过滤），避免配置笔误静默缩容。
-        self.role = os.environ.get('AGENT_RUNNER_ROLE', 'general')
-        if self.role not in ('light', 'general'):
-            self.role = 'general'
-        # 轻池槽内并发（A 方案，设计 §6）：supervisor 显式传参优先，缺省按角色自算；
-        # general 角色恒 1 槽 1 任务，误配 env 不影响重池隔离。
-        self.slot_concurrency = resolve_slot_concurrency(self.role, config, slot_concurrency)
+        # 2026-11-13 重工具服务化 §9：池路由（light/general 角色机制）整体退役，
+        # 全部 worker 等价全量领取；槽内并发统一走 resolve_slot_concurrency
+        # （supervisor 显式传参优先，缺省 config.slot_concurrency）。
+        self.slot_concurrency = resolve_slot_concurrency(config, slot_concurrency)
         from src.core.temp_logger import tlog
-        tlog("runner轻重分离", "worker 启动 worker_id={wid} role={role} slot_concurrency={sc}",
-             wid=self.worker_id, role=self.role, sc=self.slot_concurrency)
+        tlog("runner轻重分离", "worker 启动 worker_id={wid} slot_concurrency={sc}",
+             wid=self.worker_id, sc=self.slot_concurrency)
         self.slot_state = slot_state
         self.boot_id=uuid.uuid4().hex
         self.executions = execution_repository or ExecutionRepository()
@@ -495,8 +491,6 @@ class RunnerWorker:
                 and row['source']=='chat' and row['session_kind']=='web')
             collector.trace.trace_id = ('tr_'+row['runner_id']+
                 (':'+str(row['attempt']) if attempt_trace else ''))
-            # 轻重负载分离可观测（设计 §5.3）：池比例校准按 Trace 维度过滤。
-            collector.trace.metadata['load_class'] = row.get('load_class')
             control.trace_collector = collector
             # A committed finalization intent is immutable even if a user requests
             # cancellation while its transaction is retrying.
@@ -996,7 +990,7 @@ class RunnerWorker:
             return await self._acquire_controls() or await self._acquire_queued()
         priority=getattr(self.executions,'acquire_priority',None)
         if priority is not None:
-            urgent=await asyncio.to_thread(priority,self.worker_id,self.config.lease_seconds,role=self.role)
+            urgent=await asyncio.to_thread(priority,self.worker_id,self.config.lease_seconds)
             if urgent is not None:
                 self._tlog_acquired(urgent, 'priority')
                 return urgent
@@ -1011,15 +1005,15 @@ class RunnerWorker:
         return None
 
     async def _acquire_queued(self):
-        row=await asyncio.to_thread(self.executions.acquire,self.worker_id,self.config.lease_seconds,role=self.role)
+        row=await asyncio.to_thread(self.executions.acquire,self.worker_id,self.config.lease_seconds)
         if row is not None:
             self._tlog_acquired(row, 'queued')
         return row
 
     def _tlog_acquired(self, row, source):
         from src.core.temp_logger import tlog
-        tlog("runner轻重分离", "领取 runner={runner} role={role} source={source} load_class={lc}",
-             runner=row['runner_id'], role=self.role, source=source, lc=row.get('load_class'))
+        tlog("runner轻重分离", "领取 runner={runner} source={source}",
+             runner=row['runner_id'], source=source)
 
     async def _acquire_continuous(self):
         from .continuous import interrupted_candidate
@@ -1027,7 +1021,7 @@ class RunnerWorker:
         from .recovery_repository import RecoveryRepository
         recovery=RecoveryRepository(self.repository.connection_factory)
         candidates=await asyncio.to_thread(recovery.next_continuous_candidates,
-            after_queue_order=self._continuous_scan_after,role=self.role)
+            after_queue_order=self._continuous_scan_after)
         self._continuous_scan_after=candidates[-1]['queue_order'] if candidates else 0
         for row in candidates:
             if not interrupted_candidate(row):
@@ -1058,8 +1052,7 @@ class RunnerWorker:
         from .recovery import RecoveryCoordinator
         from .recovery_repository import RecoveryRepository
         recovery = RecoveryRepository(self.repository.connection_factory)
-        candidates=await asyncio.to_thread(recovery.next_candidates,after_queue_order=self._recovery_scan_after,
-            role=self.role)
+        candidates=await asyncio.to_thread(recovery.next_candidates,after_queue_order=self._recovery_scan_after)
         self._recovery_scan_after=candidates[-1]['queue_order'] if candidates else 0
         for row in candidates:
             try:
@@ -1099,8 +1092,7 @@ class RunnerWorker:
         if getattr(self.config,'durable_sleep_enabled',False):
             from .timer_repository import TimerRepository
             timers=TimerRepository(self.repository.connection_factory)
-            candidates=await asyncio.to_thread(timers.next_candidates,after_queue_order=self._timer_scan_after,
-                role=self.role)
+            candidates=await asyncio.to_thread(timers.next_candidates,after_queue_order=self._timer_scan_after)
             self._timer_scan_after=candidates[-1]['queue_order'] if candidates else 0
             for row in candidates:
                 try:
@@ -1134,8 +1126,7 @@ async def run_worker(arguments):
     explicit_concurrency = getattr(arguments, 'slot_concurrency', None)
     # slot_state 是单值 BUSY/IDLE，仅在单执行体语义下有效；并发模式由监督进程
     # 按 owned_attempts 做回收（--slot-state-file 不传）。
-    slot_concurrency = resolve_slot_concurrency(
-        os.environ.get('AGENT_RUNNER_ROLE', 'general'), config, explicit_concurrency)
+    slot_concurrency = resolve_slot_concurrency(config, explicit_concurrency)
     if slot_path is not None and (not arguments.worker_id or slot_concurrency != 1):
         raise RuntimeError('AGENT_RUNNER_SLOT_REQUIRES_SINGLE_CONCURRENCY')
     if not config.enabled:

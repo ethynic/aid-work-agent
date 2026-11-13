@@ -673,10 +673,10 @@ async function handleSend(content: string, executionMode?: 'continuous') {
 }
 
 async function handleUpload(file: File) {
-  // 前端大小拦截，避免大文件全量上传后被后端拒绝
-  const MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+  // 前端大小拦截，避免大文件全量上传后被后端拒绝（2026-11-13 通用上传上限 50MB -> 20MB）
+  const MAX_UPLOAD_SIZE = 20 * 1024 * 1024
   if (file.size > MAX_UPLOAD_SIZE) {
-    toast.error(`文件过大，最大支持 50MB`)
+    toast.error(`文件过大，最大支持 20MB`)
     return
   }
   try {

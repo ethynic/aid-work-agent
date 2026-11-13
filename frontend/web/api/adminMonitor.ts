@@ -30,13 +30,17 @@ export interface RunnerSection {
   runner_stalled: boolean
   active_alerts: number
   worker_slots?: number
-  light_slots?: number
-  general_slots?: number
+  // 2026-11-13 重工具服务化 §9：池路由退役，单 worker 服务 + 重工具服务指标
+  worker_replicas?: number
   light_concurrency?: number
-  running_light?: number
-  finalizing_light?: number
-  running_heavy?: number
-  finalizing_heavy?: number
+  heavy_tools?: {
+    mode: 'local' | 'remote'
+    replicas?: number
+    concurrency?: number
+    available?: boolean | null
+    running_jobs?: number
+    busy?: boolean
+  }
   error?: string
 }
 

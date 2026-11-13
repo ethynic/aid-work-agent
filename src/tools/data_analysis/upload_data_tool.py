@@ -30,6 +30,55 @@ class UploadDataFileTool(BaseTool):
     category = "data_analysis"
     InputModel = UploadDataFileInput
 
+    def _remote_dispatch_enabled(self) -> bool:
+        """远程解析开关（重工具服务设计 §4.1/§9）：HEAVY_TOOLS_MODE=remote 且本工具
+        在 agent_runner.heavy_tools 白名单。local 模式回退本地解析（零代码回滚）。"""
+        from src.services.heavy_tool_service.config import is_remote_mode
+
+        if not is_remote_mode():
+            return False
+        try:
+            from src.config.settings import settings
+
+            return "upload_data_file" in set(settings.agent_runner.heavy_tools or [])
+        except Exception:
+            return False
+
+    async def _parse_sheets(self, file_path: str) -> Dict[str, Any]:
+        """解析文件：remote 模式走重工具服务（大文件 pandas 解析隔离到重容器），
+        其余本地线程池解析。返回 {sheets: [...], error: str|None}，
+        失败口径与本地执行一致（error 为面向用户的中性文案，细节进日志）。"""
+        if self._remote_dispatch_enabled():
+            from src.services.heavy_tool_service import client
+            from src.services.heavy_tool_service.client import HeavyToolBusy, HeavyToolUnavailable
+
+            try:
+                result = await client.execute(
+                    tool="upload_data_file", handler="parse",
+                    params={"file_path": os.path.abspath(file_path)},
+                    timeout_seconds=600)
+                return {"sheets": result.get("sheets") or [], "error": None}
+            except HeavyToolBusy as e:
+                # busy 透传（§8）：message 已带「稍后重试」引导，不自动立即重试
+                logger.warning(f"[UploadDataFile] 重工具服务繁忙: {e}")
+                return {"sheets": [], "error": str(e)}
+            except HeavyToolUnavailable as e:
+                # 中性失败（§8）：不回退本地执行（大文件解析正是要隔离的重负载）
+                logger.error(f"[UploadDataFile] 重工具服务不可用: {e}")
+                return {"sheets": [], "error": "处理未完成，请稍后重试"}
+            except Exception as e:
+                logger.opt(exception=True).error(f"远程解析文件失败: {e}")
+                return {"sheets": [], "error": f"解析文件失败: {str(e)}"}
+
+        from src.services.data_analysis.sheet_parser import SheetParser
+        sheet_parser = SheetParser()
+        try:
+            return {"sheets": await asyncio.to_thread(sheet_parser.parse_file, file_path),
+                    "error": None}
+        except Exception as e:
+            logger.opt(exception=True).error(f"解析文件失败: {e}")
+            return {"sheets": [], "error": f"解析文件失败: {str(e)}"}
+
     async def execute(self, **kwargs) -> Dict[str, Any]:
         file_path = kwargs["file_path"]
         analysis_intent = kwargs.get("analysis_intent", "")
@@ -50,15 +99,12 @@ class UploadDataFileTool(BaseTool):
         except Exception:
             pass
 
-        # 3. 解析文件
-        from src.services.data_analysis.sheet_parser import SheetParser
-        sheet_parser = SheetParser()
-
-        try:
-            sheets = await asyncio.to_thread(sheet_parser.parse_file, file_path)
-        except Exception as e:
-            logger.opt(exception=True).error(f"解析文件失败: {e}")
-            return {"success": False, "error": f"解析文件失败: {str(e)}"}
+        # 3. 解析文件（2026-11-13 重工具服务化 §3：解析远程（纯 pandas 计算），
+        # DB 注册留本地（轻操作）；HEAVY_TOOLS_MODE=local 时原样本地解析）
+        parsed = await self._parse_sheets(file_path)
+        if parsed.get("error"):
+            return {"success": False, "error": parsed["error"]}
+        sheets = parsed.get("sheets") or []
 
         if not sheets:
             return {"success": False, "error": "文件中没有找到有效的数据表"}

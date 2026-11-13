@@ -65,10 +65,11 @@ services:
 
   runner-worker:
     extends:
-      # 轻重负载分离（runner-capacity 设计 §4.1）后原 runner-worker 拆为 light/general 双池；
-      # 本地开发用 general（无过滤领取，可跑任意负载）
+      # 2026-11-13 重工具服务化 §9：池路由退役，单一 runner-worker 服务
+      # （全部 worker 等价全量领取）；本地开发默认 HEAVY_TOOLS_MODE=local
+      # （重负载本地执行，不依赖 heavy-tools 容器）
       file: docker-compose.agent-runner.yml
-      service: runner-worker-general
+      service: runner-worker
     user: "0"
     entrypoint: []
     command: [python, -m, src.services.agent_runner.supervisor]
