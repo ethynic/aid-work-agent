@@ -49,13 +49,20 @@ try {
     await page.evaluate(() => window.fixtureUpdate({ status:'waiting',sleep_blocked:{ error_code:'CREDIT_BLOCKED' } }))
     await page.getByText('自动继续已暂停',{ exact:true }).waitFor()
     assert.equal(await page.locator('time').count(),0)
+    await page.evaluate(() => window.fixtureUpdate({ status:'waiting',sleep_blocked:undefined,
+      snapshot:{ waiting:{ kind:'clarification', wait_id:'recovery-wait', target_execution_id:'root' } } }))
+    await page.getByText('等待你的回复',{ exact:true }).waitFor()
+    assert.equal(await page.getByRole('button',{ name:/继续/ }).count(),0)
+    assert(await page.getByRole('button',{ name:'停止任务',exact:true }).isVisible())
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+    await page.screenshot({ path:join(directory,`clarification-${width}.png`) })
     await page.evaluate(() => window.fixtureUpdate({ status:'cancelled',cancel_requested:true,sleep_blocked:undefined }))
     await page.getByText('任务已停止',{ exact:true }).waitFor()
     assert.equal(await page.getByRole('button').count(),0)
     assert.deepEqual(errors,[])
     await page.close()
   }
-  console.log('PASS: 1280/390px, keyboard resume, credits/pending, pause/blocked/stop states. Screenshots:',directory)
+  console.log('PASS: 1280/390px, keyboard resume, credits/pending, pause/clarification/blocked/stop states. Screenshots:',directory)
 } finally {
   await browser?.close()
   vite.kill()

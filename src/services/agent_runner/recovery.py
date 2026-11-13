@@ -316,6 +316,22 @@ class RecoveryCoordinator:
         fact = target.tools.get(wait.get('tool_call_id'))
         if fact is None or fact.phase!='waiting':
             raise RunnerError('CONTROL_WAIT_STALE',409)
+        from .server_recovery_reply import apply_reply, recovery_wait
+        if recovery_wait(wait):
+            apply_reply(row,control,target,wait,fact)
+            # Preserve the user's actual reply after all original tool results
+            # have been paired. The replacement has already been bound to the
+            # tool, so do not run it through the generic attachment assembler.
+            message = {'role':'user','content':payload['answer'],
+                       'metadata':{'control_id':control['control_id'],
+                                   'submitted_text':payload['answer'],
+                                   'accepted_at':str(control['accepted_at']),
+                                   'attachments':copy.deepcopy(payload.get('attachments') or [])}}
+            target.followup_messages.append(copy.deepcopy(message))
+            if target is not root:
+                root.followup_messages.append(message)
+            self._remember_input(checkpoint,control)
+            return
         from .continuous import apply_confirmation
         apply_confirmation(row,control,target,states,checkpoint,wait,fact)
         attachments = payload.get('attachments') or []

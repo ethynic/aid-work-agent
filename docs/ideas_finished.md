@@ -69,6 +69,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20261113-1443 | Runner 检查点恢复 | ✅ 已完成开发（待发版验收），按原检查点续跑并支持会话内补传及核对。 | [设计](system/agent-application-architecture-design.md#58-runner-按检查点继续执行2026-11-13已实现) | [开发计划](plans/plan-runner-server-skill-interruption-recovery.md) |
 | 20261109-1440 | 任务计划提示词展示与管理对话中断 | ✅ 已完成开发。隐藏计划提示词，修复列表和详情查询导致的对话中断。 | [设计](system/scheduled-task-runner-refactor-design.md) | [计划](plans/plan-scheduled-task-result-management.md) |
 | 20261106-1010 | 定时任务结果免登录链接 | ✅ 已完成开发；免登录结果页与三渠道链接通过本地验证，agent2 验收待授权。 | [设计](system/design-task-result-share-link.md) | [计划](plans/plan-task-result-share-link.md) |
 | 20261028-1600 | 通知规则引擎（留资业务通知 + 通知配置统一） | ✅ 已完成：规则层按租户规则展开事件通知，收编留资旧邮件与管理员通知，「通知规则」页面 + 客服账号级粒度 + 定时任务通知接入（scheduled.task）；10-30/11-02 修复与扩展均已落地。 | [设计](system/notification-rule-engine-design.md) | [计划](plans/plan-scheduled-task-notification-rules.md) |
