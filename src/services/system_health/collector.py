@@ -217,7 +217,7 @@ def _probe_heavy_tools(_env_int) -> Dict[str, Any]:
     try:
         import httpx
 
-        from src.services.heavy_tool_service.client import heavy_tools_url
+        from src.services.heavy_tool_service.config import heavy_tools_url
         response = httpx.get(
             f"{heavy_tools_url().rstrip('/')}/internal/heavy-tools/health", timeout=2.0
         )

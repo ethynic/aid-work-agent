@@ -15,6 +15,7 @@ async 入口层负责 to_thread，底层保持同步）。
 
 import json
 import os
+import threading
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -30,22 +31,41 @@ REMOTE_EXCEL_HANDLERS = (
 FILL_TEMPLATE_RENDER_HANDLER = "fill_template_render"
 
 
-def dispatch(tool: str, handler: Optional[str], params: Dict[str, Any]) -> Dict[str, Any]:
-    """同步 handler 分发入口（server 在线程池中调用）。"""
+def dispatch(tool: str, handler: Optional[str], params: Dict[str, Any],
+             cancel_event: Optional["threading.Event"] = None) -> Dict[str, Any]:
+    """同步 handler 分发入口（server 在线程池中调用）。
+
+    协作取消语义：cancel_event 只在「进入重负载段之前」检查（分发入口 + 各
+    handler 的执行前置点）；已进入执行的重负载段（openpyxl / pandas /
+    paddleocr 云 API 等原生调用）无法中断，会跑完——产物竞态由
+    「远程操作一律写新产物文件」不变量消除（§4.3）。
+    """
+    if cancel_event is not None and cancel_event.is_set():
+        return {"success": False, "cancelled": True,
+                "error": "任务已取消（同 tool_call_id 的新提交已接管）"}
     if tool == "excel_process":
-        return _excel_process(handler, params)
+        return _excel_process(handler, params, cancel_event)
     if tool == "paddleocr_doc_parsing":
-        return _paddleocr(params)
+        return _paddleocr(params, cancel_event)
     if tool == "upload_data_file":
-        return _upload_parse(handler, params)
+        return _upload_parse(handler, params, cancel_event)
     return {"success": False, "error": f"重工具服务未注册工具: {tool}"}
+
+
+def _cancelled(cancel_event) -> Optional[Dict[str, Any]]:
+    """取消检查点：事件已置位时返回统一取消响应，否则 None。"""
+    if cancel_event is not None and cancel_event.is_set():
+        return {"success": False, "cancelled": True,
+                "error": "任务已取消（同 tool_call_id 的新提交已接管）"}
+    return None
 
 
 # ==================== excel_process ====================
 
-def _excel_process(handler: Optional[str], params: Dict[str, Any]) -> Dict[str, Any]:
+def _excel_process(handler: Optional[str], params: Dict[str, Any],
+                   cancel_event: Optional[threading.Event] = None) -> Dict[str, Any]:
     if handler == FILL_TEMPLATE_RENDER_HANDLER:
-        return _excel_fill_render(params)
+        return _excel_fill_render(params, cancel_event)
     if handler not in REMOTE_EXCEL_HANDLERS:
         return {"success": False, "error": f"excel_process 不支持远程 handler: {handler}"}
 
@@ -75,6 +95,9 @@ def _excel_process(handler: Optional[str], params: Dict[str, Any]) -> Dict[str, 
 
     # 事件循环内调用同步 dispatch 前提：server 在无事件循环的线程池线程执行，
     # asyncio.run 在此安全（与 load_table 线程池先例一致）
+    cancelled = _cancelled(cancel_event)
+    if cancelled:
+        return cancelled
     try:
         return asyncio.run(step(pipeline, route_params))
     except FileNotFoundError as error:
@@ -84,7 +107,8 @@ def _excel_process(handler: Optional[str], params: Dict[str, Any]) -> Dict[str, 
         return {"success": False, "error": f"操作 {handler} 执行失败: {error}"}
 
 
-def _excel_fill_render(params: Dict[str, Any]) -> Dict[str, Any]:
+def _excel_fill_render(params: Dict[str, Any],
+                       cancel_event: Optional[threading.Event] = None) -> Dict[str, Any]:
     """fill_template 渲染段：结构已由轻容器分析（LLM），此处纯 openpyxl。"""
     template_file = params.get("template_file")
     data = params.get("data")
@@ -92,6 +116,9 @@ def _excel_fill_render(params: Dict[str, Any]) -> Dict[str, Any]:
     if not template_file or not data or not structure:
         return {"success": False,
                 "error": "fill_template_render 需要 template_file、data、structure"}
+    cancelled = _cancelled(cancel_event)
+    if cancelled:
+        return cancelled
     try:
         from src.tools.excel.excel_template_ai import render_with_structure
 
@@ -106,7 +133,8 @@ def _excel_fill_render(params: Dict[str, Any]) -> Dict[str, Any]:
 
 # ==================== paddleocr_doc_parsing ====================
 
-def _paddleocr(params: Dict[str, Any]) -> Dict[str, Any]:
+def _paddleocr(params: Dict[str, Any],
+               cancel_event: Optional[threading.Event] = None) -> Dict[str, Any]:
     file_path = params.get("file_path") or None
     file_url = params.get("file_url") or None
     file_type = params.get("file_type")
@@ -114,6 +142,9 @@ def _paddleocr(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"success": False, "error": "请提供文件路径或URL"}
     if file_path and not os.path.exists(file_path):
         return {"success": False, "error": f"文件不存在: {file_path}"}
+    cancelled = _cancelled(cancel_event)
+    if cancelled:
+        return cancelled
     try:
         from src.tools.ocr.ocr_tool import paddleocr_doc_parsing
 
@@ -127,7 +158,8 @@ def _paddleocr(params: Dict[str, Any]) -> Dict[str, Any]:
 
 # ==================== upload_data_file（解析段） ====================
 
-def _upload_parse(handler: Optional[str], params: Dict[str, Any]) -> Dict[str, Any]:
+def _upload_parse(handler: Optional[str], params: Dict[str, Any],
+                  cancel_event: Optional[threading.Event] = None) -> Dict[str, Any]:
     if handler not in (None, "parse"):
         return {"success": False, "error": f"upload_data_file 不支持远程 handler: {handler}"}
     file_path = params.get("file_path") or ""
@@ -136,6 +168,9 @@ def _upload_parse(handler: Optional[str], params: Dict[str, Any]) -> Dict[str, A
     ext = os.path.splitext(file_path)[1].lower()
     if ext not in (".xlsx", ".xls", ".csv"):
         return {"success": False, "error": f"不支持的文件格式: {ext}，仅支持 .xlsx、.xls、.csv"}
+    cancelled = _cancelled(cancel_event)
+    if cancelled:
+        return cancelled
     try:
         from src.services.data_analysis.sheet_parser import SheetParser
 
@@ -168,14 +203,21 @@ def collect_request_paths(params: Dict[str, Any],
 
     只校验声明的路径字段——content/指令文本等自由文本不做前缀判定（避免
     误伤以 / 开头的正文）；路径字段一律要求绝对路径且落在共享卷 allowlist 内。
+    excel_process 的 payload 把路径字段嵌在 route_params 子对象内，嵌套层与
+    顶层用同一份字段名单校验，防止嵌套键绕过 allowlist。
     """
     paths: List[str] = []
-    for key in PATH_PARAM_KEYS:
-        value = params.get(key)
-        if isinstance(value, str):
-            paths.append(value)
-        elif isinstance(value, (list, tuple)):
-            paths.extend(item for item in value if isinstance(item, str))
+    scopes: List[Dict[str, Any]] = [params]
+    route_params = params.get("route_params")
+    if isinstance(route_params, dict):
+        scopes.append(route_params)
+    for scope in scopes:
+        for key in PATH_PARAM_KEYS:
+            value = scope.get(key)
+            if isinstance(value, str):
+                paths.append(value)
+            elif isinstance(value, (list, tuple)):
+                paths.extend(item for item in value if isinstance(item, str))
     workdir = context.get("skill_workdir")
     if isinstance(workdir, str) and workdir:
         paths.append(workdir)

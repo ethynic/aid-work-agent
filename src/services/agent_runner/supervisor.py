@@ -389,6 +389,15 @@ def main():
         # A direct host invocation cannot rely on PID namespace teardown to
         # stop detached skill sessions after a Worker crash.
         raise RuntimeError('AGENT_RUNNER_SLOT_REQUIRES_CONTAINER_PID_ONE')
+    # 重工具派发模式 fail-fast（重工具服务设计 §6）：值经 .env 注入（compose
+    # ${HEAVY_TOOLS_MODE} 无默认值），漏配/非法值时容器内为空串——静默回退 local
+    # 会让 excel/OCR/大文件解析全部留在轻容器执行（重工具服务白部署，故障形态
+    # 即 11-05 TPG80509 假异步冻结事故），因此 worker 启动即拒绝
+    heavy_mode = (os.environ.get('HEAVY_TOOLS_MODE') or '').strip().lower()
+    if heavy_mode not in ('local', 'remote'):
+        raise RuntimeError(
+            f'HEAVY_TOOLS_MODE_MUST_BE_LOCAL_OR_REMOTE (got {heavy_mode!r}); '
+            '请在该环境 .env 显式配置 HEAVY_TOOLS_MODE=local 或 remote')
     supervisor = RunnerSlotSupervisor()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, supervisor.stop)

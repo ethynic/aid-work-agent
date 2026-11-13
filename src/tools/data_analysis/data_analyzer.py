@@ -223,7 +223,9 @@ class DataAnalyzer:
     def _read_state(path: str) -> "pd.DataFrame":
         if path.endswith(".parquet"):
             return pd.read_parquet(path)
-        return pd.read_csv(path)
+        # utf-8-sig 与 _write_state 写入侧对称：剥离 BOM，否则首列名残留
+        # ﻿ 前缀，后续按列名 merge/aggregate 报 KeyError 或静默丢列
+        return pd.read_csv(path, encoding="utf-8-sig")
 
     def store_dataframe(self, var_name: str, df: "pd.DataFrame") -> str:
         """仅写工作状态（不写最终产物 CSV）：load_output 复用产物装入分析环境用——

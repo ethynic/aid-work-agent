@@ -106,7 +106,14 @@ async def execute(
                            tool, handler, error)
             raise HeavyToolUnavailable("重工具服务响应超时，处理未完成") from error
         except httpx.HTTPError as error:
-            last_error = f"http error: {type(error).__name__}: {error}"
+            # 其余传输错误（ReadError / RemoteProtocolError / WriteError 等）：
+            # 请求可能已送达重容器（连接中断只发生在响应回传阶段），重试 =
+            # modify 等原地写类操作双执行、损坏用户文件（§4.1 明令禁止），
+            # 一律不重试，按不可用处理
+            logger.warning("HeavyToolClient 传输错误（不重试） tool={} handler={} {}: {}",
+                           tool, handler, type(error).__name__, error)
+            raise HeavyToolUnavailable(
+                f"重工具服务传输失败（{type(error).__name__}），处理未完成") from error
     raise HeavyToolUnavailable(f"重工具服务不可用（{last_error}）")
 
 

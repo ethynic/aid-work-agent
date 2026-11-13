@@ -18,6 +18,18 @@ from src.tools._spill import PREVIEW_LIMIT, spill_large_content
 from src.tools.base import BaseTool
 
 
+# fill_template「data 缺可填充行」引导文案（本地/远程两条路径共用）：
+# 修订时只改这一处，保持给 LLM 的自纠提示一致，避免双改遗漏
+FILL_TEMPLATE_SHAPE_HINT = (
+    "当前传入的 data 不含可填充的数据行（rows 为空或不是列表）。两种改法："
+    "1) 若要把表格数据填入模板，构造 data={'rows': [{'列名': '值', ...}, ...]} 后重调；"
+    "2) 若只需填写个别单元格并保留模板其余内容与样式，重新调本工具并改用修改类指令，"
+    "instruction 中写明『修改模板』及目标坐标与值，"
+    '如 "修改模板：将 B4 单元格填写为2026年11月10日，B5 单元格填写为XX"，'
+    "本工具会路由为 modify（内部生成 write_cell 操作），不要用 fill_template。"
+)
+
+
 class TaskType:
     """有效操作类型常量"""
     READ = "read"
@@ -397,14 +409,7 @@ class ExcelProcessTool(BaseTool):
         if not (isinstance(data, dict) and isinstance(data.get("rows"), list) and data["rows"]):
             return await self._fill_template_needs_data(
                 template_path,
-                shape_hint=(
-                    "当前传入的 data 不含可填充的数据行（rows 为空或不是列表）。两种改法："
-                    "1) 若要把表格数据填入模板，构造 data={'rows': [{'列名': '值', ...}, ...]} 后重调；"
-                    "2) 若只需填写个别单元格并保留模板其余内容与样式，重新调本工具并改用修改类指令，"
-                    "instruction 中写明『修改模板』及目标坐标与值，"
-                    '如 "修改模板：将 B4 单元格填写为2026年11月10日，B5 单元格填写为XX"，'
-                    "本工具会路由为 modify（内部生成 write_cell 操作），不要用 fill_template。"
-                ),
+                shape_hint=FILL_TEMPLATE_SHAPE_HINT,
             )
 
         from src.tools.excel.excel_template_ai import analyze_structure_safe
@@ -866,14 +871,7 @@ class ExcelProcessTool(BaseTool):
         if data and not (isinstance(data, dict) and isinstance(data.get("rows"), list) and data["rows"]):
             return await self._fill_template_needs_data(
                 template_path,
-                shape_hint=(
-                    "当前传入的 data 不含可填充的数据行（rows 为空或不是列表）。两种改法："
-                    "1) 若要把表格数据填入模板，构造 data={'rows': [{'列名': '值', ...}, ...]} 后重调；"
-                    "2) 若只需填写个别单元格并保留模板其余内容与样式，重新调本工具并改用修改类指令，"
-                    "instruction 中写明『修改模板』及目标坐标与值，"
-                    '如 "修改模板：将 B4 单元格填写为2026年11月10日，B5 单元格填写为XX"，'
-                    "本工具会路由为 modify（内部生成 write_cell 操作），不要用 fill_template。"
-                ),
+                shape_hint=FILL_TEMPLATE_SHAPE_HINT,
             )
         if data:
             from src.tools.excel.excel_template_ai import fill_with_sample

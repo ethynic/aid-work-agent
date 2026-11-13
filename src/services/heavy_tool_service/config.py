@@ -19,8 +19,10 @@ DEFAULT_PORT = 8093
 DEFAULT_TIMEOUT_SECONDS = 600
 # paddleocr 全页识别大文档可超 10 分钟，防截断合法任务（设计 §4.1）
 PADDLEOCR_TIMEOUT_SECONDS = 900
-# 调用方消失后孤儿登记回收（设计 §4.3）
-JOB_TTL_SECONDS = 600
+# 孤儿登记回收余量（设计 §4.3）：job 登记在其实际超时（timeout_seconds）之上再加
+# 本余量后才允许清扫——固定 TTL 必然小于某个合法任务的超时（如 600 < paddleocr 900），
+# 会把仍在运行中的 job 登记误当孤儿移除；余量覆盖清扫间隔（60s）与调度抖动
+JOB_TTL_GRACE_SECONDS = 120
 
 _MODE_REMOTE = "remote"
 _MODE_LOCAL = "local"

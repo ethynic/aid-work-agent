@@ -90,6 +90,20 @@ async def test_read_timeout_never_retried(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_post_delivery_transport_errors_never_retried(monkeypatch):
+    """请求已送达后连接中断（RemoteProtocolError / ReadError）严禁重试：
+
+    modify 类原地写操作可能已在重容器执行完成，重试 = 双执行损坏用户文件。"""
+    for error in (httpx.RemoteProtocolError("peer closed connection"),
+                  httpx.ReadError("connection reset")):
+        transport = _FlakyTransport(1, error)
+        _patch_async_client(monkeypatch, transport=transport)
+        with pytest.raises(HeavyToolUnavailable):
+            await execute(tool="excel_process", handler="modify", params={})
+        assert transport.requests == 1  # 未重试
+
+
+@pytest.mark.asyncio
 async def test_busy_raised_without_retry(monkeypatch):
     response = httpx.Response(429, json={
         "success": False, "error_code": "busy", "error": "重工具服务繁忙，请稍后重试"})

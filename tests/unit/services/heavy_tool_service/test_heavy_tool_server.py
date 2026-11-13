@@ -118,7 +118,8 @@ class TestExecute:
 
     def test_success_wraps_result(self, rest_client, monkeypatch):
         monkeypatch.setattr(handlers, "dispatch",
-                            lambda tool, handler, params: {"success": True, "value": 1})
+                            lambda tool, handler, params, cancel_event=None:
+                            {"success": True, "value": 1})
         response = _post_execute(rest_client, {
             "tool": "excel_process", "handler": "read", "params": {}})
         body = response.json()
@@ -135,7 +136,8 @@ class TestBusy:
         server._jobs.clear()
         import time as _time
         monkeypatch.setattr(handlers, "dispatch",
-                            lambda tool, handler, params: (_time.sleep(0.4), {"success": True})[1])
+                            lambda tool, handler, params, cancel_event=None:
+                            (_time.sleep(0.4), {"success": True})[1])
 
         import httpx
 
@@ -172,12 +174,54 @@ class TestBusy:
 
 class TestDuplicateToolCallId:
     def test_duplicate_id_cancels_previous_registration(self, rest_client):
-        event_1 = server._register_job("call_dup")
-        assert not event_1.is_set()
+        entry_1 = server._register_job("call_dup")
+        assert not entry_1["cancel_event"].is_set()
         server._register_job("call_dup")  # 恢复重放撞车：upsert + 旧 job 协作取消
-        assert event_1.is_set()
+        assert entry_1["cancel_event"].is_set()
         with server._jobs_lock:
             assert list(server._jobs.keys()) == ["call_dup"]
+            # 登记条目必须是新 job 的对象：execute 收尾按身份 pop，
+            # 旧 job 的 finally 不得误删新 job 的登记
+            assert server._jobs["call_dup"] is not entry_1
+
+    def test_late_finish_keeps_new_registration(self, rest_client):
+        """旧 job 收尾（身份不匹配）不得移除新 job 的登记。"""
+        entry_1 = server._register_job("call_race")
+        entry_2 = server._register_job("call_race")
+        server._unregister_job("call_race", entry_1)  # 旧 job 收尾
+        with server._jobs_lock:
+            assert server._jobs.get("call_race") is entry_2
+        server._unregister_job("call_race", entry_2)  # 新 job 收尾
+        with server._jobs_lock:
+            assert "call_race" not in server._jobs
+
+
+class TestJobTtl:
+    def test_sweep_respects_per_job_ttl(self, monkeypatch):
+        """合法长任务（如 paddleocr 900s）登记不因运行超过固定短 TTL 被误删。"""
+        monkeypatch.setattr(server.config, "JOB_TTL_GRACE_SECONDS", 120)
+        server._register_job("long_job", timeout_seconds=900)
+        with server._jobs_lock:
+            server._jobs["long_job"]["started_at"] -= 700  # 运行 700s < 900+120
+        assert server._sweep_jobs() == 0
+        with server._jobs_lock:
+            server._jobs["long_job"]["started_at"] -= 400  # 累计 1100s > 1020
+        assert server._sweep_jobs() == 1
+
+
+class TestHandlersCancel:
+    def test_dispatch_cancelled_event_short_circuits(self):
+        event = threading.Event()
+        event.set()
+        result = handlers.dispatch("excel_process", "read", {}, cancel_event=event)
+        assert result["success"] is False
+        assert result["cancelled"] is True
+
+    def test_dispatch_without_event_executes(self, monkeypatch):
+        monkeypatch.setattr(handlers, "_excel_process",
+                            lambda handler, params, cancel_event=None: {"success": True})
+        result = handlers.dispatch("excel_process", "read", {})
+        assert result == {"success": True}
 
 
 class TestHandlersPathCollect:
@@ -188,6 +232,22 @@ class TestHandlersPathCollect:
             {"skill_workdir": "/app/storage/agent_runner/workspaces/ws1"})
         assert set(paths) == {"/app/storage/a.pdf", "/app/uploads/b.xlsx",
                               "/app/storage/agent_runner/workspaces/ws1"}
+
+    def test_collect_route_params_nested_paths(self):
+        """excel payload 的路径字段嵌在 route_params 内，必须同样纳入校验范围。"""
+        paths = handlers.collect_request_paths(
+            {"route_params": {"template_file": "/app/storage/t.xlsx",
+                              "output_dir": "/app/storage/out",
+                              "content": "/etc/自由文本不校验"}},
+            {"skill_workdir": ""})
+        assert set(paths) == {"/app/storage/t.xlsx", "/app/storage/out"}
+
+    def test_route_params_nested_outside_path_rejected(self, rest_client):
+        response = _post_execute(rest_client, {
+            "tool": "excel_process",
+            "params": {"route_params": {"template_file": "/etc/shadow"}}})
+        assert response.status_code == 400
+        assert "允许范围" in response.json()["error"]
 
 
 def _occupy_async_holder():

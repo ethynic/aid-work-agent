@@ -194,7 +194,8 @@ services:
       - AGENT_RUNNER_STORAGE_ROOT=/app/storage
       - AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner
       # 重工具远程派发（设计 §4.2）：remote=命中 heavy_tools 白名单即走代理远程派发；
-      # local=全本地执行（agent3/回退形态）。值经 .env 注入，漏配即 worker 拒启。
+      # local=全本地执行（agent3/回退形态）。值经 .env 注入；漏配/非法值时
+      # supervisor.main() 启动即报错拒启（fail-fast，防静默回退 local）。
       - HEAVY_TOOLS_MODE=${HEAVY_TOOLS_MODE}
       - HEAVY_TOOLS_URL=${HEAVY_TOOLS_URL:-http://heavy-tools:8093}
 
