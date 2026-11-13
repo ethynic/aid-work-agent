@@ -29,6 +29,7 @@ skills:
 context:
   max_input_tokens: 8000
   max_output_tokens: 4000
+  max_iterations: 100
 ---
 
 ## 身份
