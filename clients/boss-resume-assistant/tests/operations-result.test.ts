@@ -192,10 +192,10 @@ test('boss_filter：无筛选条件 → INVALID_ARGUMENT，且不触达 Chrome',
   assert.equal(f.calls.length, 0)
 })
 
-test('boss_filter：educations 含空串 → INVALID_ARGUMENT', async () => {
+test('boss_filter：membership_account_ref 格式错误 → INVALID_ARGUMENT（清洗保留非空引用，原规则拒绝）', async () => {
   const f = fakeFactory([])
   const op = createBossFilterOperation(f.factory)
-  const r = await op.execute({ educations: ['本科', '  '] }, silentCtx())
+  const r = await op.execute({ educations: ['本科'], membership_account_ref: 'not-a-ref' }, silentCtx())
   assert.equal(r.code, 'INVALID_ARGUMENT')
   assert.equal(f.calls.length, 0)
 })

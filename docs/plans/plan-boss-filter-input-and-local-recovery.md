@@ -5,7 +5,7 @@
 | 阶段 | 内容 | 状态 | 完成记录 |
 |---|---|---|---|
 | Phase 1 | ~~服务端统一筛选参数~~ | ⛔ 已取消（2026-11-13） | 用户决策：服务端按工具写字段级归一化属补丁代码（写死），容错收敛到 CLI 侧；服务端归一化实现已回退未合入 |
-| Phase 2 | BOSS CLI/MCP 容错与结构化零输入回执 | 📋 待开发（唯一修复路径） | 已盘点筛选字段及相邻工具；端侧 CLI 更新由用户安排 |
+| Phase 2 | BOSS CLI/MCP 容错与结构化零输入回执 | 🔧 进行中（2026-11-13 开发完成，待独立测试与 CR） | sanitizeBossFilterInput 单一规则服务 MCP z.preprocess/CLI filter/operation 三入口；inputSchema 逐字节等价（digest 不变）；全量 bounded 89 文件除基线预存 dom-snapshot-owner-scroll 外全绿；build:main/typecheck 过；打包 stage 复刻验证 version --json 清单正常（25 工具+声明+digest 不变）；端侧 CLI 更新由用户安排 |
 | Phase 3 | 可信结束证据与 Runner 自动接续 | 📋 待开发 | 回执契约 2.20 候选 |
 | Phase 4 | 原会话一键停止并继续 | 📋 待开发 | 网页状态与按钮方案已登记 |
 

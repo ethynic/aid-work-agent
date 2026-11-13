@@ -4,9 +4,10 @@
  * 推荐牛人页筛选面板：设置经验/学历/薪资（替换语义，先清除再选）或一键清空。
  * 全部走 Win32 真实鼠标通道；写动作，徽章计数校验通过才算成功。
  */
+import { randomUUID } from 'node:crypto'
 import { FilterSetter, FilterSetError, FilterPostconditionError, FILTER_SNAPSHOT_OPTIONS, type FilterSpec, type FilterPostcondition } from '../boss/FilterSetter.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
-import { CancelledError } from './types.js'
+import { CancelledError, failResult } from './types.js'
 import { pageFacts, pageFailure, type PageExecution } from './pageOperation.js'
 import {
   defaultSessionFactory,
@@ -15,6 +16,10 @@ import {
 } from './bossContext.js'
 import { PerfCollector } from '../perf.js'
 import { CodedOperationError, type BossOperation, type OperationResult, type OpContext } from './types.js'
+import { sanitizeBossFilterInput, type SanitizedBossFilterInput } from './bossFilterSanitize.js'
+
+// 清洗规则单一来源：CLI filter 命令、MCP z.preprocess 与本 operation 共用（设计「插件独立容错」）
+export { sanitizeBossFilterInput } from './bossFilterSanitize.js'
 
 export interface BossFilterArgs {
   /** 经验要求行选项，如 '5-10年' */
@@ -51,6 +56,24 @@ function filterEffect(result: OperationResult): OperationResult {
   const phase = facts?.verification?.evidence?.find((value) => value.startsWith('filter_phase='))?.split('=')[1]
   return !result.success && phase === 'draft_edited' && result.effect === 'none'
     ? { ...result, effect: 'partial', retryable: false } : result
+}
+
+/** 零输入结构化回执：清洗后无任何有效条件时在连接/点击页面前返回（前置失败码，服务端认可为完成） */
+function zeroInputResult(sanitized: SanitizedBossFilterInput): OperationResult {
+  const suffix = sanitized.notices.length > 0 ? `；${sanitized.notices.join('；')}` : ''
+  return failResult(randomUUID(), 'INVALID_ARGUMENT',
+    `没有可应用的筛选条件，已保留页面现有筛选${suffix}`, 'none',
+    {
+      applied: false,
+      filter_count: 0,
+      ...(sanitized.notices.length > 0 ? { filter_input_notices: sanitized.notices } : {}),
+    })
+}
+
+/** 清洗告知附加到最终回执（成功/失败均附）；无告知（如 MCP 已预处理清洗）保持原样 */
+function withFilterNotices(result: OperationResult, notices: string[]): OperationResult {
+  if (notices.length === 0) return result
+  return { ...result, message: `${result.message}；${notices.join('；')}`, data: { ...result.data, filter_input_notices: notices } }
 }
 
 async function verifiedFilter<T>(setter: FilterSetter, invoke: () => Promise<T>, execution: PageExecution,
@@ -171,13 +194,18 @@ export function createBossFilterOperation(
   return {
     name: 'boss_filter',
     execute(args: BossFilterArgs, ctx: OpContext): Promise<OperationResult> {
+      // 插件独立容错：MCP 严格校验与页面动作之前清洗可选筛选值（与 z.preprocess / CLI 命令同规则）
+      const sanitized = sanitizeBossFilterInput(args)
+      if (!sanitized.hasAnyCondition) return Promise.resolve(zeroInputResult(sanitized))
+      const cleaned = sanitized.input as BossFilterArgs
+      const notices = sanitized.notices
       let retainedSetter: FilterSetter | undefined
       let retainedExecution: PageExecution | undefined
       const run = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
         { kind: 'write', name: 'boss_filter' },
         ctx,
         sessionFactory,
-        () => validateFilterArgs(args),
+        () => validateFilterArgs(cleaned),
         async (session, _tracker, perf) => {
           const currentUrl = await session.getUrl()
           let onRecommend = false
@@ -190,7 +218,7 @@ export function createBossFilterOperation(
           ctx.progress({ stage: 'execute', message: '设置筛选面板' })
           const execution = filterExecution(ctx.previousPageExecution ?? retainedExecution)
           retainedExecution = execution
-          const goal = `设置候选人筛选条件：${JSON.stringify(args).slice(0, 850)}`
+          const goal = `设置候选人筛选条件：${JSON.stringify(cleaned).slice(0, 850)}`
           const expected = '筛选面板已关闭；实际筛选按钮数字等于已应用条件数，选中条件与请求匹配'
           const setter = new FilterSetter({
             snapshot: () => session.snapshot(FILTER_SNAPSHOT_OPTIONS),
@@ -209,14 +237,14 @@ export function createBossFilterOperation(
           if (retainedSetter) setter.retainInvocationState(retainedSetter)
           retainedSetter = setter
           const spec: FilterSpec = {
-            experience: args.experience?.trim(),
-            educations: args.educations?.map((e) => e.trim()),
-            salary: args.salary?.trim(),
-            filters: args.filters,
-            age: args.age,
-            membership_hint: args.membership_hint,
-            membership_account_ref: args.membership_account_ref,
-            first_degree_only: args.first_degree_only,
+            experience: cleaned.experience?.trim(),
+            educations: cleaned.educations?.map((e) => e.trim()),
+            salary: cleaned.salary?.trim(),
+            filters: cleaned.filters,
+            age: cleaned.age,
+            membership_hint: cleaned.membership_hint,
+            membership_account_ref: cleaned.membership_account_ref,
+            first_degree_only: cleaned.first_degree_only,
           }
           let result: Awaited<ReturnType<FilterSetter['apply']>>
           result = await verifiedFilter(setter, () => setter.apply(spec), execution, 'boss_filter', goal, expected, ctx.progress, perf, resumeSubmitted)
@@ -245,7 +273,7 @@ export function createBossFilterOperation(
             effect: result.applied ? 'applied' as const : 'none' as const,
           }
         },
-      ).then(filterEffect)
+      ).then(filterEffect).then((result) => withFilterNotices(result, notices))
       if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
       return run(ctx)
     },

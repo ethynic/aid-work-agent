@@ -10,6 +10,7 @@
  */
 import { OPERATIONS } from '../../main/operations/index.js'
 import { runCliOperation } from '../render.js'
+import { sanitizeBossFilterInput } from '../../main/operations/bossFilterSanitize.js'
 import type { FilterSpec } from '../../main/boss/FilterSetter.js'
 
 export interface FilterCommandOptions {
@@ -32,8 +33,13 @@ export async function filterCommand(opts: FilterCommandOptions): Promise<number>
     console.log('⚠️ 即将通过 Win32 真实鼠标操作筛选面板：请勿移动鼠标，勿遮挡 BOSS 窗口。')
     return runCliOperation(OPERATIONS.boss_clear_filter!.operation, {}, { cdpPort: opts.cdpPort })
   }
-  console.log('筛选条件:', JSON.stringify({ experience: opts.experience, educations: opts.educations, salary: opts.salary, filters: opts.filters, age: opts.age, membership_hint: opts.membership_hint, first_degree_only: opts.first_degree_only }))
-  console.log('⚠️ 即将通过 Win32 真实鼠标操作筛选面板：请勿移动鼠标，勿遮挡 BOSS 窗口。')
+  // 与 MCP z.preprocess、operation 入口同一份清洗规则：预览清洗后的实际条件；
+  // 原始参数仍交给 operation（清洗告知与零输入回执由 operation 统一产生）
+  const sanitized = sanitizeBossFilterInput(opts)
+  console.log('筛选条件:', JSON.stringify(sanitized.input))
+  if (sanitized.hasAnyCondition) {
+    console.log('⚠️ 即将通过 Win32 真实鼠标操作筛选面板：请勿移动鼠标，勿遮挡 BOSS 窗口。')
+  }
   return runCliOperation(
     OPERATIONS.boss_filter!.operation,
     { experience: opts.experience, educations: opts.educations, salary: opts.salary, filters: opts.filters, age: opts.age, membership_hint: opts.membership_hint, membership_account_ref: opts.membership_account_ref, first_degree_only: opts.first_degree_only },
