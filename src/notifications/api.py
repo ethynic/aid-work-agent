@@ -29,6 +29,22 @@ class NotificationRoute(APIRoute):
         return safe
 
 
+def resolve_subject(user_loader, request: Request, admin_only: bool = False):
+    from src.services.auth_service import AuthSubjectError
+    try:
+        user = user_loader(request.headers.get('Authorization',''))
+    except AuthSubjectError:
+        raise NotificationError('NOTIFICATION_UNAUTHORIZED', 401) from None
+    requested = request.headers.get('X-Tenant-Id') or None
+    platform = user['role'] == 'platform_admin'
+    tenant = requested if platform else user['tenant_id']
+    if (requested and not platform and requested != tenant) or (tenant is None and not platform):
+        raise NotificationError('NOTIFICATION_FORBIDDEN', 403)
+    if admin_only and user['role'] not in ('tenant_admin', 'platform_admin'):
+        raise NotificationError('NOTIFICATION_FORBIDDEN', 403)
+    return Subject(user['user_id'],tenant)
+
+
 def create_router(config=None, repository=None, user_loader=None):
     if config is None:
         from src.config.settings import settings
@@ -40,25 +56,10 @@ def create_router(config=None, repository=None, user_loader=None):
     router = APIRouter(prefix='/api/notifications',tags=['Notifications'],route_class=NotificationRoute)
 
     def subject(request: Request):
-        return _resolve_subject(request)
+        return resolve_subject(user_loader, request)
 
     def admin_subject(request: Request):
-        return _resolve_subject(request, admin_only=True)
-
-    def _resolve_subject(request: Request, admin_only: bool = False):
-        from src.services.auth_service import AuthSubjectError
-        try:
-            user = user_loader(request.headers.get('Authorization',''))
-        except AuthSubjectError:
-            raise NotificationError('NOTIFICATION_UNAUTHORIZED', 401) from None
-        requested = request.headers.get('X-Tenant-Id') or None
-        platform = user['role'] == 'platform_admin'
-        tenant = requested if platform else user['tenant_id']
-        if (requested and not platform and requested != tenant) or (tenant is None and not platform):
-            raise NotificationError('NOTIFICATION_FORBIDDEN', 403)
-        if admin_only and user['role'] not in ('tenant_admin', 'platform_admin'):
-            raise NotificationError('NOTIFICATION_FORBIDDEN', 403)
-        return Subject(user['user_id'],tenant)
+        return resolve_subject(user_loader, request, admin_only=True)
 
     def enabled():
         repository.assert_schema()
@@ -204,6 +205,11 @@ def create_router(config=None, repository=None, user_loader=None):
         if not re.fullmatch(r'[a-f0-9]{32}', notification_ref):
             raise NotificationError('NOTIFICATION_NOT_FOUND',404)
         return repository.resolve(current,notification_ref)
+
+    # 企微应用身份绑定（长任务企微应用通知 Phase 1，设计 §4.1）
+    from .wecom_bind import create_bind_router
+    router.include_router(create_bind_router(config=config, repository=repository,
+                                             user_loader=user_loader))
 
     return router
 

@@ -597,6 +597,10 @@ notifications:
       - updates.push.services.mozilla.com
       - web.push.apple.com
       - '*.notify.windows.com'
+  # 手动任务时长阈值（秒）：source=chat 的 runner 本次执行时长达到该值才发布
+  # task.completed/failed（wecom-app-task-notification-design.md §4.2，避免快问
+  # 快答被推送）；定时任务不受此限；0 表示不设阈值
+  wecom_task_min_seconds: 300
 
 # 防滥用策略 Phase 1 观察闭环（docs/system/saas/anti-abuse-policy-design.md）
 anti_abuse:

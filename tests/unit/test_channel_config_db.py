@@ -1300,3 +1300,208 @@ class TestChannelConfigDBWechatMpOptionalIdentity:
         assert written["encoding_aes_key"] == "gAAAAAoldkey"
         assert written["callback_token"] == "gAAAAAoldtoken"
         assert written["credential_version"] == 1
+
+
+class TestChannelConfigDBWecomAppNotify:
+    """企业微信应用通知（wecom_app_notify，租户自备凭据；五轮租户级配置改造）：
+    secret 加密落库、掩码回显、解密读取、敏感字段不可清空。mock 风格与
+    wechat_mp 分支一致。"""
+
+    @pytest.fixture()
+    def master_key(self, monkeypatch):
+        """固定测试主密钥并重置 Fernet 单例，避免跨文件密钥污染。"""
+        import src.core.secret_crypto as sc
+
+        monkeypatch.setenv("RPA_SECRET_KEY", "ccdb-unit-test-master-key-0123456789")
+        monkeypatch.setattr(sc, "_fernet", None)
+        yield
+        monkeypatch.setattr(sc, "_fernet", None)
+
+    def _create(self, config):
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = {"config_id": "chan_wan"}
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        with (
+            patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db,
+            patch.object(ChannelConfigDB, "get_by_id", return_value={"config_id": "chan_wan"}),
+        ):
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            result = ChannelConfigDB.create(
+                tenant_id="tenant_001", channel_type="wecom_app_notify",
+                name="企微应用通知", config=config,
+            )
+        written = json.loads(mock_cursor.execute.call_args_list[0][0][1][4])
+        return result, written
+
+    def test_create_secret_encrypted(self, master_key):
+        """create：secret Fernet 加密落库（密文前缀 gAAAAA），corp_id/agentid 明文。"""
+        _, written = self._create(
+            {"corp_id": "ww123", "agentid": 1000002, "secret": "tenant-notify-secret"})
+        assert written["secret"].startswith("gAAAAA")
+        assert written["secret"] != "tenant-notify-secret"
+        assert written["corp_id"] == "ww123"
+        assert written["agentid"] == 1000002
+
+    def test_create_roundtrip_decrypt(self, master_key):
+        """create 加密 → 解密还原明文（服务端内部读取口径）。"""
+        from src.core.secret_crypto import decrypt_secret
+
+        _, written = self._create(
+            {"corp_id": "ww123", "agentid": 1000002, "secret": "tenant-notify-secret"})
+        assert decrypt_secret(written["secret"]).decode() == "tenant-notify-secret"
+
+    def _row(self, config, channel_type="wecom_app_notify"):
+        return {
+            "config_id": "chan_wan", "tenant_id": "tenant_001",
+            "channel_type": channel_type, "name": "企微应用通知",
+            "config": json.dumps(config), "subagent_type": None, "verified": 0,
+        }
+
+    def test_get_by_id_masks_secret(self, master_key):
+        """get_by_id（API 回显口径）：secret 掩码，非敏感字段原样。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        encrypted = "gAAAAAencrypted-secret"
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = self._row(
+            {"corp_id": "ww123", "agentid": 1000002, "secret": encrypted})
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            row = ChannelConfigDB.get_by_id("chan_wan")
+        assert row["config"]["secret"] == "***"
+        assert row["config"]["corp_id"] == "ww123"
+
+    def test_get_by_tenant_and_type_decrypted_returns_latest(self, master_key):
+        """get_by_tenant_and_type_decrypted：按租户+类型取最新一条并解密 secret。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        from src.core.secret_crypto import encrypt_secret
+        secret_cipher = encrypt_secret("tenant-notify-secret")
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = self._row(
+            {"corp_id": "ww123", "agentid": 1000002, "secret": secret_cipher})
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            row = ChannelConfigDB.get_by_tenant_and_type_decrypted(
+                "tenant_001", "wecom_app_notify")
+        params = mock_cursor.execute.call_args[0][1]
+        assert params == ("tenant_001", "wecom_app_notify")
+        assert row["config"]["secret"] == "tenant-notify-secret"
+
+    @pytest.mark.parametrize("incoming", [None, "", "***", "***abc"])
+    def test_update_blank_or_mask_secret_preserves_old(self, master_key, incoming):
+        """update：secret 缺失/空串/掩码一律保留旧密文（编辑页掩码回显整体保存不掉凭据）。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        old_cipher = "gAAAAAold-notify-secret"
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wecom_app_notify",
+            "config": json.dumps({"corp_id": "ww123", "agentid": 1000002,
+                                  "secret": old_cipher}),
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        payload = {"corp_id": "ww123", "agentid": 1000002}
+        if incoming is not None:
+            payload["secret"] = incoming
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            assert ChannelConfigDB.update(config_id="chan_wan", config=payload)
+        written = json.loads(mock_cursor.execute.call_args[0][1][0])
+        assert written["secret"] == old_cipher
+
+    def test_update_new_secret_reencrypted(self, master_key):
+        """update：传入新明文 secret 加密落库（密文跳过二次加密）。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        old_cipher = "gAAAAAold-notify-secret"
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_cursor.fetchone.return_value = {
+            "channel_type": "wecom_app_notify",
+            "config": json.dumps({"corp_id": "ww123", "agentid": 1000002,
+                                  "secret": old_cipher}),
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            assert ChannelConfigDB.update(
+                config_id="chan_wan",
+                config={"corp_id": "ww123", "agentid": 1000002,
+                        "secret": "rotated-secret"})
+        written = json.loads(mock_cursor.execute.call_args[0][1][0])
+        assert written["secret"].startswith("gAAAAA")
+        assert written["secret"] != "rotated-secret"
+        assert written["secret"] != old_cipher
+
+    def test_update_config_field_rejects_secret(self):
+        """update_config_field 护栏：wecom_app_notify 的 secret 同样禁止旁路写入。"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        assert ChannelConfigDB.update_config_field("chan_wan", "secret", "x") is False
+
+
+class TestChannelConfigApiWecomAppNotify:
+    """API 层：企业微信应用通知渠道类型（五轮租户级配置改造）白名单与必填校验。"""
+
+    @pytest.fixture()
+    def client(self, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        import src.saas.api.channel_config as cc_api
+
+        def _fake_require_admin(request):
+            return {"user_id": "u1", "tenant_id": "tenant_001", "role": "tenant_admin"}
+
+        async def _noop_record(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(cc_api, "require_admin", _fake_require_admin)
+        monkeypatch.setattr("src.services.behavior_log.record_behavior", _noop_record)
+
+        app = FastAPI()
+        app.include_router(cc_api.router)
+        return TestClient(app)
+
+    def test_wecom_app_notify_whitelisted(self, client, monkeypatch):
+        """wecom_app_notify 在白名单内：三项必填齐全时创建通过（DB mock 不校验加密细节）。"""
+        import src.saas.api.channel_config as cc_api
+
+        monkeypatch.setattr(cc_api.ChannelConfigDB, "create",
+                            lambda **kwargs: {"config_id": "chan_wan", "tenant_id": "tenant_001",
+                                              "channel_type": "wecom_app_notify",
+                                              "config": {"corp_id": "ww123", "agentid": 1000002,
+                                                         "secret": "***"}})
+        monkeypatch.setattr(cc_api, "_validate_channel_subagent", lambda *a, **k: None)
+        resp = client.post("/api/saas/channels", json={
+            "channel_type": "wecom_app_notify", "name": "企微应用通知",
+            "config": {"corp_id": "ww123", "agentid": 1000002, "secret": "s"}})
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+    @pytest.mark.parametrize("missing_key", ["corp_id", "agentid", "secret"])
+    def test_missing_required_field_rejected_400(self, client, missing_key):
+        config = {"corp_id": "ww123", "agentid": 1000002, "secret": "s"}
+        config.pop(missing_key)
+        resp = client.post("/api/saas/channels", json={
+            "channel_type": "wecom_app_notify", "name": "企微应用通知", "config": config})
+        assert resp.status_code == 400
+        assert missing_key in resp.json()["detail"]
+
+    def test_unknown_channel_type_still_rejected_400(self, client):
+        resp = client.post("/api/saas/channels", json={
+            "channel_type": "wecom_app", "name": "x",
+            "config": {"corp_id": "ww123", "agentid": 1, "secret": "s"}})
+        assert resp.status_code == 400
+        assert "不支持的渠道类型" in resp.json()["detail"]

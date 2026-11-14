@@ -59,6 +59,9 @@ def repository(monkeypatch):
     adapter.available.return_value = True
     adapter.capabilities = AdapterCapabilities()
     adapter.render.return_value = {'text': 'rendered'}
+    # 平台飞书 target 是全局渠道（非租户自备）：删除 MagicMock 自动生成的
+    # available_for_tenant，让 repository.provider_available 走全局 available
+    del adapter.available_for_tenant
     repo = NotificationRepository.__new__(NotificationRepository)
     repo.registry = MagicMock()
     repo.registry.get.return_value = adapter

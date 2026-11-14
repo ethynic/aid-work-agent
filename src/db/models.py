@@ -210,6 +210,41 @@ class UserDB:
             return cursor.rowcount > 0
 
     @staticmethod
+    def set_wecom_userid(user_id: str, wecom_userid: Optional[str]) -> bool:
+        """绑定/解绑企微通知应用 userid（解绑传 None 清空）；同步失效用户缓存
+
+        长任务企微应用通知 Phase 1（docs/system/wecom-app-task-notification-design.md §4.1）
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"UPDATE users SET wecom_userid = {placeholder}, updated_at = {get_current_timestamp()} "
+                f"WHERE user_id = {placeholder}",
+                (wecom_userid, user_id))
+            conn.commit()
+            result = cursor.rowcount > 0
+            if result:
+                invalidate_user_cache(user_id)
+            return result
+
+    @staticmethod
+    def get_by_wecom_userid_in_tenant(wecom_userid: str, tenant_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """按企微 userid + 租户查用户（绑定前唯一性校验）
+
+        tenant_id 用 IS NOT DISTINCT FROM，兼容平台管理员 tenant_id 为 NULL 的场景
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT * FROM users WHERE wecom_userid = {placeholder} "
+                f"AND tenant_id IS NOT DISTINCT FROM {placeholder} LIMIT 1",
+                (wecom_userid, tenant_id))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
     def update_info(user_id: str, **kwargs) -> bool:
         """更新用户信息
 

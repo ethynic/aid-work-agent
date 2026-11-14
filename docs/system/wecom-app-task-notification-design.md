@@ -29,6 +29,7 @@ BOSS 直聘爬虫等长任务在 web 控制台执行，完成后当前实现会�
 | 4 | 消息形态 | textcard：标题=会话名+任务完成/失败，描述=执行耗时；点击跳控制台会话页 |
 | 5 | 发送通道 | 企微后台独立通知应用（独立 agentid+secret），与渠道对话应用分开 |
 | 6 | 开启方式 | 用户主动开启+绑定后才推；不补发历史任务；全租户通用 |
+| 7 | 应用配置归属 | **租户自备**（2026-11-13 变更，用户否决平台全局配置）：每个租户的企微通知应用凭据互不相同，且后续钉钉/飞书同模式。租户管理员在「连接中心 → 渠道配置」新增「企业微信应用通知」渠道类型（channel_type=`wecom_app_notify`，选择即启用），输入 corp_id/agentid/secret 三项保存（secret 加密落库、回显脱敏，保存即可用不做主动验证）；运行时按 target 所属租户读取配置发送，未配置租户不可绑定/不投递。通知目标 channel 保持 `wecom_app` 不变，redirect_uri 仍为平台全局站点域名 |
 
 ## 四、详细设计
 
@@ -45,8 +46,9 @@ BOSS 直聘爬虫等长任务在 web 控制台执行，完成后当前实现会�
 
 在既有 `publish_runner_terminal_in_tx`（`src/notifications/producer.py:161`）扩展判定，不改变通知核心：
 
-- 仅 `source=chat & session_kind=web` 的 runner（沿用 web push 设计的接入范围口径）；
-- `duration_seconds ≥ WECOM_TASK_NOTIFY_MIN_SECONDS`（配置项，默认 300）；
+- 发布范围为 `session_kind=web` 的用户自有 runner（沿用 web push 设计的接入范围口径，来源含 chat 与 scheduled）；
+- 时长门禁：`source=chat` 时要求 `duration_seconds ≥ wecom_task_min_seconds`（配置项，默认 300）；
+- **时长门禁仅作用于 `source=chat`**（2026-11-13 用户拍板口径 B）：scheduled（定时任务）沿用既有通知行为不按时长门禁——定时任务常在用户不在页面时完成，短定时任务的完成通知恰是通知价值场景，不收缩已交付行为；
 - 两条件同时满足才发布 `task.completed/task.failed` 事件（复用现有事件与幂等 event_key；阈值判定在发布前，避免短任务空进通知表）。
 - 砍掉页面在线/心跳判定（决策 3 修正）：不做 presence，不引入前端心跳。
 
@@ -54,8 +56,8 @@ BOSS 直聘爬虫等长任务在 web 控制台执行，完成后当前实现会�
 
 新增 `src/notifications/wecom_app.py`，实现既有 `Adapter` 协议，channel=`wecom_app`：
 
-- **目标配置**：`{wecom_userid, bound_user_name, tenant_id}`；`validate_target` 校验 userid 格式。目标注册 = 绑定成功后由服务端登记（OAuth/确认绑定同一事务），非用户手填。
-- **发送**：独立通知应用的 `corp_id + agentid + secret`（新配置节 `notifications.wecom_app`，与渠道应用隔离）；token 缓存与 40014/42001 刷新重试参考渠道实现；`message/send` msgtype=`textcard`，`touser=单 userid`，`url=控制台通知回跳地址`。
+- **目标配置**：`{wecom_userid, bound_user_name, tenant_id}`；`validate_target` 校验 userid 格式。目标注册 = 绑定落库成功后另起事务登记（失败不回滚绑定，响应 `target_registered` 可见），非用户手填。
+- **发送**：独立通知应用的 `corp_id + agentid + secret`——~~新配置节 `notifications.wecom_app`~~（2026-11-13 决策 7 变更：全局配置节已删除）改为**按 target 所属租户**读租户渠道配置（`tenant_channel_configs`，channel_type=`wecom_app_notify`，连接中心「企业微信应用通知」，secret 加密落库）；adapter 仍按 channel 全局单例注册，但可用性与发送凭据按租户延迟解析（`available_for_tenant`/`credentials_for_tenant`，凭据每次实时读库——租户保存配置立即生效；token 按租户缓存），token 过期按 40014/42001 刷新重试一次参考渠道实现；`message/send` msgtype=`textcard`，`touser=单 userid`，`url=控制台通知回跳地址`。
 - **文案**：title=`{会话名称}相关任务已完成/执行失败`（会话名快照与清洗口径沿用 web push 设计 §5）；description=`任务已执行 {时长}，点击查看结果`；不含简历内容、回复正文等业务数据（脱敏口径同既有设计）。
 - **结果规范化**：errcode 映射 SendResult——0 成功；40031/43004/81013（userid 不存在/无权限/不在可见范围）→ target_invalid（撤销目标并标记绑定失效，引导重新绑定）；42009/45009 限流 → retryable；网络/5xx → 有限重试。每个目标独立 delivery 记录（通知核心既有机制），保证一对一可追溯。
 - **出入站安全**：复用 `web_push.py` 的 PinnedHTTPSConnection/域名白名单模式，固定 qyapi.weixin.qq.com。
@@ -66,15 +68,15 @@ BOSS 直聘爬虫等长任务在 web 控制台执行，完成后当前实现会�
 
 ### 4.5 开启与偏好（决策 6）
 
-- 通知设置页（复用既有 web push 开关页面骨架）新增"企微任务通知"卡片：未绑定→绑定流程；已绑定→开关（启用=注册 wecom_app target 并启用偏好，关闭=停用偏好，解绑=撤销 target）。
+- 通知设置页（复用既有 web push 开关页面骨架）新增"企微任务通知"卡片：未绑定→绑定流程；已绑定→开关（target 已随绑定登记；启用=启用偏好，关闭=停用偏好，解绑=撤销 target）。
 - 开启后新接单任务才纳入；不补发历史（沿用 web push 设计口径）。
 - 企微应用可见范围即天然开关：不在范围内的成员 OAuth/匹配绑定直接失败并提示。
 
 ### 4.6 配置与运维
 
-- `configs/config.yaml` + `src/config/settings.py` 新增：`notifications.wecom_app.{corp_id, agentid, secret, enabled}`、`notifications.wecom_task_min_seconds=300`、通知回跳域名（复用站点域名配置）。
-- 企微管理端一次性配置（运维清单写入部署文档）：创建独立通知应用、可信域名、OAuth 回调域名、可见范围。
-- 观测：投递走通知核心 delivery 台账；失败原因分类可见（未绑定/不在范围/发送失败）。
+- ~~`configs/config.yaml` + `src/config/settings.py` 新增：`notifications.wecom_app.{corp_id, agentid, secret, enabled}`~~（2026-11-13 决策 7 变更：该全局节已删除——通知应用凭据为租户自备，租户管理员在「连接中心 → 渠道配置」保存，见决策 7 与 §4.3）。保留平台全局配置：`notifications.wecom_task_min_seconds=300`（时长阈值，平台行为参数非租户凭据）、通知回跳域名（复用站点域名 `app.public_base_url`，含绑定 OAuth redirect_uri）。
+- 企微管理端配置改由各租户自助（原「一次性平台配置」口径作废）：每个租户在企业微信后台创建自己的独立通知应用（corp_id/agentid/secret）、配置可信域名与可见范围，凭据填入连接中心渠道配置；成员绑定入口与 OAuth 回跳域名仍由平台站点域名承载。
+- 观测：投递走通知核心 delivery 台账；失败原因分类可见（未绑定/不在范围/发送失败/租户未配置）。
 
 ## 五、明确不做
 

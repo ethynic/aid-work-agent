@@ -68,6 +68,32 @@ def _user_owned_web_runner(runner):
                 runner['actor_kind'] == 'user' and runner['actor_id'] == runner['user_id'])))
 
 
+def _runner_duration_seconds(runner):
+    """本次执行时长（秒）：终态时间与本次执行开始时间之差（runner 行自带
+    execution_started_at/finished_at，无需调用点额外取数）。
+
+    execution_started_at 为空（未开始执行即终态，如排队中失败）按 0 处理——
+    时长未知等同未达阈值，不推送。"""
+    started, finished = runner.get('execution_started_at'), runner.get('finished_at')
+    if started is None or finished is None:
+        return 0
+    return int((finished - started).total_seconds())
+
+
+def _should_notify_terminal(runner, config):
+    """runner 终态通知触发判定（wecom-app-task-notification-design §4.2）：
+
+    web 渠道用户自有会话才发布；时长阈值仅作用于 source=chat 的手动任务
+    （避免快问快答被推送），scheduled 定时任务通过归属过滤后照常发布，
+    不受时长门禁。平台告警 runner.long_running（publish_platform_runner_alert_in_tx）
+    不经过本判定。"""
+    if not _user_owned_web_runner(runner):
+        return False
+    if runner['source'] != 'chat':
+        return True
+    return _runner_duration_seconds(runner) >= config.wecom_task_min_seconds
+
+
 def _wecom_daily_terminal_extras(cursor, runner, task, event_kind):
     """企微日报计划终态附加参数（wecom-conversation 设计 §5.4，评审 P1-12）。
 
@@ -163,8 +189,9 @@ def publish_runner_terminal_in_tx(cursor, runner, config=None):
     if config is None:
         from src.config.settings import settings
         config = settings.notifications
-    if (runner['status'] not in ('completed', 'failed')
-            or not _user_owned_web_runner(runner)):
+    # 触发判定（设计 §4.2）：web 渠道会话过滤 + 手动任务（chat）时长 ≥ 阈值，
+    # 均在发布前判定；不满足直接返回，短任务连 notification_messages 行都不写。
+    if runner['status'] not in ('completed', 'failed') or not _should_notify_terminal(runner, config):
         return
     subject = Subject(runner['user_id'], runner['tenant_id'])
     if subject.scope_key != runner['scope_key']:
@@ -175,6 +202,9 @@ def publish_runner_terminal_in_tx(cursor, runner, config=None):
         if scheduled is None:
             return  # Deleted resources have no recipient-readable result.
         parameters, task = scheduled
+        # 执行时长随终态事件带入（设计 §4.3，触发判定已算得）；0=时长未知，
+        # 渲染侧兜底（企微 textcard 耗时展示，其他渠道不读取）
+        parameters['duration_seconds'] = _runner_duration_seconds(runner)
         from src.services.task_result_sharing.service import ensure_task_result_share_in_tx
 
         ensure_task_result_share_in_tx(cursor, task, runner)
@@ -196,7 +226,9 @@ def publish_runner_terminal_in_tx(cursor, runner, config=None):
     occurred=runner['finished_at']
     return publish_in_tx(cursor,subject=subject,producer='runner',event_type='task.'+runner['status'],
         event_key='terminal:'+runner['runner_id'],resource_ref={'type':'runner_result','id':runner['runner_id']},
-        parameters={'session_title':session_title(session['title']),'event_kind':runner['status']},
+        parameters={'session_title':session_title(session['title']),'event_kind':runner['status'],
+            # 执行时长随终态事件带入（设计 §4.3，触发判定已算得）；0=时长未知
+            'duration_seconds':_runner_duration_seconds(runner)},
         occurred_at=occurred,accepted_at=runner['accepted_at'],
         expires_at=occurred+timedelta(seconds=config.ttl_seconds))
 

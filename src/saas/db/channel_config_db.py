@@ -33,6 +33,9 @@ from src.wechat_mp import config_codec as wechat_mp_codec
 
 # 需要特殊处理的渠道类型
 _WECHAT_MP_CHANNEL_TYPE = "wechat_mp"
+# 企业微信应用通知（长任务企微应用通知，租户自备凭据；secret 加密/脱敏与
+# wechat_mp 共用 wechat_mp_codec 机制，无 callback_token 服务端生成等 mp 特有逻辑）
+_WECOM_APP_NOTIFY_CHANNEL_TYPE = "wecom_app_notify"
 
 # wechat_mp 运行时/三态字段：更新配置时若调用方未提供则保留旧值
 # WP13-r1（CR P2-3 修复）：纳入清单源运行时状态与租户选择字段——前端旧快照
@@ -72,6 +75,15 @@ _WECHAT_MP_SERVER_OWNED_LIST_FIELDS = (
 
 def _is_wechat_mp(channel_type: Optional[str]) -> bool:
     return channel_type == _WECHAT_MP_CHANNEL_TYPE
+
+
+def _is_wecom_app_notify(channel_type: Optional[str]) -> bool:
+    return channel_type == _WECOM_APP_NOTIFY_CHANNEL_TYPE
+
+
+def _has_sensitive_fields(channel_type: Optional[str]) -> bool:
+    """该渠道类型 config 含需加密/脱敏的敏感字段（共用 wechat_mp codec 机制）。"""
+    return _is_wechat_mp(channel_type) or _is_wecom_app_notify(channel_type)
 
 
 class ChannelConfigDB:
@@ -120,6 +132,10 @@ class ChannelConfigDB:
                     f"wechat_mp 渠道配置创建被拒绝（同租户同 appid 已存在）：tenant_id={tenant_id}"
                 )
                 return None
+            config_to_write = wechat_mp_codec.encrypt_sensitive_fields(config_to_write)
+
+        if _is_wecom_app_notify(channel_type):
+            # secret Fernet 加密落库（复用 wechat_mp codec，密文跳过二次加密）
             config_to_write = wechat_mp_codec.encrypt_sensitive_fields(config_to_write)
 
         with get_db_connection() as conn:
@@ -190,7 +206,7 @@ class ChannelConfigDB:
             if row:
                 d = dict(row)
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
-                if _is_wechat_mp(d.get("channel_type")):
+                if _has_sensitive_fields(d.get("channel_type")):
                     d["config"] = wechat_mp_codec.mask_sensitive_fields(d["config"])
                 return d
             return None
@@ -211,7 +227,7 @@ class ChannelConfigDB:
             if row:
                 d = dict(row)
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
-                if _is_wechat_mp(d.get("channel_type")):
+                if _has_sensitive_fields(d.get("channel_type")):
                     d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
                 return d
             return None
@@ -231,7 +247,7 @@ class ChannelConfigDB:
             if row:
                 d = dict(row)
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
-                if _is_wechat_mp(d.get("channel_type")):
+                if _has_sensitive_fields(d.get("channel_type")):
                     d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
                 return d
             return None
@@ -265,7 +281,7 @@ class ChannelConfigDB:
             if row:
                 d = dict(row)
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
-                if _is_wechat_mp(d.get("channel_type")):
+                if _has_sensitive_fields(d.get("channel_type")):
                     d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
                 return d
             return None
@@ -291,7 +307,7 @@ class ChannelConfigDB:
             for row in cursor.fetchall():
                 d = dict(row)
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
-                if _is_wechat_mp(d.get("channel_type")):
+                if _has_sensitive_fields(d.get("channel_type")):
                     d["config"] = wechat_mp_codec.mask_sensitive_fields(d["config"])
                 results.append(d)
             return results
@@ -317,10 +333,39 @@ class ChannelConfigDB:
             for row in cursor.fetchall():
                 d = dict(row)
                 d["config"] = json.loads(d["config"]) if d.get("config") else {}
-                if _is_wechat_mp(d.get("channel_type")):
+                if _has_sensitive_fields(d.get("channel_type")):
                     d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
                 results.append(d)
             return results
+
+    @staticmethod
+    def get_by_tenant_and_type_decrypted(
+        tenant_id: str, channel_type: str
+    ) -> Optional[Dict[str, Any]]:
+        """按 tenant_id + channel_type 取最新一条配置（敏感字段**明文**）。
+
+        仅供服务端内部运行时使用（如企微应用通知按 target 租户读取发送凭据）；
+        API 响应一律走 list_by_tenant / get_by_id（掩码）。同租户同类型多条时
+        取 id 最大（最新保存）一条。
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM tenant_channel_configs
+                WHERE tenant_id = %s AND channel_type = %s
+                ORDER BY id DESC LIMIT 1
+                """,
+                (tenant_id, channel_type),
+            )
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d["config"] = json.loads(d["config"]) if d.get("config") else {}
+                if _has_sensitive_fields(d.get("channel_type")):
+                    d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
+                return d
+            return None
 
     @staticmethod
     def update(
@@ -425,6 +470,17 @@ class ChannelConfigDB:
                     new_config.pop("config_verified_at", None)
 
                 # 加密敏感字段（密文跳过二次加密）
+                new_config = wechat_mp_codec.encrypt_sensitive_fields(new_config)
+
+            elif _is_wecom_app_notify(existing_channel_type):
+                # secret 不允许清空：缺失/空串/掩码（***开头）一律保留 DB 原值
+                # （密文直接搬运，编辑页掩码回显整体保存不掉凭据），再加密落库
+                for k in wechat_mp_codec.SENSITIVE_KEYS:
+                    incoming = new_config.get(k)
+                    is_mask = isinstance(incoming, str) and incoming.startswith("***")
+                    is_blank = not isinstance(incoming, str) or incoming == ""
+                    if (incoming is None or is_mask or is_blank) and existing_config.get(k):
+                        new_config[k] = existing_config[k]
                 new_config = wechat_mp_codec.encrypt_sensitive_fields(new_config)
 
             # name 处理：None 表示不改；其他值（含空串）按传入值更新

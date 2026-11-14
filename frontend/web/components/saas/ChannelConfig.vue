@@ -37,14 +37,14 @@
             </BaseBadge>
           </div>
           <div class="flex items-center gap-2">
-            <BaseButton intent="ghost" size="sm" @click="handleVerify(ch.config_id)">验证连接</BaseButton>
+            <BaseButton v-if="ch.channel_type !== 'wecom_app_notify'" intent="ghost" size="sm" @click="handleVerify(ch.config_id)">验证连接</BaseButton>
             <BaseButton intent="ghost" size="sm" @click="editChannel(ch)">编辑</BaseButton>
             <BaseButton intent="ghost" size="sm" @click="openAbusePolicy(ch)">防滥用</BaseButton>
             <BaseButton intent="danger-ghost" size="sm" @click="handleDelete(ch.config_id)">删除</BaseButton>
           </div>
         </div>
-        <!-- 回调地址展示 -->
-        <div v-if="tenant" class="bg-canvas rounded-lg p-3 text-sm">
+        <!-- 回调地址展示（企业微信应用通知为纯外发通知渠道，无回调地址） -->
+        <div v-if="tenant && ch.channel_type !== 'wecom_app_notify'" class="bg-canvas rounded-lg p-3 text-sm">
           <span class="text-muted">回调地址：</span>
           <code class="text-primary-600 select-all font-mono">{{ ch.callback_url || getCallbackUrl(ch.channel_type, ch.config_id) }}</code>
           <BaseButton intent="ghost" size="sm" @click="copyUrl(ch.callback_url || getCallbackUrl(ch.channel_type, ch.config_id), ch.config_id)">
@@ -100,7 +100,7 @@
         <div class="flex items-center gap-2 mb-3">
           <BaseButton @click="handleSubmit">保存</BaseButton>
           <BaseButton intent="secondary" @click="handleSaveAndClose">保存并关闭</BaseButton>
-          <BaseButton v-if="editingId" intent="ghost" @click="handleVerify(editingId)">验证连接</BaseButton>
+          <BaseButton v-if="editingId && form.channel_type !== 'wecom_app_notify'" intent="ghost" @click="handleVerify(editingId)">验证连接</BaseButton>
         </div>
 
         <p v-if="!editingId" class="text-sm text-muted mb-3">选择 IM 平台，然后填写应用凭证</p>
@@ -157,14 +157,16 @@
             <BaseInput
               v-else
               v-model="form.config[field.key]"
+              :type="field.type === 'password' ? 'password' : 'text'"
               :placeholder="field.placeholder"
             />
             <p v-if="field.hint" class="mt-1 text-xs text-muted">{{ field.hint }}</p>
             <p v-if="field.type === 'file' && form.config[field.key]" class="mt-1 text-xs text-success-700">✓ 已上传</p>
           </div>
 
-          <!-- 关联数字员工（wecom_kf 渠道由客服账号级"绑定数字员工"决定，wechat_mp 内容源不进收发消息链路，均隐藏主表字段避免误导） -->
-          <div v-if="form.channel_type !== 'wecom_kf' && form.channel_type !== 'wechat_mp'">
+          <!-- 关联数字员工（wecom_kf 渠道由客服账号级"绑定数字员工"决定，wechat_mp 内容源
+               不进收发消息链路，wecom_app_notify 为外发通知渠道无对话入口，均隐藏主表字段避免误导） -->
+          <div v-if="form.channel_type !== 'wecom_kf' && form.channel_type !== 'wechat_mp' && form.channel_type !== 'wecom_app_notify'">
             <label class="text-sm text-muted mb-1 block">关联数字员工</label>
             <BaseSelect v-model="form.subagent_type">
               <option value="">不绑定</option>
@@ -422,8 +424,8 @@
           </div>
         </div>
 
-        <!-- 回调地址提示 -->
-        <div v-if="tenant" class="mt-3 bg-primary-50 border border-primary-200 rounded-lg p-3">
+        <!-- 回调地址提示（企业微信应用通知为纯外发通知渠道，无回调地址） -->
+        <div v-if="tenant && form.channel_type !== 'wecom_app_notify'" class="mt-3 bg-primary-50 border border-primary-200 rounded-lg p-3">
           <p class="text-sm font-medium text-primary-800 mb-1">回调地址</p>
           <p class="text-xs text-primary-600 mb-2">请将此地址填入 {{ channelTypeLabel(form.channel_type) }} 后台的「接收消息」配置中</p>
           <div class="flex items-center gap-2">
@@ -1087,6 +1089,7 @@ const channelTypes = [
   { value: 'wecom', label: '企业微信', icon: '' },
   { value: 'wecom_kf', label: '企业微信客服', icon: '' },
   { value: 'wechat_mp', label: '公众号内容', icon: '' },
+  { value: 'wecom_app_notify', label: '企微应用通知', icon: '' },
   { value: 'dingtalk', label: '钉钉', icon: '' },
   { value: 'feishu', label: '飞书', icon: '' },
 ]
@@ -1096,6 +1099,7 @@ function channelTypeLabel(type: string) {
     wecom: '企业微信',
     wecom_kf: '企业微信客服',
     wechat_mp: '微信公众号内容（入知识库）',
+    wecom_app_notify: '企业微信应用通知（任务消息）',
     dingtalk: '钉钉',
     feishu: '飞书',
   }
@@ -1104,7 +1108,7 @@ function channelTypeLabel(type: string) {
 
 // ==================== 字段定义（含获取位置说明） ====================
 
-const channelFieldMap: Record<string, { key: string; label: string; placeholder: string; hint?: string; location: string; type?: 'text' | 'file' }[]> = {
+const channelFieldMap: Record<string, { key: string; label: string; placeholder: string; hint?: string; location: string; type?: 'text' | 'file' | 'password' }[]> = {
   wecom: [
     { key: 'corp_id', label: '企业 ID (CorpID)', placeholder: 'ww...', hint: '以 ww 开头的字符串', location: '「我的企业」→「企业信息」' },
     { key: 'agent_id', label: '应用 AgentId', placeholder: '1000002', location: '「应用管理」→ 应用详情页' },
@@ -1139,6 +1143,13 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
     { key: 'app_secret', label: 'App Secret', placeholder: '', location: '「凭证与基础信息」页面' },
     { key: 'verification_token', label: 'Verification Token', placeholder: '', location: '「事件与回调」' },
     { key: 'encrypt_key', label: 'Encrypt Key', placeholder: '32 字符', location: '「事件与回调」' },
+  ],
+  // 企业微信应用通知（长任务企微应用消息）：纯外发通知渠道，无回调地址；
+  // secret 加密落库 + 掩码回显（编辑时留空/保持掩码即保留原值）
+  wecom_app_notify: [
+    { key: 'corp_id', label: '企业 ID (CorpID)', placeholder: 'ww...', hint: '以 ww 开头的字符串', location: '「我的企业」→「企业信息」' },
+    { key: 'agentid', label: '应用 AgentId', placeholder: '1000002', location: '「应用管理」→ 通知应用详情页' },
+    { key: 'secret', label: '应用 Secret', type: 'password', placeholder: '', hint: '点击「查看」获取；保存后加密存储，回显脱敏', location: '「应用管理」→ 通知应用详情页' },
   ],
 }
 
@@ -1216,6 +1227,16 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '记录 App ID、App Secret、Verification Token、Encrypt Key',
     ],
     docUrl: 'https://open.feishu.cn/',
+  },
+  wecom_app_notify: {
+    title: '企业微信应用通知接入步骤（长任务完成消息）',
+    steps: [
+      '前往企业微信管理后台 →「应用管理」→「创建应用」（建议命名如「任务通知」）',
+      '记录 CorpID、AgentId、Secret 三项',
+      '在应用详情页「可信域名」配置控制台域名；「可见范围」加入需要接收任务通知的成员',
+      '在本页保存凭据即可：成员在「通知设置」绑定企微后，长任务完成/失败会收到应用消息',
+    ],
+    docUrl: 'https://work.weixin.qq.com/wework_admin/frame',
   },
 }
 

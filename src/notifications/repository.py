@@ -58,6 +58,14 @@ def _effective_event_types(stored):
     return stored
 
 
+# 渠道事件白名单（评审回炉 P2-5，设计决策 3/§4.3）：企微应用通知仅投递任务
+# 终态（completed/failed）——waiting_input/paused 等过程事件不推企微卡片，
+# 否则 ask_user 中途提问会绕过「≥5 分钟长任务才通知」的终态门禁；expand
+# 资格判断对 wecom_app target 在既有偏好/事件集合判定之上 AND 本白名单，
+# 其他渠道不受影响。adapter 渲染层同样只留终态映射（fail loud 兜底）。
+PROVIDER_ALLOWED_EVENT_TYPES = {'wecom_app': ('task.completed', 'task.failed')}
+
+
 def mask_tenant_configuration(channel, configuration):
     """租户渠道配置回显：webhook 属凭证脱敏（保留 scheme://host + 末4位）；
     邮箱非机密信息，完整回显。"""
@@ -136,6 +144,18 @@ class NotificationRepository:
     def allowed(self, subject):
         return (subject.tenant_id is None or self.config.allowed_tenants is None
                 or subject.tenant_id in self.config.allowed_tenants)
+
+    def provider_available(self, adapter, tenant_id):
+        """渠道可用性统一判定（五轮：租户级配置改造）：租户自备凭据的渠道
+        （wecom_app 通知应用，凭据=连接中心渠道配置 wecom_app_notify）按目标
+        租户解析 available_for_tenant；其余渠道沿用平台全局 available。
+        tenant_id 缺失（global scope/租户级事件无归属）对租户渠道即不可用。"""
+        if not adapter:
+            return False
+        resolver = getattr(adapter, 'available_for_tenant', None)
+        if resolver is not None:
+            return bool(tenant_id) and bool(resolver(tenant_id))
+        return adapter.available()
 
     def guard(self, cursor, subject):
         user = assert_subject_in_tx(cursor, subject)
@@ -286,9 +306,19 @@ class NotificationRepository:
                 AND recipient_user_id=%s ORDER BY created_at DESC''', (subject.scope_key, subject.user_id))
             return [public_target(row) for row in cursor.fetchall()]
 
-    def register_target(self, subject, body):
+    def register_target(self, subject, body, *, identity_preverified=False):
+        """登记/更新用户渠道投递目标。
+
+        identity_preverified：登记是否由服务端已核验身份的企微绑定流程
+        （wecom_bind：member() 可见范围+active 状态核验 + 租户内唯一防线）
+        发起。仅该路径允许对接手/复活非 active 行豁免 installation_ref/
+        binding_version 钉扎（复审 2 换绑闭环依赖此豁免）；Web Push 用户
+        API（POST /api/notifications/targets）不带此标记，保持版本校验
+        ——用户关闭通知（revoke 升版本）后，携 stale 版本晚到的登记请求
+        必须 409，不得把已关闭目标复活为 opt-in（四轮回炉 Web Push 回归）。
+        """
         adapter = self.registry.get(body.channel, body.provider)
-        if not adapter or not adapter.available():
+        if not self.provider_available(adapter, subject.tenant_id):
             raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
         configuration = body.configuration.model_dump()
         digest = adapter.validate_target(configuration)  # DNS/validation outside DB transaction.
@@ -299,22 +329,66 @@ class NotificationRepository:
             for identity in sorted((body.installation_ref, digest)):
                 cursor.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
                                ('notification:target:'+body.provider+':'+identity,))
-            cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND identity_digest=%s FOR UPDATE''',
-                           (body.provider, digest))
+            # digest 查重按 scope 收敛（唯一约束 UNIQUE(provider,identity_digest,
+            # scope_key,rule_id) 本就按 scope 隔离）：同一 endpoint（如同一企微
+            # 成员）可在不同租户 scope 各自绑定 target，同 scope 内他人绑定仍 409。
+            cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND identity_digest=%s
+                AND scope_key=%s FOR UPDATE''',
+                (body.provider, digest, subject.scope_key))
             endpoint = cursor.fetchone()
-            if endpoint and not owned(endpoint, subject):
+            # 复审 1（同租户接手）：active 行他人绑定仍 409（必须先解绑）；
+            # 非 active（revoked/invalid）行允许同 scope 用户接手——身份已由
+            # wecom_bind 服务端 member() 核验，无条件 409 会造成「A 解绑后
+            # B 绑同一身份被 A 的废弃行卡死」死循环。
+            # 四轮回炉（Web Push 回归）：接手豁免仅限 identity_preverified=True
+            # 的企微绑定路径；Web Push 用户 API 对他人行（不分 state）恢复
+            # 原 409 TARGET_OWNED——web push 设计 §6：切换主体必须撤销旧目标
+            # 重新订阅，不静默覆盖。
+            if endpoint and not owned(endpoint, subject) and (
+                    endpoint['state'] == 'active' or not identity_preverified):
                 raise NotificationError('NOTIFICATION_TARGET_OWNED', 409)
             cursor.execute('''SELECT * FROM notification_targets WHERE provider=%s AND installation_ref=%s
                 ORDER BY (state='active') DESC,updated_at DESC LIMIT 1 FOR UPDATE''', (body.provider, body.installation_ref))
             installation = cursor.fetchone()
             if installation and installation['state'] == 'active' and not owned(installation, subject):
                 raise NotificationError('NOTIFICATION_INSTALLATION_OWNED', 409)
-            if endpoint and installation and endpoint['target_id'] != installation['target_id']:
+            # installation 仅 active 时才与 endpoint 行冲突；接手人自己的 stale
+            # revoked 行（如曾绑过其他身份后解绑）忽略，继续接手
+            if (endpoint and installation and installation['state'] == 'active'
+                    and endpoint['target_id'] != installation['target_id']):
                 raise NotificationError('NOTIFICATION_BINDING_CONFLICT', 409)
+            if endpoint and not owned(endpoint, subject):
+                # 接手（仅 identity_preverified=True 可达，见上方 409 门）：
+                # 改属主/安装引用/配置并复活；identity_digest 不变（同一身份）。
+                # 跳过 expected_binding_version 校验——旧版本号属于前任属主，
+                # 对绑定发起人无并发意义。
+                cursor.execute('''UPDATE notification_targets SET recipient_user_id=%s,
+                    installation_ref=%s,configuration_encrypted=%s,state='active',
+                    binding_version=binding_version+1,enabled_since=clock_timestamp(),
+                    verified_at=clock_timestamp(),updated_at=clock_timestamp()
+                    WHERE target_id=%s RETURNING *''',
+                    (subject.user_id, body.installation_ref, protected(configuration), endpoint['target_id']))
+                result = public_target(cursor.fetchone())
+                conn.commit()
+                return result
             row = endpoint or (installation if owned(installation, subject) else None)
             if row:
-                if (row['installation_ref'] != body.installation_ref
-                        or body.expected_binding_version != row['binding_version']):
+                # 复审 2：企微绑定路径（identity_preverified=True）版本/安装引用
+                # 钉扎仅在 active 行生效——active 行防并发 lost-update（expected
+                # 必须同时匹配 installation_ref 与版本）；非 active 行（解绑后
+                # revive/接手激活）跳过校验直接激活：revoked 行无在途投递、无
+                # lost-update 面，pg_advisory_xact_lock 已串行化并发；对 revoked
+                # 行钉扎会让重绑回传 stale 版本（如换绑后另一 revoked 行的版本）
+                # 陷入 BINDING_CHANGED 409 死循环。
+                # 四轮回炉（Web Push 回归）：上述非 active 跳钉扎豁免仅限
+                # identity_preverified=True；Web Push 用户 API 恢复无条件
+                # installation_ref+expected 版本校验（=回归前行为）——标签页 A
+                # 携 stale 版本晚到的登记请求必须 409 BINDING_CHANGED，尊重
+                # 用户刚做出的关闭（opt-out 不被翻转为 opt-in）。active 行
+                # 语义对所有取值不变。
+                if ((not identity_preverified or row['state'] == 'active')
+                        and (row['installation_ref'] != body.installation_ref
+                             or body.expected_binding_version != row['binding_version'])):
                     raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
                 old = unprotect(row['configuration_encrypted'])
                 changed = old != configuration or row['state'] != 'active'
@@ -706,7 +780,7 @@ class NotificationRepository:
         if subject.tenant_id is None:
             raise NotificationError('NOTIFICATION_TENANT_REQUIRED', 400)
         adapter = self.registry.get(body.channel, body.provider)
-        if not adapter or not adapter.available():
+        if not self.provider_available(adapter, subject.tenant_id):
             raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
         configuration = body.configuration.model_dump()
         digest = adapter.validate_target(configuration)
@@ -772,7 +846,7 @@ class NotificationRepository:
                     or target['binding_version'] != body.binding_version):
                 raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
             adapter = self.registry.get(target['channel'],target['provider'])
-            if not adapter or not adapter.available():
+            if not self.provider_available(adapter, target['tenant_id']):
                 raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
             lock_subject(cursor, subject)
             cursor.execute('''SELECT 1 FROM notification_messages WHERE scope_key=%s AND recipient_user_id=%s
@@ -802,7 +876,7 @@ class NotificationRepository:
 
     def set_preference(self, subject, body):
         adapter = self.registry.get(body.channel, body.provider)
-        if body.enabled and (not adapter or not adapter.available()):
+        if body.enabled and not self.provider_available(adapter, getattr(subject, 'tenant_id', None)):
             raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
         with self.connection_factory() as conn:
             cursor = conn.cursor()
@@ -830,6 +904,26 @@ class NotificationRepository:
             conn.commit()
             return result
 
+    def wecom_bind_profile(self, subject):
+        """设置页绑定状态（Phase 4，设计 §4.5）：当前用户最近的 wecom_app
+        target 状态与绑定姓名快照（绑定落库时缓存于 target 配置，设计 §4.1）。
+        未登记 target 时两个字段均为 None。"""
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            self.guard(cursor, subject)
+            # 接手复用旧行（created_at 不变），仅按 created_at 取最近会被用户的
+            # stale revoked 新行遮蔽接手的 active 行（设置页误显示已撤销）；与
+            # installation 查找同口径：active 行优先，无 active 再回退最近行。
+            cursor.execute('''SELECT state,configuration_encrypted FROM notification_targets
+                WHERE scope_key=%s AND recipient_user_id=%s AND channel='wecom_app'
+                ORDER BY (state='active') DESC, created_at DESC LIMIT 1''', (subject.scope_key, subject.user_id))
+            row = cursor.fetchone()
+            if not row:
+                return {'target_state': None, 'name': None}
+            configuration = unprotect(row['configuration_encrypted'])
+            return {'target_state': row['state'],
+                    'name': (configuration or {}).get('bound_user_name') or None}
+
     def test(self, subject, body):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
@@ -839,7 +933,7 @@ class NotificationRepository:
             if not owned(target, subject) or target['state'] != 'active' or target['binding_version'] != body.binding_version:
                 raise NotificationError('NOTIFICATION_BINDING_CHANGED', 409)
             adapter = self.registry.get(target['channel'],target['provider'])
-            if not adapter or not adapter.available():
+            if not self.provider_available(adapter, target['tenant_id']):
                 raise NotificationError('NOTIFICATION_PROVIDER_UNAVAILABLE', 503)
             lock_subject(cursor, subject)
             cursor.execute('''SELECT 1 FROM notification_messages WHERE scope_key=%s AND recipient_user_id=%s
@@ -1120,7 +1214,8 @@ class NotificationRepository:
             target_rows = []
             for target in self._rule_event_targets(cursor, rule, tenant_id):
                 adapter = self.registry.get(target['channel'],target['provider'])
-                if not adapter or not adapter.available() or message['schema_version'] not in adapter.capabilities.notification_schema_versions:
+                if (not self.provider_available(adapter, target.get('tenant_id'))
+                        or message['schema_version'] not in adapter.capabilities.notification_schema_versions):
                     continue
                 delivery_state,error = 'pending',None
                 try:
@@ -1192,7 +1287,8 @@ class NotificationRepository:
                          and self.platform_runner_message(message, message.get('parameters')))):
             return
         adapter = self.registry.get(target['channel'],target['provider'])
-        if not adapter or not adapter.available() or message['schema_version'] not in adapter.capabilities.notification_schema_versions:
+        if (not self.provider_available(adapter, target.get('tenant_id'))
+                or message['schema_version'] not in adapter.capabilities.notification_schema_versions):
             return
         delivery_state,error = 'pending',None
         try:
@@ -1362,7 +1458,9 @@ class NotificationRepository:
                                     eligible = (target['preference_enabled'] and target['preference_since'] is not None
                                         and target['preference_since'] <= message['accepted_at']
                                         and target['enabled_since'] <= message['accepted_at']
-                                        and message['event_type'] in _effective_event_types(target['event_types']))
+                                        and message['event_type'] in _effective_event_types(target['event_types'])
+                                        and (target['provider'] != 'wecom_app' or
+                                             message['event_type'] in PROVIDER_ALLOWED_EVENT_TYPES['wecom_app']))
                                 if not eligible:
                                     continue
                                 if message['policy_key'] == 'tenant_admin_event' and target['recipient_user_id'] is None:
@@ -1493,7 +1591,7 @@ class NotificationRepository:
                             or message['event_type'] not in _effective_event_types(pref['event_types'])):
                         reason = 'preference_changed'
                 adapter = self.registry.get(target['channel'], target['provider'])
-                if not reason and (not adapter or not adapter.available()):
+                if not reason and not self.provider_available(adapter, target['tenant_id']):
                     reason = 'provider_disabled'
             if reason:
                 cursor.execute('''UPDATE notification_deliveries SET state=%s,error_class=%s,

@@ -4824,3 +4824,7 @@
   remark: "subagent_definitions 增加 enable_thinking 列（思考模式覆盖：false 关闭思考，null 走 provider 默认）"
   statements: |
     ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS enable_thinking BOOLEAN;
+- datetime: "2026-11-13 10:00:00"
+  remark: "users 增加 wecom_userid 列（长任务企微应用通知身份绑定，存企微成员 userid）：存量库升级补列"
+  statements: |
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS wecom_userid TEXT;
