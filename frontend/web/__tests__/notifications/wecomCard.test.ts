@@ -44,22 +44,19 @@ describe('wecom task notify card', () => {
     status.mockResolvedValue({ ...availableBound, app_available: false })
     const wrapper = makeCard()
     await flushPromises()
-    expect(wrapper.text()).toContain('服务端暂未开放企微任务通知')
+    expect(wrapper.text()).toContain('当前租户未配置企业微信通知渠道')
     expect(wrapper.text()).not.toContain('开启企微通知')
     expect(status).toHaveBeenCalled()
   })
 
-  it('prefills phone suggestion and confirms bind on user action', async () => {
-    status.mockResolvedValue(availableUnbound)
+  it('binds automatically via phone suggestion (方案 A)', async () => {
+    status.mockResolvedValueOnce(availableUnbound).mockResolvedValueOnce(availableBound)
     suggest.mockResolvedValue({ matched: true, userid: 'zhangsan', name: '张三' })
     bindConfirm.mockResolvedValue({ success: true, userid: 'zhangsan', name: '张三', target_registered: true })
     const wrapper = makeCard()
     await flushPromises()
-    expect(wrapper.text()).toContain('识别到企微账号：张三')
-    await wrapper.findAll('button').find(b => b.text().includes('确认绑定'))!.trigger('click')
-    await flushPromises()
     expect(bindConfirm).toHaveBeenCalledWith('zhangsan')
-    expect(wrapper.text()).toContain('已绑定企微账号「张三」')
+    expect(wrapper.text()).toContain('已通过手机号自动绑定企微账号「张三」')
   })
 
   it('maps bind error codes to safe copy', async () => {
@@ -67,8 +64,6 @@ describe('wecom task notify card', () => {
     suggest.mockResolvedValue({ matched: true, userid: 'zhangsan', name: '张三' })
     bindConfirm.mockRejectedValue(Object.assign(new Error('NOTIFICATION_BIND_TAKEN'), { code: 'NOTIFICATION_BIND_TAKEN' }))
     const wrapper = makeCard()
-    await flushPromises()
-    await wrapper.findAll('button').find(b => b.text().includes('确认绑定'))!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('该企微账号已被其他账号绑定')
     expect(wrapper.text()).not.toContain('NOTIFICATION_BIND_TAKEN')
@@ -80,10 +75,8 @@ describe('wecom task notify card', () => {
     bindConfirm.mockResolvedValue({ success: true, userid: 'zhangsan', name: '张三', target_registered: false })
     const wrapper = makeCard()
     await flushPromises()
-    await wrapper.findAll('button').find(b => b.text().includes('确认绑定'))!.trigger('click')
-    await flushPromises()
     expect(wrapper.text()).toContain('绑定成功，但通知目标登记失败')
-    expect(wrapper.text()).not.toContain('已绑定企微账号「张三」')
+    expect(wrapper.text()).not.toContain('已通过手机号自动绑定企微账号「张三」')
   })
 
   it('opens the wecom authorize page in a new window on PC instead of rendering a QR code', async () => {
@@ -139,18 +132,20 @@ describe('wecom task notify card', () => {
     expect(context.return_path).toBe('/t/tenant-9/notifications')
   })
 
-  it('enables and disables the wecom preference when bound', async () => {
+  it('enables and disables the wecom preference via the switch when bound (方案 A)', async () => {
     status.mockResolvedValue(availableBound)
     setPreference.mockResolvedValue({ category: 'task', channel: 'wecom_app', provider: 'wecom_app', enabled: true, enabled_since: null })
     const wrapper = makeCard()
     await flushPromises()
-    expect(wrapper.text()).toContain('已绑定，通知未开启')
-    await wrapper.findAll('button').find(b => b.text() === '开启企微通知')!.trigger('click')
+    const sw = () => wrapper.find('[role="switch"]')
+    expect(sw().attributes('aria-checked')).toBe('false')
+    await sw().trigger('click')
     await flushPromises()
     expect(setPreference).toHaveBeenCalledWith(true)
-    expect(wrapper.text()).toContain('企微通知已开启')
+    expect(sw().attributes('aria-checked')).toBe('true')
+    expect(wrapper.text()).toContain('已绑定 张三')
     setPreference.mockResolvedValue({ category: 'task', channel: 'wecom_app', provider: 'wecom_app', enabled: false, enabled_since: null })
-    await wrapper.findAll('button').find(b => b.text() === '关闭企微通知')!.trigger('click')
+    await sw().trigger('click')
     await flushPromises()
     expect(setPreference).toHaveBeenLastCalledWith(false)
   })
@@ -160,7 +155,7 @@ describe('wecom task notify card', () => {
     const wrapper = makeCard()
     await flushPromises()
     expect(wrapper.text()).toContain('请解绑后重新绑定')
-    expect(wrapper.findAll('button').find(b => b.text() === '开启企微通知')!.attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[role="switch"]').attributes('disabled')).toBeDefined()
   })
 
   it('unbinds and refreshes status', async () => {

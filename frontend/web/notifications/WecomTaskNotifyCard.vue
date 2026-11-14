@@ -1,31 +1,26 @@
 <template>
-  <BaseCard title="企微任务通知">
-    <p class="text-sm text-muted mb-4">开启后，本账号新接单任务完成或失败时会通过企业微信应用消息提醒，点击通知可回到原会话。消息仅包含会话名称和任务状态，不含任务内容。</p>
-    <p v-if="loading" role="status" class="text-muted">正在检查企微通知状态…</p>
-    <template v-else>
-      <p v-if="!status?.app_available" class="text-sm text-muted">服务端暂未开放企微任务通知。</p>
-      <template v-else>
-        <BaseBadge :intent="notifyOn ? 'success' : 'neutral'">{{ notifyOn ? '企微通知已开启' : bound ? '已绑定，通知未开启' : '未绑定' }}</BaseBadge>
-        <p class="text-sm text-muted mt-3">{{ stateHint }}</p>
-        <!-- 未绑定：扫码授权或手机号预填确认绑定 -->
-        <div v-if="!bound" class="mt-4 space-y-2">
-          <p v-if="suggest?.matched" class="text-sm text-muted">识别到企微账号：{{ suggest.name }}（{{ suggest.userid }}），确认后即绑定该账号。</p>
-          <div class="flex flex-wrap gap-3">
-            <BaseButton :disabled="busy" @click="startBind">{{ busy ? '处理中…' : '绑定企微' }}</BaseButton>
-            <BaseButton v-if="suggest?.matched && suggest.userid" intent="secondary" :disabled="busy" @click="confirmBind">确认绑定「{{ suggest.name }}」</BaseButton>
-          </div>
-        </div>
-        <!-- 已绑定：开关 + 解绑 -->
-        <div v-else class="flex flex-wrap gap-3 mt-5">
-          <BaseButton :disabled="busy || notifyOn || !targetActive" @click="enable">{{ busy ? '处理中…' : '开启企微通知' }}</BaseButton>
-          <BaseButton intent="secondary" :disabled="busy || !notifyOn" @click="disable">关闭企微通知</BaseButton>
-          <BaseButton intent="ghost" :disabled="busy" @click="unbind">解绑</BaseButton>
-        </div>
+  <!-- 企微通知渠道行（方案 B，2026-11-14）：无卡片外壳，嵌入父级「通知渠道」卡片；
+       手机号识别命中自动绑定，未命中自动弹 OAuth 绑定弹窗 -->
+  <div>
+    <div class="flex items-center gap-3 py-3.5">
+      <div class="w-9 h-9 rounded-[10px] bg-success-50 text-success-700 flex items-center justify-center flex-none">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M8 10h8M8 14h5M21 12a9 9 0 11-18 0 9 9 0 0118 0zM7 17l-4 3 1-4" /></svg>
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-semibold text-default">企微通知 <BaseBadge v-if="!loading && status?.app_available" :intent="notifyOn ? 'success' : 'neutral'">{{ notifyOn ? '已开启' : bound ? '已绑定' : '未绑定' }}</BaseBadge></div>
+        <div class="text-xs text-gray-500 mt-0.5">{{ wecomRowDesc }}</div>
+      </div>
+      <template v-if="!loading && status?.app_available">
+        <button v-if="!bound" class="text-sm text-primary-600 hover:underline cursor-pointer flex-none" :disabled="busy" @click="startBind">绑定企微</button>
+        <button v-else class="text-sm text-primary-600 hover:underline cursor-pointer flex-none" :disabled="busy" @click="unbind">解绑</button>
+        <BaseSwitch :model-value="notifyOn" :disabled="busy || !bound || !targetActive" aria-label="企微通知开关" @update:model-value="toggleWecom" />
       </template>
-      <p v-if="error" role="alert" class="text-sm text-danger-600 mt-4">{{ error }}</p>
-      <p v-if="notice" role="status" class="text-sm text-success-700 mt-4">{{ notice }}</p>
-    </template>
-  </BaseCard>
+    </div>
+    <p v-if="!loading && status && !status.app_available" class="text-xs text-gray-500 -mt-1 pb-1">当前租户未配置企业微信通知渠道，需要租户管理员在「连接中心 → 渠道配置」添加企业微信应用通知。</p>
+    <p v-else-if="!loading && bound && !targetActive" class="text-xs text-warning-700 -mt-1 pb-1">通知目标未就绪（可能账号已变动或已被撤销），请解绑后重新绑定。</p>
+    <p v-if="error" role="alert" class="text-sm text-danger-600 pb-1">{{ error }}</p>
+    <p v-if="notice" role="status" class="text-sm text-success-700 pb-1">{{ notice }}</p>
+  </div>
   <BaseModal v-model="bindOpen" title="绑定企业微信" size="sm" :show-fullscreen="false">
     <div class="space-y-3 text-sm">
       <p v-if="bindInfo && !inWeCom" class="text-muted">将在新窗口打开企业微信授权页，在企微中扫码确认后本页将自动完成绑定。</p>
@@ -45,10 +40,10 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import BaseCard from '@/components/ui/BaseCard.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
+import BaseSwitch from '@/components/ui/BaseSwitch.vue'
 import { getTenantScopedKey } from '@/api/tenantStorage'
 import { notificationsAPI, type WecomBindStatus, type WecomBindUrl, type WecomBindSuggest } from '@/api/notifications'
 
@@ -72,8 +67,8 @@ const REGISTER_FAILED_TEXT = '绑定成功，但通知目标登记失败，请�
 
 // 绑定/偏好操作错误码 → 用户提示（其余错误展示通用文案，不暴露原始错误码）
 const ERROR_TEXT: Record<string, string> = {
-  NOTIFICATION_WECOM_APP_UNAVAILABLE: '服务端暂未开放企微任务通知。',
-  NOTIFICATION_PROVIDER_UNAVAILABLE: '服务端暂未开放企微任务通知。',
+  NOTIFICATION_WECOM_APP_UNAVAILABLE: '当前租户未配置企业微信通知渠道，需要租户管理员在「连接中心 → 渠道配置」添加企业微信应用通知。',
+  NOTIFICATION_PROVIDER_UNAVAILABLE: '当前租户未配置企业微信通知渠道，需要租户管理员在「连接中心 → 渠道配置」添加企业微信应用通知。',
   NOTIFICATION_BIND_STATE_INVALID: '绑定链接已过期或无效，请重新发起绑定。',
   NOTIFICATION_BIND_FAILED: '企微授权失败，请重试。',
   NOTIFICATION_BIND_NOT_IN_SCOPE: '当前企微账号不在通知应用可见范围内，请联系管理员。',
@@ -103,22 +98,40 @@ const targetActive = computed(() => status.value?.target_state === 'active')
 const notifyOn = computed(() => bound.value && targetActive.value && preferenceEnabled.value)
 const preferenceEnabled = ref(false)
 const inWeCom = computed(() => WECOM_UA_PATTERN.test(navigator.userAgent))
-const stateHint = computed(() => {
-  if (!bound.value) return suggest.value?.matched ? '已识别企微账号，确认绑定即可开启。' : '绑定后即可在企微中接收任务完成提醒。'
-  if (!targetActive.value) return '通知目标未就绪（可能账号已变动或已被撤销），请解绑后重新绑定。'
-  return notifyOn.value ? '任务完成后将通过企业微信应用消息提醒。' : '开启后新接单任务完成或失败时会提醒。'
+// 行说明（方案 B）：绑定状态融入说明文字；未配置租户时由行下方提示条说明
+const wecomRowDesc = computed(() => {
+  if (!status.value?.app_available) return '任务完成或失败时通过企业微信应用消息提醒'
+  if (bound.value) return `任务完成或失败时通过企业微信应用消息提醒 · 已绑定 ${status.value?.name || ''}`
+  return suggest.value?.matched ? '识别到企微账号，正在自动绑定…' : '绑定企微账号后，任务完成或失败时通过企微应用消息提醒'
 })
+const emit = defineEmits<{ availability: [available: boolean] }>()
 
 async function refresh() {
   loading.value = true; error.value = ''
   try {
     status.value = await notificationsAPI.wecomBindStatus()
+    emit('availability', status.value.app_available === true)
     const prefs = await notificationsAPI.preferences()
     preferenceEnabled.value = prefs.preferences.some(p => p.category === 'task' && p.channel === 'wecom_app' && p.enabled)
-    // 未绑定时预取手机号预填（只读）；失败静默，不阻塞卡片展示
+    // 未绑定时预取手机号预填（只读）；失败静默，不阻塞卡片展示。
+    // 手机号命中即自动完成绑定（服务端二次核实仍在 confirm 内）；未命中回落 OAuth。
     if (!bound.value && !bindSuggestDone.value) {
       bindSuggestDone.value = true
-      try { suggest.value = await notificationsAPI.wecomBindSuggest() } catch { suggest.value = null }
+      try {
+        suggest.value = await notificationsAPI.wecomBindSuggest()
+        if (suggest.value?.matched && suggest.value?.userid) {
+          try {
+            const result = await notificationsAPI.wecomBindConfirm(suggest.value.userid)
+            await refresh()
+            if (result.target_registered === false) error.value = REGISTER_FAILED_TEXT
+            else notice.value = `已通过手机号自动绑定企微账号「${result.name || result.userid}」。`
+            return
+          } catch (e) { error.value = describe(e, '自动绑定失败，请尝试扫码绑定。') }
+        }
+        // 手机号未命中（明确 matched:false）→ 自动弹出 OAuth 绑定弹窗
+        //（用户口径 2026-11-14）；suggest 接口本身失败时不自动弹，保留手动入口
+        if (suggest.value?.matched === false && status.value?.app_available) void startBind()
+      } catch { suggest.value = null }
     }
   } catch (e) { error.value = describe(e, '读取企微通知状态失败。') }
   finally { loading.value = false }
@@ -200,18 +213,11 @@ function refreshStatus() {
 
 function closeBind() { bindOpen.value = false; stopPolling() }
 
-async function confirmBind() {
-  if (!suggest.value?.userid) return
-  busy.value = true; error.value = ''
-  try {
-    const result = await notificationsAPI.wecomBindConfirm(suggest.value.userid)
-    await refresh()
-    // 绑定落库成功但 target 登记失败时显式警示，不乐观提示成功（评审回炉 P2-4）；
-    // 先 refresh 再置提示，避免被 refresh 清空
-    if (result.target_registered === false) error.value = REGISTER_FAILED_TEXT
-    else notice.value = `已绑定企微账号「${result.name || result.userid}」。`
-  } catch (e) { error.value = describe(e, '确认绑定失败，请重试。') }
-  finally { busy.value = false }
+
+// 开关切换单一入口：开=启用偏好；关=停用偏好
+function toggleWecom(on: boolean) {
+  if (on === notifyOn.value) return
+  return on ? enable() : disable()
 }
 
 async function enable() {
