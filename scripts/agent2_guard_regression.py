@@ -22,9 +22,9 @@ from agent2_runner_load import (  # noqa: E402
 SSH_KEY = Path.home() / ".ssh" / "id_ed25519"
 RUN_ID = "guard-regr"
 CONTAINERS = (
-    "agent2-runner-worker-light-4", "agent2-runner-worker-light-5",
-    "agent2-runner-worker-general-1", "agent2-runner-worker-general-2",
-    "agent2-runner-worker-general-3",
+    "agent2-runner-worker-1", "agent2-runner-worker-2",
+    "agent2-runner-worker-3", "agent2-runner-worker-4",
+    "aid-heavy-tools",
 )
 
 # 事故同款自然语言意图：含「分块读取」，不写死 range，验证路由不再劫持为 to_md

@@ -171,6 +171,58 @@ class TestBusy:
         assert response.status_code == 200
         assert response.json() == {"success": True, "found": False}
 
+    def test_replay_same_id_takes_over_instead_of_busy(self, monkeypatch):
+        """§4.3 重放接管优先于 busy 快败：旧 job 执行中收到同 tool_call_id 重复
+        提交，新请求不被 429 拒绝，而是协作取消旧 job 后排队接手（等待时长受
+        旧 job 剩余超时约束，实际并发不超信号量上限）。"""
+        monkeypatch.setenv("AGENT_RUNNER_WEB_SERVICE_TOKEN", "tok")
+        monkeypatch.setenv("HEAVY_TOOLS_CONCURRENCY", "1")
+        server._semaphore = None
+        server._jobs.clear()
+        import time as _time
+        observed_events = []
+
+        def _dispatch(tool, handler, params, cancel_event=None):
+            # 旧 job 被同 id 新提交协作取消后，dispatch 入口检查点应感知取消；
+            # 新 job 正常执行
+            if cancel_event is not None and cancel_event.is_set():
+                observed_events.append("cancelled")
+                return {"success": False, "cancelled": True}
+            observed_events.append("run")
+            _time.sleep(0.4)
+            return {"success": True}
+
+        monkeypatch.setattr(handlers, "dispatch", _dispatch)
+        import httpx
+
+        async def _run():
+            transport = httpx.ASGITransport(app=server.app)
+            results = {}
+            async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+                payload = {"tool": "excel_process",
+                           "context": {"tool_call_id": "replay_busy"}}
+                task_1 = asyncio.create_task(c.post(
+                    "/internal/heavy-tools/execute", json=payload, headers=AUTH))
+                await asyncio.sleep(0.1)  # 旧 job 已取得信号量并进入执行
+                results["replay"] = await c.post(
+                    "/internal/heavy-tools/execute", json=payload, headers=AUTH)
+                results["first"] = await task_1
+            return results
+
+        try:
+            results = asyncio.run(_run())
+            # 核心断言：重放请求不被 busy 429 拒绝，排队接手后成功执行
+            assert results["replay"].status_code == 200
+            assert results["replay"].json()["success"] is True
+            # 旧请求也正常收尾（结果被新登记覆盖后按身份清理，不误删）
+            assert results["first"].status_code == 200
+            # 旧 job 与新 job 都真正跑过 dispatch（旧 job 已过入口检查点，
+            # 协作取消标志只能影响其后续检查点——本 mock 无后续检查点）
+            assert observed_events.count("run") == 2
+            assert results["replay"].json()["result"] == {"success": True}
+        finally:
+            server._jobs.clear()
+
 
 class TestDuplicateToolCallId:
     def test_duplicate_id_cancels_previous_registration(self, rest_client):

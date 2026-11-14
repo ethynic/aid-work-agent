@@ -1,10 +1,14 @@
-"""HeavyToolClient 重试与失败语义单测（设计 §4.1/§8）。
+"""HeavyToolClient 重试与失败语义单测（设计 §4.1/§4.3/§8）。
 
 覆盖（重试范围强制限定）：
 - 仅连接建立阶段失败重试一次（DNS/connect 拒绝/connect 超时）；
 - 已送达请求的读超时严禁重试（防 modify 类原地写双执行损坏用户文件）；
 - busy 结构化透传、不自动重试；
-- 401/5xx → HeavyToolUnavailable；400/业务级 success=false 透传为普通 dict。"""
+- 401/5xx → HeavyToolUnavailable；400/业务级 success=false 透传为普通 dict；
+- 调用方任务被进程内协作取消时，尽力通知重容器 cancel 端点（验收 3）。"""
+
+import asyncio
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -58,6 +62,46 @@ def _patch_async_client(monkeypatch, **client_kwargs):
         return real_cls(**{**client_kwargs, **kwargs})
 
     monkeypatch.setattr(client.httpx, "AsyncClient", factory)
+
+
+class _HangingThenRecordingTransport(httpx.AsyncBaseTransport):
+    """execute 请求挂起（模拟长调用）；记录收到的请求 URL（验证 cancel 通知）。"""
+
+    def __init__(self):
+        self.urls = []
+
+    async def handle_async_request(self, request):
+        self.urls.append(str(request.url.path))
+        if request.url.path.endswith("/execute"):
+            await asyncio.Event().wait()  # 挂起直至外层任务被取消
+        return httpx.Response(200, json={"success": True, "found": True})
+
+
+@pytest.mark.asyncio
+async def test_caller_cancellation_notifies_heavy_container(monkeypatch):
+    """进程内协作取消（验收 3）：execute 任务被 cancel 时，客户端应尽力向
+    重容器 cancel 端点通知该 tool_call_id，再向上传播 CancelledError。"""
+    transport = _HangingThenRecordingTransport()
+    _patch_async_client(monkeypatch, transport=transport)
+    context = SimpleNamespace(
+        tenant_id="t1", user_id="u1", session_id="s1", channel="web",
+        subagent_id=None, chat_record_id=None, agent_execution_id=None,
+        tool_call_id="cancel_me_1", profile_id=None, instance_id=None,
+        skill_workdir=None)
+    task = asyncio.create_task(
+        execute(tool="excel_process", handler="read", params={},
+                context=context))
+    await asyncio.sleep(0.05)  # 让 execute 进入挂起的 HTTP 等待
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # fire-and-forget 的 cancel 通知任务需要机会执行
+    for _ in range(20):
+        await asyncio.sleep(0.02)
+        if any(path.endswith("/cancel") for path in transport.urls):
+            break
+    assert any(path.endswith("/execute") for path in transport.urls)
+    assert any(path.endswith("/cancel") for path in transport.urls)
 
 
 @pytest.mark.asyncio

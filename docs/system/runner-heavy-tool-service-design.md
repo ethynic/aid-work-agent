@@ -134,6 +134,7 @@ GET  /internal/heavy-tools/health
   - `HEAVY_TOOLS_REPLICAS`（默认 1）+ `HEAVY_TOOLS_CONCURRENCY`（单容器信号量，默认 1），总并发 = 副本数 × 信号量；
   - 调副本数走 `docker compose up -d --scale heavy-tools=N`（只增减该服务实例，不动其他容器）；改 `CONCURRENCY` 才需重建重容器；
   - 资源线性放大：每副本 2g cgroup + 空载 ~90MiB。**agent2 固定 replicas=1**（8GiB 与 agent3 同机，多副本挤占轻容器内存余量）；生产起步 replicas=2。多副本负载均衡为 DNS round-robin 弱保证，代理重试要求见 §4.2。
+  - **内存下限约束（2026-11-14 压测回填）**：单病理 job（百万行 excel read）实测峰值 801.8MB——`HEAVY_TOOLS_MEMORY` 低于 2g 时，2 并发病理叠加会击穿；agent2 `.env` 现值 1.5g（单信号量下安全，余量 ~45%）**上调回 2g 待部署**；任何调高 `HEAVY_TOOLS_CONCURRENCY` 的环境必须先确认内存 ≥ 2g×并发折算。
 
 ### 6.1 远期扩容方向：重工具容器跨机部署到内网服务器（2026-11-13 用户提出，本期不实现）
 
@@ -207,22 +208,22 @@ GET  /internal/heavy-tools/health
 | B2 | analyze_data 数据操作远程派发（文件介导已在 B1 落地） | B1 稳定运行 |
 | 收尾 | `architecture.md` 负载等级声明改接入清单声明 + `heavy_tools` 白名单语义文档化 | B1/B2 观察期满 |
 
-验收矩阵（在容量设计 §5 之上追加）：
+验收矩阵（在容量设计 §5 之上追加；2026-11-14 agent2 真机压测回填，详细数据见压测报告会话记录与项目记忆）：
 
-1. 5 个工具经代理调用的端到端结果与本地执行一致（含错误路径：参数非法、文件缺失、超时）
-2. excel fill_template / paddleocr 全页识别在重容器内存峰值 ≤ cgroup 2g，轻容器 5 并发混合负载下轻容器峰值 ≤ 1.5g
-3. 取消传播：runner 取消后 cancel 端点收到、协作标志生效、TTL 清扫验证
-4. 重容器 kill -9 后 10 秒级恢复，进行中调用方收到中性失败且可重试
-5. 计费扫描：重容器代码内 gateway/embedding/sms 命中为零（§7 第 6 条）
-6. 认证：无 token 请求 401；跨服务调用带 token
-7. 模式开关双向验证：agent3（长期 `local` 模式）重工具本地执行全链路回归——它同时是回退形态的常态化证据，`local`→`remote` 切换后 B1 四件套经代理返回结果一致（与第 1 条合并验证）
-8. agent2 混合负载 20 执行体压测：排队 p95、DB 连接峰值 ≤ 58、看门狗零误杀
-9. **池路由剥离回归**（§9）：判型/角色过滤删除后，四类领取路径（execution/recovery×2/timer）全量领取无滞队；`AGENT_RUNNER_ROLE` / `LIGHT_SLOTS` / `GENERAL_SLOTS` / `classify_profile` / `state_uses_heavy` 全仓 grep 残留为零；agent2 重配后 4 容器全部等价领取（含旅游咨询智能体会话——过判场景回归，其会话不再有任何池归属差异）
-10. **重试不双执行**：modify 类 handler 连接建立阶段失败注入——代理重试一次后结果正确无叠加；已送达请求读超时注入——代理不重试
-11. **fill_template 拆分端到端**：结构分析（本地 LLM）+ 渲染（远程 openpyxl）结果与现状单进程执行一致
-12. **busy 语义链路**：信号量占满时调用方收到 busy 结构化响应，LLM 回复含「稍后重试」引导而非立即重试
-13. **宿主内存水位**：agent2 水位 85% 告警线接入并触发一次演练告警
-14. **tool_call_id 重放**：Runner 恢复重放同 id 时重容器先取消旧 job 再接新请求，产物路径无竞态（§4.3）
+1. 5 个工具经代理调用的端到端结果与本地执行一致（含错误路径：参数非法、文件缺失、超时）——✅ 2026-11-14：未知工具/handler、文件缺失、fill_template data 模式拒绝、401/400 错误路径全对；upload_data_file×3 + excel read×1 经真实 Runner 会话代理派发成功。**覆盖缺口**：excel_process InputModel 无 range 字段，LLM 无法触发病理全量读（走流式截断），百万行重读仅经服务级直发压测覆盖
+2. excel fill_template / paddleocr 全页识别在重容器内存峰值 ≤ cgroup 2g，轻容器 5 并发混合负载下轻容器峰值 ≤ 1.5g——✅ 2026-11-14：百万行 read 峰值 801.8MB VmHWM（≤1.5g 现值，余量 45%）；轻容器 23 并发混合负载峰值 576MiB ≤ 1.5g
+3. 取消传播：runner 取消后 cancel 端点收到、协作标志生效、TTL 清扫验证——🔧 2026-11-14 接线修复：cancel 端点原本全仓零调用方，已在 `client.execute` 捕获 `CancelledError` 时 fire-and-forget 通知重容器（覆盖进程内协作取消路径）；执行进程被 SIGTERM/SIGKILL 的取消路径无法运行代码，孤儿 job 仍靠 TTL 清扫兜底（§4.3 口径不变）
+4. 重容器 kill -9 后 10 秒级恢复，进行中调用方收到中性失败且可重试——✅ 2026-11-14：容器内 kill PID1（OOM 形态）22s 恢复 healthy（含 healthcheck 探测周期），恢复后服务可用；`docker kill` 属人为停止不触发 restart policy（Docker 语义非缺陷）
+5. 计费扫描：重容器代码内 gateway/embedding/sms 命中为零（§7 第 6 条）——✅ 2026-11-14：grep 零命中（含直连链路 `_default_llm`/`chat/completions`）；容器内零 API_KEYS/DATABASE_URL
+6. 认证：无 token 请求 401；跨服务调用带 token——✅ 2026-11-14：无/错 token 均 401；路径 allowlist 逃逸/相对路径均 400
+7. 模式开关双向验证：agent3（长期 `local` 模式）重工具本地执行全链路回归——它同时是回退形态的常态化证据，`local`→`remote` 切换后 B1 四件套经代理返回结果一致（与第 1 条合并验证）——🔧 2026-11-14：agent3 环境面已核（HEAVY_TOOLS_MODE=local、is_remote_mode=False、无重容器）；四工具本地全链路回归仍待跑
+8. agent2 混合负载 20 执行体压测：排队 p95、DB 连接峰值 ≤ 58、看门狗零误杀——✅ 2026-11-14：23 并发混合负载（12 main_long + 3 excel + 3 数据分析 + 2 travel + 3 短问答）23/23 completed+settled、attempt 全 1；排队 p95 12.9s / max 14.3s；DB 连接峰值 34 ≤ 58；看门狗零误杀
+9. **池路由剥离回归**（§9）：判型/角色过滤删除后，四类领取路径（execution/recovery×2/timer）全量领取无滞队；`AGENT_RUNNER_ROLE` / `LIGHT_SLOTS` / `GENERAL_SLOTS` / `classify_profile` / `state_uses_heavy` 全仓 grep 残留为零；agent2 重配后 4 容器全部等价领取（含旅游咨询智能体会话——过判场景回归，其会话不再有任何池归属差异）——✅ 2026-11-14：grep 残留仅 deploy 注释；travel-consultant 会话 load_class=light 全部等价领取
+10. **重试不双执行**：modify 类 handler 连接建立阶段失败注入——代理重试一次后结果正确无叠加；已送达请求读超时注入——代理不重试——✅ 代码审查级核实（client.py 仅 ConnectError/ConnectTimeout 重试一次；ReadTimeout/RemoteProtocolError 等已送达错误一律不重试），单测覆盖；真机故障注入未做
+11. **fill_template 拆分端到端**：结构分析（本地 LLM）+ 渲染（远程 openpyxl）结果与现状单进程执行一致——🔧 协议与代码两侧已落实（本地 analyze_structure_safe → 远程 fill_template_render，重容器拒绝直发 data 模式）；真实模板端到端待跑
+12. **busy 语义链路**：信号量占满时调用方收到 busy 结构化响应，LLM 回复含「稍后重试」引导而非立即重试——✅ 2026-11-14：429 + `error_code=busy`，20 并发风暴全部 ≤0.93s 快败；压测期间真实 busy 2 次，LLM 按引导稍后重试成功
+13. **宿主内存水位**：agent2 水位 85% 告警线接入并触发一次演练告警——🔧 2026-11-14：既有实现 watch 80 / critical 92（assessment.py），较设计 85% 更严，口径差异登记；演练告警待触发
+14. **tool_call_id 重放**：Runner 恢复重放同 id 时重容器先取消旧 job 再接新请求，产物路径无竞态（§4.3）——🔧 2026-11-14 修复：原实现 busy 检查先于登记，重放撞执行中旧 job 返回 429 而非接管（接管分支近乎不可达）；已改为重放检测优先于 busy 快败（同 id 重复提交协作取消旧 job 后排队接手，等待受旧 job 剩余超时约束、并发不超信号量上限），单测覆盖
 
 ## 11. 开放问题
 
