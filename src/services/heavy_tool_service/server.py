@@ -190,7 +190,18 @@ async def execute(request: Request):
 
     tool_call_id = (context.get("tool_call_id") or
                     f"heavy_{uuid.uuid4().hex[:12]}")
-    if _semaphore is not None and _semaphore.locked():
+    # §4.3 重放接管优先于 busy 快败：同 tool_call_id 重复提交（Runner 恢复重放
+    # 撞车）先协作取消旧 job、登记 upsert（_register_job 内完成）、再接新请求。
+    # 新请求的信号量获取可能等待旧 job 收尾（原生调用段无法中断，协作取消只在
+    # 前置检查点生效）——等待时长受旧 job 剩余超时约束，且实际并发不超信号量上限，
+    # 不破坏内存防护；故此类请求跳过 busy 快败，允许在 acquire 上短暂排队。
+    replay_takeover = False
+    with _jobs_lock:
+        replay_takeover = tool_call_id in _jobs
+    if replay_takeover:
+        logger.warning("heavy-tools 同 tool_call_id 重放接管 tool={} handler={} tcid={}",
+                       tool, handler, tool_call_id)
+    if not replay_takeover and _semaphore is not None and _semaphore.locked():
         # busy：不排队直接拒绝（§8）——排队等待 = 占用轻容器执行体，无意义
         logger.info("heavy-tools busy 拒绝 tool={} handler={}", tool, handler)
         return JSONResponse(status_code=429, content={

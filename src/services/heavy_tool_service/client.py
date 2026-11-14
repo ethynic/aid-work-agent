@@ -9,6 +9,7 @@ busy 语义（§8）：信号量满时重容器返回结构化 busy，客户端�
 message 带「稍后重试」引导），不做自动立即重试（防重试烧 LLM 轮次积分）。
 """
 
+import asyncio
 from typing import Any, Dict, Optional
 
 import httpx
@@ -31,6 +32,35 @@ class HeavyToolUnavailable(Exception):
     def __init__(self, message: str):
         super().__init__(message)
         self.message = message
+
+
+def _tool_call_id_from(context: Any) -> Optional[str]:
+    try:
+        if context is not None:
+            return context.tool_call_id
+        from src.tools.context import current_tool_execution_context
+        return current_tool_execution_context().tool_call_id
+    except Exception:  # noqa: BLE001 - 取消通知是尽力而为，取不到 id 就放弃
+        return None
+
+
+def _fire_cancel(tool_call_id: Optional[str]) -> None:
+    """进程内任务被取消时尽力通知重容器（§4.3/验收 3）。
+
+    fire-and-forget：不等待结果、失败仅记日志（cancel 端点本就是尽力而为语义）；
+    覆盖进程内协作取消路径（如 worker 中断时 loop task.cancel()）。执行进程被
+    SIGTERM/SIGKILL 杀掉的取消路径无法运行任何代码，孤儿 job 仍靠重容器 TTL
+    清扫兜底（超时 + JOB_TTL_GRACE_SECONDS），与设计 §4.3 口径一致。
+    """
+    if not tool_call_id:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    task = loop.create_task(cancel(tool_call_id))
+    # 防止"Task exception was never retrieved"噪音：cancel() 内部已兜异常，再保险
+    task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
 
 def serialize_context(context) -> Dict[str, Any]:
@@ -89,11 +119,18 @@ async def execute(
     # 连接失败才允许重试一次（§4.1）。
     timeout = httpx.Timeout(timeout_seconds + 30.0, connect=5.0)
     last_error: Optional[str] = None
+    cancel_hook = _tool_call_id_from(context)
     for attempt in (1, 2):
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(url, json=payload, headers=headers)
             return _handle_response(response, tool, handler)
+        except asyncio.CancelledError:
+            # 进程内协作取消（验收 3）：尽力通知重容器协作取消远端 job，再传播
+            logger.info("HeavyToolClient 调用方取消，尽力通知重容器 tool={} handler={} tcid={}",
+                        tool, handler, cancel_hook)
+            _fire_cancel(cancel_hook)
+            raise
         except httpx.ConnectError as error:
             last_error = f"connect failed: {error}"
         except httpx.ConnectTimeout as error:
