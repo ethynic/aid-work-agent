@@ -36,6 +36,9 @@ fi
 #      恢复内容并 chown 回 ubuntu；凭据本体不入 git 仓库
 #      （2026-10-19 加固：内容被清空为 0 字节时属主仍可能是 ubuntu，仅查属主会
 #       漏判，改为同时检查 codeup 凭据是否存在，缺失即从备份件恢复）
+#  10. 2026-11-14 新增 [5.1] 步：runner 容器（worker/heavy-tools/runner-api）的
+#      /tmp 与 /home/appuser/tmp 权限兜底——原脚本只修 aid-agent-api3，
+#      worker TMPDIR 权限在镜像未重建时缺兜底（2026-11-13 部署手工补）
 # ==============================================================================
 
 set -e
@@ -278,6 +281,24 @@ if ! docker exec -u root aid-agent-api3 chmod 1777 /tmp 2>/dev/null; then
       echo "  警告：两种方式均失败，appuser 可能无法写入 /tmp"
 fi
 docker exec -u root aid-agent-api3 ls -ld /tmp || true
+
+# 5.1 修复 runner 容器 /tmp 与 /home/appuser/tmp 权限（与 agent2_update.sh [8] 同款）。
+#    worker 是执行体所在容器：/home/appuser/tmp 是其 TMPDIR，tmpfs mode 在本机引擎
+#    不可靠（2026-11-12 Playwright EACCES 事故），镜像内 fix_tmp.sh 为权威兜底，
+#    此处兜底「代码已更新但镜像未重建」的容器；旧镜像场景下按容器逐一修复并自检。
+#    2026-11-14 补：池路由退役（B1）后 worker 按 Compose 副本序号命名
+#    agent3-runner-worker-1..N；heavy-tools 在 agent3 不部署（REPLICAS=0），
+#    保留在名单中便于未来拉起时同样兜底。
+echo "[5.1] 修复 runner 容器 /tmp 与 /home/appuser/tmp 权限..."
+for c in $(docker ps --format '{{.Names}}' | grep -E '^agent3-runner-worker-[0-9]+$|^aid-heavy-tools$|^aid-runner-api3$'); do
+    if docker exec -u root "$c" sh -c "chmod 1777 /tmp && chown appuser:appgroup /home/appuser/tmp" 2>/dev/null; then
+        # 以 appuser 身份自检可写性，失败时输出可 grep 的警告
+        docker exec -u 1000 "$c" sh -c "touch /home/appuser/tmp/.perm_probe && rm -f /home/appuser/tmp/.perm_probe" 2>/dev/null \
+            || echo "  警告：$c appuser 无法写 /home/appuser/tmp，请核对镜像内 fix_tmp.sh 版本"
+    else
+        echo "  警告：$c 权限修复失败（容器不存在或 exec 异常）"
+    fi
+done
 
 # 6. 等待前端编译完成并原子切换（仅前端有变更时）
 if [ -n "$FRONTEND_PID" ]; then

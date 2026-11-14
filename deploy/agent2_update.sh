@@ -73,6 +73,10 @@ fi
 #      恢复内容并 chown 回 ubuntu；凭据本体不入 git 仓库
 #      （2026-10-19 加固：内容被清空为 0 字节时属主仍可能是 ubuntu，仅查属主会
 #       漏判，改为同时检查 codeup 凭据是否存在，缺失即从备份件恢复）
+#   9. 2026-11-14 修正 [8] 步 worker 容器匹配模式：池路由退役（B1）后 worker
+#      按 Compose 副本序号命名 agent2-runner-worker-1..N，旧 general/light
+#      模式匹配不到导致 TMPDIR 权限修复被跳过（2026-11-13 部署手工兜底）；
+#      heavy-tools 纳入同一兜底循环
 # ==============================================================================
 
 set -e
@@ -289,7 +293,10 @@ done
 echo "[8] 修复容器 /tmp 与 /home/appuser/tmp 权限..."
 docker exec -u root aid-agent-api2 chmod 1777 /tmp 2>/dev/null \
     || echo "  警告：aid-agent-api2 /tmp chmod 失败"
-for c in $(docker ps --format '{{.Names}}' | grep -E '^agent2-runner-worker-(general|light)-|^aid-runner-api$'); do
+# 2026-11-13 池路由退役（B1）：worker 容器改为 Compose 副本序号命名
+# agent2-runner-worker-1..N（旧 general/light 命名已废弃）；
+# heavy-tools 同镜像入口，一并在旧镜像场景下兜底
+for c in $(docker ps --format '{{.Names}}' | grep -E '^agent2-runner-worker-[0-9]+$|^aid-heavy-tools$|^aid-runner-api$'); do
     if docker exec -u root "$c" sh -c "chmod 1777 /tmp && chown appuser:appgroup /home/appuser/tmp" 2>/dev/null; then
         # 以 appuser 身份自检可写性，失败时输出可 grep 的警告
         docker exec -u 1000 "$c" sh -c "touch /home/appuser/tmp/.perm_probe && rm -f /home/appuser/tmp/.perm_probe" 2>/dev/null \
