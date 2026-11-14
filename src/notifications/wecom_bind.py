@@ -145,16 +145,18 @@ class WecomClient:
         return data
 
     def userid_by_phone(self, mobile):
-        """按手机号查成员 userid（user/get_userid_by_phone，仅查不写）。"""
+        """按手机号查成员 userid（官方文档 path/95402：POST /cgi-bin/user/getuserid，
+        body {"mobile": ...}，仅查不写）。2026-11-13 E2E 实测修正：旧值
+        user/get_userid_by_phone 为杜撰路径，企微返回 HTTP 404。"""
         token = self._token()
         if not token:
             return None
-        data = self._call('user/get_userid_by_phone', 'POST',
-                          f'/cgi-bin/user/get_userid_by_phone?access_token={quote(token)}',
+        data = self._call('user/getuserid', 'POST',
+                          f'/cgi-bin/user/getuserid?access_token={quote(token)}',
                           body={'mobile': mobile})
         if not data or data.get('errcode') != 0:
             errcode = data.get('errcode') if data else 'N/A'
-            logger.warning(f'企微通知应用 user/get_userid_by_phone 失败: errcode={errcode}')
+            logger.warning(f'企微通知应用 user/getuserid 失败: errcode={errcode}')
             return None
         return data.get('userid') or None
 
