@@ -1452,9 +1452,8 @@ class AnalysisAgent:
             self._var_sources[table_id] = {table_id}
             self.tables_metadata.append(table_meta)
 
-            # 获取实际行数
-            df = self.analyzer._tables.get(loaded_id)
-            row_count = len(df) if df is not None else 0
+            # 获取实际行数（状态介导后不驻留 DataFrame，行数在写盘时记录）
+            row_count = self.analyzer.table_rows(loaded_id)
 
             columns = table_meta.get("columns", [])
             columns_info = []
@@ -1553,8 +1552,9 @@ class AnalysisAgent:
             return {"success": False, "error": f"产物文件读取失败: {e}"}
 
         # 装入分析环境：后续 merge/aggregate 等可直接以 var 引用；来源集合随
-        # 登记恢复，供后续以其为输入的产物继续传播
-        self.analyzer._variables[output_var] = df
+        # 登记恢复，供后续以其为输入的产物继续传播。
+        # §5.1 去内存驻留：写状态文件介导（产物 CSV 已在册，不重复落最终产物）
+        self.analyzer.store_dataframe(output_var, df)
         src = entry.get("source_table_ids")
         self._var_sources[output_var] = (
             {str(t) for t in src} if isinstance(src, list) and src else None

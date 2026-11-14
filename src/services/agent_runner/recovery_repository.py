@@ -31,7 +31,7 @@ class RecoveryRepository:
     def __init__(self, connection_factory=get_db_connection):
         self.connection_factory = connection_factory
 
-    def next_continuous_candidates(self, *, after_queue_order=0, limit=16, role='general'):
+    def next_continuous_candidates(self, *, after_queue_order=0, limit=16):
         if type(limit) is not int or not 1 <= limit <= 32:
             raise ValueError('RECOVERY_CANDIDATE_LIMIT_INVALID')
         with self.connection_factory() as connection:
@@ -47,9 +47,8 @@ class RecoveryRepository:
                 AND EXISTS (SELECT 1 FROM agent_runner_session_claims c
                     WHERE c.scope_key=r.scope_key AND c.session_kind=r.session_kind
                     AND c.session_id=r.session_id AND c.owner_runner_id=r.runner_id)
-                AND (%s <> 'light' OR r.load_class='light')
                 AND r.queue_order>%s ORDER BY r.queue_order LIMIT %s''',
-                (role, after_queue_order, limit))
+                (after_queue_order, limit))
             return [decoded(item) for item in cursor.fetchall()]
 
     def claim_continuous(self, expected, worker_id, lease_seconds, checkpoint, *, source_port=None,
@@ -139,7 +138,7 @@ class RecoveryRepository:
         rows = self.next_candidates()
         return rows[0] if rows else None
 
-    def next_candidates(self, *, after_queue_order=0, limit=16, role='general'):
+    def next_candidates(self, *, after_queue_order=0, limit=16):
         if type(limit) is not int or not 1 <= limit <= 32:
             raise ValueError('RECOVERY_CANDIDATE_LIMIT_INVALID')
         with self.connection_factory() as connection:
@@ -150,9 +149,8 @@ class RecoveryRepository:
                 AND EXISTS (SELECT 1 FROM agent_runner_session_claims c
                     WHERE c.scope_key=r.scope_key AND c.session_kind=r.session_kind
                     AND c.session_id=r.session_id AND c.owner_runner_id=r.runner_id)
-                AND (%s <> 'light' OR r.load_class='light')
                 AND r.queue_order>%s ORDER BY r.queue_order LIMIT %s''',
-                (role, after_queue_order, limit))
+                (after_queue_order, limit))
             return [decoded(row) for row in cursor.fetchall()]
 
 
@@ -183,6 +181,7 @@ class RecoveryRepository:
             control = cursor.fetchone()
             if not control or control['status'] != 'accepted' or control['action'] not in ('resume','reply','browser_complete'):
                 raise RunnerError('RECOVERY_CONTROL_STALE',409)
+            snapshot = row['public_snapshot']
             if control['action'] in ('reply','browser_complete'):
                 # 受理后的 payload 是服务端权威存储：结构化受理把 canonical 写入
                 # answer 键并附 form/answers 审计键，不再是原始客户端形状，不能也
@@ -193,6 +192,10 @@ class RecoveryRepository:
                                           wait_id=payload.get('wait_id'),
                                           target_execution_id=payload.get('target_execution_id'))
                 ControlRepository.assert_wait(row, request)
+                if payload.get('recovery_reply'):
+                    # Once consumed, the old question must not reappear if the
+                    # new worker fails before its first execution checkpoint.
+                    snapshot = {**snapshot, 'waiting':None}
             if row['checkpoint'] and row['checkpoint'].get('pending_finalization'):
                 raise RunnerError('RECOVERY_FINALIZATION_PENDING',409)
             if recovery_port is not None:
@@ -214,10 +217,12 @@ class RecoveryRepository:
             consumed_at = (cursor.fetchone() or {}).get('consumed_at')
             cursor.execute('''UPDATE agent_runners SET status='running',attempt=%s,worker_id=%s,
                 lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),execution_started_at=clock_timestamp(),checkpoint=%s::jsonb,
+                public_snapshot=%s::jsonb,
                 pause_requested=FALSE,resume_control_id=NULL,wake_at=NULL,revision=revision+1,
                 control_revision=control_revision+1,view_revision=view_revision+1,updated_at=clock_timestamp()
                 WHERE runner_id=%s RETURNING *''',
-                (number,worker_id,lease_seconds,capped_checkpoint_dumps(checkpoint),runner_id))
+                (number,worker_id,lease_seconds,capped_checkpoint_dumps(checkpoint),
+                 capped_snapshot_dumps(snapshot),runner_id))
             result = decoded(cursor.fetchone())
             result = sync_public_display(cursor,result,advance_view=False)
             if recovery_port is not None:

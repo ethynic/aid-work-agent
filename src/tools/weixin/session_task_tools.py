@@ -137,8 +137,14 @@ class SessionTaskPublishTool(BaseTool):
     InputModel = SessionTaskPublishInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
-        return await _execute(self.InputModel, kwargs, lambda service, context, args: service.publish_task_once(
-            context.tenant_id, context.user_id, args.task_id, args.expected_version, args.confirmation_id))
+        def publish(service, context, args):
+            # A dedicated Runner worker doesn't run the main app scheduler.
+            # Reuse the existing feature-gated registration for this tool.
+            from src.weixin_conversation.registration import ensure_registered
+            ensure_registered()
+            return service.publish_task_once(
+                context.tenant_id, context.user_id, args.task_id, args.expected_version, args.confirmation_id)
+        return await _execute(self.InputModel, kwargs, publish)
 
 
 class SessionTaskManageTool(BaseTool):

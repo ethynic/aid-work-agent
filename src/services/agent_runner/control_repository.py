@@ -155,6 +155,7 @@ class ControlRepository:
             return result
 
     def submit_in_tx(self,cursor,principal,runner_id,request,*,expected_revision=None):
+        from .server_recovery_reply import recovery_wait, validate_reply
         row = lock_owned_runner(cursor, principal, runner_id)
         cursor.execute('SELECT * FROM agent_runner_controls WHERE runner_id=%s AND client_request_id=%s',
                        (runner_id,request.client_request_id))
@@ -171,15 +172,19 @@ class ControlRepository:
         if row['cancel_requested'] or row['status'] in ('finalizing','completed','cancelled','failed'):
             raise RunnerError('CONTROL_EXECUTION_CLOSED',409)
         structured = None
+        recovery_reply = None
         if request.action != 'pause':
             if row['status'] not in ('paused','waiting','interrupted'):
                 raise RunnerError('RUNNER_NOT_PARKED',409)
             if row.get('resume_control_id'):
                 raise RunnerError('RUNNER_RESUME_PENDING',409)
-            guard_wait = any((waiting or {}).get('kind')=='continuous_guard'
-                for _,waiting in execution_waits(row.get('checkpoint')))
-            if request.action=='resume' and ((row.get('checkpoint',{}).get('durable_sleep') or {}).get('phase')=='armed' or guard_wait):
-                self.assert_wait(row,request)
+            if request.action == 'resume':
+                waits = [waiting for _,waiting in execution_waits(row.get('checkpoint')) if waiting]
+                if any(recovery_wait(wait) for wait in waits):
+                    raise RunnerError('CONTROL_WAIT_KIND_MISMATCH',409)
+                guard_wait = any(wait.get('kind') == 'continuous_guard' for wait in waits)
+                if guard_wait or (row.get('checkpoint',{}).get('durable_sleep') or {}).get('phase')=='armed':
+                    self.assert_wait(row,request)
             if request.action in ('reply','browser_complete'):
                 self.assert_wait(row,request)
                 cursor.execute('''SELECT 1 FROM agent_runner_controls WHERE runner_id=%s
@@ -193,6 +198,13 @@ class ControlRepository:
                 structured = (self._accept_ask_form(row, request)
                               if request.action == 'reply'
                               and (request.answers is not None or request.skip) else None)
+                if request.action == 'reply':
+                    waiting = self.waiting_for(row, request)
+                    if recovery_wait(waiting):
+                        payload = request.intent()
+                        if structured is not None:
+                            payload['answers'] = structured['answers']
+                        recovery_reply = validate_reply(cursor,row,waiting,payload)
             if request.action == 'browser_complete':
                 if self.browser_completions is None:
                     raise RunnerError('CONTROL_COMPLETION_FORBIDDEN',403)
@@ -201,6 +213,8 @@ class ControlRepository:
         acknowledged_pause = request.action == 'pause' and row['status'] in ('paused','waiting','interrupted')
         status = 'consumed' if acknowledged_pause else 'accepted'
         payload = request.intent()
+        if recovery_reply is not None:
+            payload['recovery_reply'] = recovery_reply
         if structured is not None:
             # canonical 写入既有 answer 键（recovery._apply_reply 读该键回注为
             # tool result）；form 快照与结构化答案仅供审计/历史，不参与 digest

@@ -1013,6 +1013,10 @@ def fill_with_sample(
 ) -> Dict[str, Any]:
     """无状态：样例 + data → 按样例版式填好的 Excel。
 
+    两段式拆分（2026-11-13 重工具服务化 §3）：结构分析（LLM，本函数内）+
+    openpyxl 渲染（render_with_structure，可整体远程到重工具容器）。
+    单进程执行时两段在本地串联；重工具服务化远程模式由调用方拆开发送。
+
     Args:
         sample_file_path: 样例 xlsx 路径（调用方提供并负责存储；工具只读不改原件）
         data: FillData 或 dict（meta/rows/columns?/group_subtotals?/totals?）
@@ -1023,6 +1027,27 @@ def fill_with_sample(
     Returns:
         {success, file_path, file_name, file_size, rows_rendered, inferred_structure,
          unused_data_keys, missing_fields, message}
+    """
+    structure_result = analyze_structure_safe(sample_file_path, data, llm_callable=llm_callable)
+    if not structure_result.get("success"):
+        return structure_result
+    return render_with_structure(
+        sample_file_path, data, structure_result["structure"],
+        output_name=output_name, output_dir=output_dir,
+    )
+
+
+def analyze_structure_safe(
+    sample_file_path: str,
+    data: Any,
+    *,
+    llm_callable: Optional[Callable[[str], str]] = None,
+) -> Dict[str, Any]:
+    """fill_template 拆分第一段：样例结构分析（含 LLM 调用）。
+
+    独立可调用，供轻容器在远程模式下先本地完成结构分析，再把序列化结构
+    交给重容器渲染段（render_with_structure）。失败以 {"success": False,
+    "error": ...} 返回，与 fill_with_sample 既有失败口径一致。
     """
     src = Path(sample_file_path)
     if not src.exists():
@@ -1044,19 +1069,54 @@ def fill_with_sample(
     except Exception as e:
         logger.opt(exception=True).error(f"[excel_template_ai] 结构分析失败: {e}")
         return {"success": False, "error": f"样例结构分析失败: {e}"}
+    return {"success": True, "structure": _serialize_structure(structure)}
+
+
+def render_with_structure(
+    sample_file_path: str,
+    data: Any,
+    structure: Any,
+    output_name: Optional[str] = None,
+    output_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """fill_template 拆分第二段：按已分析结构渲染（纯 openpyxl，零 LLM）。
+
+    structure 接受 SheetStructure 或其序列化 dict（远程调用的 JSON 交接形态）。
+    本函数可整体运行在重工具容器（纯计算、无凭证依赖，§7）。
+    """
+    src = Path(sample_file_path)
+    if not src.exists():
+        return {"success": False, "error": f"样例文件不存在: {sample_file_path}"}
+
+    fill_data = data if isinstance(data, FillData) else FillData(**(data or {}))
+    if not fill_data.rows:
+        return {"success": False, "error": "data.rows 为空，无需填充"}
+
+    err = _validate_cell_scalars(fill_data)
+    if err:
+        return {"success": False, "error": err}
+
+    if isinstance(structure, SheetStructure):
+        sheet_structure = structure
+    else:
+        try:
+            sheet_structure = _deserialize_structure(structure)
+        except Exception as e:
+            logger.opt(exception=True).error(f"[excel_template_ai] 结构反序列化失败: {e}")
+            return {"success": False, "error": f"结构描述无效: {e}"}
 
     wb, _ = ExcelFileHandler.copy_and_open(sample_file_path)
     try:
         ws = wb.active
-        rows_rendered = _render(ws, structure, fill_data)
-        _verify_render(ws, structure, fill_data)  # fail-loud：残留即 bug
+        rows_rendered = _render(ws, sheet_structure, fill_data)
+        _verify_render(ws, sheet_structure, fill_data)  # fail-loud：残留即 bug
 
         output_name = output_name or (src.stem + "_filled.xlsx")
         save_result = ExcelFileHandler.save_temp(wb, file_name=output_name, output_dir=output_dir)
     finally:
         wb.close()
 
-    unused, missing = _analyze_coverage(structure, fill_data)
+    unused, missing = _analyze_coverage(sheet_structure, fill_data)
     notes = []
     if unused:
         notes.append(f"以下数据未找到模板对应位置，已忽略：{', '.join(unused)}")
@@ -1067,7 +1127,7 @@ def fill_with_sample(
     save_result.update({
         "success": True,
         "rows_rendered": rows_rendered,
-        "inferred_structure": _serialize_structure(structure),
+        "inferred_structure": _serialize_structure(sheet_structure),
         "unused_data_keys": unused,
         "missing_fields": missing,
         "message": "；".join(notes) if notes else f"已填充 {rows_rendered} 行",
@@ -1086,6 +1146,15 @@ def _serialize_structure(s: SheetStructure) -> Dict[str, Any]:
         "groups": [g.model_dump() if hasattr(g, "model_dump") else g.dict() for g in s.groups],
         "totals": [t.model_dump() if hasattr(t, "model_dump") else t.dict() for t in s.totals],
     }
+
+
+def _deserialize_structure(data: Dict[str, Any]) -> SheetStructure:
+    """_serialize_structure 的逆变换：JSON 交接形态 → SheetStructure。
+
+    用于 fill_template 拆分的远程渲染段（重工具服务 §3）：结构分析段在轻容器
+    完成，序列化 dict 经 HTTP 交接后在重容器重建。
+    """
+    return SheetStructure(**(data or {}))
 
 
 # ============================================================

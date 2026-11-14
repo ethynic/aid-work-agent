@@ -217,7 +217,10 @@ class StorageConfig(BaseModel):
     base_dir: str = "storage"  # 存储根目录
     # 注意：代码内部使用字节单位，.env 中配置使用 MB 单位
     max_knowledge_file_size: int = 50 * 1024 * 1024  # 知识库文件大小限制（默认 50MB），支持 .env 覆盖
-    max_general_file_size: int = 50 * 1024 * 1024  # 通用上传文件大小限制（默认 50MB），支持 .env 覆盖
+    # 2026-11-13 重工具服务化 §6：通用上传 50MB -> 20MB（image_render 参考图解码
+    # 留轻容器的观察期保护配套）；知识库文件限制不动，与移动端 blob 下载 10MB
+    # 门槛无关联
+    max_general_file_size: int = 20 * 1024 * 1024  # 通用上传文件大小限制（默认 20MB），支持 .env 覆盖
 
 
 class EmailToolConfig(BaseModel):
@@ -769,16 +772,16 @@ class AgentRunnerConfig(BaseModel):
     cancel_grace_seconds: int = Field(default=1200, ge=60)
     poll_seconds: float = Field(default=1.0, gt=0)
     concurrency: int = Field(default=1, ge=1, le=1)
-    # 轻池槽内并发（A 方案，设计 §6）：light 角色 worker 执行进程内并发执行体数，
-    # 置 1 即回退现行拓扑（无需回滚代码）；general 角色经 slot_capacity 强制 1。
+    # 槽内并发（A 方案，设计 §6；2026-11-13 §9 池路由退役后全部 worker 等价）：
+    # 执行进程内并发执行体数，置 1 即回退单执行体拓扑。
     slot_concurrency: int = Field(default=4, ge=1, le=16)
     # 事件循环停跳看门狗阈值（秒）：探针超过该时长未在 loop 内响应即判定停跳，
     # 回收本进程执行体并硬退触发容器重启（设计 §6.2）。
     watchdog_threshold: int = Field(default=15, ge=5, le=300)
-    # 轻重负载分离判型清单（设计 §4.2）：本地 CPU/内存密集为重。
-    # heavy_skills 按技能基础名（去版本后缀）匹配，heavy_tools 按工具注册 name 匹配。
+    # 重工具远程派发白名单（2026-11-13 重工具服务化 §9 语义切换，原判型清单退役）：
+    # HEAVY_TOOLS_MODE=remote 时清单内工具经代理/处理器远程派发到重工具服务；
+    # 按工具注册 name 匹配。清单移除某项即该工具回退轻容器本地执行。
     heavy_tools: List[str] = Field(default_factory=list)
-    heavy_skills: List[str] = Field(default_factory=list)
     browser_owner: AgentRunnerBrowserOwnerConfig = Field(default_factory=AgentRunnerBrowserOwnerConfig)
     limits: AgentRunnerLimitsConfig = Field(default_factory=AgentRunnerLimitsConfig)
 

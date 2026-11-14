@@ -400,6 +400,11 @@ def _ensure_task_subject(conn, tenant_id: str, scenario_key: str, ref: str, owne
     )
 
 
+def publication_identity(task_id: UUID, expected_version: int, confirmation_id: UUID):
+    return (f"POST /api/session-tasks/{task_id}/publish", f"confirmation:{confirmation_id}",
+            {"expected_version": expected_version, "confirmation_id": str(confirmation_id)})
+
+
 def publish_task_once(tenant_id: str, user_id: str, task_id: UUID, expected_version: int,
                       confirmation_id: UUID) -> Dict[str, Any]:
     """Tool transport uses the same transactional receipt as HTTP publishing.
@@ -408,10 +413,9 @@ def publish_task_once(tenant_id: str, user_id: str, task_id: UUID, expected_vers
     No confirmation is created here. Replays return the original publication.
     """
     from .api import _execute_idempotent
-    body = {"expected_version": expected_version, "confirmation_id": str(confirmation_id)}
+    route, key, body = publication_identity(task_id, expected_version, confirmation_id)
     response = _execute_idempotent(
-        tenant_id, user_id, f"POST /api/session-tasks/{task_id}/publish",
-        f"confirmation:{confirmation_id}", body,
+        tenant_id, user_id, route, key, body,
         lambda finalizer: publish_task(tenant_id, user_id, task_id, expected_version,
                                       confirmation_id, finalizer=finalizer),
     )

@@ -339,6 +339,59 @@ class PaddleOCRDocParsingTool(BaseTool):
                 return f"解析文档「{source}」"
         return self.display_name
 
+    def _remote_dispatch_enabled(self) -> bool:
+        """远程派发开关（重工具服务设计 §3/§4.2）：HEAVY_TOOLS_MODE=remote 且本工具
+        在 agent_runner.heavy_tools 白名单。本工具零 LLM（§3 核实），整体远程；
+        代理语义以「类内模式分支」实现——name/description/InputModel 与本地版
+        恒为同一类，schema 生成链路与 LLM 感知不变（§4.2）。"""
+        from src.services.heavy_tool_service.config import is_remote_mode
+
+        if not is_remote_mode():
+            return False
+        try:
+            from src.config.settings import settings
+
+            return "paddleocr_doc_parsing" in set(settings.agent_runner.heavy_tools or [])
+        except Exception:
+            return False
+
+    async def _execute_remote(self, file_path: str, file_url: str, file_type) -> Dict[str, Any]:
+        """整体远程执行（§4.1 同步长调用）：路径先解析为共享卷绝对路径再派发；
+        重容器侧执行同一 paddleocr_doc_parsing 函数（同镜像，结果与本地执行一致）。"""
+        from src.services.heavy_tool_service import client
+        from src.services.heavy_tool_service.client import HeavyToolBusy, HeavyToolUnavailable
+        from src.services.heavy_tool_service.config import PADDLEOCR_TIMEOUT_SECONDS
+
+        if file_path and not os.path.exists(file_path):
+            # 入参可能是 file_id/相对路径：本地解析为磁盘绝对路径（远程只认绝对路径）
+            try:
+                from src.tools.excel.excel_lib import ExcelFileHandler
+
+                resolved = ExcelFileHandler.resolve_path(file_path)
+                if os.path.exists(resolved):
+                    file_path = resolved
+            except Exception:
+                pass
+
+        try:
+            return await client.execute(
+                tool=self.name,
+                params={
+                    "file_path": os.path.abspath(file_path) if file_path else None,
+                    "file_url": file_url or None,
+                    "file_type": file_type,
+                },
+                timeout_seconds=PADDLEOCR_TIMEOUT_SECONDS,
+            )
+        except HeavyToolBusy as e:
+            # busy 透传（§8）：message 已带「稍后重试」引导，代理不做自动立即重试
+            logger.warning(f"PaddleOCR 重工具服务繁忙: {e}")
+            return {"success": False, "error": str(e)}
+        except HeavyToolUnavailable as e:
+            # 中性失败（§8）：不回退本地执行（全页识别正是要隔离的重负载）
+            logger.error(f"PaddleOCR 重工具服务不可用: {e}")
+            return {"success": False, "error": "处理未完成，请稍后重试"}
+
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """
         执行PaddleOCR文档解析
@@ -361,6 +414,9 @@ class PaddleOCRDocParsingTool(BaseTool):
                 "success": False,
                 "error": "请提供文件URL或本地路径",
             }
+
+        if self._remote_dispatch_enabled():
+            return await self._execute_remote(file_path, file_url, file_type)
 
         # 同步函数 paddleocr_doc_parsing 内部用 httpx.Client 同步请求远端 API（单次可达 60s），
         # 直接调用会阻塞事件循环导致 Gunicorn worker 心跳超时被杀。必须用 asyncio.to_thread 包裹。

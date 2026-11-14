@@ -78,6 +78,7 @@ export function runnerResumable(row: RunnerView): boolean {
   if (row.cancel_requested || row.resume_requested || row.local_recovery) return false
   const wait = runnerWaitLeaf(row.snapshot.waiting)
   const timerResume = wait?.kind === 'timer' && !!wait.wait_id && !!wait.target_execution_id
+    && ['waiting', 'paused', 'interrupted'].includes(row.status)
   const guardResume = wait?.kind === 'continuous_guard' && !!wait.wait_id && !!wait.target_execution_id
     && ['waiting', 'paused'].includes(row.status)
   const bareResume = ['paused', 'interrupted'].includes(row.status)

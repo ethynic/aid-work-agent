@@ -27,6 +27,12 @@ from src.services.data_analysis.crypto import decrypt_password
 from src.services.data_analysis.db_connector import DatabaseConnector
 
 
+def _safe_state_stem(name: str) -> str:
+    """状态文件名安全化：var_name/table_id 来自 LLM/DB，限制为文件名安全字符。"""
+    stem = re.sub(r"[^\w一-鿿-]+", "_", str(name or "var")).strip("_")
+    return stem[:60] or "var"
+
+
 # 中文字体配置
 plt.rcParams["font.sans-serif"] = [
     "Noto Sans CJK SC",    # 容器环境（fonts-noto-cjk）
@@ -105,6 +111,7 @@ class DataAnalyzer:
         session_id: str = None,
         tenant_id: str = "",
         allow_arbitrary_path_source: bool = False,
+        workspace_dir: str = None,
     ):
         self.session_id = session_id or ""
         # 产物按租户附件存储规范落盘：图表/导出表 -> report，中间聚合 CSV -> temp
@@ -112,10 +119,28 @@ class DataAnalyzer:
         _tid = tenant_id or "_anonymous"
         self.chart_output_dir = get_tenant_storage_dir(_tid, "report")
         self.data_output_dir = get_tenant_storage_dir(_tid, "temp")
-        self._variables: Dict[str, pd.DataFrame] = {}
+        # 状态介导目录（2026-11-13 重工具服务化 §5.1 去内存驻留）：加载表/中间变量
+        # 落 parquet（无 pyarrow 降级 CSV），_variables/_tables 只存路径映射——
+        # 每次操作只读当前一张表进内存，用完释放。目录优先级：
+        # 显式 workspace_dir > ToolExecutionContext.skill_workdir（runner workspace，
+        # 随 workspace 生命周期清理，§5.5）> 租户 temp/analysis_vars 兜底（分析工具
+        # 调用常态无 workspace 注入面，由既有 7 天 tmp 清理管辖；与最终产物 CSV
+        # 不同子目录，清理归属不混淆）
+        from src.tools.context import current_tool_execution_context
+        _context = current_tool_execution_context()
+        _workspace = (workspace_dir
+                      or (getattr(_context, "skill_workdir", None) if _context else None))
+        if _workspace:
+            self.state_dir = os.path.join(str(_workspace), "analysis_vars")
+        else:
+            self.state_dir = os.path.join(self.data_output_dir, f"analysis_vars_{uuid.uuid4().hex[:8]}")
+        os.makedirs(self.state_dir, exist_ok=True)
+        # var_name/table_id -> 状态文件路径（非 DataFrame；§5.1 状态边界切口）
+        self._variables: Dict[str, str] = {}
         self._artifact_paths: Dict[str, str] = {}
-        self._tables: Dict[str, pd.DataFrame] = {}
+        self._tables: Dict[str, str] = {}
         self._table_meta: Dict[str, Dict] = {}
+        self._table_rows: Dict[str, int] = {}
         # 任意文件路径 source 逃生开关：生产 analyze_data 路径必须为 False——
         # _resolve_source 的文件路径分支是未经注册表回查的读取面，LLM 可用任意
         # 路径绕过数据表名单。低层测试/内部离线计算可显式开启保持旧行为；
@@ -160,10 +185,54 @@ class DataAnalyzer:
                 f"请检查源文件/数据库连接器是否仍存在"
             )
 
-        self._tables[table_id] = df
+        # 状态介导落盘后立即释放内存（§5.1 去驻留：同时只有 1 张表在内存）
+        row_count, column_count = len(df), len(df.columns)
+        self._tables[table_id] = self._write_state(df, f"table_{_safe_state_stem(table_id)}")
+        self._table_rows[table_id] = row_count
         self._table_meta[table_id] = metadata
-        logger.info(f"[DataAnalyzer] 加载表 {table_id}: {len(df)} 行, {len(df.columns)} 列")
+        logger.info(f"[DataAnalyzer] 加载表 {table_id}: {row_count} 行, {column_count} 列")
         return table_id
+
+    def table_rows(self, table_id: str) -> int:
+        """已加载表的行数（写盘时记录，不重读数据文件）。"""
+        return self._table_rows.get(table_id, 0)
+
+    # ==================== 状态介导（§5.1 去内存驻留） ====================
+
+    @staticmethod
+    def _state_engine() -> str:
+        """状态文件格式：parquet（有 pyarrow）/ CSV（降级，dev 环境无 pyarrow 时）。"""
+        try:
+            import pyarrow  # noqa: F401
+            return "parquet"
+        except ImportError:
+            return "csv"
+
+    def _write_state(self, df: "pd.DataFrame", stem: str) -> str:
+        """DataFrame 写状态文件（parquet 优先），返回路径；不保留内存引用。"""
+        os.makedirs(self.state_dir, exist_ok=True)
+        engine = self._state_engine()
+        path = os.path.join(self.state_dir, f"{stem}.{engine}")
+        if engine == "parquet":
+            df.to_parquet(path, index=False)
+        else:
+            df.to_csv(path, index=False, encoding="utf-8-sig")
+        return path
+
+    @staticmethod
+    def _read_state(path: str) -> "pd.DataFrame":
+        if path.endswith(".parquet"):
+            return pd.read_parquet(path)
+        # utf-8-sig 与 _write_state 写入侧对称：剥离 BOM，否则首列名残留
+        # ﻿ 前缀，后续按列名 merge/aggregate 报 KeyError 或静默丢列
+        return pd.read_csv(path, encoding="utf-8-sig")
+
+    def store_dataframe(self, var_name: str, df: "pd.DataFrame") -> str:
+        """仅写工作状态（不写最终产物 CSV）：load_output 复用产物装入分析环境用——
+        产物 CSV 已在 temp 登记在册，无需重复落最终产物（§5.5 目录双轨）。"""
+        path = self._write_state(df, f"var_{_safe_state_stem(var_name)}")
+        self._variables[var_name] = path
+        return path
 
     def _load_excel(self, source: dict) -> Optional[pd.DataFrame]:
         """从 Excel/CSV 文件加载数据"""
@@ -269,10 +338,13 @@ class DataAnalyzer:
     def _resolve_source(self, source_ref: str) -> Optional[pd.DataFrame]:
         """
         解析数据源引用，支持三种方式（按优先级）：
-        1. 内存变量名（_variables）
-        2. 原始表 table_id（_tables）
+        1. 中间变量名（_variables，状态文件介导）
+        2. 原始表 table_id（_tables，状态文件介导）
         3. 文件路径（仅 allow_arbitrary_path_source=True 时可用）
 
+        2026-11-13 重工具服务化 §5.1：状态不再驻留内存——变量/表均落
+        parquet（降级 CSV）状态文件，本方法按需读入当前一张表；每次操作
+        重新读盘，用完由调用方作用域释放。
         生产 analyze_data 构造的实例关闭优先级 3：任意路径读取是显式入参绕过面
         （LLM 可传文件路径读取未经名单校验的数据）；原始文件应通过已授权表的
         load_table 加载，历史产物经校验后的 load_output 装入。
@@ -280,13 +352,13 @@ class DataAnalyzer:
         if not source_ref:
             return None
 
-        # 优先级 1: 中间变量
+        # 优先级 1: 中间变量（状态文件）
         if source_ref in self._variables:
-            return self._variables[source_ref].copy()
+            return self._read_state(self._variables[source_ref])
 
-        # 优先级 2: 原始表
+        # 优先级 2: 原始表（状态文件）
         if source_ref in self._tables:
-            return self._tables[source_ref].copy()
+            return self._read_state(self._tables[source_ref])
 
         # 优先级 3: 文件路径（逃生分支，生产路径禁用）
         if self.allow_arbitrary_path_source and os.path.exists(source_ref):
@@ -306,8 +378,11 @@ class DataAnalyzer:
         return None
 
     def _store(self, var_name: str, df: pd.DataFrame) -> str:
-        """持久化 DataFrame 到内存 + CSV 文件"""
-        self._variables[var_name] = df.copy()
+        """DataFrame 落盘介导（§5.1 去内存驻留 + §5.5 目录双轨）：
+        - 工作状态写 parquet/CSV 到状态目录，var -> 路径映射（不驻留内存）；
+        - 最终产物 CSV 维持 temp 现状（load_output 校验与 7 天清理口径不动）；
+        - 禁止把两类产物混到同一目录（清理归属歧义）。"""
+        self._variables[var_name] = self._write_state(df, f"var_{_safe_state_stem(var_name)}")
 
         os.makedirs(self.data_output_dir, exist_ok=True)
         file_path = os.path.join(self.data_output_dir, f"analysis_output_{uuid.uuid4().hex}.csv")
