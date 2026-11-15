@@ -245,6 +245,41 @@ class UserDB:
             return dict(row) if row else None
 
     @staticmethod
+    def set_feishu_open_id(user_id: str, feishu_open_id: Optional[str]) -> bool:
+        """绑定/解绑飞书通知 open_id（解绑传 None 清空）；同步失效用户缓存
+
+        飞书任务通知接入（2026-11-15，wecom-app-task-notification-design 决策 7 追加）
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"UPDATE users SET feishu_open_id = {placeholder}, updated_at = {get_current_timestamp()} "
+                f"WHERE user_id = {placeholder}",
+                (feishu_open_id, user_id))
+            conn.commit()
+            result = cursor.rowcount > 0
+            if result:
+                invalidate_user_cache(user_id)
+            return result
+
+    @staticmethod
+    def get_by_feishu_open_id_in_tenant(feishu_open_id: str, tenant_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """按飞书 open_id + 租户查用户（绑定前唯一性校验）
+
+        tenant_id 用 IS NOT DISTINCT FROM，兼容平台管理员 tenant_id 为 NULL 的场景
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT * FROM users WHERE feishu_open_id = {placeholder} "
+                f"AND tenant_id IS NOT DISTINCT FROM {placeholder} LIMIT 1",
+                (feishu_open_id, tenant_id))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
     def update_info(user_id: str, **kwargs) -> bool:
         """更新用户信息
 

@@ -211,6 +211,11 @@ def create_router(config=None, repository=None, user_loader=None):
     router.include_router(create_bind_router(config=config, repository=repository,
                                              user_loader=user_loader))
 
+    # 飞书应用身份绑定（飞书任务通知接入，2026-11-15 决策 7 追加，无 OAuth）
+    from .feishu_bind import create_feishu_bind_router
+    router.include_router(create_feishu_bind_router(config=config, repository=repository,
+                                                    user_loader=user_loader))
+
     return router
 
 

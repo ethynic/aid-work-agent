@@ -175,7 +175,10 @@ class TestUpdateChannelKeepKfAccount:
         assert config_arg["waiting_indicator"] == {"enabled": False}
 
     def test_non_wecom_kf_passes_kf_account_through(self, client, app, tenant_admin):
-        """非 wecom_kf 渠道保存时，请求体 config 原样传递（不做干预）。"""
+        """非 wecom_kf 渠道保存时，请求体 config 原样传递（不做干预）。
+
+        六轮起 wecom update 按本次提交 config 校验必填（不做字段保留合并），
+        请求体需带全 5 项；本用例校验点不变（kf_account 原样保留）。"""
         existing_row = {
             "config_id": "chan_wecom_1",
             "tenant_id": "tenant_9eb3e45cab83",
@@ -184,7 +187,10 @@ class TestUpdateChannelKeepKfAccount:
             "subagent_type": None,
             "verified": 1,
         }
-        body_config = {"corp_id": "ww_new", "agent_id": "1000001", "kf_account": [{"name": "x"}]}
+        body_config = {"corp_id": "ww_new", "agent_id": "1000001", "secret": "app-secret",
+                       "token": "callback-token",
+                       "encoding_aes_key": "aes-key-43-characters-base64-xxxxxxx",
+                       "kf_account": [{"name": "x"}]}
         updated_row = dict(existing_row)
         updated_row["config"] = dict(body_config)
         get_by_id_mock = MagicMock(side_effect=[existing_row, updated_row])

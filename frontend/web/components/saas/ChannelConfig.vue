@@ -44,8 +44,8 @@
           </div>
         </div>
         <!-- 回调地址展示（企业微信应用通知为纯外发通知渠道，无回调地址；
-             企微应用「仅通知」用途同样不接回调） -->
-        <div v-if="tenant && ch.channel_type !== 'wecom_app_notify' && !(ch.channel_type === 'wecom' && ch.config?.notify_usage === 'notify_only')" class="bg-canvas rounded-lg p-3 text-sm">
+             企微/飞书应用「仅通知」用途同样不接回调） -->
+        <div v-if="tenant && ch.channel_type !== 'wecom_app_notify' && ch.config?.notify_usage !== 'notify_only'" class="bg-canvas rounded-lg p-3 text-sm">
           <span class="text-muted">回调地址：</span>
           <code class="text-primary-600 select-all font-mono">{{ ch.callback_url || getCallbackUrl(ch.channel_type, ch.config_id) }}</code>
           <BaseButton intent="ghost" size="sm" @click="copyUrl(ch.callback_url || getCallbackUrl(ch.channel_type, ch.config_id), ch.config_id)">
@@ -149,18 +149,19 @@
           </a>
         </div>
 
-        <!-- 企微应用「通知用途」单选（渠道合并 2026-11-15）：notify_only 只填三项，无回调链路 -->
-        <div v-if="form.channel_type === 'wecom'" class="mb-3">
+        <!-- 应用「通知用途」单选（企微渠道合并 2026-11-15、飞书通知接入 2026-11-15）：
+             notify_only 只填发消息凭据，无回调链路 -->
+        <div v-if="supportsNotifyUsage" class="mb-3">
           <label class="text-sm text-muted mb-1 block">通知用途</label>
           <div class="grid grid-cols-3 gap-2">
             <label
-              v-for="u in WECOM_NOTIFY_USAGES" :key="u.value"
+              v-for="u in NOTIFY_USAGES" :key="u.value"
               class="flex items-start gap-2 rounded-lg border p-2.5 cursor-pointer transition-colors"
               :class="notifyUsage === u.value ? 'border-primary-400 bg-primary-50' : 'border-default hover:border-hover'"
             >
               <input
                 type="radio"
-                name="wecom-notify-usage"
+                name="notify-usage"
                 :value="u.value"
                 v-model="notifyUsage"
                 class="mt-0.5 w-4 h-4 text-primary-600 focus:ring-primary-500"
@@ -198,7 +199,7 @@
           <!-- 关联数字员工（wecom_kf 渠道由客服账号级"绑定数字员工"决定，wechat_mp 内容源
                不进收发消息链路，wecom_app_notify 为外发通知渠道无对话入口；企微应用
                「仅通知」用途同样无对话入口，均隐藏主表字段避免误导） -->
-          <div v-if="form.channel_type !== 'wecom_kf' && form.channel_type !== 'wechat_mp' && form.channel_type !== 'wecom_app_notify' && !isWecomNotifyOnly">
+          <div v-if="form.channel_type !== 'wecom_kf' && form.channel_type !== 'wechat_mp' && form.channel_type !== 'wecom_app_notify' && !isNotifyOnly">
             <label class="text-sm text-muted mb-1 block">关联数字员工</label>
             <BaseSelect v-model="form.subagent_type">
               <option value="">不绑定</option>
@@ -457,8 +458,8 @@
         </div>
 
         <!-- 回调地址提示（企业微信应用通知为纯外发通知渠道，无回调地址；
-             企微应用「仅通知」用途纯服务端 API 发消息，同样无回调） -->
-        <div v-if="tenant && form.channel_type !== 'wecom_app_notify' && !isWecomNotifyOnly" class="mt-3 bg-primary-50 border border-primary-200 rounded-lg p-3">
+             企微/飞书应用「仅通知」用途纯服务端 API 发消息，同样无回调） -->
+        <div v-if="tenant && form.channel_type !== 'wecom_app_notify' && !isNotifyOnly" class="mt-3 bg-primary-50 border border-primary-200 rounded-lg p-3">
           <p class="text-sm font-medium text-primary-800 mb-1">回调地址</p>
           <p class="text-xs text-primary-600 mb-2">请将此地址填入 {{ channelTypeLabel(form.channel_type) }} 后台的「接收消息」配置中</p>
           <div class="flex items-center gap-2">
@@ -1187,29 +1188,37 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
   ],
 }
 
-// ==================== 企微应用「通知用途」（渠道合并 2026-11-15） ====================
+// ==================== 应用「通知用途」（企微渠道合并 2026-11-15、飞书通知接入 2026-11-15） ====================
 // agent_only 仅智能体接入（缺省，存量行为不变）；both 智能体接入+通知（通知
 // 借用此应用凭据发送）；notify_only 仅通知（不接对话，纯服务端 API 无回调，
-// 表单只填 corp_id/agent_id/secret 三项）
-const WECOM_NOTIFY_USAGES = [
+// 表单只填发消息凭据——企微 corp_id/agent_id/secret 三项、飞书 app_id/app_secret 两项）
+const NOTIFY_USAGES = [
   { value: 'agent_only', label: '仅智能体接入', desc: '默认；仅用于 IM 对话，不发任务通知' },
   { value: 'both', label: '智能体接入 + 通知', desc: '对话接入，且任务通知借用此应用凭据发送' },
-  { value: 'notify_only', label: '仅通知', desc: '不接对话；只填企业 ID / AgentId / Secret 三项' },
+  { value: 'notify_only', label: '仅通知', desc: '不接对话；只填发消息所需凭据' },
 ]
+
+const supportsNotifyUsage = computed(() =>
+  form.value.channel_type === 'wecom' || form.value.channel_type === 'feishu')
 
 const notifyUsage = computed({
   get: () => form.value.config.notify_usage || 'agent_only',
   set: (v: string) => { form.value.config.notify_usage = v }
 })
 
-const isWecomNotifyOnly = computed(() =>
-  form.value.channel_type === 'wecom' && notifyUsage.value === 'notify_only')
+const isNotifyOnly = computed(() =>
+  supportsNotifyUsage.value && notifyUsage.value === 'notify_only')
 
 const channelFields = computed(() => {
   const fields = channelFieldMap[form.value.channel_type] || []
-  if (isWecomNotifyOnly.value) {
-    // 仅通知用途：无回调链路，回调 Token / EncodingAESKey 免填（保存时剔除旧值）
+  if (isNotifyOnly.value && form.value.channel_type === 'wecom') {
+    // 企微仅通知用途：无回调链路，回调 Token / EncodingAESKey 免填（保存时剔除旧值）
     return fields.filter(f => f.key !== 'token' && f.key !== 'encoding_aes_key')
+  }
+  if (isNotifyOnly.value && form.value.channel_type === 'feishu') {
+    // 飞书仅通知用途：纯服务端 API 发消息，Verification Token / Encrypt Key 免填
+    //（encrypt_key 本就可选），保存时剔除旧值
+    return fields.filter(f => f.key !== 'verification_token' && f.key !== 'encrypt_key')
   }
   return fields
 })
@@ -1284,6 +1293,7 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '在「事件与回调」中添加 im.message.receive_v1 事件',
       '将下方回调地址填入请求地址',
       '记录 App ID、App Secret、Verification Token、Encrypt Key',
+      '仅任务通知（不接对话）时，「通知用途」选「仅通知」，只需 App ID / App Secret 两项',
     ],
     docUrl: 'https://open.feishu.cn/',
   },
@@ -1776,13 +1786,18 @@ async function saveChannel(): Promise<boolean> {
       config: { ...form.value.config },
       subagent_type: form.value.subagent_type || undefined
     }
-    // 企微应用：写入通知用途（缺省 agent_only，存量行为不变）；
-    // 仅通知用途无回调链路，剔除回调 Token / EncodingAESKey 旧值（表单已隐藏）
-    if (form.value.channel_type === 'wecom') {
+    // 企微/飞书应用：写入通知用途（缺省 agent_only，存量行为不变）；
+    // 仅通知用途无回调链路，剔除回调字段旧值（表单已隐藏）
+    if (form.value.channel_type === 'wecom' || form.value.channel_type === 'feishu') {
       payload.config.notify_usage = notifyUsage.value
       if (notifyUsage.value === 'notify_only') {
-        delete payload.config.token
-        delete payload.config.encoding_aes_key
+        if (form.value.channel_type === 'wecom') {
+          delete payload.config.token
+          delete payload.config.encoding_aes_key
+        } else {
+          delete payload.config.verification_token
+          delete payload.config.encrypt_key
+        }
       }
     }
     // wecom_kf：写入处理等待提示（渠道级配置）；不写 delay_seconds（watchdog 已删除）

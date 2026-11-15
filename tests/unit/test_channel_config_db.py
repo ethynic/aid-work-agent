@@ -1551,3 +1551,51 @@ class TestGetLatestWecomNotifyUsageDecrypted:
         with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
             mock_get_db.return_value.__enter__.return_value = mock_conn
             assert ChannelConfigDB.get_latest_wecom_notify_usage_decrypted("tenant_x") is None
+
+
+class TestGetLatestFeishuNotifyUsageDecrypted:
+    """飞书应用「通知用途」凭据源查询（飞书通知接入 2026-11-15，同模式）"""
+
+    def test_queries_feishu_notify_usage_latest_row(self):
+        """SQL 按 tenant + feishu + notify_usage IN (both, notify_only) 过滤，
+        参数化取 id 最大一条"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = {
+            "config_id": "chan_f2",
+            "tenant_id": "tenant_001",
+            "channel_type": "feishu",
+            "config": json.dumps({"app_id": "cli_a1", "app_secret": "s",
+                                  "encrypt_key": "ek", "verification_token": "vt",
+                                  "notify_usage": "notify_only"}),
+            "subagent_type": None,
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            row = ChannelConfigDB.get_latest_feishu_notify_usage_decrypted("tenant_001")
+
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "notify_usage" in sql
+        assert "ORDER BY id DESC LIMIT 1" in sql
+        # 参数化：tenant_id / feishu / both / notify_only（缺省 agent_only 的
+        # 存量配置不含任一取值，天然不命中）
+        assert params == ("tenant_001", "feishu", "both", "notify_only")
+        assert row["config_id"] == "chan_f2"
+        assert row["config"]["app_id"] == "cli_a1"
+
+    def test_no_row_returns_none(self):
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = None
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            assert ChannelConfigDB.get_latest_feishu_notify_usage_decrypted("tenant_x") is None

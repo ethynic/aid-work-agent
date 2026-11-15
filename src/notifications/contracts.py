@@ -46,10 +46,11 @@ class RegisterTarget(StrictDTO):
 
 class PreferenceRequest(StrictDTO):
     # wecom_app：企微任务通知偏好（绑定后开关用，wecom-app-task-notification-design
-    # §4.5；target 登记是服务端行为，偏好开关仍走本 API）
+    # §4.5；target 登记是服务端行为，偏好开关仍走本 API）；feishu_app：飞书任务
+    # 通知偏好（2026-11-15 决策 7 追加，同模式）
     category: Literal['task']
-    channel: Literal['web_push', 'wecom_app']
-    provider: Literal['web_push', 'wecom_app']
+    channel: Literal['web_push', 'wecom_app', 'feishu_app']
+    provider: Literal['web_push', 'wecom_app', 'feishu_app']
     enabled: StrictBool
 
 
@@ -76,6 +77,12 @@ class WecomBindConfirm(StrictDTO):
     userid: str = Field(min_length=1, max_length=64)
 
 
+class FeishuBindConfirm(StrictDTO):
+    """飞书手机号识别确认绑定：open_id 仅回传预填值，服务端以登录用户手机号
+    batch_get_id 重新核实后才落库（2026-11-15 决策 7 追加，同企微 confirm 口径）"""
+    open_id: str = Field(min_length=1, max_length=64)
+
+
 class WecomAppConfiguration(StrictDTO):
     """企微应用通知目标配置（wecom-app-task-notification-design §4.3）。
 
@@ -95,6 +102,27 @@ class WecomAppTargetRegistration(StrictDTO):
     installation_ref: str = Field(min_length=1, max_length=128)
     expected_binding_version: StrictInt | None = Field(default=None, ge=1)
     configuration: WecomAppConfiguration
+
+
+class FeishuAppConfiguration(StrictDTO):
+    """飞书应用通知目标配置（2026-11-15 决策 7 追加，对齐 WecomAppConfiguration）。
+
+    目标注册是绑定成功后的服务端内部行为（手机号 batch_get_id 核实后登记），
+    不走用户提交的 RegisterTarget API；RegisterTarget.channel 维持 web_push 不扩。"""
+    feishu_open_id: str = Field(min_length=1, max_length=64)
+    # 绑定成员姓名快照（batch_get_id 不返回姓名，本期留空；设置页展示用，非机密）
+    bound_user_name: str = Field(default='', max_length=128)
+    tenant_id: str = Field(default='', max_length=64)
+
+
+class FeishuAppTargetRegistration(StrictDTO):
+    """绑定事务内服务端登记 feishu_app target 的载体（复用
+    repository.register_target 的 upsert/归属/幂等语义）。"""
+    channel: Literal['feishu_app'] = 'feishu_app'
+    provider: Literal['feishu_app'] = 'feishu_app'
+    installation_ref: str = Field(min_length=1, max_length=128)
+    expected_binding_version: StrictInt | None = Field(default=None, ge=1)
+    configuration: FeishuAppConfiguration
 
 
 TENANT_CHANNEL_PROVIDERS = {

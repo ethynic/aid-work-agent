@@ -58,12 +58,16 @@ def _effective_event_types(stored):
     return stored
 
 
-# 渠道事件白名单（评审回炉 P2-5，设计决策 3/§4.3）：企微应用通知仅投递任务
-# 终态（completed/failed）——waiting_input/paused 等过程事件不推企微卡片，
+# 渠道事件白名单（评审回炉 P2-5，设计决策 3/§4.3）：企微/飞书应用通知仅投递
+# 任务终态（completed/failed）——waiting_input/paused 等过程事件不推应用卡片，
 # 否则 ask_user 中途提问会绕过「≥5 分钟长任务才通知」的终态门禁；expand
-# 资格判断对 wecom_app target 在既有偏好/事件集合判定之上 AND 本白名单，
-# 其他渠道不受影响。adapter 渲染层同样只留终态映射（fail loud 兜底）。
-PROVIDER_ALLOWED_EVENT_TYPES = {'wecom_app': ('task.completed', 'task.failed')}
+# 资格判断对白名单内 provider 的 target 在既有偏好/事件集合判定之上 AND 本
+# 白名单，其他渠道不受影响。adapter 渲染层同样只留终态映射（fail loud 兜底）。
+# feishu_app：2026-11-15 决策 7 追加（飞书通知完全复刻企微租户级模式）。
+PROVIDER_ALLOWED_EVENT_TYPES = {
+    'wecom_app': ('task.completed', 'task.failed'),
+    'feishu_app': ('task.completed', 'task.failed'),
+}
 
 
 def mask_tenant_configuration(channel, configuration):
@@ -908,6 +912,15 @@ class NotificationRepository:
         """设置页绑定状态（Phase 4，设计 §4.5）：当前用户最近的 wecom_app
         target 状态与绑定姓名快照（绑定落库时缓存于 target 配置，设计 §4.1）。
         未登记 target 时两个字段均为 None。"""
+        return self._bind_profile(subject, 'wecom_app')
+
+    def feishu_bind_profile(self, subject):
+        """设置页绑定状态（飞书通知接入，2026-11-15 决策 7 追加）：当前用户
+        最近的 feishu_app target 状态与绑定姓名快照。口径与 wecom_bind_profile
+        一致，未登记 target 时两个字段均为 None。"""
+        return self._bind_profile(subject, 'feishu_app')
+
+    def _bind_profile(self, subject, channel):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
             self.guard(cursor, subject)
@@ -915,8 +928,9 @@ class NotificationRepository:
             # stale revoked 新行遮蔽接手的 active 行（设置页误显示已撤销）；与
             # installation 查找同口径：active 行优先，无 active 再回退最近行。
             cursor.execute('''SELECT state,configuration_encrypted FROM notification_targets
-                WHERE scope_key=%s AND recipient_user_id=%s AND channel='wecom_app'
-                ORDER BY (state='active') DESC, created_at DESC LIMIT 1''', (subject.scope_key, subject.user_id))
+                WHERE scope_key=%s AND recipient_user_id=%s AND channel=%s
+                ORDER BY (state='active') DESC, created_at DESC LIMIT 1''',
+                (subject.scope_key, subject.user_id, channel))
             row = cursor.fetchone()
             if not row:
                 return {'target_state': None, 'name': None}
@@ -1459,8 +1473,8 @@ class NotificationRepository:
                                         and target['preference_since'] <= message['accepted_at']
                                         and target['enabled_since'] <= message['accepted_at']
                                         and message['event_type'] in _effective_event_types(target['event_types'])
-                                        and (target['provider'] != 'wecom_app' or
-                                             message['event_type'] in PROVIDER_ALLOWED_EVENT_TYPES['wecom_app']))
+                                        and (target['provider'] not in PROVIDER_ALLOWED_EVENT_TYPES or
+                                             message['event_type'] in PROVIDER_ALLOWED_EVENT_TYPES[target['provider']]))
                                 if not eligible:
                                     continue
                                 if message['policy_key'] == 'tenant_admin_event' and target['recipient_user_id'] is None:
