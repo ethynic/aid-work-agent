@@ -43,8 +43,9 @@
             <BaseButton intent="danger-ghost" size="sm" @click="handleDelete(ch.config_id)">删除</BaseButton>
           </div>
         </div>
-        <!-- 回调地址展示（企业微信应用通知为纯外发通知渠道，无回调地址） -->
-        <div v-if="tenant && ch.channel_type !== 'wecom_app_notify'" class="bg-canvas rounded-lg p-3 text-sm">
+        <!-- 回调地址展示（企业微信应用通知为纯外发通知渠道，无回调地址；
+             企微应用「仅通知」用途同样不接回调） -->
+        <div v-if="tenant && ch.channel_type !== 'wecom_app_notify' && !(ch.channel_type === 'wecom' && ch.config?.notify_usage === 'notify_only')" class="bg-canvas rounded-lg p-3 text-sm">
           <span class="text-muted">回调地址：</span>
           <code class="text-primary-600 select-all font-mono">{{ ch.callback_url || getCallbackUrl(ch.channel_type, ch.config_id) }}</code>
           <BaseButton intent="ghost" size="sm" @click="copyUrl(ch.callback_url || getCallbackUrl(ch.channel_type, ch.config_id), ch.config_id)">
@@ -105,6 +106,12 @@
 
         <p v-if="!editingId" class="text-sm text-muted mb-3">选择 IM 平台，然后填写应用凭证</p>
 
+        <!-- 存量企微应用通知迁移提示：类型已合并进「企业微信」的通知用途（2026-11-15），
+             存量行保留展示与编辑，仍有效 -->
+        <div v-if="editingId && form.channel_type === 'wecom_app_notify'" class="bg-primary-50 border border-primary-200 rounded-lg p-3 mb-3 text-sm text-primary-800">
+          该配置仍有效，任务通知继续经此应用发送。新配置建议直接在「企业微信」渠道的「通知用途」中选择「智能体接入 + 通知」或「仅通知」，无需再单独新建通知渠道。
+        </div>
+
         <!-- 渠道类型选择 -->
         <div v-if="!editingId" class="grid grid-cols-8 gap-2 mb-3">
           <button
@@ -142,6 +149,30 @@
           </a>
         </div>
 
+        <!-- 企微应用「通知用途」单选（渠道合并 2026-11-15）：notify_only 只填三项，无回调链路 -->
+        <div v-if="form.channel_type === 'wecom'" class="mb-3">
+          <label class="text-sm text-muted mb-1 block">通知用途</label>
+          <div class="grid grid-cols-3 gap-2">
+            <label
+              v-for="u in WECOM_NOTIFY_USAGES" :key="u.value"
+              class="flex items-start gap-2 rounded-lg border p-2.5 cursor-pointer transition-colors"
+              :class="notifyUsage === u.value ? 'border-primary-400 bg-primary-50' : 'border-default hover:border-hover'"
+            >
+              <input
+                type="radio"
+                name="wecom-notify-usage"
+                :value="u.value"
+                v-model="notifyUsage"
+                class="mt-0.5 w-4 h-4 text-primary-600 focus:ring-primary-500"
+              />
+              <span class="min-w-0">
+                <span class="block text-sm font-medium text-default">{{ u.label }}</span>
+                <span class="block text-xs text-muted mt-0.5">{{ u.desc }}</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
         <!-- 表单字段（一行4个） -->
         <div class="grid grid-cols-4 gap-3">
           <div v-for="field in channelFields" :key="field.key">
@@ -165,8 +196,9 @@
           </div>
 
           <!-- 关联数字员工（wecom_kf 渠道由客服账号级"绑定数字员工"决定，wechat_mp 内容源
-               不进收发消息链路，wecom_app_notify 为外发通知渠道无对话入口，均隐藏主表字段避免误导） -->
-          <div v-if="form.channel_type !== 'wecom_kf' && form.channel_type !== 'wechat_mp' && form.channel_type !== 'wecom_app_notify'">
+               不进收发消息链路，wecom_app_notify 为外发通知渠道无对话入口；企微应用
+               「仅通知」用途同样无对话入口，均隐藏主表字段避免误导） -->
+          <div v-if="form.channel_type !== 'wecom_kf' && form.channel_type !== 'wechat_mp' && form.channel_type !== 'wecom_app_notify' && !isWecomNotifyOnly">
             <label class="text-sm text-muted mb-1 block">关联数字员工</label>
             <BaseSelect v-model="form.subagent_type">
               <option value="">不绑定</option>
@@ -424,8 +456,9 @@
           </div>
         </div>
 
-        <!-- 回调地址提示（企业微信应用通知为纯外发通知渠道，无回调地址） -->
-        <div v-if="tenant && form.channel_type !== 'wecom_app_notify'" class="mt-3 bg-primary-50 border border-primary-200 rounded-lg p-3">
+        <!-- 回调地址提示（企业微信应用通知为纯外发通知渠道，无回调地址；
+             企微应用「仅通知」用途纯服务端 API 发消息，同样无回调） -->
+        <div v-if="tenant && form.channel_type !== 'wecom_app_notify' && !isWecomNotifyOnly" class="mt-3 bg-primary-50 border border-primary-200 rounded-lg p-3">
           <p class="text-sm font-medium text-primary-800 mb-1">回调地址</p>
           <p class="text-xs text-primary-600 mb-2">请将此地址填入 {{ channelTypeLabel(form.channel_type) }} 后台的「接收消息」配置中</p>
           <div class="flex items-center gap-2">
@@ -1085,11 +1118,12 @@ function closeModal() {
 
 // ==================== 渠道类型定义 ====================
 
+// 新增渠道可选类型。企微应用通知（wecom_app_notify）已合并进「企业微信」的
+// 通知用途选择（2026-11-15），不再开放新增；存量行保留展示与编辑（编辑弹窗提示迁移）。
 const channelTypes = [
   { value: 'wecom', label: '企业微信', icon: '' },
   { value: 'wecom_kf', label: '企业微信客服', icon: '' },
   { value: 'wechat_mp', label: '公众号内容', icon: '' },
-  { value: 'wecom_app_notify', label: '企微应用通知', icon: '' },
   { value: 'dingtalk', label: '钉钉', icon: '' },
   { value: 'feishu', label: '飞书', icon: '' },
 ]
@@ -1153,7 +1187,32 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
   ],
 }
 
-const channelFields = computed(() => channelFieldMap[form.value.channel_type] || [])
+// ==================== 企微应用「通知用途」（渠道合并 2026-11-15） ====================
+// agent_only 仅智能体接入（缺省，存量行为不变）；both 智能体接入+通知（通知
+// 借用此应用凭据发送）；notify_only 仅通知（不接对话，纯服务端 API 无回调，
+// 表单只填 corp_id/agent_id/secret 三项）
+const WECOM_NOTIFY_USAGES = [
+  { value: 'agent_only', label: '仅智能体接入', desc: '默认；仅用于 IM 对话，不发任务通知' },
+  { value: 'both', label: '智能体接入 + 通知', desc: '对话接入，且任务通知借用此应用凭据发送' },
+  { value: 'notify_only', label: '仅通知', desc: '不接对话；只填企业 ID / AgentId / Secret 三项' },
+]
+
+const notifyUsage = computed({
+  get: () => form.value.config.notify_usage || 'agent_only',
+  set: (v: string) => { form.value.config.notify_usage = v }
+})
+
+const isWecomNotifyOnly = computed(() =>
+  form.value.channel_type === 'wecom' && notifyUsage.value === 'notify_only')
+
+const channelFields = computed(() => {
+  const fields = channelFieldMap[form.value.channel_type] || []
+  if (isWecomNotifyOnly.value) {
+    // 仅通知用途：无回调链路，回调 Token / EncodingAESKey 免填（保存时剔除旧值）
+    return fields.filter(f => f.key !== 'token' && f.key !== 'encoding_aes_key')
+  }
+  return fields
+})
 
 // 切换渠道类型：wechat_mp 的 enabled 默认 true（checkbox 绑定需要显式初值）
 function selectChannelType(type: string) {
@@ -1716,6 +1775,15 @@ async function saveChannel(): Promise<boolean> {
       name: trimmedName,
       config: { ...form.value.config },
       subagent_type: form.value.subagent_type || undefined
+    }
+    // 企微应用：写入通知用途（缺省 agent_only，存量行为不变）；
+    // 仅通知用途无回调链路，剔除回调 Token / EncodingAESKey 旧值（表单已隐藏）
+    if (form.value.channel_type === 'wecom') {
+      payload.config.notify_usage = notifyUsage.value
+      if (notifyUsage.value === 'notify_only') {
+        delete payload.config.token
+        delete payload.config.encoding_aes_key
+      }
     }
     // wecom_kf：写入处理等待提示（渠道级配置）；不写 delay_seconds（watchdog 已删除）
     if (form.value.channel_type === 'wecom_kf') {

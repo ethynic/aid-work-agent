@@ -19,6 +19,7 @@
 | 三轮回炉（外部复审 3 项） | profile 遮蔽/换绑死循环/集成用例断言 | ✅ 完成（2026-11-13） | ab8f45c4；钉扎仅 active 行生效（非激活跳过，advisory 锁+锁后判定闭合并发边界）；profile active 优先排序；接手/换绑 integration 真 PG 用例改按状态断言。单测 439（红先验证）+ 真 PG 隔离库 wecom 5 用例独立复现全绿；logout 用例失败为 master 预存签名漂移（初始提交即 4 参） |
 | 四轮回炉（外部复审 1 项：Web Push 回归） | stale 请求复活用户刚关闭的浏览器通知 | ✅ 完成（2026-11-13） | dfd527c1；register_target 增 identity_preverified 门控（默认 False=web_push 完全恢复回归前语义，wecom_bind 传 True 保留企微接手/换绑/跳钉扎）；红先 3 用例复现回归后转绿，445 passed；CR 独立复现红先+与 2fdf51c2 基线逐分支等价；integration 真 PG 待隔离库环境 |
 | 五轮：租户级配置改造（用户否决平台全局配置） | 企微应用通知凭据从全局 `notifications.wecom_app` 改为租户自备（连接中心渠道配置 wecom_app_notify） | 🔧 进行中（开发+单测+独立测试+CR 完成，integration 真 PG 与真机验收待环境） | 详见下方「五轮」节；notifications 460 + channel_config_db 79 + task_result_sharing 回归 19 = 558 全绿（CR 独立复跑一致）；前端 build + vitest notifications 140 全绿；E2E 旧全局配置口径作废（后续教程走租户配置页）；integration 真 PG 与真机验收待环境 |
+| 六轮：企微应用与通知配置合并（2026-11-15，设计 §3 决策 7 追加） | 「企业微信」应用配置加「通知用途」三模式（notify_usage），通知凭据两级回退借用 | 🔧 进行中（开发+单测完成，独立测试/CR 待走） | 详见下方「六轮」节；notifications+channels+channel_config_db+factory+api 用例 1555 过（7 失败经基线核实为 master 预存，与本轮无关）；前端 build + vitest notifications 140 全绿 |
 
 ## 五轮：租户级配置改造（2026-11-13，设计 §3 决策 7）
 
@@ -28,6 +29,15 @@
 - 前端：ChannelConfig.vue 新增「企业微信应用通知」类型（corp_id/agentid/secret，secret 密码框+掩码回显；无回调地址、无验证连接、不绑定数字员工）。
 
 前置（用户/运维，五轮更新）：各租户管理员在企业微信后台创建本租户的独立通知应用（agentid+secret）、配置可信域名与可见范围，凭据填入连接中心「企业微信应用通知」渠道；OAuth 回跳域名仍由平台站点域名承载。E2E 按旧文档准备的 `notifications.wecom_app` 全局配置作废。
+
+## 六轮：企微应用与通知配置合并（2026-11-15，设计 §3 决策 7 追加）
+
+- 背景：连接中心「企业微信」（agent 对话接入）与「企业微信应用通知」（wecom_app_notify，通知专用）两套配置并存；通知仅发生在 web 渠道聊天（producer 已判定，企微渠道聊天无通知），合并无体验负担。
+- 渠道配置（src/saas/api/channel_config.py）：wecom 类型 config 新键 `notify_usage`（`agent_only` 缺省 / `both` / `notify_only`，非法值 400）；必填校验按用途分支——notify_only 仅 corp_id/agent_id/secret 三项（纯服务端 API 无回调，token/encoding_aes_key 免填），agent_only/both 保持原 5 项；create/update 同口径。
+- 渠道工厂（src/saas/services/channel_factory.py）：`_load_config` 跳过 notify_only 的 wecom 配置（不实例化对话渠道、不接回调，回调路由走既有 404 分支）；`notify_usage` 作为配置元键在 adapter 构造前剔除（verify 直连路径同样覆盖）。
+- 凭据回退链（src/notifications/wecom_app.py）：`_default_credentials_source` 改两级回退——① wecom_app_notify 最新一条（存量兼容优先，凭据不全继续回退）② wecom 且 notify_usage ∈ {both, notify_only} 最新一条（借用发送，agent_id→agentid 映射；wecom 类型 secret 明文存储）③ 均无 → None；新增 ChannelConfigDB.get_latest_wecom_notify_usage_decrypted（SQL 参数化）。
+- 前端（ChannelConfig.vue）：企微应用表单加「通知用途」单选（notify_only 联动隐藏回调字段/回调地址/关联数字员工，保存时剔除回调字段旧值）；「企业微信应用通知」从新增入口隐藏（存量行保留展示与编辑，编辑弹窗提示迁移）。
+- 存量行为零变更：agent_only 缺省、wecom_app_notify 优先、既有 wecom 5 项必填不变。
 
 ## Phase 1 — 身份绑定（设计 §4.1）
 

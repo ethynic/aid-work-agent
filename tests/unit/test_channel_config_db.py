@@ -1505,3 +1505,49 @@ class TestChannelConfigApiWecomAppNotify:
             "config": {"corp_id": "ww123", "agentid": 1, "secret": "s"}})
         assert resp.status_code == 400
         assert "不支持的渠道类型" in resp.json()["detail"]
+
+
+class TestGetLatestWecomNotifyUsageDecrypted:
+    """企微应用「通知用途」借用源查询（渠道合并 2026-11-15）"""
+
+    def test_queries_wecom_notify_usage_latest_row(self):
+        """SQL 按 tenant + wecom + notify_usage IN (both, notify_only) 过滤，
+        参数化取 id 最大一条"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = {
+            "config_id": "chan_w2",
+            "tenant_id": "tenant_001",
+            "channel_type": "wecom",
+            "config": json.dumps({"corp_id": "ww1", "agent_id": "1000002",
+                                  "secret": "s", "notify_usage": "both"}),
+            "subagent_type": None,
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            row = ChannelConfigDB.get_latest_wecom_notify_usage_decrypted("tenant_001")
+
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "notify_usage" in sql
+        assert "ORDER BY id DESC LIMIT 1" in sql
+        # 参数化：tenant_id / wecom / both / notify_only
+        assert params == ("tenant_001", "wecom", "both", "notify_only")
+        assert row["config_id"] == "chan_w2"
+        assert row["config"]["agent_id"] == "1000002"
+
+    def test_no_row_returns_none(self):
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = None
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            assert ChannelConfigDB.get_latest_wecom_notify_usage_decrypted("tenant_x") is None

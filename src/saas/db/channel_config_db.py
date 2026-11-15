@@ -36,6 +36,8 @@ _WECHAT_MP_CHANNEL_TYPE = "wechat_mp"
 # 企业微信应用通知（长任务企微应用通知，租户自备凭据；secret 加密/脱敏与
 # wechat_mp 共用 wechat_mp_codec 机制，无 callback_token 服务端生成等 mp 特有逻辑）
 _WECOM_APP_NOTIFY_CHANNEL_TYPE = "wecom_app_notify"
+# 企微应用消息渠道（agent 对话接入；secret 明文存储——敏感字段加密机制不含该类型）
+_WECOM_CHANNEL_TYPE = "wecom"
 
 # wechat_mp 运行时/三态字段：更新配置时若调用方未提供则保留旧值
 # WP13-r1（CR P2-3 修复）：纳入清单源运行时状态与租户选择字段——前端旧快照
@@ -357,6 +359,35 @@ class ChannelConfigDB:
                 ORDER BY id DESC LIMIT 1
                 """,
                 (tenant_id, channel_type),
+            )
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d["config"] = json.loads(d["config"]) if d.get("config") else {}
+                if _has_sensitive_fields(d.get("channel_type")):
+                    d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
+                return d
+            return None
+
+    @staticmethod
+    def get_latest_wecom_notify_usage_decrypted(tenant_id: str) -> Optional[Dict[str, Any]]:
+        """按 tenant_id 取最新一条「通知用途」企微应用配置（渠道合并 2026-11-15）。
+
+        channel_type=wecom 且 config.notify_usage ∈ {both, notify_only}，同租户
+        多条时取 id 最大（最新保存）一条；仅供企微应用通知凭据借用链服务端内部
+        使用。wecom 类型敏感字段明文存储，无需解密（与
+        get_by_tenant_and_type_decrypted 返回结构一致，decrypt 分支仅作形态对齐）。
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM tenant_channel_configs
+                WHERE tenant_id = %s AND channel_type = %s
+                  AND (config::jsonb)->>'notify_usage' IN (%s, %s)
+                ORDER BY id DESC LIMIT 1
+                """,
+                (tenant_id, _WECOM_CHANNEL_TYPE, "both", "notify_only"),
             )
             row = cursor.fetchone()
             if row:

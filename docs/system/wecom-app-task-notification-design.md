@@ -29,7 +29,7 @@ BOSS 直聘爬虫等长任务在 web 控制台执行，完成后当前实现会�
 | 4 | 消息形态 | textcard：标题=会话名+任务完成/失败，描述=执行耗时；点击跳控制台会话页 |
 | 5 | 发送通道 | 企微后台独立通知应用（独立 agentid+secret），与渠道对话应用分开 |
 | 6 | 开启方式 | 用户主动开启+绑定后才推；不补发历史任务；全租户通用 |
-| 7 | 应用配置归属 | **租户自备**（2026-11-13 变更，用户否决平台全局配置）：每个租户的企微通知应用凭据互不相同，且后续钉钉/飞书同模式。租户管理员在「连接中心 → 渠道配置」新增「企业微信应用通知」渠道类型（channel_type=`wecom_app_notify`，选择即启用），输入 corp_id/agentid/secret 三项保存（secret 加密落库、回显脱敏，保存即可用不做主动验证）；运行时按 target 所属租户读取配置发送，未配置租户不可绑定/不投递。通知目标 channel 保持 `wecom_app` 不变，redirect_uri 仍为平台全局站点域名 |
+| 7 | 应用配置归属 | **租户自备**（2026-11-13 变更，用户否决平台全局配置）：每个租户的企微通知应用凭据互不相同，且后续钉钉/飞书同模式。租户管理员在「连接中心 → 渠道配置」新增「企业微信应用通知」渠道类型（channel_type=`wecom_app_notify`，选择即启用），输入 corp_id/agentid/secret 三项保存（secret 加密落库、回显脱敏，保存即可用不做主动验证）；运行时按 target 所属租户读取配置发送，未配置租户不可绑定/不投递。通知目标 channel 保持 `wecom_app` 不变，redirect_uri 仍为平台全局站点域名。**2026-11-15 渠道合并追加（用户拍板）**：连接中心「企业微信」应用配置（channel_type=`wecom`）增加「通知用途」单选（config 新键 `notify_usage`：`agent_only` 仅智能体接入（缺省，存量行为不变）/ `both` 智能体接入+通知（通知借用此应用凭据发送）/ `notify_only` 仅通知——不接 agent、表单只填 corp_id/agent_id/secret 三项（纯服务端 API 无回调，token/encoding_aes_key 免填））；「企业微信应用通知」类型从新增入口隐藏（存量行保留展示与编辑）；通知凭据解析改为两级回退链：① `wecom_app_notify` 最新一条（存量兼容优先）② `wecom` 且 `notify_usage ∈ {both, notify_only}` 最新一条（字段映射 agent_id→agentid；wecom 类型 secret 明文存储，无需解密）③ 均无 → None；`notify_only` 的 wecom 配置不实例化对话渠道、不注册回调（ChannelFactory `_load_config` 跳过，`notify_usage` 作为配置元键在 adapter 构造前剔除）。前提：通知仅发生在 web 渠道聊天（producer 已判定），企微渠道聊天无通知，合并无体验负担 |
 
 ## 四、详细设计
 
