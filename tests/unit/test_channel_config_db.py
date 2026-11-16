@@ -1599,3 +1599,52 @@ class TestGetLatestFeishuNotifyUsageDecrypted:
         with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
             mock_get_db.return_value.__enter__.return_value = mock_conn
             assert ChannelConfigDB.get_latest_feishu_notify_usage_decrypted("tenant_x") is None
+
+
+class TestGetLatestDingtalkNotifyUsageDecrypted:
+    """钉钉应用「通知用途」凭据源查询（钉钉通知接入 2026-11-16，同模式）"""
+
+    def test_queries_dingtalk_notify_usage_latest_row(self):
+        """SQL 按 tenant + dingtalk + notify_usage IN (both, notify_only) 过滤，
+        参数化取 id 最大一条"""
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = {
+            "config_id": "chan_d2",
+            "tenant_id": "tenant_001",
+            "channel_type": "dingtalk",
+            "config": json.dumps({"app_key": "ding-key", "app_secret": "s",
+                                  "agent_id": 1000002, "token": "cb",
+                                  "encoding_aes_key": "aes",
+                                  "notify_usage": "notify_only"}),
+            "subagent_type": None,
+        }
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            row = ChannelConfigDB.get_latest_dingtalk_notify_usage_decrypted("tenant_001")
+
+        sql = mock_cursor.execute.call_args[0][0]
+        params = mock_cursor.execute.call_args[0][1]
+        assert "notify_usage" in sql
+        assert "ORDER BY id DESC LIMIT 1" in sql
+        # 参数化：tenant_id / dingtalk / both / notify_only（缺省 agent_only 的
+        # 存量配置不含任一取值，天然不命中）
+        assert params == ("tenant_001", "dingtalk", "both", "notify_only")
+        assert row["config_id"] == "chan_d2"
+        assert row["config"]["app_key"] == "ding-key"
+
+    def test_no_row_returns_none(self):
+        from src.saas.db.channel_config_db import ChannelConfigDB
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = None
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.saas.db.channel_config_db.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            assert ChannelConfigDB.get_latest_dingtalk_notify_usage_decrypted("tenant_x") is None

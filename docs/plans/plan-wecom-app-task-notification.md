@@ -21,6 +21,7 @@
 | 五轮：租户级配置改造（用户否决平台全局配置） | 企微应用通知凭据从全局 `notifications.wecom_app` 改为租户自备（连接中心渠道配置 wecom_app_notify） | 🔧 进行中（开发+单测+独立测试+CR 完成，integration 真 PG 与真机验收待环境） | 详见下方「五轮」节；notifications 460 + channel_config_db 79 + task_result_sharing 回归 19 = 558 全绿（CR 独立复跑一致）；前端 build + vitest notifications 140 全绿；E2E 旧全局配置口径作废（后续教程走租户配置页）；integration 真 PG 与真机验收待环境 |
 | 六轮：企微应用与通知配置合并（2026-11-15，设计 §3 决策 7 追加） | 「企业微信」应用配置加「通知用途」三模式（notify_usage），通知凭据两级回退借用 | 🔧 进行中（开发+单测完成，独立测试/CR 待走） | 详见下方「六轮」节；notifications+channels+channel_config_db+factory+api 用例 1555 过（7 失败经基线核实为 master 预存，与本轮无关）；前端 build + vitest notifications 140 全绿 |
 | 七轮：飞书通知接入（2026-11-15，设计 §3 决策 7 追加） | 飞书通知完全复刻企微租户级模式：飞书渠道通知用途三模式 + 手机号识别绑定（无 OAuth）+ FeishuAppAdapter | 🔧 进行中（开发+单测完成，独立测试/CR 待走） | 详见下方「七轮」节；notifications/channels/factory/db/api 单测全绿（channels 5 失败为宿主机预存环境项：Redis 禁用致 idempotency 2 + kf_account_referral 3，与本轮无关）；前端 build + vitest notifications 148 全绿 |
+| 八轮：钉钉通知接入（2026-11-16，设计 §3 决策 7 追加） | 钉钉通知完全复刻飞书租户级模式：钉钉渠道通知用途三模式（notify_only 需 app_key/app_secret/agent_id 三项）+ 手机号识别绑定（无 OAuth）+ DingTalkAppAdapter（asyncsend_v2 action_card） | 🔧 进行中（开发+单测完成，独立测试/CR 待走） | 详见下方「八轮」节；notifications+channel_config_db+usage_validation+factory 单测 822 全绿；前端 build + vitest notifications 157 全绿 |
 
 ## 五轮：租户级配置改造（2026-11-13，设计 §3 决策 7）
 
@@ -52,6 +53,19 @@
 - 注册与白名单：service.py 注册 FeishuAppAdapter；PROVIDER_ALLOWED_EVENT_TYPES 加 'feishu_app'（completed/failed），expand 资格判断泛化为按白名单 provider 查表（wecom_app 行为不变）；PreferenceRequest channel/provider 加 feishu_app；repository 增 feishu_bind_profile（与 wecom_bind_profile 共用 _bind_profile）。
 - 前端：NotificationSettings.vue 徽标改 x/3 可用 + 加飞书通知行；新增 FeishuTaskNotifyCard.vue 行组件（复制企微行结构精简——去掉 OAuth 弹窗/轮询/UA 检测，保留手机号识别自动绑定；取舍：企微行组件 OAuth 部分占大头，抽取共享行组件需重构已交付企微卡，复制改接口最直接）；未命中行下方提示、未绑定无手动绑定按钮；解绑后不自动重识别（重识别命中会立刻自动重绑，无法保持解绑态，页面刷新后可重新识别）；ChannelConfig.vue 通知用途单选扩展到 feishu（notify_only 隐藏 verification_token/encrypt_key/回调地址/关联数字员工，保存剔除旧值）。
 - 已知边界：飞书 batch_get_id 不返回姓名（绑定姓名快照恒空，设置页显示「已绑定」不带姓名）；token 中途失效（如 secret 轮换）按其他 code→permanent 处理（凭据轮换后语义正确）；suggest 手机号按库内存量原样传（无 +86 规整），匹配失败提示用户核对手机号与应用可见范围。
+
+## 八轮：钉钉通知接入（2026-11-16，设计 §3 决策 7 追加）
+
+- 背景：钉钉任务通知完全复刻飞书租户级模式（渠道用途三模式 + 手机号绑定 + 通知适配器）；本期无 OAuth，绑定仅手机号识别 + confirm 服务端二次核实，无绑定弹窗。接口字段以 2026-11-16 官方文档查证口径为准（决策 7 追加）。
+- DB：`users` 加 `dingtalk_userid TEXT`（db_update.yaml 幂等块 + deploy/init-postgres.sql + deploy/nuodu/init-postgres.sql 三处同步，照 feishu_open_id 先例）；UserDB 增 set_dingtalk_userid / get_by_dingtalk_userid_in_tenant（IS NOT DISTINCT FROM 兼容平台管理员）。
+- 渠道配置（src/saas/api/channel_config.py）：`_NOTIFY_USAGE_CHANNEL_TYPES` 加 dingtalk；notify_only 必填 app_key/app_secret/agent_id 三项（工作通知发送需应用 AgentId；token/encoding_aes_key 免填），agent_only/both 保持原必填（存量行为不变）；create/update 同口径（create 白名单分支改按 `_NOTIFY_USAGE_CHANNEL_TYPES` 判定）。
+- 渠道工厂（src/saas/services/channel_factory.py）：`_NOTIFY_USAGE_CHANNEL_TYPES` 加 dingtalk（notify_only 同样跳过对话渠道实例化/回调）。
+- 凭据源（src/saas/db/channel_config_db.py + src/notifications/dingtalk_app.py）：新增 ChannelConfigDB.get_latest_dingtalk_notify_usage_decrypted（SQL 参数化，notify_usage IN (both, notify_only)，照 feishu 同构）；DingTalkAppAdapter（channel=dingtalk_app）credentials_for_tenant/available_for_tenant 租户级解析（config 缺 agent_id 按未配置），全局 available() 恒 False；access_token 按租户缓存（expires_in 提前 300s 作废；发送返回 40014 刷新重试一次）。
+- Adapter（src/notifications/dingtalk_app.py）：出站复用 PinnedHTTPSConnection/public_addresses（域名固定 oapi.dingtalk.com）；access_token `GET /gettoken?appkey=&appsecret=`（token/appkey/appsecret 均在 URL query，后续 oapi 接口 token 放 query 非 Bearer 头）；发送 `POST /topapi/message/corpconversation/asyncsend_v2?access_token=`（body：agent_id 数字、userid_list 字符串、msg.msgtype=action_card、btn_orientation 数字 1、btn_list「查看结果」action_url={public_base_url}/notification?ref=&tenant=；**异步受理**——errcode=0 即 accepted，provider_id 记 task_id，送达结果 getsendresult 本期不查）；validate_target 校验 userid 形态（非空/无空白控制字符/≤64，宽松边界），endpoint 摘要 sha256(dingtalk_userid)；errcode 分类——0→accepted；60104/81013→target_invalid；-1/799913→retryable 限流；HTTP 429/5xx/网络→retryable；40014→刷新重试一次；其余（40035 缺参数等）→permanent。token 在 URL query——日志只打接口名与 errcode，不打完整 URL（含 token）。
+- 绑定路由（src/notifications/dingtalk_bind.py，挂 /api/notifications）：GET /dingtalk/bind/status（纯本地事实）、GET /dingtalk/bind/suggest（登录用户手机号 → getbymobile 查 userid，只读；getbymobile 不返回姓名，姓名快照恒空；errcode 非 0 如 60104 视为未命中）、POST /dingtalk/bind/confirm（服务端按手机号重新 getbymobile 核实后落库 users.dingtalk_userid + 幂等登记 dingtalk_app target，identity_preverified=True 对齐企微/飞书）、DELETE /dingtalk/bind（清列 + 撤 dingtalk_app target，不过租户 gate）；未配置租户绑定端点 503。无 state/OAuth 弹窗。
+- 注册与白名单：service.py 注册 DingTalkAppAdapter；PROVIDER_ALLOWED_EVENT_TYPES 加 'dingtalk_app'（completed/failed）；PreferenceRequest channel/provider 加 dingtalk_app；repository 增 dingtalk_bind_profile（共用 _bind_profile）。
+- 前端：NotificationSettings.vue 徽标改 x/4 可用 + 加钉钉通知行；新增 DingTalkNotifyCard.vue 行组件（逐文件对照 FeishuTaskNotifyCard 复刻改接口——手机号识别自动绑定、未命中行下方提示、suggest 失败 503 静默、解绑后不自动重识别）；ChannelConfig.vue 通知用途单选扩展到 dingtalk（notify_only 联动补填 agent_id 字段、保存剔除 token/encoding_aes_key 旧值、无回调字段需隐藏）；api/notifications.ts 补 dingtalk 绑定/偏好封装与错误码。
+- 已知边界：getbymobile 不返回姓名（绑定姓名快照恒空，设置页显示「已绑定」不带姓名）；asyncsend_v2 异步受理——errcode=0 记 accepted 不代表已送达（getsendresult 本期不查）；钉钉 userid 失效场景少，未知 errcode 统一 permanent 靠手机号重绑兜底；suggest 手机号按库内存量原样传（无 +86 规整），匹配失败提示用户核对手机号。
 
 ## Phase 1 — 身份绑定（设计 §4.1）
 

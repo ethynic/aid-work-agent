@@ -29,18 +29,18 @@ _CACHE_LOCKS: Dict[Tuple[str, str, Optional[str]], asyncio.Lock] = {}
 # 缓存 TTL：超过后下次获取时重建（兜底，防止配置变更未触发 invalidate）
 _CACHE_TTL_SECONDS = 3600
 
-# 应用配置「通知用途」元键（企微渠道合并 2026-11-15、飞书通知接入 2026-11-15，
-# config.notify_usage）：notify_only=仅通知（纯服务端 API 发消息凭据源，无回调
-# 链路）——不实例化对话渠道、不接回调；agent_only/both 仍是对话渠道。该键是
-# 配置元数据而非 adapter 构造参数，实例化前剔除。
+# 应用配置「通知用途」元键（企微渠道合并 2026-11-15、飞书通知接入 2026-11-15、
+# 钉钉通知接入 2026-11-16，config.notify_usage）：notify_only=仅通知（纯服务端
+# API 发消息凭据源，无回调链路）——不实例化对话渠道、不接回调；agent_only/both
+# 仍是对话渠道。该键是配置元数据而非 adapter 构造参数，实例化前剔除。
 _NOTIFY_USAGE_KEY = "notify_usage"
 _NOTIFY_ONLY = "notify_only"
 # 支持「通知用途」的渠道类型（与 saas/api/channel_config.py 口径一致）
-_NOTIFY_USAGE_CHANNEL_TYPES = ("wecom", "feishu")
+_NOTIFY_USAGE_CHANNEL_TYPES = ("wecom", "feishu", "dingtalk")
 
 
 def _is_notify_only(cfg: dict) -> bool:
-    """应用配置是否为「仅通知」用途（对话渠道实例化时跳过；企微/飞书同模式）。"""
+    """应用配置是否为「仅通知」用途（对话渠道实例化时跳过；企微/飞书/钉钉同模式）。"""
     return (
         cfg.get("channel_type") in _NOTIFY_USAGE_CHANNEL_TYPES
         and (cfg.get("config") or {}).get(_NOTIFY_USAGE_KEY) == _NOTIFY_ONLY

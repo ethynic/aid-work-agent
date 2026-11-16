@@ -280,6 +280,41 @@ class UserDB:
             return dict(row) if row else None
 
     @staticmethod
+    def set_dingtalk_userid(user_id: str, dingtalk_userid: Optional[str]) -> bool:
+        """绑定/解绑钉钉通知 userid（解绑传 None 清空）；同步失效用户缓存
+
+        钉钉任务通知接入（2026-11-16，wecom-app-task-notification-design 决策 7 追加）
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"UPDATE users SET dingtalk_userid = {placeholder}, updated_at = {get_current_timestamp()} "
+                f"WHERE user_id = {placeholder}",
+                (dingtalk_userid, user_id))
+            conn.commit()
+            result = cursor.rowcount > 0
+            if result:
+                invalidate_user_cache(user_id)
+            return result
+
+    @staticmethod
+    def get_by_dingtalk_userid_in_tenant(dingtalk_userid: str, tenant_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """按钉钉 userid + 租户查用户（绑定前唯一性校验）
+
+        tenant_id 用 IS NOT DISTINCT FROM，兼容平台管理员 tenant_id 为 NULL 的场景
+        """
+        placeholder = "%s"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT * FROM users WHERE dingtalk_userid = {placeholder} "
+                f"AND tenant_id IS NOT DISTINCT FROM {placeholder} LIMIT 1",
+                (dingtalk_userid, tenant_id))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
     def update_info(user_id: str, **kwargs) -> bool:
         """更新用户信息
 

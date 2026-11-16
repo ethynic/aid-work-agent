@@ -1056,3 +1056,95 @@ class TestChannelFactoryNotifyOnlyFeishu:
             "notify_usage": "both",
         })
         assert adapter.app_id == "cli_a1"
+
+
+class TestChannelFactoryNotifyOnlyDingtalk:
+    """钉钉应用「仅通知」用途（钉钉通知接入 2026-11-16，同企微/飞书模式）：纯
+    通知凭据源，不实例化对话渠道、不接回调；agent_only/both 不受影响。"""
+
+    async def test_notify_only_config_id_skips_dialog_adapter(self):
+        """按 config_id 精确查找命中 notify_only 钉钉配置 → 返回 None（不实例化）"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        mock_cfg = {
+            "config_id": "chan_dn1",
+            "tenant_id": "tenant_001",
+            "channel_type": "dingtalk",
+            "config": {"app_key": "k", "app_secret": "s", "agent_id": "1000002",
+                       "notify_usage": "notify_only"},
+            "subagent_type": None,
+            "verified": 1,
+        }
+
+        with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
+            mock_db.get_by_id.return_value = mock_cfg
+            with patch.object(ChannelFactory, "create_adapter") as mock_create:
+                adapter, cfg_id, _ = await ChannelFactory.create_from_tenant_config(
+                    "tenant_001", "dingtalk", config_id="chan_dn1"
+                )
+                assert (adapter, cfg_id) == (None, None)
+                mock_create.assert_not_called()
+
+    async def test_notify_only_excluded_from_list_selection(self):
+        """config_id=None 选择路径：notify_only 钉钉配置被过滤，选中同租户常规配置"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        notify_only_cfg = {
+            "config_id": "chan_dn2",
+            "tenant_id": "tenant_001",
+            "channel_type": "dingtalk",
+            "config": {"app_key": "k", "app_secret": "s", "agent_id": "1000002",
+                       "notify_usage": "notify_only"},
+            "subagent_type": None,
+            "verified": 1,
+        }
+        agent_cfg = {
+            "config_id": "chan_da1",
+            "tenant_id": "tenant_001",
+            "channel_type": "dingtalk",
+            "config": {"app_key": "k2", "app_secret": "s2"},
+            "subagent_type": "travel-consultant",
+            "verified": 0,
+        }
+        adapter = MagicMock(name="adapter")
+
+        with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
+            mock_db.list_by_tenant.return_value = [notify_only_cfg, agent_cfg]
+            with patch.object(ChannelFactory, "create_adapter", return_value=adapter):
+                got_adapter, cfg_id, subagent = await ChannelFactory.create_from_tenant_config(
+                    "tenant_001", "dingtalk"
+                )
+                assert cfg_id == "chan_da1"
+                assert subagent == "travel-consultant"
+                assert got_adapter is adapter
+
+    async def test_agent_only_config_still_instantiated(self):
+        """缺省用途（agent_only 存量行为不变）的钉钉配置照常实例化对话渠道。"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        mock_cfg = {
+            "config_id": "chan_da2",
+            "tenant_id": "tenant_001",
+            "channel_type": "dingtalk",
+            "config": {"app_key": "k2", "app_secret": "s2"},
+            "subagent_type": None,
+            "verified": 1,
+        }
+        adapter = MagicMock(name="adapter")
+
+        with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
+            mock_db.get_by_id.return_value = mock_cfg
+            with patch.object(ChannelFactory, "create_adapter", return_value=adapter):
+                got_adapter, cfg_id, _ = await ChannelFactory.create_from_tenant_config(
+                    "tenant_001", "dingtalk", config_id="chan_da2"
+                )
+                assert cfg_id == "chan_da2" and got_adapter is adapter
+
+    def test_create_adapter_dingtalk_strips_notify_usage_meta_key(self):
+        """create_adapter 对 dingtalk 同样剔除 notify_usage 元键（非构造参数）"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        adapter = ChannelFactory.create_adapter("dingtalk", {
+            "app_key": "k", "app_secret": "s", "notify_usage": "both",
+        })
+        assert adapter.app_key == "k"
