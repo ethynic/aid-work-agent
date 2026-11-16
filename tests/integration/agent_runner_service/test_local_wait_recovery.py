@@ -130,6 +130,37 @@ def test_known_late_result_releases_same_machine_hold_and_new_login_attempt_can_
     assert devices.create_invocation(row['tenant_id'], row['user_id'], str(device['id']), 'boss_goto', {}, row['session_id'])
 
 
+@pytest.mark.parametrize('capable', [True, False])
+def test_runtime_completion_evidence_releases_hold_only_with_declared_capability(
+        lost_local, service_database, capable):
+    """契约 2.20 候选「正常结束的事实」真实 PG：租约过期 unknown 无回执保持占用，
+    带证据迟到回执仅在设备声明 runtime_boss_completion_v1 时解除；原 unknown
+    事实（state/effect/error_code）与业务 data 零改写，state 仍不自动重发。"""
+    repository, _, principal, row, device, invocation, claim = lost_local
+    end_waiting(repository, principal, row['runner_id'])
+    # 租约过期 → unknown 无回执：completion_known 仍 false，占用保持（证据不误释放）
+    with pytest.raises(devices.DeviceOperationUnresolved):
+        devices.create_invocation(row['tenant_id'], row['user_id'], str(device['id']), 'boss_goto', {})
+    devices.touch_device_seen(str(device['id']), capabilities={'capabilities': ['local_v2'] +
+        (['runtime_boss_completion_v1'] if capable else [])})
+    written = devices.write_result(invocation, row['tenant_id'], claim, True, effect='unknown',
+        data={'filter': 1, '_runtime_completion': {'version': 1}}, device_id=str(device['id']))
+    assert written['state'] == written['effect'] == 'unknown', '原 unknown 事实零改写'
+    late = written['result_json']['_late_result']
+    assert late['stopped'] is capable and late['success'] is True
+    expected_data = {'filter': 1, '_runtime_completion': {'version': 1}} if capable else {'filter': 1}
+    assert late['data'] == expected_data
+    if capable:
+        fresh = devices.create_invocation(row['tenant_id'], row['user_id'], str(device['id']),
+            'boss_goto', {}, row['session_id'])
+        assert fresh != invocation, '证据解除占用后新调用放行'
+    else:
+        with pytest.raises(devices.DeviceOperationUnresolved):
+            devices.create_invocation(row['tenant_id'], row['user_id'], str(device['id']),
+                'boss_goto', {})
+        assert written['effect'] == 'unknown', '效果未知语义不动（不自动重发）'
+
+
 @pytest.mark.parametrize('late', [False, True])
 def test_next_none_login_failure_allows_new_attempt_on_original_device(lost_local, service_database, late):
     _, _, _, row, device, original_id, original_claim = lost_local

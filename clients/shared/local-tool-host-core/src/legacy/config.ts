@@ -203,6 +203,9 @@ export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessR
     }
   }
   if (store?.hasDeclarations) capabilities.push('tool_declarations_v1')
+  // 契约 2.20 候选「正常结束的事实」：boss Provider 存在才声明（无 boss 时不上报——
+  // 能力缺失=零影响，服务端对未声明设备按旧语义消费回执、剥离 _runtime_completion）
+  if (available.includes('boss-recruiting')) capabilities.push('runtime_boss_completion_v1')
   // parallel_tools/declared_tools：仅已验签、启用且带有效声明的商店插件（store 来源），
   // 且 provider 实际可用（有 entry）；无并行工具的 provider 不出现键，全空则整个字段省略
   const parallel: Record<string, string[]> = {}

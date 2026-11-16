@@ -71,10 +71,33 @@ COMPLETED_NONE_RESULT_CODES = (*PREEXECUTION_RESULT_CODES, 'INVALID_ARGUMENT', '
     'WRONG_PAGE', 'JOB_CHANGED', 'BUSY', 'PAYWALL', 'UI_CHANGED', 'TOOL_NOT_FOUND', 'UNKNOWN_TOOL')
 
 
-def result_proves_completion(success, code, effect):
+RUNTIME_COMPLETION_KEY = '_runtime_completion'
+
+
+def runtime_completion_evidence(data):
+    """合法的 _runtime_completion 结束证据（version 1 单字段，bool 不算 version）→ 原样返回。
+
+    形状之外的信任不在此判定：证据只会在 write_result 内核验设备能力串
+    runtime_boss_completion_v1 后原样落库，持久层出现合法形状即写入时的能力核验事实。
+    """
+    if not isinstance(data, dict):
+        return None
+    evidence = data.get(RUNTIME_COMPLETION_KEY)
+    if not isinstance(evidence, dict) or evidence.keys() != {'version'}:
+        return None
+    version = evidence['version']
+    return evidence if type(version) is int and version == 1 else None
+
+
+def result_proves_completion(success, code, effect, data=None):
     # Abort/timeout/ProviderCrash can return while a child is still running.
-    return success is True and effect in {'none', 'applied'} or (
-        success is False and effect == 'none' and code in COMPLETED_NONE_RESULT_CODES)
+    if success is True and effect in {'none', 'applied'} or (
+            success is False and effect == 'none' and code in COMPLETED_NONE_RESULT_CODES):
+        return True
+    # BOSS 正常结束的事实（契约 2.20 候选）：Runtime 在受权结果 data 附加的结束证据
+    # 证明「Provider 结构化终态已到达且执行停稳」，补足业务 effect 无法自证的调用；
+    # 原 state/effect/业务回执按原规则保留，只解除该调用的资源占用。
+    return runtime_completion_evidence(data) is not None
 
 
 def owned_invocation_ids(execution):
@@ -103,7 +126,8 @@ def operation_completion_known(invocation):
     observed = observed_invocation(invocation)
     result = observed.get('result_json') or {}
     return result_proves_completion(result.get('success'),
-        observed.get('error_code') or result.get('code'), observed.get('effect'))
+        observed.get('error_code') or result.get('code'), observed.get('effect'),
+        result.get('data'))
 
 
 def lock_operation_admission(cursor, tenant_id):
@@ -179,7 +203,8 @@ def observed_invocation(invocation):
     late = (invocation.get('result_json') or {}).get('_late_result')
     if invocation.get('state') != 'unknown' or not isinstance(late, dict):
         return invocation
-    if not result_proves_completion(late.get('success'), late.get('code'), late.get('effect')):
+    if not result_proves_completion(late.get('success'), late.get('code'), late.get('effect'),
+            late.get('data')):
         return invocation
     return {**invocation, 'state': 'succeeded' if late['success'] else
         'unknown' if late.get('code') == 'EXECUTION_UNKNOWN' else 'failed',
@@ -1249,6 +1274,14 @@ def write_runtime_result(invocation_id, tenant_id, claim_token_hash, success, co
         message, effect, data, retryable, device_id=device_id)
 
 
+def _device_capabilities_json(cursor, row):
+    """同一事务内读发起设备的心跳能力（行缺失返回 None=无能力；异常形态由门禁函数判定）。"""
+    cursor.execute('SELECT capabilities_json FROM local_tool_devices WHERE id = %s AND tenant_id = %s',
+        (row.get('device_id'), row.get('tenant_id')))
+    device = cursor.fetchone()
+    return device.get('capabilities_json') if device else None
+
+
 def write_result(
     invocation_id: str,
     tenant_id: str,
@@ -1294,6 +1327,18 @@ def write_result(
             # 幂等：已终态重复写返回原状态，不报错
             conn.commit()
             return dict(row)
+
+        # 契约 2.20 候选「正常结束的事实」：核验四要素——原设备+领取凭据（上方 FOR UPDATE
+        # 行核验已过）+ 原调用（本行）+ 设备能力串与证据版本（此处同事务读设备心跳能力）。
+        # 齐备 → 证据原样留在 data 落库（持久证据，完成判定据此只解除该调用资源占用）；
+        # 形状/版本不合法或设备未声明能力 → 剥离该键（防伪造残留）走原逻辑（旧语义）。
+        # 证据不改 state/effect/计费/原始回执语义，Host 合成错误/取消路径无 data 无证据。
+        if isinstance(data, dict) and RUNTIME_COMPLETION_KEY in data:
+            from .catalog import declares_boss_completion
+            if not (declares_boss_completion(_device_capabilities_json(cursor, row))
+                    and runtime_completion_evidence(data)):
+                data = {key: value for key, value in data.items()
+                    if key != RUNTIME_COMPLETION_KEY} or None
 
         if success:
             new_state = "succeeded"
@@ -1371,7 +1416,7 @@ def write_result(
             # The original lease-loss fact stays unknown. A final device receipt
             # proves this invocation stopped, not that a new execution is allowed.
             result_json = {'_late_result': {**result_json, 'effect': effect,
-                'stopped': result_proves_completion(success, code, effect)}}
+                'stopped': result_proves_completion(success, code, effect, data)}}
             new_state, effect, code, message = row['state'], row['effect'], row.get('error_code'), row.get('error_message')
         sql = """
             UPDATE local_tool_invocations

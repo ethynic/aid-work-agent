@@ -250,6 +250,21 @@ def declared_tools_for_device(capabilities: Optional[Dict[str, Any]]) -> Optiona
     return tools_map or None
 
 
+BOSS_COMPLETION_CAPABILITY = "runtime_boss_completion_v1"
+
+
+def declares_boss_completion(capabilities: Optional[Dict[str, Any]]) -> bool:
+    """设备心跳能力串含 runtime_boss_completion_v1（契约 2.20 候选：BOSS 正常结束的事实）。
+
+    形态门禁与 declared_tools_for_device 同款：仅认 dict.capabilities 字符串数组；
+    未上报（旧 Runtime / 无 boss Provider）一律 False——能力缺失=零影响（旧语义）。
+    """
+    if not isinstance(capabilities, dict):
+        return False
+    capability_list = capabilities.get("capabilities")
+    return isinstance(capability_list, list) and BOSS_COMPLETION_CAPABILITY in capability_list
+
+
 def is_tool_allowed_for_device(capabilities: Optional[Dict[str, Any]], provider_key: Optional[str],
                                tool_name: str, default_provider_key: Optional[str] = None) -> bool:
     """claim 行级放行（声明分流）：provider_key 为 invocation 行的原 provider_key。

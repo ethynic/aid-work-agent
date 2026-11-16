@@ -780,6 +780,15 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
   const r = settled ?? {}
   const data: Record<string, unknown> = { ...(r['data'] as Record<string, unknown> | undefined) }
   if (typeof r['run_id'] === 'string') data['run_id'] = r['run_id']
+  // 契约 2.20 候选「正常结束的事实」：_runtime_completion 是 Runtime Host 保留键——插件
+  // 回执同名字段先剥离（Host 唯一附加，防伪造残留），仅 boss Provider 的纯成功路径重加。
+  // 写入判据 = 原可信 Provider 结构化终态已到达（settled 非空）+ 执行已退出 + 桌面锁已释放
+  //（enterLock 返回的控制流保证）；声明 parallel 的作业不取锁，无法证明锁释放，不写入。
+  // 其余全部路径（lockPreabort / 授权丢失 / 取消 / shutdown / 锁超时 / 调用错误）不得写入。
+  delete data['_runtime_completion']
+  if (providerKey === 'boss-recruiting' && deps.parallel !== true && settled !== null) {
+    data['_runtime_completion'] = { version: 1 }
+  }
   // v1（旧 /result）：Provider 结果缺 effect 时键缺省——与 HEAD 逐字节一致，不注入默认值
   const rawEffect = strField(r['effect'])
   await sendFinalResult({

@@ -86,6 +86,21 @@ test('未配置 wecom entry：capabilities 与 provider_manifests 均不含 weco
   assert.ok(!capabilities.some((c) => c.startsWith('wecom_')), 'wecom 未安装不得上报任何工具能力')
 })
 
+test('契约 2.20 候选「正常结束的事实」：boss Provider 存在才声明 runtime_boss_completion_v1（无 boss 不上报）', () => {
+  const withBoss = deviceCapabilities(makeConfig())
+  assert.ok((withBoss.capabilities as string[]).includes('runtime_boss_completion_v1'))
+  // 仅 weixin（无 boss entry）：能力缺失=零影响（服务端对未声明设备按旧语义消费回执）
+  const withoutBoss = deviceCapabilities(makeConfig({
+    bossCliEntry: undefined, providers: { weixin: { entry: existingEntry } },
+  }))
+  assert.ok(!(withoutBoss.capabilities as string[]).includes('runtime_boss_completion_v1'))
+  // entry 指向不存在的文件 = 未安装，不上报
+  const missingEntry = deviceCapabilities(makeConfig({
+    bossCliEntry: 'C:/missing/boss.js', providers: { weixin: { entry: existingEntry } },
+  }))
+  assert.ok(!(missingEntry.capabilities as string[]).includes('runtime_boss_completion_v1'))
+})
+
 test('配置兼容：旧 config.json 只有 bossCliEntry 时 resolveProviderEntries 正常折算', () => {
   const entries = resolveProviderEntries(makeConfig({ bossCliEntry: 'C:/boss/entry.js' }))
   assert.deepEqual(entries, { 'boss-recruiting': 'C:/boss/entry.js' })
