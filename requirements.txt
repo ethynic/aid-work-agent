@@ -58,6 +58,7 @@ pandas>=2.0.0    # Data analysis, manipulation, CSV/Excel I/O
 numpy>=1.24.0    # Numerical computing, used by DataAnalyzer
 matplotlib>=3.7.0 # Chart generation for DataAnalyzer
 chardet>=5.0.0   # Character encoding auto-detection for CSV
+pyarrow>=14.0.0  # DataAnalyzer 状态介导 parquet 读写（重工具服务化 §5.1 去内存驻留；缺失时降级 CSV 介导）
 
 # PPT Document Processing
 python-pptx>=1.0.0  # PPT document reading and processing

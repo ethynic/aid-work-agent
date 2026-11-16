@@ -1,7 +1,10 @@
-"""轻池槽内并发容量计算与事件循环停跳看门狗（A 方案，设计 §6）。
+"""槽内并发容量计算与事件循环停跳看门狗（A 方案，设计 §6）。
 
-effective_slot_concurrency：重池（general）强制 1 槽 1 任务，仅 light 角色
-启用执行进程内协程并发；置 AGENT_RUNNER_SLOT_CONCURRENCY=1 即回退现行拓扑。
+resolve_slot_concurrency：执行进程内协程并发容量；监督进程显式传参
+（--slot-concurrency）优先于 config.slot_concurrency。置
+AGENT_RUNNER_SLOT_CONCURRENCY=1 即回退单执行体拓扑。
+（2026-11-13 重工具服务化 §9：按角色判型的池路由退役，全部 worker 等价，
+并发统一走本函数，不再有 general 强制 1 的钳制。）
 
 LoopWatchdog：心跳线程周期性 call_soon_threadsafe 投递探针，探针在事件循环内
 执行并更新时间戳；超过阈值未响应即判定循环停跳（11-05 假异步类挂死，pgrep
@@ -16,15 +19,9 @@ import time
 from loguru import logger
 
 
-def effective_slot_concurrency(role, config):
-    """light 角色按配置并发，其余角色一律 1（误配兜底，防重池并发化）。"""
-    return config.slot_concurrency if role == 'light' else 1
-
-
-def resolve_slot_concurrency(role, config, explicit=None):
-    """监督进程显式传参（--slot-concurrency）优先；无论何种来源，general 钳制为 1。"""
-    value = explicit if explicit is not None else config.slot_concurrency
-    return value if role == 'light' else 1
+def resolve_slot_concurrency(config, explicit=None):
+    """监督进程显式传参（--slot-concurrency）优先，其次 config.slot_concurrency。"""
+    return explicit if explicit is not None else config.slot_concurrency
 
 
 class LoopWatchdog:

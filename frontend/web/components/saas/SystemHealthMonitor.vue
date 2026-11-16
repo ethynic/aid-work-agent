@@ -53,18 +53,16 @@
           </div>
           <div class="space-y-2 text-sm">
             <div class="flex justify-between">
-              <span class="text-muted">轻槽</span>
-              <span class="text-default font-medium" :title="lightSlotTitle">
-                {{ lightOccupied ?? '-' }} / {{ lightCapacity ?? '-' }}
-                <span v-if="lightCapacity != null" class="text-muted text-xs">({{ lightConcurrency }} * {{ runner?.light_slots ?? '-' }})</span>
+              <span class="text-muted">执行体</span>
+              <span class="text-default font-medium" :title="workerSlotTitle">
+                {{ workerOccupied ?? '-' }} / {{ workerCapacity ?? '-' }}
+                <span v-if="workerCapacity != null" class="text-muted text-xs">({{ slotConcurrency }} * {{ runner?.worker_replicas ?? '-' }})</span>
               </span>
             </div>
             <div class="flex justify-between">
-              <span class="text-muted">通用槽</span>
-              <span class="text-default font-medium"
-                :title="generalSlotTitle">
-                {{ heavyOccupied ?? '-' }} / {{ runner?.general_slots ?? '-' }}
-                <span v-if="runner?.general_slots != null" class="text-muted text-xs">(1 * {{ runner?.general_slots }})</span>
+              <span class="text-muted">重工具服务</span>
+              <span class="text-default font-medium" :title="heavyToolsTitle">
+                {{ heavyToolsLabel }}
               </span>
             </div>
             <div class="flex justify-between">
@@ -379,25 +377,38 @@ const retryShareSuffix = computed(() => {
 })
 const retryShareTitle = computed(() => 'attempt>1 的任务数 / 今日已启动任务数；启动数不足 10 时不计算占比')
 
-// 轻槽容量按执行体换算：槽位 × 每槽并发（AGENT_RUNNER_SLOT_CONCURRENCY，未配置=4，与 settings/compose 默认一致）
-const lightConcurrency = computed(() => runner.value?.light_concurrency ?? 4)
-const lightOccupied = computed(() =>
-  (runner.value?.running_light ?? 0) + (runner.value?.finalizing_light ?? 0))
-const lightCapacity = computed(() => {
-  const slots = runner.value?.light_slots
-  if (slots == null) return null
-  return slots * lightConcurrency.value
+// 池路由退役（2026-11-13 重工具服务化 §9）：单一 runner-worker 服务全量领取，
+// 执行体容量 = 副本数 × 每副本并发（AGENT_RUNNER_SLOT_CONCURRENCY，未配置=4，
+// 与 settings/compose 默认一致）；重负载经代理远程派发到重工具服务。
+const slotConcurrency = computed(() => runner.value?.light_concurrency ?? 4)
+const workerOccupied = computed(() =>
+  (runner.value?.running ?? 0) + (runner.value?.finalizing ?? 0))
+const workerCapacity = computed(() => {
+  const replicas = runner.value?.worker_replicas
+  if (replicas == null) return null
+  return replicas * slotConcurrency.value
 })
-const heavyOccupied = computed(() =>
-  (runner.value?.running_heavy ?? 0) + (runner.value?.finalizing_heavy ?? 0))
-const lightSlotTitle = computed(() => {
-  const slots = runner.value?.light_slots ?? '-'
-  const c = lightConcurrency.value
-  return `占用/容量为运行+收尾合并计数；容量 = 每槽并发 ${c} × 轻槽副本 ${slots}（AGENT_RUNNER_SLOT_CONCURRENCY × AGENT_RUNNER_LIGHT_SLOTS，部署配置口径）；轻池只领轻任务，通用池可兜领，占用按判型近似`
+const heavyTools = computed(() => runner.value?.heavy_tools)
+const heavyToolsLabel = computed(() => {
+  const h = heavyTools.value
+  if (!h) return '-'
+  if (h.mode !== 'remote') {
+    return `本地模式（${h.replicas ?? '-'}×${h.concurrency ?? '-'}）`
+  }
+  const status = h.available == null ? '未知' : (h.available ? '正常' : '不可用')
+  const running = h.running_jobs != null ? `，执行中 ${h.running_jobs}` : ''
+  const busy = h.busy ? '，繁忙' : ''
+  return `${status}${running}${busy}`
 })
-const generalSlotTitle = computed(() => {
-  const slots = runner.value?.general_slots ?? '-'
-  return `占用/容量为运行+收尾合并计数；容量 = 通用槽副本 ${slots}（AGENT_RUNNER_GENERAL_SLOTS，部署配置口径），每槽 1 执行体；通用池可兜领轻任务，占用按判型近似`
+const workerSlotTitle = computed(() => {
+  const replicas = runner.value?.worker_replicas ?? '-'
+  const c = slotConcurrency.value
+  return `占用/容量为运行+收尾合并计数；容量 = 每副本并发 ${c} × worker 副本 ${replicas}（AGENT_RUNNER_SLOT_CONCURRENCY × AGENT_RUNNER_WORKER_SLOTS，部署配置口径）；全部 worker 等价全量领取，重工具经代理远程派发`
+})
+const heavyToolsTitle = computed(() => {
+  const h = heavyTools.value
+  if (!h) return '重工具服务未采集'
+  return `mode=${h.mode}，副本 ${h.replicas ?? '-'} × 并发 ${h.concurrency ?? '-'}（HEAVY_TOOLS_REPLICAS × HEAVY_TOOLS_CONCURRENCY，部署配置口径）；remote 模式探测 /internal/heavy-tools/health，local 模式重负载在轻容器本地执行`
 })
 const business = computed(() => overview.value?.snapshot?.business)
 const middleware = computed(() => overview.value?.snapshot?.middleware)

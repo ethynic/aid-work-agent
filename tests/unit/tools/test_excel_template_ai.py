@@ -1290,3 +1290,92 @@ def test_nested_title_rejected_before_llm(sample_path):
     res = fill_with_sample(str(sample_path), data, llm_callable=_mock_llm())
     assert not res["success"]
     assert "标量" in res["error"], res["error"]
+
+
+# ============================================================
+# fill_template 拆分（重工具服务化 §3）：结构分析段 / 渲染段
+# ============================================================
+
+def test_analyze_structure_safe_returns_serialized_structure(sample_path):
+    """拆分第一段：结构分析（LLM）返回可 JSON 交接的序列化结构"""
+    from src.tools.excel.excel_template_ai import analyze_structure_safe
+
+    data = _data([{"category": "住宿", "name": "酒店", "unit_price": 100,
+                   "quantity": 2, "amount": 200}])
+    result = analyze_structure_safe(str(sample_path), data, llm_callable=_mock_llm())
+    assert result["success"] is True
+    structure = result["structure"]
+    assert isinstance(structure, dict)
+    assert structure["detail_first_row"] == 4 and structure["detail_last_row"] == 6
+    assert len(structure["columns"]) == 5
+
+
+def test_analyze_structure_safe_failures_match_fill_with_sample(sample_path, tmp_path):
+    """拆分第一段失败口径与 fill_with_sample 一致（文件缺失 / rows 空 / 标量校验）"""
+    from src.tools.excel.excel_template_ai import analyze_structure_safe
+
+    missing = analyze_structure_safe(str(tmp_path / "nope.xlsx"), _data([{"x": 1}]))
+    assert missing["success"] is False and "不存在" in missing["error"]
+
+    empty = analyze_structure_safe(str(sample_path), _data([]))
+    assert empty["success"] is False and "rows 为空" in empty["error"]
+
+    bad = analyze_structure_safe(str(sample_path), _data([{"x": {"nested": 1}}]))
+    # 非标量值校验失败（先于 LLM 调用）
+    assert bad["success"] is False
+
+
+def test_render_with_structure_roundtrip_matches_fill_with_sample(sample_path, tmp_path):
+    """拆分端到端等价（§10 验收 11）：结构分析（本地）+ 渲染（可远程）结果
+    与 fill_with_sample 单进程执行一致"""
+    from src.tools.excel.excel_template_ai import (
+        analyze_structure_safe, render_with_structure,
+    )
+
+    rows = [
+        {"category": "住宿", "name": "酒店A", "unit_price": 100, "quantity": 2, "amount": 200},
+        {"category": "门票", "name": "景点B", "unit_price": 50, "quantity": 3, "amount": 150},
+    ]
+    data = _data(rows, totals={"grand_total": 350})
+
+    single = fill_with_sample(str(sample_path), data,
+                              output_name="single.xlsx", output_dir=str(tmp_path))
+    assert single["success"] is True
+
+    analysis = analyze_structure_safe(str(sample_path), data, llm_callable=_mock_llm())
+    assert analysis["success"] is True
+    split = render_with_structure(str(sample_path), data, analysis["structure"],
+                                  output_name="split.xlsx", output_dir=str(tmp_path))
+    assert split["success"] is True
+    assert split["rows_rendered"] == single["rows_rendered"]
+
+    wb_single = openpyxl.load_workbook(single["file_path"])
+    wb_split = openpyxl.load_workbook(split["file_path"])
+    ws_single, ws_split = wb_single.active, wb_split.active
+    for row in ws_single.iter_rows(values_only=True):
+        assert row in list(ws_split.iter_rows(values_only=True))
+    wb_single.close()
+    wb_split.close()
+
+
+def test_render_with_structure_rejects_missing_file(tmp_path):
+    from src.tools.excel.excel_template_ai import render_with_structure
+
+    result = render_with_structure(str(tmp_path / "nope.xlsx"),
+                                   {"rows": [{"a": 1}]}, {"columns": []})
+    assert result["success"] is False and "不存在" in result["error"]
+
+
+def test_render_with_structure_accepts_sheet_structure_object(sample_path, tmp_path):
+    """structure 同时接受 SheetStructure 对象（单进程直调）与序列化 dict（远程交接）"""
+    from src.tools.excel.excel_template_ai import (
+        SheetStructure, analyze_structure_safe, render_with_structure,
+    )
+
+    data = _data([{"category": "住宿", "name": "酒店", "unit_price": 100,
+                   "quantity": 2, "amount": 200}])
+    analysis = analyze_structure_safe(str(sample_path), data, llm_callable=_mock_llm())
+    as_object = SheetStructure(**analysis["structure"])
+    result = render_with_structure(str(sample_path), data, as_object,
+                                   output_name="obj.xlsx", output_dir=str(tmp_path))
+    assert result["success"] is True

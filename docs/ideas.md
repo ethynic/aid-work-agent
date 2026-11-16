@@ -34,7 +34,7 @@
 | 20261110-1524 | 管理后台系统健康监控页面 | 🔧 部分完成（四级状态徽标改版+网络 IO；重试占比口径 bug 已修待部署，待真机验收） | 平台后台新增 /portal/system-health 健康监控页（登录默认页）：四组指标+AI 研判，无曲线无历史，手机端一等公民 | [设计](system/system-health-monitor-design.md) | — |
 | 20261110-2201 | 系统健康真实模型错误率 | 📋 待规划 | 模型网关侧 LLM 调用失败率统计（KeyPool/CircuitBreaker 补失败计数），发现「限流被重试兜住、对话未失败」隐患；替代已删除的同源重复行（2026-11-10） | — | — |
 | 20261106-1010 | 定时任务结果免登录链接 | 📋 设计完成，待开发 | 定时任务终态通知链接免登录化（复用回复分享的公开路由/ticket/只读渲染）：只读结果页+登录入口、无密码链接即凭证、实时读跟随任务生命周期、web push/站内信/IM webhook 三处全换、产物文件免登录可下载。10 项决策已与用户逐条定稿（2026-11-06）。 | [设计](system/design-task-result-share-link.md) | [计划](plans/plan-task-result-share-link.md) |
-| 20261113-1000 | Runner 重工具服务化 | 📋 设计完成，待评审 | 5 个重工具剥离 LLM 后入独立容器，轻容器 4×5=20 执行体；analyze_data 文件介导改造列 B2；load_class 退役两步走。 | [设计](system/runner-heavy-tool-service-design.md) | — |
+| 20261113-1000 | Runner 重工具服务化 | 🔧 部分完成（B1 压测达标，验收修复已部署 agent2） | 2026-11-14 真机压测：23 并发混合负载全过（排队 p95 12.9s、DB 34、看门狗零误杀、busy/allowlist/认证/计费扫描达标）；F1 重放接管/F3 取消传播/F4 guard 脚本已修并部署 agent2（f45016ca）、F2 heavy 内存已调 2g、F5 口径登记；B2（analyze_data 远程派发）、验收 7 四工具本地全链路回归、验收 11 真实模板端到端待办。 | [设计](system/runner-heavy-tool-service-design.md) | — |
 | 20261111-1100 | Runner 容量与轻重负载分离 | 🔧 部分完成（Phase 7 已发布 agent2） | 11-12 agent2 压测通过轻重分离/槽内并发/重判/看门狗验收；to_md 大文件守门 P0 已整改并对话级回归通过；入队判型信号重构草案（travel-consultant 过判实证）定稿待实施，见设计 §10。 | [设计](system/runner-capacity-and-load-separation-design.md) | [开发计划](plans/plan-runner-capacity-load-separation.md) |
 | 20261105-1902 | Runner 执行槽隔离与运行告警 | 🔧 部分完成（agent3 初验） | 混合负载与 Excel 重负载专项已验：隔离性与告警达成，新发现取消挂死/心跳锁超时/假异步 3 个 P0 待整改。 | [设计](system/agent-application-architecture-design.md#10-runner-执行槽隔离与运行告警2026-11-05) | [计划](plans/plan-runner-execution-slot-isolation-and-alerts.md) |
 | 20261104-1639 | 知识库多轮检索新鲜度与结果去重 | 🔧 部分完成 | 工具说明对照无差异，待 Web 与正式微信 KF 复验。 | [设计](system/knowledge-base/knowledge-search-freshness-design.md) | [计划](plans/plan-knowledge-search-freshness.md) |
@@ -107,7 +107,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261113-1126 | 长任务企业微信应用通知 | 📋 待开发 | web 渠道长任务（≥5 分钟可配）完成/失败时经企微独立通知应用一对一推送 textcard，点击回原会话；OAuth 为主+手机号确认兜底绑定身份；替换 web push 投递渠道（保留停用）。6 项决策已逐条确认。 | [设计](system/wecom-app-task-notification-design.md) | [计划](plans/plan-wecom-app-task-notification.md) |
+| 20261113-1126 | 长任务企业微信应用通知（企微+飞书） | ✅ 已完成开发（已合并 master，2026-11-16；本地 E2E 通过，真机扫码与隔离库集成待环境验收） | web 渠道长任务（≥5 分钟可配）完成/失败时经企微独立通知应用一对一推送 textcard，点击回原会话；OAuth 为主+手机号确认兜底绑定身份；替换 web push 投递渠道（保留停用）。飞书通知已同模式接入（决策 7 追加）。 | [设计](system/wecom-app-task-notification-design.md) | [计划](plans/plan-wecom-app-task-notification.md) |
 | 20261106-1145 | wecom_kf 人工超时智能体接管 | 📋 待开发（设计待评审） | 转人工后人工超时限无发言且客户来新消息时，自动结束人工会话切回智能体接待（企业微信状态图 3 只能转 4，无热切换）；含 reason 白名单豁免、接管标记与审计字段、配置字段及前端表单。 | [设计](channel/wecom_kf/wecom_kf_design.md)（§十五） | — |
 | 20261109-2203 | 三渠道入站文件消息支持（飞书/钉钉/企微应用） | 💡 灵感 | 非图片文件输出侧三渠道已具备（textcard/文件消息直发），输入侧缺文件消息分支；机制与图片分支同构（媒体模块已有下载接口），有实际需求时按图片模式补齐。 | — | — |
 | 20261109-2159 | 多渠道图片收发支持（飞书/钉钉/企微应用，对齐 wecom_kf） | 🔧 部分完成（开发+单测完成，待真机验收） | 复刻 wecom_kf 图片链路到三渠道：入站图片下载落盘 -> attachment 入 Runner；出站公共 helper（ImageRef/files 解析+租户校验）+ 企微补 images 直发（>2MB 降级 textcard）+ 飞书/钉钉对齐口径。真机缺口：飞书 image_key、钉钉 downloadCode/photoURL、企微 media_id 收发待各渠道租户配置验证。 | — | — |

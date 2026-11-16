@@ -924,3 +924,8 @@ ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS recovery_reset_at TIMESTAMP
 -- 2026-10-29 定时任务 Runner 化：agent_runners.actor_kind 放宽允许 'system'（scheduled 调度身份）
 ALTER TABLE agent_runners DROP CONSTRAINT IF EXISTS agent_runners_actor_kind_check;
 ALTER TABLE agent_runners ADD CONSTRAINT agent_runners_actor_kind_check CHECK (actor_kind IN ('user', 'channel', 'system'));
+
+-- 2026-11-13 长任务企微应用通知 Phase 1（身份绑定）：users 增加 wecom_userid
+-- （企微通知应用成员 userid，OAuth 授权/手机号兜底绑定落库，可空；
+-- 唯一性按 tenant+userid 应用层校验，docs/system/wecom-app-task-notification-design.md §4.1）
+ALTER TABLE users ADD COLUMN IF NOT EXISTS wecom_userid TEXT;

@@ -1,7 +1,8 @@
 """Phase 7：轻池槽内并发（A 方案）与事件循环停跳看门狗单测。
 
-覆盖：并发容量解析（角色钳制）、worker 并发领取上限、看门狗停跳检测与
-执行体回收、监督进程多执行体路径（取消宽限/收尾回收按 owned_attempts）。
+覆盖：并发容量解析（2026-11-13 §9 池路由退役后无角色钳制，config/显式传参
+二选一）、worker 并发领取上限、看门狗停跳检测与执行体回收、监督进程多执行体
+路径（取消宽限/收尾回收按 owned_attempts）。
 """
 
 import asyncio
@@ -16,7 +17,6 @@ from src.services.agent_runner import slot_capacity
 from src.services.agent_runner.ownership import Attempt
 from src.services.agent_runner.slot_capacity import (
     LoopWatchdog,
-    effective_slot_concurrency,
     resolve_slot_concurrency,
 )
 
@@ -28,29 +28,16 @@ def _runner_config(slot_concurrency=4):
         browser_owner=None)
 
 
-class TestEffectiveSlotConcurrency:
-    def test_light_uses_config_value(self):
-        assert effective_slot_concurrency('light', _runner_config(4)) == 4
-
-    def test_general_forced_single(self):
-        assert effective_slot_concurrency('general', _runner_config(4)) == 1
-
-    def test_invalid_role_forced_single(self):
-        assert effective_slot_concurrency('weird', _runner_config(4)) == 1
-
-    def test_light_env_fallback_to_one(self):
-        assert effective_slot_concurrency('light', _runner_config(1)) == 1
-
-
 class TestResolveSlotConcurrency:
-    def test_explicit_overrides_config_for_light(self):
-        assert resolve_slot_concurrency('light', _runner_config(4), explicit=2) == 2
-
-    def test_explicit_still_clamped_for_general(self):
-        assert resolve_slot_concurrency('general', _runner_config(4), explicit=8) == 1
+    def test_explicit_overrides_config(self):
+        assert resolve_slot_concurrency(_runner_config(4), explicit=2) == 2
 
     def test_none_explicit_falls_back_to_config(self):
-        assert resolve_slot_concurrency('light', _runner_config(4), explicit=None) == 4
+        assert resolve_slot_concurrency(_runner_config(4), explicit=None) == 4
+
+    def test_no_role_clamping_after_pool_routing_retired(self):
+        # §9 池路由退役：不再有角色钳制，全部 worker 等价
+        assert resolve_slot_concurrency(_runner_config(5)) == 5
 
 
 class TestConfigField:
@@ -70,10 +57,9 @@ class TestConfigField:
             AgentRunnerConfig(watchdog_threshold=4)
 
 
-def _make_worker(monkeypatch, *, role='light', slot_concurrency=None,
+def _make_worker(monkeypatch, *, slot_concurrency=None,
                  config=None, **overrides):
     """构造仅依赖 fake 的 RunnerWorker，避开 DB/Agent 真实初始化。"""
-    monkeypatch.setenv('AGENT_RUNNER_ROLE', role)
     from src.services.agent_runner.worker import RunnerWorker
     config = config or _runner_config()
     kwargs = dict(
@@ -90,18 +76,17 @@ def _make_worker(monkeypatch, *, role='light', slot_concurrency=None,
 
 
 class TestWorkerSlotConcurrency:
-    def test_light_default_from_config(self, monkeypatch):
-        worker = _make_worker(monkeypatch, role='light')
+    def test_default_from_config(self, monkeypatch):
+        worker = _make_worker(monkeypatch)
         assert worker.slot_concurrency == 4
 
-    def test_general_clamped_even_with_explicit(self, monkeypatch):
-        worker = _make_worker(monkeypatch, role='general', slot_concurrency=8)
-        assert worker.slot_concurrency == 1
+    def test_explicit_overrides_config(self, monkeypatch):
+        worker = _make_worker(monkeypatch, slot_concurrency=8)
+        assert worker.slot_concurrency == 8
 
     @pytest.mark.asyncio
     async def test_run_worker_rejects_slot_state_with_concurrency(self, monkeypatch):
         # slot_state 单值语义只允许单执行体；并发模式不传 --slot-state-file。
-        monkeypatch.setenv('AGENT_RUNNER_ROLE', 'light')
         from src.services.agent_runner.worker import run_worker
         arguments = SimpleNamespace(slot_state_file='/tmp/slot', worker_id='w1',
             slot_concurrency=2, once=False, max_tasks=None)
@@ -111,7 +96,7 @@ class TestWorkerSlotConcurrency:
 
     @pytest.mark.asyncio
     async def test_run_concurrency_cap_async(self, monkeypatch):
-        worker = _make_worker(monkeypatch, role='light', slot_concurrency=2)
+        worker = _make_worker(monkeypatch, slot_concurrency=2)
         rows = ['r1', 'r2', 'r3']
         state = {'active': 0, 'max_active': 0, 'executed': []}
 
@@ -135,7 +120,7 @@ class TestWorkerSlotConcurrency:
 
     @pytest.mark.asyncio
     async def test_run_single_concurrency_matches_legacy(self, monkeypatch):
-        worker = _make_worker(monkeypatch, role='light', slot_concurrency=1)
+        worker = _make_worker(monkeypatch, slot_concurrency=1)
         rows = ['r1', 'r2']
         state = {'active': 0, 'max_active': 0}
 

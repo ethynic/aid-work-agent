@@ -90,7 +90,8 @@ class TestScheduledTerminalParametersAccepted:
         assert validated['notify_target_id'] == 'target_9'
 
     def test_chat_terminal_parameters_still_minimal(self):
-        """chat 终态不携带扩展字段（缺省 None），兼容既有渲染路径"""
+        """chat 终态携带时长（设计 §4.3 渲染耗时），仍不带任务扩展字段
+        （task_id/notify_* 缺省 None），兼容既有渲染路径"""
         from src.config.settings import NotificationsConfig
         from src.notifications import events as events_mod
         from src.notifications.producer import publish_runner_terminal_in_tx
@@ -102,21 +103,25 @@ class TestScheduledTerminalParametersAccepted:
             return {'notification_ref': 'ref_c1'}
 
         runner = {
+            # chat 来源受时长门禁（设计 §4.2）：execution_started_at 提供 360s
+            # 执行时长以过默认阈值（300s）
             'runner_id': 'runner_c1', 'session_id': 'sess_c1', 'status': 'failed',
             'source': 'chat', 'session_kind': 'web',
             'user_id': 'u1', 'tenant_id': 'tenant_1', 'scope_key': 'tenant:tenant_1',
             'actor_kind': 'user', 'actor_id': 'u1',
+            'execution_started_at': datetime(2026, 10, 28, 9, 0),
             'accepted_at': datetime(2026, 10, 28, 9, 0),
-            'finished_at': datetime(2026, 10, 28, 9, 2), 'input': {},
+            'finished_at': datetime(2026, 10, 28, 9, 6), 'input': {},
         }
         cursor = MagicMock()
         cursor.fetchone.side_effect = [{'title': '普通会话'},
                                        {'notification_ref': 'ref_c1'}]
         with patch.object(events_mod, 'publish_in_tx', spy_publish):
             publish_runner_terminal_in_tx(cursor, runner, NotificationsConfig())
-        # chat 旧路径只传两字段；扩展字段经模型校验缺省 None（兼容既有渲染）
+        # chat 携带时长（触发判定已算得）；任务扩展字段经模型校验缺省 None
         assert captured['parameters'] == {'session_title': '普通会话',
-                                          'event_kind': 'failed'}
+                                          'event_kind': 'failed',
+                                          'duration_seconds': 360}
         from src.notifications.events import EVENTS
         _, validated = EVENTS.validate('task.failed', captured['parameters'],
                                        {'type': 'runner_result', 'id': 'runner_c1'})

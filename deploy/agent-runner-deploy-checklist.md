@@ -2,7 +2,7 @@
 
 适用对象：`docker-compose.agent-runner.yml`（叠加到目标环境主 compose 使用）。三服务同镜像
 `aid-agent-api:latest`：`runner-api`（`python -m src.services.agent_runner.bootstrap`）、
-`runner-worker-light` / `runner-worker-general`（轻重负载分离双池，每副本由 `python -m src.services.agent_runner.supervisor` 管理一个单并发 Worker；light 池领取过滤 `load_class='light'`，general 池无过滤，见 [runner-capacity 设计](../docs/system/runner-capacity-and-load-separation-design.md)）、
+`runner-worker`（单一执行 worker 服务，2026-11-13 重工具服务化 §9 池路由退役：全部副本等价全量领取，槽内并发 `AGENT_RUNNER_SLOT_CONCURRENCY`；重负载经代理远程派发到 `heavy-tools` 服务，见 [runner-heavy-tool-service 设计](../docs/system/runner-heavy-tool-service-design.md)）、
 `runner-monitor`（`python -m src.services.agent_runner.monitor` 每分钟扫描运行告警）。微信 KF 恢复主 API 原渠道入口，
 overlay 不再包含 KF ingress/admission 或 `wecom-kf` profile。
 
@@ -50,13 +50,13 @@ runner-api(8091, /health) ◄── HTTP ── 主 API 的 Web / KF gateway
         ▲
         │ DB lease/事件/控制
         ▼
-runner-worker-light / runner-worker-general(执行/恢复, 无HTTP; 双池按 load_class 过滤)
+runner-worker(执行/恢复, 无HTTP; 全量领取) + heavy-tools(重工具纯计算服务, 无DB)
 runner-monitor(只读 Runner 状态、写告警/通知/扫描状态, 无HTTP)
 
 主 API 的微信 KF 原渠道：回调 → 拉取/合并/语音/人工 → Runner HTTP → 原渲染发送
 ```
 
-- 三类服务经共享数据库协作；`runner-worker-light` / `runner-worker-general` 和 `runner-monitor` 不调用 HTTP API。
+- 三类服务经共享数据库协作；`runner-worker` / `runner-monitor` 不调用 Runner HTTP API。`heavy-tools` 无 DB 连接，与 worker 经共享 storage 卷以 workspace 绝对路径交接文件。
 - 共享产物路径：`AGENT_RUNNER_STORAGE_ROOT=/app/storage`（`src/core/storage.py`
   `configured_storage_root`）与 `AGENT_RUNNER_RESOURCE_DIR=/app/storage/agent_runner`
   （`src/services/agent_runner/worker.py` RuntimeFactory）在两服务显式注入，均落在与主
@@ -121,11 +121,11 @@ AGENT_RUNNER_API_URL=http://runner-api:8091
 > （agent3 侧 `AGENT_RUNNER_*_CONTAINER` 加 `3` 后缀，见 overlay 头部说明）。测试数据经
 > `deploy/test2dev.sh` 单向同步（test → dev），**不得**反向同步；若未来任何环境重新指回
 > 对方库，必须先回到本条核查。Phase 2 的 worker 改为 Compose 自动命名副本，
-> agent3 只需保留 runner-api 的独立容器名；用 `docker compose ps runner-worker-light runner-worker-general` 查看副本。
+> agent3 只需保留 runner-api 的独立容器名；用 `docker compose ps runner-worker` 查看副本。agent3 开发环境不部署 heavy-tools：.env 设 `HEAVY_TOOLS_MODE=local`、`HEAVY_TOOLS_REPLICAS=0`。
 
 ### ④ 令牌与 peer 检查（凭据不入文档/日志）
 
-`runner-worker-light` / `runner-worker-general` 启动门槛：`agent_runner.enabled=true` 且 `web_service_token` 明文存在
+`runner-worker` 启动门槛：`agent_runner.enabled=true` 且 `web_service_token` 明文存在
 （`src/services/agent_runner/worker.py` `AGENT_RUNNER_SERVICE_AUTH_REQUIRED`）；`runner-api`
 同样校验（`bootstrap.py`）。服务间凭据统一为 `.env` 明文 `AGENT_RUNNER_WEB_SERVICE_TOKEN`，
 主 API 与 runner-api 共用同一 `.env` 注入（恒等比较即验证，2026-10-04 起不再用 bcrypt hash，
@@ -168,9 +168,9 @@ docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml con
 # 0. 迁移（前置①已核，先备份：见 deploy/backup.md）
 # 1. 独立 API（等 healthcheck 转 healthy；日志确认 assert_schema 通过、无 AGENT_RUNNER_SCHEMA_REQUIRED）
 docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml up -d runner-api
-# 2. 执行 worker 双池（AGENT_RUNNER_LIGHT_SLOTS / AGENT_RUNNER_GENERAL_SLOTS 控制副本数；
-#    每副本 1 个执行进程；AGENT_RUNNER_ROLE 由服务固定注入，勿在 .env 覆盖）
-docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml up -d runner-worker-light runner-worker-general
+# 2. 执行 worker（AGENT_RUNNER_WORKER_SLOTS 控制副本数）+ 重工具服务
+#    （2026-11-13 重工具服务化：AGENT_RUNNER_ROLE / LIGHT_SLOTS / GENERAL_SLOTS 已废弃）
+docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml up -d runner-worker heavy-tools
 # 3. 运行告警扫描器（确认迁移；平台飞书目标可后配，但旧事件不追发）
 docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml up -d runner-monitor
 # 4. 主 API 容器 recreate 补 env（前置②；窗口期动作）
@@ -178,7 +178,7 @@ docker compose -f docker-compose.prod.yml up -d --force-recreate aid-agent-api
 # 5. 观察
 docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml ps
 docker logs aid-runner-api --tail 100
-docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml logs --tail 100 runner-worker-light runner-worker-general runner-monitor
+docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml logs --tail 100 runner-worker heavy-tools runner-monitor
 curl http://localhost:8000/health   # 主 API
 ```
 
@@ -194,7 +194,7 @@ assert_schema，compose 并发重建时先断言会撞上未迁移的表/列秒�
 
 ## 3. 回退步骤（授权后）
 
-- 停新增服务：`docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml stop runner-monitor runner-worker-light runner-worker-general runner-api`。
+- 停新增服务：`docker compose -f docker-compose.prod.yml -f docker-compose.agent-runner.yml stop runner-monitor runner-worker heavy-tools runner-api`。
 - 已被接受的 runner 任务**不得**交旧 Agent 从头重跑：由 AgentRunner 排空、暂停或显式取消
   （计划红线，`docs/plans/plan-agent-runner-service.md` M7 节）。
 - 新表与已接单任务保留，不做破坏性降级；主 API 若已注入 env，回退同样需 recreate。
@@ -206,7 +206,7 @@ assert_schema，compose 并发重建时先断言会撞上未迁移的表/列秒�
 ## 4. healthcheck 局限（如实登记）
 
 - `runner-api`：`curl /health` 仅报告进程与 `enabled` 状态，不代表 DB/lease 健康。
-- `runner-worker-light` / `runner-worker-general`：每副本的监督进程作为容器主进程，异常退出由 restart policy
+- `runner-worker`：每副本的监督进程作为容器主进程，异常退出由 restart policy
   重启整个槽容器并换新 `worker_id`。无 HTTP 健康端点，容器状态只证明
   监督进程存活，不证明数据库租约或业务执行健康。
   业务健康验证留给 M7 综合验收（真实消息闭环、跨副本并发、慢/断线场景）。

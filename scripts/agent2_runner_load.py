@@ -1,7 +1,9 @@
 """Bounded end-to-end Runner load probe against agent2's public Nginx URL.
 
-Adapted from scripts/agent3_runner_load.py for the light/heavy separation
-topology (2 light containers x 4 in-slot concurrency + 3 general containers).
+Adapted from scripts/agent3_runner_load.py for the heavy-tool-service
+topology (4 runner-worker containers x 5 in-slot concurrency = 20 executors,
+pool routing retired; heavy tools dispatched remotely to the aid-heavy-tools
+container, see docs/system/runner-heavy-tool-service-design.md).
 Only dedicated test tenants are used. The script never prints tokens, prompts,
 model replies, or uploaded data. It leaves labelled sessions and a synthetic
 data source for inspection after the run.
@@ -284,10 +286,9 @@ def sample_state(ssh_key: Path, run_id: str) -> dict:
         elif parts[0] == "C" and len(parts) == 2:
             sample["db_connections"] = int(parts[1])
     command = ("docker stats --no-stream --format '{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}' "
-               "agent2-runner-worker-light-4 agent2-runner-worker-light-5 "
-               "agent2-runner-worker-general-1 agent2-runner-worker-general-2 "
-               "agent2-runner-worker-general-3 agent2-runner-monitor-1 "
-               "aid-agent-api2 aid-postgres")
+               "agent2-runner-worker-1 agent2-runner-worker-2 "
+               "agent2-runner-worker-3 agent2-runner-worker-4 "
+               "aid-heavy-tools aid-agent-api2 aid-postgres")
     result = subprocess.run(["ssh", "-i", str(ssh_key), "-o", "BatchMode=yes",
                              SSH_HOST, command], text=True, capture_output=True,
                             timeout=30, check=False)
@@ -427,9 +428,9 @@ def main() -> int:
     names = [name.strip() for name in args.cases.split(",")]
     if not names or any(name not in CASES for name in names):
         parser.error("unknown case")
-    # 允许重复同名用例（轻池并发验证需要 8+ 个轻任务；重池满载需要 excel 双发）
-    if not 1 <= args.concurrency <= 12 or not 60 <= args.timeout_seconds <= 3600:
-        parser.error("concurrency must be 1..12 and timeout 60..3600 seconds")
+    # 允许重复同名用例（20 执行体满载验证需要 20+ 个并发任务；重工具远程派发需要 excel 多发）
+    if not 1 <= args.concurrency <= 30 or not 60 <= args.timeout_seconds <= 3600:
+        parser.error("concurrency must be 1..30 and timeout 60..3600 seconds")
     if not args.ssh_key.is_file():
         parser.error("SSH key does not exist")
 

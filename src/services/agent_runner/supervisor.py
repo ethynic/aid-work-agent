@@ -360,15 +360,13 @@ class RunnerSlotSupervisor:
         from src.config.settings import settings
         from src.db.database import init_postgres_pool, close_postgres_pool
         from .repository import RunnerRepository
-        from .slot_capacity import effective_slot_concurrency
 
         config = settings.agent_runner
         if not config.enabled or not config.peers or not config.web_service_token:
             raise RuntimeError('AGENT_RUNNER_SERVICE_AUTH_REQUIRED')
-        # 轻池槽内并发（A 方案，设计 §6）：按容器角色决定执行模型；general 池恒走
-        # 单执行体路径（零回归），light 并发 >1 时走多执行体监督路径。
-        slot_concurrency = effective_slot_concurrency(
-            os.environ.get('AGENT_RUNNER_ROLE', 'general'), config)
+        # 槽内并发（A 方案，设计 §6；2026-11-13 §9 池路由退役后全部 worker 等价）：
+        # 并发 >1 走多执行体监督路径，=1 走单执行体路径（零回归）。
+        slot_concurrency = config.slot_concurrency
         self.lease_seconds = config.lease_seconds
         self.cancel_grace_seconds = config.cancel_grace_seconds
         # One sequential supervisor scan needs no Worker-sized connection pool.
@@ -391,6 +389,15 @@ def main():
         # A direct host invocation cannot rely on PID namespace teardown to
         # stop detached skill sessions after a Worker crash.
         raise RuntimeError('AGENT_RUNNER_SLOT_REQUIRES_CONTAINER_PID_ONE')
+    # 重工具派发模式 fail-fast（重工具服务设计 §6）：值经 .env 注入（compose
+    # ${HEAVY_TOOLS_MODE} 无默认值），漏配/非法值时容器内为空串——静默回退 local
+    # 会让 excel/OCR/大文件解析全部留在轻容器执行（重工具服务白部署，故障形态
+    # 即 11-05 TPG80509 假异步冻结事故），因此 worker 启动即拒绝
+    heavy_mode = (os.environ.get('HEAVY_TOOLS_MODE') or '').strip().lower()
+    if heavy_mode not in ('local', 'remote'):
+        raise RuntimeError(
+            f'HEAVY_TOOLS_MODE_MUST_BE_LOCAL_OR_REMOTE (got {heavy_mode!r}); '
+            '请在该环境 .env 显式配置 HEAVY_TOOLS_MODE=local 或 remote')
     supervisor = RunnerSlotSupervisor()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, supervisor.stop)

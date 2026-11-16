@@ -13,6 +13,11 @@ from .repository import protected
 class TerminalParameters(StrictDTO):
     session_title: str = Field(min_length=1,max_length=80)
     event_kind: Literal['completed','failed']
+    # 执行时长（秒，可选，wecom-app-task-notification-design §4.3）：runner
+    # 终态触发判定已算得（producer._runner_duration_seconds），生产者随事件
+    # 带入供企微 textcard 渲染耗时；0 表示时长未知（未开始执行即终态），渲染
+    # 侧兜底不显示。存量事件缺省该字段，其他渠道渲染不读取（可选不破坏）。
+    duration_seconds: int | None = Field(default=None, ge=0, le=1_000_000_000)
     # scheduled 终态扩展（Phase 3 复核，设计 §8.2）：任务标识/名称与目标
     # 快照；chat 来源缺省（可选字段，白名单不放宽 extra 校验）。
     # notify_rule_id 为任务选用通知规则的快照（规则优先，notify_target_id
@@ -326,13 +331,11 @@ def render_message_text(event_type, parameters):
         return '通知渠道测试', '这是一条测试通知，收到即表示外发渠道配置有效。'
     if event_type == 'runner.long_running':
         minutes = parameters['duration_seconds'] // 60
-        load_class = parameters.get('load_class')
-        pool = {'light': '轻专用池', 'heavy': '通用池'}.get(load_class)
+        # 2026-11-13 重工具服务化 §9：池路由退役，不再区分负载池归属。
         return 'Runner 运行较久', (
             f'Runner ID：{parameters["runner_id"]}\n'
             f'租户标识：{parameters.get("tenant_id") or "无"}\n'
             f'数字员工：{parameters["profile_id"]}\n'
-            + (f'负载池：{pool}\n' if pool else '')
             + f'本次执行时长：{minutes} 分钟。')
     return render_inbox_text(event_type, parameters)
 

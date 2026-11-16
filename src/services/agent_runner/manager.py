@@ -38,14 +38,10 @@ class RunnerManager:
         config, fingerprint = self.profiles.resolve(profile_id, principal.identity.tenant_id)
         from .input_projection import project_execution_context
         execution_context = project_execution_context(request, profile_id, fingerprint)
-        from .load_class import classify_profile
-        load_class = classify_profile(profile_id, config)
+        # 2026-11-13 重工具服务化 §9：入队判型退役，全部任务等价入队（load_class
+        # 列保留恒 light，DB 列不删）；重负载改由工具执行层经代理远程派发。
         row, created = self.repository.submit(principal, request, fingerprint, resolved_profile_id=profile_id,
-                                              execution_context=execution_context,
-                                              load_class=load_class)
-        from src.core.temp_logger import tlog
-        tlog("runner轻重分离", "入队判型 runner={runner} profile={profile} load_class={lc} created={created}",
-             runner=row['runner_id'], profile=profile_id, lc=load_class, created=created)
+                                              execution_context=execution_context)
         return public_runner(row), created
 
     def _authorize_row(self, row, credentials):

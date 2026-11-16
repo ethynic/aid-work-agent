@@ -73,6 +73,10 @@ fi
 #      恢复内容并 chown 回 ubuntu；凭据本体不入 git 仓库
 #      （2026-10-19 加固：内容被清空为 0 字节时属主仍可能是 ubuntu，仅查属主会
 #       漏判，改为同时检查 codeup 凭据是否存在，缺失即从备份件恢复）
+#   9. 2026-11-14 修正 [8] 步 worker 容器匹配模式：池路由退役（B1）后 worker
+#      按 Compose 副本序号命名 agent2-runner-worker-1..N，旧 general/light
+#      模式匹配不到导致 TMPDIR 权限修复被跳过（2026-11-13 部署手工兜底）；
+#      heavy-tools 纳入同一兜底循环
 # ==============================================================================
 
 set -e
@@ -241,12 +245,16 @@ if [ -f docker-compose.agent-runner.yml ]; then
     COMPOSE_FILES+=(-f docker-compose.agent-runner.yml)
     # AgentRunner overlay 的插值变量（网络/宿主目录/槽位/内存/DB 池）一律以服务器
     # .env 为唯一来源（compose up 会重读 .env，无需额外操作），脚本不再 export 覆盖。
-    # agent2 应配置：AGENT_RUNNER_NETWORK=aid-network2、
+    # 2026-11-13 重工具服务化（§9 池路由退役）：LIGHT_SLOTS/GENERAL_SLOTS/
+    # AGENT_RUNNER_ROLE 已废弃，单一 runner-worker 服务；agent2 应配置：
+    #   AGENT_RUNNER_NETWORK=aid-network2、
     #   AGENT_RUNNER_UPLOADS_HOST_DIR=/var/www/qb3_upload/agent2_uploads、
     #   AGENT_RUNNER_STORAGE_HOST_DIR=/var/www/qb3_upload/agent2_storage、
-    #   AGENT_RUNNER_LIGHT_SLOTS=1、AGENT_RUNNER_GENERAL_SLOTS=3、
-    #   AGENT_RUNNER_LIGHT_MEMORY=2g、AGENT_RUNNER_DB_POOL_MAX=6
-    echo "    叠加 AgentRunner overlay（runner-api/runner-worker/runner-monitor）"
+    #   AGENT_RUNNER_WORKER_SLOTS=4、AGENT_RUNNER_SLOT_CONCURRENCY=5、
+    #   AGENT_RUNNER_WORKER_MEMORY=1.5g、
+    #   HEAVY_TOOLS_MODE=remote、HEAVY_TOOLS_URL=http://heavy-tools:8093、
+    #   HEAVY_TOOLS_REPLICAS=1、HEAVY_TOOLS_CONCURRENCY=1、HEAVY_TOOLS_MEMORY=2g
+    echo "    叠加 AgentRunner overlay（runner-api/runner-worker/heavy-tools/runner-monitor）"
     # 互斥预检：用本环境主 API 容器的 compose project 标签锚定当前 project 名
     # （首次部署容器不存在时退回目录名，与 compose 默认 project 命名一致）
     CURRENT_PROJECT=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' aid-agent-api2 2>/dev/null || true)
@@ -285,7 +293,10 @@ done
 echo "[8] 修复容器 /tmp 与 /home/appuser/tmp 权限..."
 docker exec -u root aid-agent-api2 chmod 1777 /tmp 2>/dev/null \
     || echo "  警告：aid-agent-api2 /tmp chmod 失败"
-for c in $(docker ps --format '{{.Names}}' | grep -E '^agent2-runner-worker-(general|light)-|^aid-runner-api$'); do
+# 2026-11-13 池路由退役（B1）：worker 容器改为 Compose 副本序号命名
+# agent2-runner-worker-1..N（旧 general/light 命名已废弃）；
+# heavy-tools 同镜像入口，一并在旧镜像场景下兜底
+for c in $(docker ps --format '{{.Names}}' | grep -E '^agent2-runner-worker-[0-9]+$|^aid-heavy-tools$|^aid-runner-api$'); do
     if docker exec -u root "$c" sh -c "chmod 1777 /tmp && chown appuser:appgroup /home/appuser/tmp" 2>/dev/null; then
         # 以 appuser 身份自检可写性，失败时输出可 grep 的警告
         docker exec -u 1000 "$c" sh -c "touch /home/appuser/tmp/.perm_probe && rm -f /home/appuser/tmp/.perm_probe" 2>/dev/null \

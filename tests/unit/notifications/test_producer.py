@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import timedelta, datetime, timezone
 from unittest.mock import MagicMock
 import pytest
 
@@ -8,9 +8,13 @@ from src.notifications.repository import unprotect
 
 
 def runner(**kw):
+    # Phase 2 触发判定（设计 §4.2）：终态通知需时长 ≥ wecom_task_min_seconds
+    # （默认 300s），fixture 给 600s 执行时长以走发布路径。
     return dict(source='chat',session_kind='web',actor_kind='user',actor_id='user',
         user_id='user',tenant_id='tenant',scope_key='tenant:tenant',status='completed',
-        session_id='session',runner_id='runner',finished_at=datetime.now(timezone.utc),
+        session_id='session',runner_id='runner',
+        execution_started_at=datetime.now(timezone.utc)-timedelta(seconds=600),
+        finished_at=datetime.now(timezone.utc),
         accepted_at=datetime.now(timezone.utc),**kw)
 
 
@@ -29,6 +33,7 @@ def test_terminal_message_uses_server_snapshot_and_stable_key():
     assert 'ON CONFLICT(scope_key,recipient_user_id,producer,event_key)' in statement
     assert args[5]=='terminal:runner'
     assert unprotect(args[11])=={'session_title':'项目名称','event_kind':'completed',
+        'duration_seconds':600,
         'task_id':None,'task_name':None,'notify_rule_id':None,'notify_target_id':None,
         'daily_report_date':None,'daily_report_link':None,
         'daily_report_summary':None,'daily_report_missing':None}

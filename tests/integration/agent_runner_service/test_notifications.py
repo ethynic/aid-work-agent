@@ -81,7 +81,9 @@ def terminal(database,actor,status='completed'):
     with database.connect() as conn,conn.cursor() as cursor:
         cursor.execute('SELECT * FROM agent_runners WHERE runner_id=%s FOR UPDATE',(row['runner_id'],))
         before=decoded(cursor.fetchone())
+        # Phase 2 触发判定：终态通知需时长 ≥ wecom_task_min_seconds（默认 300s）
         cursor.execute('''UPDATE agent_runners SET status=%s,finished_at=clock_timestamp(),
+            execution_started_at=clock_timestamp()-interval '10 minutes',
             view_revision=view_revision+1 WHERE runner_id=%s RETURNING *''',(status,row['runner_id']))
         return EventRepository.notify_in_tx(cursor,before,after=decoded(cursor.fetchone()),kind='terminal')
 

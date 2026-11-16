@@ -32,7 +32,6 @@ def _runner_config():
 
 def _make_worker(monkeypatch):
     """构造仅依赖 fake 的 RunnerWorker（与 test_slot_concurrency 同模式）。"""
-    monkeypatch.setenv('AGENT_RUNNER_ROLE', 'general')
     return RunnerWorker(_runner_config(), slot_concurrency=1,
         execution_repository=SimpleNamespace(reap_expired=lambda: []),
         repository=SimpleNamespace(),
