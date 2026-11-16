@@ -51,6 +51,7 @@ lxml>=5.0  # HTML 解析后端（web-search-pro 技能脚本依赖；容器内�
 # Word Document Processing
 python-docx>=1.0.0  # Word document reading and processing
 markitdown[docx]>=0.1.0  # Word to Markdown conversion
+pdf2docx>=0.5.8  # PDF to editable DOCX（doc-layout-clone 技能；间接依赖 opencv-python-headless、fire）
 
 # Excel Document Processing
 openpyxl>=3.1.0  # Excel document reading and processing
