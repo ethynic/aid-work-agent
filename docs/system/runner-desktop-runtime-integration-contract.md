@@ -1,5 +1,14 @@
 # AgentRunner / Desktop / Runtime 共同集成契约
 
+### 企业微信定时消息发送共同检查点
+
+2026-11-16 · 契约 2.21，服务端内部加性，P1 编码基线。已确认业务规则、记录字段、锁序和状态所有权见 [定时发送 P1 编码契约](../design/wecom/wecom-scheduled-send-design.md#p1-编码契约)。
+
+- Scheduler 在原到期循环内识别 `[wecom-conversation:scheduled-send]` 并先于通用 once 宽限与 Runner pending 分支处理，原计划行和逐目标执行事实同事务提交。企微专属 API 写配置，Scheduler 写到期事实，企微派发器按原设备组串行取得发送占用。待发顺序读取持久执行记录。原 Runtime/Provider 与 AgentRunner 不写这三种服务端事实。
+- 企微派发器唯一创建内部绑定 `business_kind='wecom_scheduled_send'`、`business_ref={version:1,execution_id}` 的原写调用。原用户、租户、设备、账号、稳定会话及正文来自持久执行记录，原通道只传现有 `wecom_message_send({session,text})`。定时调用在原 `/started` 事务核对授权时点、状态、设备及余额并唯一冻结执行单价，原工具接口、标准领取和结果格式照旧。已授权后停止或超时不重置发送事实。
+- CLI 回执及原身份的只读对账是发送证据，原 Runtime 回执和权威停止确认是设备占用证据。已授权后租约失联保持发送未确认，原写调用不重放。能证明释放才让其他企微队列工作继续，保留可信迟到回执和对账路径。专属结算以执行记录为幂等键、按已冻结价格写现有台账。普通工具结果扣费对这种内部绑定不再触发，首启和其他工具的原价照旧。
+- 现有 Device API、H1/H3、Provider schema 与全局最低客户端版本沿用。设备上报原能力与实际已交付 Runtime/WeCom CLI 组合必须覆盖稳定目标、本地校验、`/started` 非成功停止执行、原结果及迟到结果，以及本机互斥。缺少仅定时发送所需条件时保持已有 BOSS、企微与恢复、上报、计费路径。P0 自测、独测、合入及实际已交付设备验证分别登记。
+
 ### BOSS 筛选容错与本机操作恢复共同检查点
 
 2026-11-12 · 契约 2.20 候选，待实施。适用 BOSS 网页任务。规则见 [筛选输入](../design/recruiting/resume-job-matching-design.md#boss-筛选参数容错)、[恢复交互](agent-application-architecture-design.md#boss-本机操作恢复) 和 [计划](../plans/plan-boss-filter-input-and-local-recovery.md)。
