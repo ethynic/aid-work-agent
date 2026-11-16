@@ -103,18 +103,22 @@ _WECOM_APP_NOTIFY_CHANNEL_TYPE = "wecom_app_notify"
 _WECOM_CHANNEL_TYPE = "wecom"
 # 飞书应用消息渠道（agent 对话接入；飞书通知接入 2026-11-15 起支持通知用途）
 _FEISHU_CHANNEL_TYPE = "feishu"
+# 钉钉应用消息渠道（agent 对话接入；钉钉通知接入 2026-11-16 起支持通知用途）
+_DINGTALK_CHANNEL_TYPE = "dingtalk"
 
 # 应用渠道「通知用途」（config.notify_usage，企微渠道合并 2026-11-15，飞书接入
-# 2026-11-15 同模式）：agent_only 仅智能体接入（缺省，存量行为不变）；both 智能体
-# 接入+通知（通知借用此应用凭据发送）；notify_only 仅通知（不接 agent，回调链路
-# 不注册）
+# 2026-11-15、钉钉接入 2026-11-16 同模式）：agent_only 仅智能体接入（缺省，存量
+# 行为不变）；both 智能体接入+通知（通知借用此应用凭据发送）；notify_only 仅通知
+# （不接 agent，回调链路不注册）
 _NOTIFY_USAGE_KEY = "notify_usage"
 _NOTIFY_USAGES = ("agent_only", "both", "notify_only")
 # 支持「通知用途」单选的渠道类型
-_NOTIFY_USAGE_CHANNEL_TYPES = (_WECOM_CHANNEL_TYPE, _FEISHU_CHANNEL_TYPE)
+_NOTIFY_USAGE_CHANNEL_TYPES = (_WECOM_CHANNEL_TYPE, _FEISHU_CHANNEL_TYPE, _DINGTALK_CHANNEL_TYPE)
 
 # notify_only 的必填字段：纯服务端 API 发消息无回调链路，回调字段免填
-# （企微：token/encoding_aes_key；飞书：verification_token，encrypt_key 本就可选）
+# （企微：token/encoding_aes_key；飞书：verification_token，encrypt_key 本就可选；
+# 钉钉：token/encoding_aes_key——通知发送仅需 app_key/app_secret/agent_id 三项，
+# agent_id 为工作通知应用 AgentId）
 _WECOM_NOTIFY_ONLY_REQUIRED_FIELDS = {
     "wecom": {
         "corp_id": "企业ID（在「我的企业」页面获取，格式 ww 开头）",
@@ -128,10 +132,17 @@ _FEISHU_NOTIFY_ONLY_REQUIRED_FIELDS = {
         "app_secret": "应用App Secret",
     }
 }
+_DINGTALK_NOTIFY_ONLY_REQUIRED_FIELDS = {
+    "dingtalk": {
+        "app_key": "应用AppKey",
+        "app_secret": "应用AppSecret",
+        "agent_id": "应用AgentId（在应用详情页获取，工作通知发送必须）",
+    }
+}
 
 
 def _notify_usage(channel_type: str, config: dict) -> str:
-    """规整并校验支持「通知用途」渠道（wecom/feishu）config 中的通知用途。
+    """规整并校验支持「通知用途」渠道（wecom/feishu/dingtalk）config 中的通知用途。
 
     缺省/空值 = agent_only（存量配置行为不变）；非法值 400（表单单选来源，
     出现非法值即为异常调用，不静默纠正）。
@@ -150,8 +161,8 @@ def _notify_usage(channel_type: str, config: dict) -> str:
 
 
 def _required_fields_missing(channel_type: str, config: dict) -> list:
-    """支持「通知用途」的渠道（wecom/feishu）按用途分支的必填校验（create/update
-    共用）。
+    """支持「通知用途」的渠道（wecom/feishu/dingtalk）按用途分支的必填校验
+    （create/update 共用）。
 
     notify_only 仅发消息凭据必填（无回调链路，回调字段免填）；agent_only/both
     保持原必填。其他渠道返回空列表。
@@ -164,6 +175,10 @@ def _required_fields_missing(channel_type: str, config: dict) -> list:
         required_map = (_FEISHU_NOTIFY_ONLY_REQUIRED_FIELDS[_FEISHU_CHANNEL_TYPE]
                         if _notify_usage(channel_type, config) == "notify_only"
                         else _REQUIRED_FIELDS[_FEISHU_CHANNEL_TYPE])
+    elif channel_type == _DINGTALK_CHANNEL_TYPE:
+        required_map = (_DINGTALK_NOTIFY_ONLY_REQUIRED_FIELDS[_DINGTALK_CHANNEL_TYPE]
+                        if _notify_usage(channel_type, config) == "notify_only"
+                        else _REQUIRED_FIELDS[_DINGTALK_CHANNEL_TYPE])
     else:
         return []
     return [f"{k}（{v}）" for k, v in required_map.items() if not (config or {}).get(k)]
@@ -266,8 +281,8 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
                                  _WECHAT_MP_CHANNEL_TYPE, _WECOM_APP_NOTIFY_CHANNEL_TYPE):
         raise HTTPException(status_code=400, detail=f"不支持的渠道类型: {body.channel_type}")
 
-    # wecom/feishu 按通知用途分支必填（notify_usage 非法值在此处 400）；其余渠道静态必填表
-    if body.channel_type in (_WECOM_CHANNEL_TYPE, _FEISHU_CHANNEL_TYPE):
+    # wecom/feishu/dingtalk 按通知用途分支必填（notify_usage 非法值在此处 400）；其余渠道静态必填表
+    if body.channel_type in _NOTIFY_USAGE_CHANNEL_TYPES:
         missing = _required_fields_missing(body.channel_type, body.config)
     else:
         required = _REQUIRED_FIELDS.get(body.channel_type, {})

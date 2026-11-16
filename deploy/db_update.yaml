@@ -4832,6 +4832,10 @@
   remark: "users 增加 feishu_open_id 列（飞书任务通知身份绑定，存飞书用户 open_id）：存量库升级补列"
   statements: |
     ALTER TABLE users ADD COLUMN IF NOT EXISTS feishu_open_id TEXT;
+- datetime: "2026-11-16 10:00:00"
+  remark: "users 增加 dingtalk_userid 列（钉钉任务通知身份绑定，存钉钉用户 userid）：存量库升级补列"
+  statements: |
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS dingtalk_userid TEXT;
 
 - datetime: "2026-11-16 11:06:00"
   remark: "企微定时消息逐会话执行记录和队列索引"
