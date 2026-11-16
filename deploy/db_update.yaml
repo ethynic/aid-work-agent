@@ -4828,3 +4828,7 @@
   remark: "users 增加 wecom_userid 列（长任务企微应用通知身份绑定，存企微成员 userid）：存量库升级补列"
   statements: |
     ALTER TABLE users ADD COLUMN IF NOT EXISTS wecom_userid TEXT;
+- datetime: "2026-11-15 10:00:00"
+  remark: "users 增加 feishu_open_id 列（飞书任务通知身份绑定，存飞书用户 open_id）：存量库升级补列"
+  statements: |
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS feishu_open_id TEXT;

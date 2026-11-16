@@ -6,10 +6,12 @@ RegisterTarget API），发送走独立通知应用的 textcard 应用消息，t
 wecom_userid。
 
 **凭据租户自备**：corp_id/agentid/secret 不再来自平台全局配置（原
-notifications.wecom_app 节已删除），改为按 target 所属租户读租户渠道配置
-（连接中心「企业微信应用通知」，channel_type=wecom_app_notify，租户管理员
-保存即启用；secret 加密落库）。adapter 仍按 channel 全局单例注册（registry
-不变），但"可用性"与"发送凭据"按租户延迟解析：
+notifications.wecom_app 节已删除），改为按 target 所属租户读租户渠道配置，
+两级回退链（渠道合并 2026-11-15）：① 连接中心「企业微信应用通知」
+（channel_type=wecom_app_notify，secret 加密落库）最新一条，存量专用配置
+兼容优先；② 企微应用配置（channel_type=wecom）通知用途为 both/notify_only
+的最新一条（借用发送，agent_id→agentid 映射）。adapter 仍按 channel 全局
+单例注册（registry 不变），但"可用性"与"发送凭据"按租户延迟解析：
 
 - available_for_tenant(tenant_id) / credentials_for_tenant(tenant_id)：
   repository/expand/binding 的租户感知点调用；无 available_for_tenant 语义的
@@ -68,25 +70,42 @@ class WecomAppCredentials:
     secret: str
 
 
-def _default_credentials_source(tenant_id):
-    """默认租户凭据解析：连接中心渠道配置 channel_type=wecom_app_notify
-    （最新一条）。配置缺失或 corp_id/agentid/secret 不全返回 None。"""
-    from src.saas.db.channel_config_db import ChannelConfigDB
-    row = ChannelConfigDB.get_by_tenant_and_type_decrypted(
-        tenant_id, WECOM_APP_NOTIFY_CHANNEL_TYPE)
-    if not row:
-        return None
-    config = row.get('config') or {}
+def _credentials_from_channel_config(tenant_id, config, agentid_key):
+    """从渠道 config 提取通知凭据（corp_id/agentid/secret 全齐才有效；
+    agentid_key 区分 wecom_app_notify 的 agentid 与 wecom 的 agent_id）。"""
+    config = config or {}
     corp_id = str(config.get('corp_id') or '').strip()
     secret = str(config.get('secret') or '')
     try:
-        agentid = int(config.get('agentid') or 0)
+        agentid = int(config.get(agentid_key) or 0)
     except (TypeError, ValueError):
         agentid = 0
     if not (corp_id and agentid and secret):
         return None
     return WecomAppCredentials(tenant_id=str(tenant_id), corp_id=corp_id,
                                agentid=agentid, secret=secret)
+
+
+def _default_credentials_source(tenant_id):
+    """默认租户凭据解析（企微应用/通知配置合并后的两级回退链）：
+
+    ① 连接中心「企业微信应用通知」channel_type=wecom_app_notify 最新一条
+       （存量专用配置兼容优先，字段 agentid）；该条存在但凭据不全时继续回退；
+    ② 企微应用配置 channel_type=wecom 中通知用途为 both/notify_only 的最新一条
+       （借用发送，字段映射 agent_id→agentid；wecom 类型敏感字段明文存储）；
+    ③ 均无有效凭据返回 None。"""
+    from src.saas.db.channel_config_db import ChannelConfigDB
+    row = ChannelConfigDB.get_by_tenant_and_type_decrypted(
+        tenant_id, WECOM_APP_NOTIFY_CHANNEL_TYPE)
+    if row:
+        credentials = _credentials_from_channel_config(
+            tenant_id, row.get('config') or {}, 'agentid')
+        if credentials:
+            return credentials
+    row = ChannelConfigDB.get_latest_wecom_notify_usage_decrypted(tenant_id)
+    if not row:
+        return None
+    return _credentials_from_channel_config(tenant_id, row.get('config') or {}, 'agent_id')
 
 
 def _json_object(raw):
@@ -143,7 +162,8 @@ class WecomAppAdapter:
         return False
 
     def available_for_tenant(self, tenant_id):
-        """租户在连接中心保存了完整的企业微信应用通知凭据才可用。"""
+        """租户在连接中心保存了完整通知凭据（专用通知配置或通知用途的企微应用
+        配置，两级回退链）才可用。"""
         return self.credentials_for_tenant(tenant_id) is not None
 
     def credentials_for_tenant(self, tenant_id):

@@ -18,7 +18,7 @@
 """
 import hashlib
 import json
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -210,8 +210,11 @@ class TestAvailableForTenant:
             assert channel_type == 'wecom_app_notify'
             return incomplete_rows.pop(0)
 
+        # 渠道合并后两级回退链：专用配置凭据不全且无借用源（借用源 None）
         with patch('src.saas.db.channel_config_db.ChannelConfigDB.get_by_tenant_and_type_decrypted',
-                   staticmethod(fake_get)):
+                   staticmethod(fake_get)), \
+             patch('src.saas.db.channel_config_db.ChannelConfigDB.get_latest_wecom_notify_usage_decrypted',
+                   staticmethod(lambda tenant_id: None)):
             for _ in range(5):
                 assert wecom_app._default_credentials_source('t1') is None
 
@@ -247,6 +250,79 @@ class TestAvailableForTenant:
 
         adapter = WecomAppAdapter(credentials_source=broken_source)
         assert adapter.available_for_tenant('t1') is False
+
+
+# ============== 凭据两级回退链（渠道合并 2026-11-15） ==============
+
+class TestCredentialsFallbackChain:
+    """_default_credentials_source 两级回退链：① wecom_app_notify 存量专用配置
+    优先；② 企微应用配置（notify_usage ∈ {both, notify_only}）借用发送，
+    agent_id→agentid 映射；③ 均无有效凭据 None。"""
+
+    @staticmethod
+    def _patch_sources(dedicated, borrowed):
+        stack = ExitStack()
+        stack.enter_context(patch(
+            'src.saas.db.channel_config_db.ChannelConfigDB.get_by_tenant_and_type_decrypted',
+            staticmethod(lambda tenant_id, channel_type: dedicated)))
+        stack.enter_context(patch(
+            'src.saas.db.channel_config_db.ChannelConfigDB.get_latest_wecom_notify_usage_decrypted',
+            staticmethod(lambda tenant_id: borrowed)))
+        return stack
+
+    def test_dedicated_config_takes_priority_over_borrowed(self):
+        """① 专用配置完整 → 直接使用，不查借用源。"""
+        dedicated = {'config': {'corp_id': 'ww1', 'agentid': 1000001, 'secret': 's1'}}
+        with self._patch_sources(dedicated, self._fail_borrowed()):
+            credentials = wecom_app._default_credentials_source('t1')
+        assert credentials == WecomAppCredentials(tenant_id='t1', corp_id='ww1',
+                                                  agentid=1000001, secret='s1')
+
+    def test_borrowed_wecom_maps_agent_id_to_agentid(self):
+        """① 无专用配置 → ② 借用 wecom（notify_usage=both）配置，agent_id
+        映射为 agentid。"""
+        borrowed = {'config': {'corp_id': 'ww2', 'agent_id': '1000002',
+                               'secret': 's2', 'notify_usage': 'both'}}
+        with self._patch_sources(None, borrowed):
+            credentials = wecom_app._default_credentials_source('t1')
+        assert credentials == WecomAppCredentials(tenant_id='t1', corp_id='ww2',
+                                                  agentid=1000002, secret='s2')
+
+    def test_fallback_when_dedicated_incomplete(self):
+        """① 专用配置存在但凭据不全 → 继续借用 ②（迁移期兜底）。"""
+        dedicated = {'config': {'corp_id': 'ww1', 'agentid': 1000001, 'secret': ''}}
+        borrowed = {'config': {'corp_id': 'ww2', 'agent_id': 1000002,
+                               'secret': 's2', 'notify_usage': 'notify_only'}}
+        with self._patch_sources(dedicated, borrowed):
+            credentials = wecom_app._default_credentials_source('t1')
+        assert credentials == WecomAppCredentials(tenant_id='t1', corp_id='ww2',
+                                                  agentid=1000002, secret='s2')
+
+    def test_no_configs_returns_none(self):
+        """③ 两级均无配置 → None。"""
+        with self._patch_sources(None, None):
+            assert wecom_app._default_credentials_source('t1') is None
+
+    def test_borrowed_incomplete_returns_none(self):
+        """借用行存在但缺 secret → None（不全的凭据不发送）。"""
+        borrowed = {'config': {'corp_id': 'ww2', 'agent_id': '1000002',
+                               'notify_usage': 'notify_only'}}
+        with self._patch_sources(None, borrowed):
+            assert wecom_app._default_credentials_source('t1') is None
+
+    def test_borrowed_agent_id_not_numeric_returns_none(self):
+        """借用行 agent_id 非数字 → None（不误发）。"""
+        borrowed = {'config': {'corp_id': 'ww2', 'agent_id': 'not-a-number',
+                               'secret': 's2', 'notify_usage': 'both'}}
+        with self._patch_sources(None, borrowed):
+            assert wecom_app._default_credentials_source('t1') is None
+
+    @staticmethod
+    def _fail_borrowed():
+        """借用源断言未被调用（专用配置优先时不查 ②）。"""
+        def _fail(tenant_id):
+            raise AssertionError('借用源不应在专用配置完整时被查询')
+        return _fail
 
 
 # ============== render（textcard 文案与回跳） ==============

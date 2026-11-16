@@ -8,7 +8,7 @@
           <template #header>
             <div class="flex items-center gap-2.5">
               <h3 class="text-base font-semibold text-default">通知渠道</h3>
-              <BaseBadge :intent="usableCount === 2 ? 'success' : 'neutral'">{{ usableCount }} / 2 可用</BaseBadge>
+              <BaseBadge :intent="usableCount === 3 ? 'success' : 'neutral'">{{ usableCount }} / 3 可用</BaseBadge>
             </div>
           </template>
           <!-- 渠道行 1：浏览器任务提醒 -->
@@ -25,6 +25,8 @@
           </div>
           <!-- 渠道行 2：企微通知（独立行组件，含绑定弹窗） -->
           <WecomTaskNotifyCard @availability="wecomAppAvailable = $event" />
+          <!-- 渠道行 3：飞书通知（独立行组件，手机号识别自动绑定，无 OAuth） -->
+          <FeishuTaskNotifyCard @availability="feishuAvailable = $event" />
           <p v-if="error" role="alert" class="text-sm text-danger-600 pt-2">{{ error }}</p>
           <p v-if="notice" role="status" class="text-sm text-success-700 pt-2">{{ notice }}</p>
         </BaseCard>
@@ -42,6 +44,7 @@ import { useTenantAuth } from '@/composables/useTenantAuth'
 import { notificationApi, type NotificationCapabilities } from './api'
 import { cleanupPending, disableNotifications, enableNotifications, ownsBinding, readBinding, currentSubject, supportsNotifications, registerNotificationWorker, syncRevokedTarget, type BrowserBinding } from './client'
 import WecomTaskNotifyCard from './WecomTaskNotifyCard.vue'
+import FeishuTaskNotifyCard from './FeishuTaskNotifyCard.vue'
 const { admin, isLoggedIn, logout, init } = useTenantAuth()
 const toggleSidebar = inject<() => void>('toggleSidebar')
 const loading = ref(true), busy = ref(false), error = ref(''), notice = ref('')
@@ -49,11 +52,12 @@ const binding = ref<BrowserBinding | null>(readBinding())
 const capabilities = ref<NotificationCapabilities | null>(null)
 const preferenceEnabled = ref(false)
 const wecomAppAvailable = ref(false)
+const feishuAvailable = ref(false)
 const permission = ref<NotificationPermission | 'unsupported'>('Notification' in window ? Notification.permission : 'unsupported')
 const browserAvailable = computed(() => supportsNotifications() && !!capabilities.value?.enabled && !!capabilities.value?.web_push.enabled)
 const ownedActiveBinding = computed(() => !!binding.value && ownsBinding(binding.value) && binding.value.state === 'active')
 const browserEnabled = computed(() => ownedActiveBinding.value && preferenceEnabled.value && permission.value === 'granted')
-const usableCount = computed(() => (browserAvailable.value ? 1 : 0) + (wecomAppAvailable.value ? 1 : 0))
+const usableCount = computed(() => (browserAvailable.value ? 1 : 0) + (wecomAppAvailable.value ? 1 : 0) + (feishuAvailable.value ? 1 : 0))
 async function refresh() {
   loading.value = true; error.value = ''; binding.value = readBinding()
   try {

@@ -19,6 +19,8 @@
 | 三轮回炉（外部复审 3 项） | profile 遮蔽/换绑死循环/集成用例断言 | ✅ 完成（2026-11-13） | ab8f45c4；钉扎仅 active 行生效（非激活跳过，advisory 锁+锁后判定闭合并发边界）；profile active 优先排序；接手/换绑 integration 真 PG 用例改按状态断言。单测 439（红先验证）+ 真 PG 隔离库 wecom 5 用例独立复现全绿；logout 用例失败为 master 预存签名漂移（初始提交即 4 参） |
 | 四轮回炉（外部复审 1 项：Web Push 回归） | stale 请求复活用户刚关闭的浏览器通知 | ✅ 完成（2026-11-13） | dfd527c1；register_target 增 identity_preverified 门控（默认 False=web_push 完全恢复回归前语义，wecom_bind 传 True 保留企微接手/换绑/跳钉扎）；红先 3 用例复现回归后转绿，445 passed；CR 独立复现红先+与 2fdf51c2 基线逐分支等价；integration 真 PG 待隔离库环境 |
 | 五轮：租户级配置改造（用户否决平台全局配置） | 企微应用通知凭据从全局 `notifications.wecom_app` 改为租户自备（连接中心渠道配置 wecom_app_notify） | 🔧 进行中（开发+单测+独立测试+CR 完成，integration 真 PG 与真机验收待环境） | 详见下方「五轮」节；notifications 460 + channel_config_db 79 + task_result_sharing 回归 19 = 558 全绿（CR 独立复跑一致）；前端 build + vitest notifications 140 全绿；E2E 旧全局配置口径作废（后续教程走租户配置页）；integration 真 PG 与真机验收待环境 |
+| 六轮：企微应用与通知配置合并（2026-11-15，设计 §3 决策 7 追加） | 「企业微信」应用配置加「通知用途」三模式（notify_usage），通知凭据两级回退借用 | 🔧 进行中（开发+单测完成，独立测试/CR 待走） | 详见下方「六轮」节；notifications+channels+channel_config_db+factory+api 用例 1555 过（7 失败经基线核实为 master 预存，与本轮无关）；前端 build + vitest notifications 140 全绿 |
+| 七轮：飞书通知接入（2026-11-15，设计 §3 决策 7 追加） | 飞书通知完全复刻企微租户级模式：飞书渠道通知用途三模式 + 手机号识别绑定（无 OAuth）+ FeishuAppAdapter | 🔧 进行中（开发+单测完成，独立测试/CR 待走） | 详见下方「七轮」节；notifications/channels/factory/db/api 单测全绿（channels 5 失败为宿主机预存环境项：Redis 禁用致 idempotency 2 + kf_account_referral 3，与本轮无关）；前端 build + vitest notifications 148 全绿 |
 
 ## 五轮：租户级配置改造（2026-11-13，设计 §3 决策 7）
 
@@ -28,6 +30,28 @@
 - 前端：ChannelConfig.vue 新增「企业微信应用通知」类型（corp_id/agentid/secret，secret 密码框+掩码回显；无回调地址、无验证连接、不绑定数字员工）。
 
 前置（用户/运维，五轮更新）：各租户管理员在企业微信后台创建本租户的独立通知应用（agentid+secret）、配置可信域名与可见范围，凭据填入连接中心「企业微信应用通知」渠道；OAuth 回跳域名仍由平台站点域名承载。E2E 按旧文档准备的 `notifications.wecom_app` 全局配置作废。
+
+## 六轮：企微应用与通知配置合并（2026-11-15，设计 §3 决策 7 追加）
+
+- 背景：连接中心「企业微信」（agent 对话接入）与「企业微信应用通知」（wecom_app_notify，通知专用）两套配置并存；通知仅发生在 web 渠道聊天（producer 已判定，企微渠道聊天无通知），合并无体验负担。
+- 渠道配置（src/saas/api/channel_config.py）：wecom 类型 config 新键 `notify_usage`（`agent_only` 缺省 / `both` / `notify_only`，非法值 400）；必填校验按用途分支——notify_only 仅 corp_id/agent_id/secret 三项（纯服务端 API 无回调，token/encoding_aes_key 免填），agent_only/both 保持原 5 项；create/update 同口径。
+- 渠道工厂（src/saas/services/channel_factory.py）：`_load_config` 跳过 notify_only 的 wecom 配置（不实例化对话渠道、不接回调，回调路由走既有 404 分支）；`notify_usage` 作为配置元键在 adapter 构造前剔除（verify 直连路径同样覆盖）。
+- 凭据回退链（src/notifications/wecom_app.py）：`_default_credentials_source` 改两级回退——① wecom_app_notify 最新一条（存量兼容优先，凭据不全继续回退）② wecom 且 notify_usage ∈ {both, notify_only} 最新一条（借用发送，agent_id→agentid 映射；wecom 类型 secret 明文存储）③ 均无 → None；新增 ChannelConfigDB.get_latest_wecom_notify_usage_decrypted（SQL 参数化）。
+- 前端（ChannelConfig.vue）：企微应用表单加「通知用途」单选（notify_only 联动隐藏回调字段/回调地址/关联数字员工，保存时剔除回调字段旧值）；「企业微信应用通知」从新增入口隐藏（存量行保留展示与编辑，编辑弹窗提示迁移）。
+- 存量行为零变更：agent_only 缺省、wecom_app_notify 优先、既有 wecom 5 项必填不变。
+
+## 七轮：飞书通知接入（2026-11-15，设计 §3 决策 7 追加）
+
+- 背景：飞书任务通知完全复刻企微租户级模式（渠道用途三模式 + 手机号绑定 + 通知适配器）；本期无 OAuth，绑定仅手机号识别 + confirm 服务端二次核实，无绑定弹窗。
+- DB：`users` 加 `feishu_open_id TEXT`（db_update.yaml 幂等块 + deploy/init-postgres.sql + deploy/nuodu/init-postgres.sql 三处同步，照 wecom_userid 先例）；UserDB 增 set_feishu_open_id / get_by_feishu_open_id_in_tenant（IS NOT DISTINCT FROM 兼容平台管理员）。
+- 渠道配置（src/saas/api/channel_config.py）：`_wecom_notify_usage/_wecom_required_fields_missing` 泛化为 `_notify_usage/_required_fields_missing`（wecom/feishu 同口径）；feishu notify_only 仅 app_id/app_secret 两项必填（verification_token/encrypt_key 免填），agent_only/both 保持原必填（app_id/app_secret/verification_token，encrypt_key 本就可选）。
+- 渠道工厂（src/saas/services/channel_factory.py）：`_is_wecom_notify_only` 泛化 `_is_notify_only`（feishu notify_only 同样跳过对话渠道实例化/回调）。
+- 凭据源（src/saas/db/channel_config_db.py + src/notifications/feishu_app.py）：新增 ChannelConfigDB.get_latest_feishu_notify_usage_decrypted（SQL 参数化，notify_usage IN (both, notify_only)）；FeishuAppAdapter（channel=feishu_app）credentials_for_tenant/available_for_tenant 租户级解析，全局 available() 恒 False；tenant_access_token 按租户缓存（expire 提前 300s 作废；本期错误码语义无 token 失效专项码，不做 code 触发的刷新重试）。
+- Adapter（src/notifications/feishu_app.py）：出站复用 PinnedHTTPSConnection/public_addresses（域名固定 open.feishu.cn）；发送 `POST /open-apis/im/v1/messages?receive_id_type=open_id`（Bearer token 头，content 为 interactive 卡片 JSON 序列化字符串：header 标题 + lark_md 说明含时长 + button「查看结果」url={public_base_url}/notification?ref=&tenant=）；validate_target 校验 open_id 形态（ou_ + ≥32 位十六进制，宽松量级），endpoint 摘要 sha256(feishu_open_id)；响应 code 分类——0→accepted；230013/230034→target_invalid；230020→retryable 限流；HTTP 429/5xx/网络→retryable；其他 code→permanent。接口字段以 2026-11-15 官方文档查证口径为准（决策 7 追加）。
+- 绑定路由（src/notifications/feishu_bind.py，挂 /api/notifications）：GET /feishu/bind/status（纯本地事实）、GET /feishu/bind/suggest（登录用户手机号 → batch_get_id 查 open_id，只读；batch_get_id 不返回姓名，姓名快照恒空）、POST /feishu/bind/confirm（服务端按手机号重新 batch_get_id 核实后落库 users.feishu_open_id + 幂等登记 feishu_app target，identity_preverified=True 对齐企微）、DELETE /feishu/bind（清列 + 撤 feishu_app target，不过租户 gate 对齐企微 unbind）；未配置租户绑定端点 503。无 state/OAuth 弹窗。
+- 注册与白名单：service.py 注册 FeishuAppAdapter；PROVIDER_ALLOWED_EVENT_TYPES 加 'feishu_app'（completed/failed），expand 资格判断泛化为按白名单 provider 查表（wecom_app 行为不变）；PreferenceRequest channel/provider 加 feishu_app；repository 增 feishu_bind_profile（与 wecom_bind_profile 共用 _bind_profile）。
+- 前端：NotificationSettings.vue 徽标改 x/3 可用 + 加飞书通知行；新增 FeishuTaskNotifyCard.vue 行组件（复制企微行结构精简——去掉 OAuth 弹窗/轮询/UA 检测，保留手机号识别自动绑定；取舍：企微行组件 OAuth 部分占大头，抽取共享行组件需重构已交付企微卡，复制改接口最直接）；未命中行下方提示、未绑定无手动绑定按钮；解绑后不自动重识别（重识别命中会立刻自动重绑，无法保持解绑态，页面刷新后可重新识别）；ChannelConfig.vue 通知用途单选扩展到 feishu（notify_only 隐藏 verification_token/encrypt_key/回调地址/关联数字员工，保存剔除旧值）。
+- 已知边界：飞书 batch_get_id 不返回姓名（绑定姓名快照恒空，设置页显示「已绑定」不带姓名）；token 中途失效（如 secret 轮换）按其他 code→permanent 处理（凭据轮换后语义正确）；suggest 手机号按库内存量原样传（无 +86 规整），匹配失败提示用户核对手机号与应用可见范围。
 
 ## Phase 1 — 身份绑定（设计 §4.1）
 

@@ -882,3 +882,177 @@ class TestChannelFactoryConfigVersion:
                 assert ret2 == (None, None, None)
                 # 旧缓存被清掉
                 assert ("tenant_d", "dingtalk", "chan_d") not in channel_factory._ADAPTER_CACHE
+
+
+class TestChannelFactoryNotifyOnlyWecom:
+    """企微应用「仅通知」用途（渠道合并 2026-11-15）：纯通知凭据源，不实例化
+    对话渠道、不接回调（回调路由拿 None 走既有 404 分支）；agent_only/both
+    不受影响，notify_usage 元键在实例化前剔除。"""
+
+    async def test_notify_only_config_id_skips_dialog_adapter(self):
+        """按 config_id 精确查找命中 notify_only 企微配置 → 返回 None（不实例化）"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        mock_cfg = {
+            "config_id": "chan_n1",
+            "tenant_id": "tenant_001",
+            "channel_type": "wecom",
+            "config": {"corp_id": "ww1", "agent_id": "1000002", "secret": "s",
+                       "notify_usage": "notify_only"},
+            "subagent_type": None,
+            "verified": 1,
+        }
+
+        with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
+            mock_db.get_by_id.return_value = mock_cfg
+            with patch.object(ChannelFactory, "create_adapter") as mock_create:
+                adapter, cfg_id, _ = await ChannelFactory.create_from_tenant_config(
+                    "tenant_001", "wecom", config_id="chan_n1"
+                )
+                assert (adapter, cfg_id) == (None, None)
+                mock_create.assert_not_called()
+
+    async def test_notify_only_excluded_from_list_selection(self):
+        """config_id=None 选择路径：notify_only 配置被过滤，选中同租户常规企微配置"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        notify_only_cfg = {
+            "config_id": "chan_n2",
+            "tenant_id": "tenant_001",
+            "channel_type": "wecom",
+            "config": {"corp_id": "ww1", "agent_id": "1000002", "secret": "s",
+                       "notify_usage": "notify_only"},
+            "subagent_type": None,
+            "verified": 1,
+        }
+        agent_cfg = {
+            "config_id": "chan_a1",
+            "tenant_id": "tenant_001",
+            "channel_type": "wecom",
+            "config": {"corp_id": "ww1", "agent_id": "1000003", "secret": "s2"},
+            "subagent_type": "travel-consultant",
+            "verified": 0,
+        }
+        adapter = MagicMock(name="adapter")
+
+        with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
+            mock_db.list_by_tenant.return_value = [notify_only_cfg, agent_cfg]
+            with patch.object(ChannelFactory, "create_adapter", return_value=adapter):
+                got_adapter, cfg_id, subagent = await ChannelFactory.create_from_tenant_config(
+                    "tenant_001", "wecom"
+                )
+                assert cfg_id == "chan_a1"
+                assert subagent == "travel-consultant"
+                assert got_adapter is adapter
+
+    def test_create_adapter_strips_notify_usage_meta_key(self):
+        """create_adapter 剔除 notify_usage 元键（非构造参数），both 用途可正常实例化"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        adapter = ChannelFactory.create_adapter("wecom", {
+            "corp_id": "ww1", "agent_id": "1000002", "secret": "s",
+            "token": "t", "encoding_aes_key": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopq", "notify_usage": "both",
+        })
+        assert adapter.corp_id == "ww1"
+        assert adapter.agent_id == "1000002"
+
+    def test_create_adapter_notify_only_three_fields_instantiable(self):
+        """notify_only 三项配置（无 token/aes_key）同样可构造 adapter（verify 路径不误报）"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        adapter = ChannelFactory.create_adapter("wecom", {
+            "corp_id": "ww1", "agent_id": "1000002", "secret": "s",
+            "notify_usage": "notify_only",
+        })
+        assert adapter.corp_id == "ww1"
+
+
+class TestChannelFactoryNotifyOnlyFeishu:
+    """飞书应用「仅通知」用途（飞书通知接入 2026-11-15，同企微模式）：纯通知
+    凭据源，不实例化对话渠道、不接回调；agent_only/both 不受影响。"""
+
+    async def test_notify_only_config_id_skips_dialog_adapter(self):
+        """按 config_id 精确查找命中 notify_only 飞书配置 → 返回 None（不实例化）"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        mock_cfg = {
+            "config_id": "chan_fn1",
+            "tenant_id": "tenant_001",
+            "channel_type": "feishu",
+            "config": {"app_id": "cli_a1", "app_secret": "s", "notify_usage": "notify_only"},
+            "subagent_type": None,
+            "verified": 1,
+        }
+
+        with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
+            mock_db.get_by_id.return_value = mock_cfg
+            with patch.object(ChannelFactory, "create_adapter") as mock_create:
+                adapter, cfg_id, _ = await ChannelFactory.create_from_tenant_config(
+                    "tenant_001", "feishu", config_id="chan_fn1"
+                )
+                assert (adapter, cfg_id) == (None, None)
+                mock_create.assert_not_called()
+
+    async def test_notify_only_excluded_from_list_selection(self):
+        """config_id=None 选择路径：notify_only 飞书配置被过滤，选中同租户常规配置"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        notify_only_cfg = {
+            "config_id": "chan_fn2",
+            "tenant_id": "tenant_001",
+            "channel_type": "feishu",
+            "config": {"app_id": "cli_a1", "app_secret": "s", "notify_usage": "notify_only"},
+            "subagent_type": None,
+            "verified": 1,
+        }
+        agent_cfg = {
+            "config_id": "chan_fa1",
+            "tenant_id": "tenant_001",
+            "channel_type": "feishu",
+            "config": {"app_id": "cli_a2", "app_secret": "s2", "verification_token": "vt"},
+            "subagent_type": "travel-consultant",
+            "verified": 0,
+        }
+        adapter = MagicMock(name="adapter")
+
+        with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
+            mock_db.list_by_tenant.return_value = [notify_only_cfg, agent_cfg]
+            with patch.object(ChannelFactory, "create_adapter", return_value=adapter):
+                got_adapter, cfg_id, subagent = await ChannelFactory.create_from_tenant_config(
+                    "tenant_001", "feishu"
+                )
+                assert cfg_id == "chan_fa1"
+                assert subagent == "travel-consultant"
+                assert got_adapter is adapter
+
+    async def test_agent_only_config_still_instantiated(self):
+        """缺省用途（agent_only 存量行为不变）的飞书配置照常实例化对话渠道。"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        mock_cfg = {
+            "config_id": "chan_fa2",
+            "tenant_id": "tenant_001",
+            "channel_type": "feishu",
+            "config": {"app_id": "cli_a2", "app_secret": "s2", "verification_token": "vt"},
+            "subagent_type": None,
+            "verified": 1,
+        }
+        adapter = MagicMock(name="adapter")
+
+        with patch("src.saas.services.channel_factory.ChannelConfigDB") as mock_db:
+            mock_db.get_by_id.return_value = mock_cfg
+            with patch.object(ChannelFactory, "create_adapter", return_value=adapter):
+                got_adapter, cfg_id, _ = await ChannelFactory.create_from_tenant_config(
+                    "tenant_001", "feishu", config_id="chan_fa2"
+                )
+                assert cfg_id == "chan_fa2" and got_adapter is adapter
+
+    def test_create_adapter_feishu_strips_notify_usage_meta_key(self):
+        """create_adapter 对 feishu 同样剔除 notify_usage 元键（非构造参数）"""
+        from src.saas.services.channel_factory import ChannelFactory
+
+        adapter = ChannelFactory.create_adapter("feishu", {
+            "app_id": "cli_a1", "app_secret": "s", "verification_token": "vt",
+            "notify_usage": "both",
+        })
+        assert adapter.app_id == "cli_a1"

@@ -1,5 +1,6 @@
 """Composition root; legacy NotificationService callers retain their old contract."""
 from .contracts import AdapterRegistry
+from .feishu_app import FeishuAppAdapter
 from .im_webhook import DingtalkBotAdapter, FeishuBotAdapter, WecomBotAdapter
 from .repository import NotificationRepository
 from .smtp_email import SmtpEmailAdapter
@@ -22,4 +23,8 @@ def notification_repository(config=None):
         # gate 走 WecomAppAdapter.available_for_tenant（repository 租户感知点），
         # 全局 available 恒 False；未配置租户 registry 命中但不投递
         WecomAppAdapter(config.timeout_seconds),
+        # 飞书应用通知（2026-11-15 决策 7 追加，完全复刻企微租户级模式）：凭据
+        # 租户自备（飞书渠道配置 notify_usage ∈ {both, notify_only}），可用性
+        # gate 走 FeishuAppAdapter.available_for_tenant，全局 available 恒 False
+        FeishuAppAdapter(config.timeout_seconds),
     ]))

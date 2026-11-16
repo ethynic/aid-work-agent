@@ -82,6 +82,10 @@ export type NotificationErrorCode =
   | 'NOTIFICATION_BIND_TAKEN'
   | 'NOTIFICATION_BIND_MISMATCH'
   | 'NOTIFICATION_BIND_PHONE_REQUIRED'
+  | 'NOTIFICATION_FEISHU_APP_UNAVAILABLE'
+  | 'NOTIFICATION_FEISHU_BIND_TAKEN'
+  | 'NOTIFICATION_FEISHU_BIND_MISMATCH'
+  | 'NOTIFICATION_INVALID_FEISHU_OPEN_ID'
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { ...getAuthHeader(), ...(init.headers as Record<string, string> || {}) }
@@ -241,6 +245,37 @@ export const notificationsAPI = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ category: 'task', channel: 'wecom_app', provider: 'wecom_app', enabled }),
     }),
+
+  /** ---------- 飞书应用身份绑定（飞书任务通知接入，2026-11-15；无 OAuth，手机号识别） ---------- */
+
+  /** 绑定状态：应用可用性 + 绑定态 + 姓名快照 + target 状态（纯本地，不出站） */
+  feishuBindStatus: () =>
+    request<FeishuBindStatus>('/feishu/bind/status'),
+
+  /** 手机号识别（只读）：按当前登录用户手机号匹配飞书通讯录 open_id
+   *  （batch_get_id 不返回姓名，命中时 name 恒空） */
+  feishuBindSuggest: () =>
+    request<FeishuBindSuggest>('/feishu/bind/suggest'),
+
+  /** 确认绑定：服务端按手机号二次核实后才落库，不信任前端传的 open_id */
+  feishuBindConfirm: (openId: string) =>
+    request<FeishuBindSuccess>('/feishu/bind/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ open_id: openId }),
+    }),
+
+  /** 解绑：清空 feishu_open_id 并撤销既有 feishu_app target */
+  feishuBindUnbind: () =>
+    request<{ success: boolean }>('/feishu/bind', { method: 'DELETE' }),
+
+  /** 飞书任务通知开关：启用=创建/启用 feishu_app 偏好行，关闭=停用 */
+  feishuSetPreference: (enabled: boolean) =>
+    request<NotificationPreference>('/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: 'task', channel: 'feishu_app', provider: 'feishu_app', enabled }),
+    }),
 }
 
 export interface WecomBindStatus {
@@ -279,6 +314,31 @@ export interface WecomBindSuggest {
 export interface WecomBindSuccess {
   success: boolean
   userid: string
+  name: string
+  /** 通知 target 是否登记成功；false 时绑定已落库但需回设置页重试登记 */
+  target_registered: boolean
+}
+
+export interface FeishuBindStatus {
+  /** 通知应用可用（租户配置了通知用途的飞书应用）；不可用时绑定与开关均不开放 */
+  app_available: boolean
+  bound: boolean
+  /** 绑定成员姓名快照（batch_get_id 不返回姓名，本期恒空），未绑定/未登记为 null */
+  name: string | null
+  /** 最近 feishu_app target 状态；target_invalid 撤销后为 'invalid' 提示重绑 */
+  target_state: 'active' | 'revoked' | 'invalid' | null
+}
+
+export interface FeishuBindSuggest {
+  matched: boolean
+  open_id?: string
+  /** batch_get_id 不返回姓名，命中时恒空 */
+  name?: string
+}
+
+export interface FeishuBindSuccess {
+  success: boolean
+  open_id: string
   name: string
   /** 通知 target 是否登记成功；false 时绑定已落库但需回设置页重试登记 */
   target_registered: boolean

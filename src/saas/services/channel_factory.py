@@ -29,6 +29,23 @@ _CACHE_LOCKS: Dict[Tuple[str, str, Optional[str]], asyncio.Lock] = {}
 # 缓存 TTL：超过后下次获取时重建（兜底，防止配置变更未触发 invalidate）
 _CACHE_TTL_SECONDS = 3600
 
+# 应用配置「通知用途」元键（企微渠道合并 2026-11-15、飞书通知接入 2026-11-15，
+# config.notify_usage）：notify_only=仅通知（纯服务端 API 发消息凭据源，无回调
+# 链路）——不实例化对话渠道、不接回调；agent_only/both 仍是对话渠道。该键是
+# 配置元数据而非 adapter 构造参数，实例化前剔除。
+_NOTIFY_USAGE_KEY = "notify_usage"
+_NOTIFY_ONLY = "notify_only"
+# 支持「通知用途」的渠道类型（与 saas/api/channel_config.py 口径一致）
+_NOTIFY_USAGE_CHANNEL_TYPES = ("wecom", "feishu")
+
+
+def _is_notify_only(cfg: dict) -> bool:
+    """应用配置是否为「仅通知」用途（对话渠道实例化时跳过；企微/飞书同模式）。"""
+    return (
+        cfg.get("channel_type") in _NOTIFY_USAGE_CHANNEL_TYPES
+        and (cfg.get("config") or {}).get(_NOTIFY_USAGE_KEY) == _NOTIFY_ONLY
+    )
+
 
 def _get_cache_lock(
     tenant_id: str, channel_type: str, config_id: Optional[str]
@@ -135,8 +152,10 @@ class ChannelFactory:
         module = importlib.import_module(module_path)
         adapter_class = getattr(module, class_name)
 
-        # 传入配置参数创建实例
-        return adapter_class(**config)
+        # 传入配置参数创建实例（notify_usage 为配置元键，非构造参数，剔除防 TypeError；
+        # verify 等直连路径同样经过此处）
+        build_config = {k: v for k, v in (config or {}).items() if k != _NOTIFY_USAGE_KEY}
+        return adapter_class(**build_config)
 
     @classmethod
     async def create_from_tenant_config(
@@ -235,6 +254,15 @@ class ChannelFactory:
         if config_id:
             cfg = ChannelConfigDB.get_by_id(config_id)
             if cfg and cfg.get("tenant_id") == tenant_id and cfg.get("channel_type") == channel_type:
+                # 应用配置「仅通知」用途（企微/飞书）：纯通知凭据源，不实例化
+                # 对话渠道、不接回调（回调路由拿到 None 走既有 404 分支，不影响
+                # 其他渠道）
+                if _is_notify_only(cfg):
+                    logger.info(
+                        f"[ChannelFactory] 应用配置为仅通知用途，跳过创建对话 adapter: "
+                        f"tenant={tenant_id}, type={channel_type}, config={config_id}"
+                    )
+                    return None, None
                 if not cfg.get("config"):
                     logger.info(
                         f"[ChannelFactory] 渠道配置为空，跳过创建 adapter: "
@@ -245,7 +273,7 @@ class ChannelFactory:
             return None, None
 
         configs = ChannelConfigDB.list_by_tenant(tenant_id, channel_type)
-        configs = [c for c in configs if c.get("config")]
+        configs = [c for c in configs if c.get("config") and not _is_notify_only(c)]
         if not configs:
             return None, None
 

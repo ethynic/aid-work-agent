@@ -100,6 +100,73 @@ _WECHAT_MP_CHANNEL_TYPE = "wechat_mp"
 # 企业微信应用通知（长任务企微应用消息，租户自备凭据；与消息渠道 wecom_app
 # target/delivery 全链无关，仅是租户渠道配置类型名）
 _WECOM_APP_NOTIFY_CHANNEL_TYPE = "wecom_app_notify"
+_WECOM_CHANNEL_TYPE = "wecom"
+# 飞书应用消息渠道（agent 对话接入；飞书通知接入 2026-11-15 起支持通知用途）
+_FEISHU_CHANNEL_TYPE = "feishu"
+
+# 应用渠道「通知用途」（config.notify_usage，企微渠道合并 2026-11-15，飞书接入
+# 2026-11-15 同模式）：agent_only 仅智能体接入（缺省，存量行为不变）；both 智能体
+# 接入+通知（通知借用此应用凭据发送）；notify_only 仅通知（不接 agent，回调链路
+# 不注册）
+_NOTIFY_USAGE_KEY = "notify_usage"
+_NOTIFY_USAGES = ("agent_only", "both", "notify_only")
+# 支持「通知用途」单选的渠道类型
+_NOTIFY_USAGE_CHANNEL_TYPES = (_WECOM_CHANNEL_TYPE, _FEISHU_CHANNEL_TYPE)
+
+# notify_only 的必填字段：纯服务端 API 发消息无回调链路，回调字段免填
+# （企微：token/encoding_aes_key；飞书：verification_token，encrypt_key 本就可选）
+_WECOM_NOTIFY_ONLY_REQUIRED_FIELDS = {
+    "wecom": {
+        "corp_id": "企业ID（在「我的企业」页面获取，格式 ww 开头）",
+        "agent_id": "应用AgentId（在应用详情页获取）",
+        "secret": "应用Secret（在应用详情页获取）",
+    }
+}
+_FEISHU_NOTIFY_ONLY_REQUIRED_FIELDS = {
+    "feishu": {
+        "app_id": "应用App ID",
+        "app_secret": "应用App Secret",
+    }
+}
+
+
+def _notify_usage(channel_type: str, config: dict) -> str:
+    """规整并校验支持「通知用途」渠道（wecom/feishu）config 中的通知用途。
+
+    缺省/空值 = agent_only（存量配置行为不变）；非法值 400（表单单选来源，
+    出现非法值即为异常调用，不静默纠正）。
+    """
+    if channel_type not in _NOTIFY_USAGE_CHANNEL_TYPES:
+        return "agent_only"
+    raw = str((config or {}).get(_NOTIFY_USAGE_KEY) or "").strip()
+    if not raw:
+        return "agent_only"
+    if raw not in _NOTIFY_USAGES:
+        raise HTTPException(
+            status_code=400,
+            detail="通知用途取值应为 agent_only / both / notify_only",
+        )
+    return raw
+
+
+def _required_fields_missing(channel_type: str, config: dict) -> list:
+    """支持「通知用途」的渠道（wecom/feishu）按用途分支的必填校验（create/update
+    共用）。
+
+    notify_only 仅发消息凭据必填（无回调链路，回调字段免填）；agent_only/both
+    保持原必填。其他渠道返回空列表。
+    """
+    if channel_type == _WECOM_CHANNEL_TYPE:
+        required_map = (_WECOM_NOTIFY_ONLY_REQUIRED_FIELDS[_WECOM_CHANNEL_TYPE]
+                        if _notify_usage(channel_type, config) == "notify_only"
+                        else _REQUIRED_FIELDS[_WECOM_CHANNEL_TYPE])
+    elif channel_type == _FEISHU_CHANNEL_TYPE:
+        required_map = (_FEISHU_NOTIFY_ONLY_REQUIRED_FIELDS[_FEISHU_CHANNEL_TYPE]
+                        if _notify_usage(channel_type, config) == "notify_only"
+                        else _REQUIRED_FIELDS[_FEISHU_CHANNEL_TYPE])
+    else:
+        return []
+    return [f"{k}（{v}）" for k, v in required_map.items() if not (config or {}).get(k)]
 
 
 def _build_wechat_mp_callback_url(request: Request, config_id: str) -> str:
@@ -199,8 +266,12 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
                                  _WECHAT_MP_CHANNEL_TYPE, _WECOM_APP_NOTIFY_CHANNEL_TYPE):
         raise HTTPException(status_code=400, detail=f"不支持的渠道类型: {body.channel_type}")
 
-    required = _REQUIRED_FIELDS.get(body.channel_type, {})
-    missing = [f"{k}（{v}）" for k, v in required.items() if not body.config.get(k)]
+    # wecom/feishu 按通知用途分支必填（notify_usage 非法值在此处 400）；其余渠道静态必填表
+    if body.channel_type in (_WECOM_CHANNEL_TYPE, _FEISHU_CHANNEL_TYPE):
+        missing = _required_fields_missing(body.channel_type, body.config)
+    else:
+        required = _REQUIRED_FIELDS.get(body.channel_type, {})
+        missing = [f"{k}（{v}）" for k, v in required.items() if not body.config.get(k)]
     if missing:
         raise HTTPException(
             status_code=400,
@@ -284,6 +355,16 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
     if existing["channel_type"] == "wecom_kf":
         body.config = dict(body.config)
         body.config["kf_account"] = (existing.get("config") or {}).get("kf_account") or []
+
+    # wecom/feishu：update 同样按通知用途分支必填（notify_only 免填回调字段；
+    # agent_only/both 保持原必填——update 不做字段保留合并，按本次提交的 config
+    # 校验，notify_usage 非法值同样在此 400）
+    missing = _required_fields_missing(existing["channel_type"], body.config)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"缺少必填字段: {', '.join(missing)}",
+        )
 
     # wechat_mp：appid/original_id 可选（空值规整删除，DB 层缺失回填旧值语义不变）；
     # original_id 有值才校验 gh_ 前缀；callback_token 传入合法明文视为改密
