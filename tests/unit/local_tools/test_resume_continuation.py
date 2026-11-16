@@ -71,6 +71,18 @@ async def test_invalid_origin_never_dispatches(monkeypatch, change):
 
 
 @pytest.mark.asyncio
+async def test_r8_proven_steady_parent_with_unknown_effect_stays_blocked_for_verification(monkeypatch):
+    """R8 依赖步骤先核对：父行停稳已证明但效果未知 → 续筛单独卡核对，文案明确。"""
+    steady = parent(state='unknown', effect='unknown', result_json={'_late_result': {
+        **parent()['result_json'], 'effect': 'unknown', 'stopped': True,
+        'data': {**parent()['result_json']['data'], '_runtime_completion': {'version': 1}}}})
+    monkeypatch.setattr(repository, 'get_invocation', lambda *a: steady)
+    result, failure = await continuation.prepare_next(kwargs())
+    assert result is None and failure['code'] == 'INVALID_CONTINUATION'
+    assert '结果未知' in failure['message'] and '核对' in failure['message']
+
+
+@pytest.mark.asyncio
 async def test_missing_identity_or_invalid_cursor(monkeypatch):
     fetch = MagicMock()
     monkeypatch.setattr(repository, 'get_invocation', fetch)

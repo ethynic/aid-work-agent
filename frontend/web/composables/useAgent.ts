@@ -113,6 +113,7 @@ const runnerFeedback = ref<{ message: string; canPresent: () => boolean } | null
 
 const LOCAL_RECOVERY_MESSAGES = {
   stopBusy: '原设备还有正在执行的任务，本次未停止。请等该任务结束后重试，仍可只读观察页面。',
+  stopOffline: '原执行设备当前离线，「停止上一步并继续」暂不能受理。设备上线后按钮会重新出现，可再次点击；本次输入和附件已保留。',
   verification: '原本机操作结果尚未核对，不能重复执行。请保持原 Runtime 连接，使用“核对并继续”；也可结束等待后继续对话。补充消息和附件已保留，但尚未应用。',
   instruction: '原本机操作需要核对。请使用“核对并继续”或“结束等待，继续对话”；本次输入和附件已保留。',
   ending: '正在结束原任务，请稍候再发送。本次输入和附件已保留。',
@@ -342,6 +343,8 @@ export function useAgent() {
         new Error(action === 'verify' || action === 'stop' || action === 'stop_and_continue'
           ? issue instanceof RunnerRequestError && issue.code === 'LOCAL_RECOVERY_BUSY'
             ? LOCAL_RECOVERY_MESSAGES.stopBusy
+            : issue instanceof RunnerRequestError && issue.code === 'LOCAL_VERIFICATION_DEVICE_OFFLINE'
+            ? LOCAL_RECOVERY_MESSAGES.stopOffline
             : issue instanceof RunnerRequestError && issue.code === 'LOCAL_VERIFICATION_ORIGINAL_ACTIVE'
             ? LOCAL_RECOVERY_MESSAGES.verifyActive
             : issue instanceof RunnerRequestError && (issue.status === 404 || issue.code === 'LOCAL_VERIFICATION_RUNTIME_UPGRADE_REQUIRED')

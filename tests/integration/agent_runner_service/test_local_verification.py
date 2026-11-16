@@ -347,6 +347,74 @@ def test_stop_does_not_require_a_page_target_when_original_target_evidence_confl
     assert repository.get(row['runner_id'])['checkpoint']['verified_local_invocations'] == [original]
 
 
+# ---- R8：stop_and_continue 投影与受理共用判断（在线/停止能力/占用排除本 scope） ----
+
+
+def public_actions(repository, runner_id):
+    from src.services.agent_runner.repository import public_runner
+    return (public_runner(repository.get(runner_id)).get('local_recovery_actions') or [])
+
+
+def test_r8_offline_device_hides_stop_and_continue_and_acceptance_rejects_explicitly(
+        lost_local, service_database):
+    """设备离线：不投影、受理明确拒绝（命令排队只会静默等待到期限过期）。"""
+    repository, _, principal, row, device, _, _ = lost_local
+    enable(service_database, device, stop=True)
+    assert public_actions(repository, row['runner_id'])[:3] == ['verify', 'stop', 'stop_and_continue']
+    service_database.rows('UPDATE local_tool_devices SET last_seen_at=NULL WHERE id=%s', (device['id'],))
+    assert 'stop_and_continue' not in public_actions(repository, row['runner_id'])
+    with pytest.raises(RunnerError) as error:
+        verify_local(repository, principal, row['runner_id'], 'offline-continue',
+                     stop_resources=True, continue_after_stop=True)
+    assert error.value.code == 'LOCAL_VERIFICATION_DEVICE_OFFLINE'
+    assert not repository.get(row['runner_id'])['checkpoint'].get('local_verification')
+    # 纯观察（v2）与不带接续的停止不新增在线门（原排队行为不变）。
+    accepted = verify_local(repository, principal, row['runner_id'], 'offline-plain-stop', stop_resources=True)
+    assert accepted['checkpoint']['local_verification']['version'] == 3
+
+
+def test_r8_running_original_is_not_another_task_occupy_and_stays_projected(
+        lost_local, service_database):
+    """本任务自己的运行中原调用不算「另一任务占用」：投影出现且受理成功（协作取消）。"""
+    repository, _, principal, row, device, original, _ = lost_local
+    enable(service_database, device, stop=True)
+    service_database.rows("UPDATE local_tool_invocations SET state='running' WHERE id=%s", (original,))
+    assert 'stop_and_continue' in public_actions(repository, row['runner_id'])
+    accepted = verify_local(repository, principal, row['runner_id'], 'continue-own-running',
+                            stop_resources=True, continue_after_stop=True)
+    verification = accepted['checkpoint']['local_verification']
+    assert verification['continue_after_stop'] is True and verification['original_invocation_ids'] == [original]
+    assert service_database.rows('SELECT state FROM local_tool_invocations WHERE id=%s',
+        (original,))[0]['state'] == 'cancel_requested'
+
+
+def test_r8_stop_and_continue_hidden_until_stop_capability_declared(lost_local, service_database):
+    """停止能力（runtime_recovery_stop_v1）纳入投影：旧 Runtime 只见 verify。"""
+    repository, _, principal, row, device, _, _ = lost_local
+    enable(service_database, device)  # 仅 observe_v2，无 stop 能力
+    actions = public_actions(repository, row['runner_id'])
+    assert 'stop_and_continue' not in actions and 'verify' in actions
+    with pytest.raises(RunnerError) as error:
+        verify_local(repository, principal, row['runner_id'], 'upgrade-continue',
+                     stop_resources=True, continue_after_stop=True)
+    assert error.value.code == 'LOCAL_VERIFICATION_RUNTIME_UPGRADE_REQUIRED'
+
+
+def r8_enable(database, device):
+    database.rows('UPDATE local_tool_devices SET capabilities_json=%s::jsonb WHERE id=%s',
+        (json.dumps({'providers': ['boss-recruiting', 'runtime-recovery'],
+            'capabilities': ['runtime_recovery_observe_v2', 'runtime_recovery_stop_v1',
+                             'runtime_boss_completion_v1']}), device['id']))
+
+
+def r8_write_proven_completion(devices, row, device, original, claim):
+    devices.write_result(original, row['tenant_id'], claim, True, effect='unknown',
+        data={'page': 'jobs', '_runtime_completion': {'version': 1}}, device_id=str(device['id']))
+    stored = devices.get_invocation(original, row['tenant_id'])
+    assert stored['state'] == stored['effect'] == 'unknown'
+    assert stored['result_json']['_late_result']['stopped'] is True
+
+
 # ---- Phase 4「停止与接续」：continue_after_stop 受理与自动接续编排 ----
 
 
@@ -542,3 +610,68 @@ def test_closed_runner_releases_occupation_without_forcing_a_resume(
     assert current['checkpoint']['verified_local_invocations'] == [original]
     assert devices.create_invocation(row['tenant_id'], row['user_id'], str(device['id']), 'boss_goto', {'target':'recommend'})
     assert resume_controls(service_database, row['runner_id']) == []
+
+
+# ---- R8：晚回执竞态——原调用可信终态后，停止核验派发前复判（无需派发落终态） ----
+
+
+def test_r8_late_completion_supersedes_queued_stop_and_dispatches_resume(
+        lost_local, service_database):
+    """停止排队中原调用可信回执先到：停止核验落「无需派发」终态、verified 合并、接续照常。"""
+    repository, _, principal, row, device, original, claim = lost_local
+    r8_enable(service_database, device)
+    accepted = verify_local(repository, principal, row['runner_id'], 'race-continue',
+                            stop_resources=True, continue_after_stop=True)
+    probe = accepted['checkpoint']['local_verification']['invocation_id']
+    r8_write_proven_completion(devices, row, device, original, claim)
+    assert devices.claim_next(str(device['id']), row['tenant_id'], 'probe-claim', 60,
+        provider_keys=['runtime-recovery']) is None, '停稳已被原回执证明，停止不再派发'
+    superseded = devices.get_invocation(probe, row['tenant_id'])
+    assert superseded['state'] == 'failed' and superseded['effect'] == 'none'
+    assert superseded['started_at'] is None and superseded['error_code'] == 'LOCAL_RECOVERY_STOP_SUPERSEDED'
+    assert superseded['result_json']['_stop_superseded']['version'] == 1
+    assert superseded['result_json']['retryable'] is False
+    current = repository.get(row['runner_id'])
+    assert current['checkpoint']['local_verification']['state'] == 'succeeded'
+    assert current['checkpoint']['local_verification']['resource_stopped'] is True
+    assert current['checkpoint']['verified_local_invocations'] == [original]
+    controls = resume_controls(service_database, row['runner_id'])
+    assert len(controls) == 1 and controls[0]['status'] == 'accepted'
+    assert repository.get(row['runner_id'])['resume_control_id'] == controls[0]['control_id']
+    # 停稳已证明：新业务放行（占用已解除）。
+    assert devices.create_invocation(row['tenant_id'], row['user_id'], str(device['id']), 'boss_goto', {'target':'recommend'})
+
+
+def test_r8_completion_between_claim_and_start_supersedes_before_physical_stop(
+        lost_local, service_database):
+    """claim 后 started 前原调用可信回执到达：不再 started、不执行受管停止，接续照常。"""
+    repository, _, principal, row, device, original, claim = lost_local
+    r8_enable(service_database, device)
+    accepted = verify_local(repository, principal, row['runner_id'], 'start-race-continue',
+                            stop_resources=True, continue_after_stop=True)
+    probe = accepted['checkpoint']['local_verification']['invocation_id']
+    token = uuid.uuid4().hex
+    queued = devices.claim_next(str(device['id']), row['tenant_id'], token, 60,
+        provider_keys=['runtime-recovery'])
+    assert str(queued['id']) == probe and queued['state'] == 'claimed'
+    r8_write_proven_completion(devices, row, device, original, claim)
+    assert devices.mark_started(probe, row['tenant_id'], token) is None, '不确认受管停止的 started'
+    superseded = devices.get_invocation(probe, row['tenant_id'])
+    assert superseded['state'] == 'failed' and superseded['effect'] == 'none'
+    assert superseded['started_at'] is None and superseded['error_code'] == 'LOCAL_RECOVERY_STOP_SUPERSEDED'
+    current = repository.get(row['runner_id'])
+    assert current['checkpoint']['verified_local_invocations'] == [original]
+    assert len(resume_controls(service_database, row['runner_id'])) == 1
+
+
+def test_r8_unproven_original_keeps_the_queued_stop_dispatch(lost_local, service_database):
+    """无证据 unknown（真未知）：停止照常派发（回归）。"""
+    repository, _, principal, row, device, original, _ = lost_local
+    enable(service_database, device, stop=True)
+    accepted = verify_local(repository, principal, row['runner_id'], 'still-need-stop',
+                            stop_resources=True, continue_after_stop=True)
+    probe = accepted['checkpoint']['local_verification']['invocation_id']
+    devices.write_result(original, row['tenant_id'], str(uuid.uuid4().hex), True, effect='unknown',
+        data={'page': 'jobs'}, device_id=str(device['id']))
+    token, args = claim_probe(row, device, probe)
+    assert args['version'] == 3 and args['stop_resources'] is True

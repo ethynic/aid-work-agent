@@ -11,6 +11,54 @@ CAPABILITY = 'runtime_recovery_observe_v2'
 STOP_CAPABILITY = 'runtime_recovery_stop_v1'
 
 
+def stop_continue_admission(cursor, row, ids, *, capability, fence, online):
+    """R8 契约「停止与接续」：stop_and_continue 投影与 verify_local 受理共用判断。
+
+    只读：单一受支持 provider（boss-recruiting/wecom）且单设备、设备 active 且
+    具备 capability（wecom 另需 runtime_recovery_wecom_v1）、`online=True` 时设备
+    必须当前在线（离线不投影也不受理——命令排队只会静默等待并在期限后过期）、
+    `fence=True` 时停止栅栏排除本 scope 原调用（本任务自己的原调用——含待协作
+    取消的运行中行——不属于「另一任务占用」）。
+    通过返回 (originals, device, provider, device_id)；不可受理抛 RunnerError，
+    投影侧统一捕获为不可投影。
+    """
+    from src.local_tools import repository as local
+    cursor.execute('SELECT * FROM local_tool_invocations WHERE tenant_id=%s AND id=ANY(%s::uuid[])',
+        (row['tenant_id'], sorted(ids)))
+    originals = [dict(item) for item in cursor.fetchall()]
+    devices = {str(item['device_id']) for item in originals}
+    if len(originals) != len(ids) or len(devices) != 1:
+        raise RunnerError('LOCAL_VERIFICATION_DEVICE_SCOPE_REQUIRED', 409)
+    device_id = devices.pop()
+    cursor.execute('SELECT * FROM local_tool_devices WHERE id=%s AND tenant_id=%s AND user_id=%s AND status=\'active\' FOR SHARE',
+        (device_id, row['tenant_id'], row['user_id']))
+    device = cursor.fetchone()
+    providers = {(item.get('provider_key') or 'boss-recruiting') for item in originals}
+    if len(providers) != 1 or not providers <= {'boss-recruiting', 'wecom'}:
+        raise RunnerError('LOCAL_VERIFICATION_PROVIDER_UNSUPPORTED', 409)
+    provider = next(iter(providers))
+    capabilities = ((device or {}).get('capabilities_json') or {}).get('capabilities') or []
+    if provider == 'wecom' and 'runtime_recovery_wecom_v1' not in capabilities:
+        raise RunnerError('LOCAL_VERIFICATION_RUNTIME_UPGRADE_REQUIRED', 409)
+    if not device or capability not in capabilities:
+        raise RunnerError('LOCAL_VERIFICATION_RUNTIME_UPGRADE_REQUIRED', 409)
+    if online:
+        # 与 device_policy.ONLINE_THRESHOLD_SECONDS 同一口径；SQL 内与时钟比较。
+        cursor.execute("""SELECT EXISTS (SELECT 1 FROM local_tool_devices WHERE id=%s AND tenant_id=%s
+              AND last_seen_at IS NOT NULL
+              AND last_seen_at > clock_timestamp() - INTERVAL '30 seconds') AS online""",
+            (device_id, row['tenant_id']))
+        if not cursor.fetchone()['online']:
+            raise RunnerError('LOCAL_VERIFICATION_DEVICE_OFFLINE', 409)
+    if fence:
+        # 本 scope 原调用是受管停止的目标：排除后其他任务的真实占用仍栅栏。
+        try:
+            local.assert_device_stop_available(cursor, row['tenant_id'], device_id, exclude_ids=sorted(set(ids)))
+        except local.DeviceOperationUnresolved as error:
+            raise RunnerError('LOCAL_RECOVERY_BUSY', 409) from error
+    return originals, device, provider, device_id
+
+
 def verify_local(repository, principal, runner_id, request_id, *, stop_resources=False,
                  continue_after_stop=False):
     from src.local_tools import repository as local
@@ -74,35 +122,11 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
             pending = cursor.fetchone()
             if pending and pending['state'] not in local.TERMINAL_STATES and pending['unexpired']:
                 raise RunnerError('LOCAL_VERIFICATION_PENDING', 409)
-        cursor.execute('SELECT * FROM local_tool_invocations WHERE tenant_id=%s AND id=ANY(%s::uuid[])',
-            (row['tenant_id'], ids))
-        originals = [dict(item) for item in cursor.fetchall()]
-        devices = {str(item['device_id']) for item in originals}
-        if len(originals) != len(ids) or len(devices) != 1:
-            raise RunnerError('LOCAL_VERIFICATION_DEVICE_SCOPE_REQUIRED', 409)
-        device_id = devices.pop()
-        cursor.execute('SELECT capabilities_json FROM local_tool_devices WHERE id=%s AND tenant_id=%s AND user_id=%s AND status=\'active\' FOR SHARE',
-            (device_id, row['tenant_id'], row['user_id']))
-        device = cursor.fetchone()
-        required_capability = STOP_CAPABILITY if stop_resources else CAPABILITY
-        providers = {(item.get('provider_key') or 'boss-recruiting') for item in originals}
-        if len(providers) != 1 or not providers <= {'boss-recruiting', 'wecom'}:
-            raise RunnerError('LOCAL_VERIFICATION_PROVIDER_UNSUPPORTED', 409)
-        provider = next(iter(providers))
-        if provider == 'wecom' and 'runtime_recovery_wecom_v1' not in (
-                ((device or {}).get('capabilities_json') or {}).get('capabilities') or []):
-            raise RunnerError('LOCAL_VERIFICATION_RUNTIME_UPGRADE_REQUIRED', 409)
-        if not device or required_capability not in ((device['capabilities_json'] or {}).get('capabilities') or []):
-            raise RunnerError('LOCAL_VERIFICATION_RUNTIME_UPGRADE_REQUIRED', 409)
-        if stop_resources:
-            if any((item.get('provider_key') or 'boss-recruiting') != provider for item in originals):
-                raise RunnerError('LOCAL_RECOVERY_PROVIDER_UNSUPPORTED', 409)
-            try:
-                # 本 scope 原调用是受管停止的目标：协作取消后的 cancel_requested
-                # 行不属于「另一任务占用」，排除后其他任务的真实占用仍栅栏。
-                local.assert_device_stop_available(cursor, row['tenant_id'], device_id, exclude_ids=ids)
-            except local.DeviceOperationUnresolved as error:
-                raise RunnerError('LOCAL_RECOVERY_BUSY', 409) from error
+        # R8：受理判断与网页投影共用 stop_continue_admission（单 scope、能力、
+        # 在线、停止栅栏排除本 scope）；纯观察（v2）不栅栏也不要求在线。
+        originals, device, provider, device_id = stop_continue_admission(cursor, row, ids,
+            capability=STOP_CAPABILITY if stop_resources else CAPABILITY,
+            fence=stop_resources, online=stop_resources and continue_after_stop)
         targets = set()
         target_unavailable = False
         for item in originals:

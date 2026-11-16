@@ -1,6 +1,7 @@
 """Real PG recovery: retain original facts while freeing ordinary conversation."""
 
 from datetime import datetime, timedelta, timezone
+import json
 import uuid
 
 import pytest
@@ -159,6 +160,52 @@ def test_runtime_completion_evidence_releases_hold_only_with_declared_capability
             devices.create_invocation(row['tenant_id'], row['user_id'], str(device['id']),
                 'boss_goto', {})
         assert written['effect'] == 'unknown', '效果未知语义不动（不自动重发）'
+
+
+@pytest.mark.parametrize('capable', [True, False])
+def test_r8_settled_unknown_effect_restores_but_evidenceless_unknown_stays_verification(
+        lost_local, service_database, capable):
+    """R8 修复1（契约「停止与接续」）：迟到可信回执 effect=unknown 且带
+    _runtime_completion 证据 → 完成判定成立，恢复检查放行接续（未知效果保留为
+    事实，不重发：invocation 数不增）；无证据 unknown（真未知）保持现状卡核验，
+    租约过期无回执保持占用。"""
+    repository, _, principal, row, device, invocation, claim = lost_local
+    state = ExecutionState.restore(row['checkpoint']['execution'])
+    assert not LocalRecoveryProof().can_restore(row, state, state.tools['original-call'])
+    devices.touch_device_seen(str(device['id']), capabilities={'capabilities':
+        ['runtime_boss_completion_v1'] if capable else ['local_v2']})
+    devices.write_result(invocation, row['tenant_id'], claim, True, effect='unknown',
+        data={'page': 'jobs', '_runtime_completion': {'version': 1}} if capable else {'page': 'jobs'},
+        device_id=str(device['id']))
+    stored = devices.get_invocation(invocation, row['tenant_id'])
+    assert stored['state'] == stored['effect'] == 'unknown', '原 unknown 事实零改写'
+    assert stored['result_json']['_late_result']['stopped'] is capable
+    assert LocalRecoveryProof().can_restore(row, state, state.tools['original-call']) is capable
+    assert service_database.rows('SELECT count(*) AS n FROM local_tool_invocations WHERE tenant_id=%s',
+        (row['tenant_id'],)) == [{'n': 1}], '停稳接续不产生新派发（效果未知不重放）'
+    if capable:
+        # recovery preflight 全链路：resume 控制的 prepare 不再 RECOVERY_TOOL_VERIFICATION_REQUIRED，
+        # 原调用保持 pending 等待由 worker 重新绑定原 invocation（未知结果作为事实交回）。
+        from types import SimpleNamespace
+        from src.services.agent_runner.recovery import RecoveryCoordinator
+        from src.services.agent_runner.runtime_manifest import configuration_fingerprint
+        service_database.rows("""UPDATE agent_runners SET profile_fingerprint='fixture-profile',
+            checkpoint=jsonb_set(jsonb_set(checkpoint,'{execution,resources,configuration_fingerprint}',%s::jsonb),
+                '{execution,profile_id}','"main"')
+            WHERE runner_id=%s""", (json.dumps(configuration_fingerprint('fixture-profile')), row['runner_id']))
+        row = repository.get(row['runner_id'])
+        restored = ExecutionState.restore(row['checkpoint']['execution'])
+        assert LocalRecoveryProof().can_restore(row, restored, restored.tools['original-call'])
+        authority = SimpleNamespace(authorize_persisted=lambda *a, **k: principal,
+            assert_credit=lambda *a: None, authorize_child_profile=lambda *a: None)
+        control = {'action': 'resume', 'control_id': 'r8-resume-control', 'payload': {},
+                   'accepted_at': datetime.now(timezone.utc)}
+        prepared = RecoveryCoordinator(authority, SimpleNamespace(
+            resolve=lambda *a: (None, 'fixture-profile')),
+            tool_recovery=LocalRecoveryProof()).prepare(row, control)
+        tree = ExecutionState.restore(prepared.checkpoint['execution'])
+        assert [call.id for call in tree.pending] == ['original-call']
+        assert restored.tools['original-call'].phase == 'dispatching'
 
 
 @pytest.mark.parametrize('late', [False, True])

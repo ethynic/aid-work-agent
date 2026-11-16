@@ -240,7 +240,12 @@ class LocalRecoveryProof:
                 from src.local_tools.wecom_inbound import validate_read_phase
                 validate_read_phase(row, state, fact, ref, invocation)
             invocation = repository.observed_invocation(invocation)
-            if invocation['state']=='unknown' or invocation.get('effect')=='unknown':
+            # R8 接续语义（契约「停止与接续」）：可信结束后旧调用的未知业务效果仍保留，
+            # 完成判定已认证据（Phase 3 _runtime_completion 或已核回执）的 invocation 视为
+            # 事实已核对的完成——不再因 effect/state unknown 整体拒绝接续；无证据的
+            # unknown（真未知，无法证明停稳）语义不动，保持占用与核验。
+            if ((invocation['state']=='unknown' or invocation.get('effect')=='unknown')
+                    and not repository.operation_completion_known(invocation)):
                 from src.local_tools.wecom_flow import modern_call, readonly_db_call
                 if not (request.get('provider_key') == 'wecom'
                         and ((inbound or resolving) and readonly_db_call(request.get('tool_name'), request.get('arguments') or {})

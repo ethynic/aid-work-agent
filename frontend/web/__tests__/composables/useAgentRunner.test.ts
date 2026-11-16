@@ -446,6 +446,16 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
   })
 
+  it('offline device rejection explains that stop-and-continue can be retried after reconnect', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:continueActions}))
+    const stopping = agent.resolveLocalRecovery('stop_and_continue'); await flush()
+    request('/runners/runner-A/verify-local','POST').respond({code:'LOCAL_VERIFICATION_DEVICE_OFFLINE'},409)
+    await stopping; await flush()
+    expect(agent.error.value).toContain('设备当前离线')
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+  })
+
   const continueActions: RunnerView['local_recovery_actions'] = ['verify','stop','stop_and_continue','resume','end']
 
   it('stop_and_continue sends the managed-stop continuation shape and keeps the waiting input', async () => {

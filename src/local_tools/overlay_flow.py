@@ -85,6 +85,12 @@ def _known(result, proxy=None):
         from .boss_visual_recovery import is_visual_failure
         if proxy is not None and is_visual_failure(proxy, result):
             return result
+        # R8 接续语义（契约「停止与接续」）：_runtime_completion 结束证据（Phase 3
+        # write_result 能力核验后原样落库）证明执行已停稳——未知业务效果作为事实交回
+        # 原任务，依赖步骤保持先核对；无证据的 unknown 语义不动（效果未知不重放）。
+        from .repository import runtime_completion_evidence
+        if result.get('invocation_id') and runtime_completion_evidence(result.get('data')) is not None:
+            return result
         raise LocalContinuationRequired('LOCAL_EFFECT_VERIFICATION_REQUIRED',result.get('invocation_id'))
     return result
 

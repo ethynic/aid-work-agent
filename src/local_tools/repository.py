@@ -1125,7 +1125,7 @@ def claim_next(
         if not row:
             conn.commit()
             return None
-        from .recovery_observation import observation_scope
+        from .recovery_observation import observation_scope, stop_superseded_by_completion, supersede_completed_stop
         try:
             send_status = _send_status_scope(cursor, row, dispatch=True)
         except DeviceOperationUnresolved as error:
@@ -1134,8 +1134,15 @@ def claim_next(
             _reject_undispatched_send_status(cursor, row, 'queued')
             conn.commit()
             return None
+        observation = observation_scope(cursor, row, dispatch=True)
+        if (observation is not None and observation.get('version') == 3
+                and stop_superseded_by_completion(cursor, row, observation)):
+            # R8 晚回执竞态：原调用已全部可信终态——停止核验无需派发，本轮不领取。
+            conn.commit()
+            supersede_completed_stop(row['id'], tenant_id)
+            return None
         assert_device_operations_settled(cursor, tenant_id, device_id,
-            observation=observation_scope(cursor, row, dispatch=True), send_status=send_status)
+            observation=observation, send_status=send_status)
         cursor.execute(
             """
             UPDATE local_tool_invocations
@@ -1166,7 +1173,8 @@ def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str) -> O
         owner = cursor.fetchone()
         if not owner or not lock_active_device(cursor, tenant_id, str(owner['device_id'])):
             return None
-        from .recovery_observation import observation_scope
+        from .recovery_observation import (observation_scope, stop_superseded_by_completion,
+            supersede_completed_stop)
         observation = observation_scope(cursor, owner, dispatch=True)
         try:
             send_status = _send_status_scope(cursor, owner, dispatch=True)
@@ -1178,8 +1186,14 @@ def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str) -> O
             conn.commit()
             return None  # Never acknowledge /started after rejecting its read scope.
         if (owner.get('business_kind') == 'agent_runner_recovery'
-                and (owner.get('business_ref') or {}).get('version') == 3 and observation is None):
-            return None
+                and (owner.get('business_ref') or {}).get('version') == 3):
+            if observation is None:
+                return None
+            if stop_superseded_by_completion(cursor, owner, owner.get('business_ref') or {}):
+                # R8 晚回执竞态：原调用已全部可信终态——started 前拒发并落终态。
+                conn.commit()
+                supersede_completed_stop(owner['id'], tenant_id)
+                return None
         assert_device_operations_settled(cursor, tenant_id, str(owner['device_id']), observation=observation, send_status=send_status)
         cursor.execute(
             """

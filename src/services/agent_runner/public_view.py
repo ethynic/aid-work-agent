@@ -164,26 +164,25 @@ def local_recovery_applicable(row):
 def _stop_and_continue_acceptable(cursor, row, checkpoint):
     """契约「停止与接续」：stop_and_continue 只在服务端可受理时投影。
 
-    只读判定，无副作用：原调用单一受支持 provider 且单设备、设备 stop 栅栏
-    当前不忙（assert_device_stop_available 不抛）、行未请求取消。pending 核验
-    期间的按钮禁用由前端按 local_verification.state 处理（与既有四按钮一致）。
+    R8：与 verify_local 受理共用 stop_continue_admission——单一受支持 provider
+    且单设备、设备在线、设备具备停止能力（runtime_recovery_stop_v1）、设备
+    stop 栅栏不忙（排除本 scope 原调用：本任务运行中的原调用不算忙）、行未请求
+    取消。任何不可受理都以按钮不投影表达；点击时的具体错误码由受理侧给出。
+    pending 核验期间的按钮禁用由前端按 local_verification.state 处理（与既有
+    四按钮一致）。
     """
-    from src.local_tools.repository import assert_device_stop_available, owned_invocation_ids
+    from src.local_tools.repository import owned_invocation_ids
+    from .contracts import RunnerError
+    from .local_verification import STOP_CAPABILITY, stop_continue_admission
     if row.get('cancel_requested'):
         return False
     ids = owned_invocation_ids(checkpoint.get('execution') or {})
     if not ids:
         return False
-    cursor.execute("""SELECT DISTINCT device_id::text AS device_id,
-            COALESCE(provider_key,'boss-recruiting') AS provider
-        FROM local_tool_invocations WHERE tenant_id=%s AND id=ANY(%s::uuid[])""",
-        (row['tenant_id'], sorted(ids)))
-    scopes = cursor.fetchall()
-    if len(scopes) != 1 or scopes[0]['provider'] not in {'boss-recruiting', 'wecom'}:
-        return False
     try:
-        assert_device_stop_available(cursor, row['tenant_id'], scopes[0]['device_id'])
-    except Exception:  # DeviceOperationUnresolved：另一任务占用时不投影
+        stop_continue_admission(cursor, row, sorted(ids), capability=STOP_CAPABILITY,
+            fence=True, online=True)
+    except RunnerError:
         return False
     return True
 
