@@ -11,6 +11,7 @@ from src.local_tools.proxy_tool import WecomMessageSendTool
 from src.local_tools.wecom_send_status import SendStatusScopeError, original_scope
 
 from . import proxy_tasks
+from .scheduled_sends import group_has_turn_in_tx
 
 SEND_TOOL = 'wecom_message_send'
 SEND_KIND = 'wecom_proxy_opening'
@@ -45,7 +46,9 @@ def _finish(row, previous, status, error=None):
         if previous == 'pending':
             task = proxy_tasks._task_for_update(cursor, row['tenant_id'], row['user_id'], row['task_id'])
             proxy_tasks.lock_device_group_in_tx(cursor, task)
-            if proxy_tasks.device_group_busy_in_tx(cursor, task, include_pending_opening=False):
+            key = (task['tenant_id'], str(task['device_id']), task['wecom_account_id'])
+            if (proxy_tasks.device_group_busy_in_tx(cursor, task, include_pending_opening=False)
+                    or group_has_turn_in_tx(cursor, key, include_queued=True)):
                 return False  # A stale readiness failure cannot skip someone else's turn.
         cursor.execute(
             '''UPDATE bs_wecom_proxy_task_sessions
@@ -69,7 +72,9 @@ def _bind(row, *, reconcile=False):
         task = proxy_tasks._task_for_update(cursor, tenant_id, user_id, row['task_id'])
         if not reconcile:
             proxy_tasks.lock_device_group_in_tx(cursor, task)
-            if proxy_tasks.device_group_busy_in_tx(cursor, task, include_pending_opening=False):
+            key = (task['tenant_id'], str(task['device_id']), task['wecom_account_id'])
+            if (proxy_tasks.device_group_busy_in_tx(cursor, task, include_pending_opening=False)
+                    or group_has_turn_in_tx(cursor, key, include_queued=True)):
                 return False
         cursor.execute(
             '''SELECT * FROM bs_wecom_proxy_task_sessions
@@ -180,14 +185,22 @@ async def _reconcile(row):
         return
 
 
-async def run_tick(key, *, runner_busy):
+async def settle_active(key):
+    """Release any completed send before the dispatcher selects a new queue turn."""
+    rows = await asyncio.to_thread(_load_group, key)
+    sending = next((row for row in rows if row['opening_send_status'] == 'sending'), None)
+    busy = sending is not None and not await asyncio.to_thread(_settle_send, sending)
+    return rows, busy
+
+
+async def run_tick(key, *, runner_busy, rows=None):
     """Called only with the shared group lock. True leaves ordinary work behind this send."""
     from . import proxy_api
 
-    rows = await asyncio.to_thread(_load_group, key)
-    sending = next((row for row in rows if row['opening_send_status'] == 'sending'), None)
-    if sending and not await asyncio.to_thread(_settle_send, sending):
-        return True
+    if rows is None:
+        rows, busy = await settle_active(key)
+        if busy:
+            return True
     for row in rows:
         if row['opening_send_status'] != 'pending':
             continue

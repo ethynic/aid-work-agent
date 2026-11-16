@@ -316,6 +316,13 @@ CREATE INDEX IF NOT EXISTS idx_bs_wecom_scheduled_sends_history
     ON bs_wecom_scheduled_sends (tenant_id, user_id, due_at DESC, plan_order, target_order)
 """
 
+SCHEDULED_SEND_SETTINGS_DDL = """
+CREATE TABLE IF NOT EXISTS wecom_scheduled_send_settings (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    unit_price NUMERIC(12,2) CHECK (unit_price >= 0)
+)
+"""
+
 _DDL_ITEMS = (
     CONVERSATIONS_DDL,
     CONVERSATIONS_OWNER_INDEX_DDL,
@@ -336,6 +343,7 @@ _DDL_ITEMS = (
     SCHEDULED_SENDS_DDL,
     SCHEDULED_SENDS_QUEUE_INDEX_DDL,
     SCHEDULED_SENDS_HISTORY_INDEX_DDL,
+    SCHEDULED_SEND_SETTINGS_DDL,
 )
 
 

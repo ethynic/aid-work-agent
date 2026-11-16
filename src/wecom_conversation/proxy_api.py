@@ -128,12 +128,49 @@ async def _task_device(tenant_id, user_id, device_id, required_tools):
     return device, None
 
 
-async def _read_sessions_call(tenant_id, user_id, device, arguments):
+def _enqueue_monitor_read(tenant_id, user_id, device_id, account, arguments):
+    from uuid import uuid4
+
+    from src.db.database import get_db_connection
+    from src.local_tools import repository
+    from src.local_tools.proxy_tool import WecomReadSessionsTool
+    from .scheduled_sends import _group_task, group_has_turn_in_tx
+
+    group = (tenant_id, device_id, account)
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        proxy_tasks.lock_device_group_in_tx(cursor, _group_task(group))
+        if group_has_turn_in_tx(cursor, group, include_queued=True):
+            return None
+        cursor.execute('SELECT clock_timestamp()+(%s*interval \'1 second\') AS deadline',
+                       (WecomReadSessionsTool.timeout_seconds,))
+        deadline = cursor.fetchone()['deadline']
+        invocation_id = repository.create_invocation_in_tx(
+            cursor, tenant_id, user_id, device_id, 'wecom_read_sessions', arguments, None,
+            provider_key='wecom', business_kind='wecom_proxy_monitor_read', dedupe_key=uuid4().hex,
+            deadline_at=deadline)
+        conn.commit()
+        return {'id': invocation_id}
+
+
+async def _read_sessions_call(tenant_id, user_id, device, arguments, *, monitor_account=None):
     """受信监控读取（wecom_read_sessions 只读；与监控循环共用同设备串行占用）。"""
     from src.local_tools.proxy_tool import WecomReadSessionsTool
 
-    result = await WecomReadSessionsTool()._dispatch_and_wait(
-        tenant_id, user_id, None, device, arguments, None)
+    tool = WecomReadSessionsTool()
+    if monitor_account is None:
+        result = await tool._dispatch_and_wait(tenant_id, user_id, None, device, arguments, None)
+    else:
+        from src.local_tools import repository
+
+        try:
+            invocation = await asyncio.to_thread(_enqueue_monitor_read, tenant_id, user_id,
+                                                 str(device['id']), monitor_account, arguments)
+        except repository.DeviceOperationUnresolved as error:
+            return None, _err(409, '设备暂不能开始监控读取，下轮重试', str(error))
+        if invocation is None:
+            return None, _err(409, '定时消息已到期，监控本轮让位', 'WECOM_SCHEDULED_TURN')
+        result = await tool._poll_invocation(invocation, tenant_id, None)
     if not result.get('success'):
         code = result.get('code') or 'PROXY_READ_FAILED'
         if code in _CLIENT_UPGRADE_CODES:

@@ -210,11 +210,10 @@ def _stop_plan(tenant_id, user_id, task_id, *, delete):
             raise _error('PLAN_STATE_CONFLICT', '当前计划不能暂停')
         group = _device_group(task, _read_definition(task))
         proxy_tasks.lock_device_group_in_tx(cursor, _group_task(group))
-        cursor.execute(
-            """UPDATE bs_wecom_scheduled_sends
-                  SET status='cancelled',finished_at=clock_timestamp(),error_code=%s
-                WHERE tenant_id=%s AND user_id=%s AND task_id=%s AND status='queued'""",
-            ('PLAN_DELETED' if delete else 'PLAN_PAUSED', tenant_id, user_id, task_id))
+        from .scheduled_delivery import retire_in_tx
+
+        retire_in_tx(cursor, 'tenant_id=%s AND user_id=%s AND task_id=%s',
+                     (tenant_id, user_id, task_id), 'cancelled', 'PLAN_DELETED' if delete else 'PLAN_PAUSED')
         cursor.execute(
             """UPDATE scheduled_tasks SET status=%s,next_due_at=NULL,updated_at=now()
                  WHERE task_id=%s RETURNING *""", ('deleted' if delete else 'paused', task_id))
@@ -289,19 +288,20 @@ def freeze_due_in_tx(cursor, task, *, now=None):
 
 
 def group_has_turn_in_tx(cursor, group, *, include_queued, now=None):
-    """Scheduled occupancy for the future shared dispatcher, under its device group lock."""
+    """Scheduled occupancy under the shared device group lock."""
     at = _database_now(cursor, now).replace(tzinfo=TIMEZONE)
     cursor.execute(
         """SELECT 1 FROM bs_wecom_scheduled_sends
             WHERE tenant_id=%s AND device_id=%s AND account=%s
-              AND (status IN ('dispatched','running') OR (status='unknown' AND released_at IS NULL)
+              AND (status IN ('dispatched','running')
+                   OR (status IN ('unknown','succeeded') AND released_at IS NULL)
                    OR (%s AND status='queued' AND deadline_at >= %s))
             LIMIT 1""", (*group, include_queued, at))
     return cursor.fetchone() is not None
 
 
 def next_execution_in_tx(cursor, group, *, now=None):
-    """Hold the device group fence while selecting, so P3 can bind the same queue turn."""
+    """Hold the device group fence while the caller selects and binds the queue turn."""
     task = _group_task(group)
     proxy_tasks.lock_device_group_in_tx(cursor, task)
     if (proxy_tasks.device_group_busy_in_tx(cursor, task, include_pending_opening=False)

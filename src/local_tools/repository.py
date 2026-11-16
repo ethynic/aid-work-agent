@@ -21,6 +21,7 @@ from src.local_tools.security import sha256_hex
 
 # 终态：写 result 时遇到终态直接幂等返回
 TERMINAL_STATES = ("succeeded", "failed", "cancelled", "unknown", "expired")
+WECOM_SCHEDULED_SEND = 'wecom_scheduled_send'
 
 
 class ResumeContinuationConflict(ValueError):
@@ -1063,6 +1064,7 @@ def claim_next(
             SELECT * FROM local_tool_invocations
             WHERE state = 'queued' AND device_id = %s AND tenant_id = %s
               {lane_filter}{provider_filter}
+              AND (business_kind IS DISTINCT FROM 'wecom_proxy_monitor_read' OR deadline_at>=clock_timestamp())
               AND (business_kind IS DISTINCT FROM 'agent_runner_recovery' OR business_ref->>'version' IS DISTINCT FROM '3'
                 OR (deadline_at>NOW() AND EXISTS (SELECT 1 FROM agent_runners r
                   WHERE r.runner_id=local_tool_invocations.business_ref->>'runner_id' AND r.tenant_id=local_tool_invocations.tenant_id
@@ -1108,7 +1110,8 @@ def claim_next(
         return invocation
 
 
-def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str) -> Optional[Dict[str, Any]]:
+def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str, *,
+                 device_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """claimed → running。hash 匹配时返回当前记录（无论是否迁移），不匹配/不存在返回 None"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -1116,6 +1119,14 @@ def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str) -> O
         cursor.execute('SELECT * FROM local_tool_invocations WHERE id=%s AND tenant_id=%s AND claim_token_hash=%s',
             (invocation_id, tenant_id, claim_token_hash))
         owner = cursor.fetchone()
+        if owner and owner.get('business_kind') == WECOM_SCHEDULED_SEND:
+            if str(owner['device_id']) != device_id or not lock_active_device(cursor, tenant_id, device_id):
+                return None
+            from src.wecom_conversation.scheduled_delivery import authorize_in_tx
+
+            row = authorize_in_tx(cursor, owner)
+            conn.commit()
+            return row
         if not owner or not lock_active_device(cursor, tenant_id, str(owner['device_id'])):
             return None
         from .recovery_observation import observation_scope
@@ -1176,17 +1187,21 @@ def append_event(
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT device_id FROM local_tool_invocations WHERE id = %s AND tenant_id = %s AND claim_token_hash = %s",
+            "SELECT device_id, business_kind FROM local_tool_invocations WHERE id = %s AND tenant_id = %s AND claim_token_hash = %s",
             (invocation_id, tenant_id, claim_token_hash),
         )
         owner = cursor.fetchone()
         if not owner or not lock_active_device(cursor, tenant_id, str(owner["device_id"])):
             return None
+        # A scheduled claim may be retired and reissued with new credentials.
+        # Serialize its update with that transition and reject a stale pre-start renewal.
+        claim_fence = (" AND (state <> 'claimed' OR lease_expires_at > clock_timestamp()) FOR UPDATE"
+                       if owner.get('business_kind') == WECOM_SCHEDULED_SEND else "")
         cursor.execute(
             """
             SELECT state FROM local_tool_invocations
             WHERE id = %s AND tenant_id = %s AND claim_token_hash = %s
-            """,
+            """ + claim_fence,
             (invocation_id, tenant_id, claim_token_hash),
         )
         row = cursor.fetchone()
@@ -1272,7 +1287,24 @@ def write_result(
                 or device_id is not None and str(row['device_id']) != str(device_id)):
             conn.commit()
             return None
-        late_result = row['state'] == 'unknown' and row.get('result_json') is None
+        scheduled = row.get('business_kind') == WECOM_SCHEDULED_SEND
+        preexecution_failure = (success is False and effect == 'none' and code in PREEXECUTION_RESULT_CODES
+                                and row['state'] == 'claimed')
+        if scheduled and row['started_at'] is None:
+            if not preexecution_failure:
+                conn.commit()
+                return dict(row)  # No device report can create authorization after its rejection.
+            cursor.execute('''SELECT lease_expires_at>clock_timestamp() AS lease_valid
+                               FROM local_tool_invocations WHERE tenant_id=%s AND id=%s''',
+                           (tenant_id, invocation_id))
+            if not cursor.fetchone()['lease_valid']:
+                return None  # An old worker cannot terminate the replacement claim's opportunity.
+        prior_result = row.get('result_json')
+        scheduled_late_confirmation = (scheduled and isinstance(prior_result, dict) and '_late_result' not in prior_result
+            and success is True and effect == 'applied' and isinstance(data, dict)
+            and data.get('verification') == 'local-record'
+            and data.get('session') == (row.get('arguments_json') or {}).get('session'))
+        late_result = row['state'] == 'unknown' and (prior_result is None or scheduled_late_confirmation)
         if row["state"] in TERMINAL_STATES and not late_result:
             # 幂等：已终态重复写返回原状态，不报错
             conn.commit()
@@ -1288,7 +1320,7 @@ def write_result(
         # 计费预判：仅 succeeded 首次落终态。price>0 落台账+扣费；price=0（免费）仅回写占位。
         # 先 ceil 到分再判断，与 insert_tool_usage_row 的台账舍入保持同一数值
         bill_price: Optional[float] = None
-        if success and row.get("credit_cost") is None:
+        if success and not scheduled and row.get("credit_cost") is None:
             bill_price = math.ceil(tool_credit_price(row.get("tool_name")) * 100) / 100
             if bill_price > 0:
                 balance_after: Optional[float] = None
@@ -1353,7 +1385,7 @@ def write_result(
         if late_result:
             # The original lease-loss fact stays unknown. A final device receipt
             # proves this invocation stopped, not that a new execution is allowed.
-            result_json = {'_late_result': {**result_json, 'effect': effect,
+            result_json = {**(prior_result or {}), '_late_result': {**result_json, 'effect': effect,
                 'stopped': result_proves_completion(success, code, effect)}}
             new_state, effect, code, message = row['state'], row['effect'], row.get('error_code'), row.get('error_message')
         sql = """

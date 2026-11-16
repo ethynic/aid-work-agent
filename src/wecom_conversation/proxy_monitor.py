@@ -235,6 +235,7 @@ def _group_runner_busy(tenant_id, device_id, account):
     waiting/reconcile_hold 已释放/结束执行，不阻塞组级读取，仅按会话级占用跳过。
     """
     from src.db.database import get_db_connection
+    from .scheduled_sends import group_has_turn_in_tx
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -249,7 +250,8 @@ def _group_runner_busy(tenant_id, device_id, account):
                WHERE s.tenant_id=%s AND t.device_id=%s AND t.wecom_account_id=%s
                  AND s.opening_send_status IN ('pending','sending') LIMIT 1''',
             (tenant_id, device_id, account, proxy_tasks.BATCH_RUNNING, tenant_id, device_id, account))
-        return cursor.fetchone() is not None
+        return (cursor.fetchone() is not None
+                or group_has_turn_in_tx(cursor, (tenant_id, device_id, account), include_queued=True))
 
 
 async def _run_group(items):
@@ -363,10 +365,10 @@ async def _process_target(item, device):
     """单目标：受信读排空 → 候选消费 → 建批/推进游标（失败按语义分流）。"""
     tenant_id, locator = item['tenant_id'], item['session']
     pages, error = await _drain_read(tenant_id, item['user_id'], device, locator,
-                                     item['wb1_cursor'])
+                                     item['wb1_cursor'], account=item['wecom_account_id'])
     if error is not None:
         code, message = error
-        if code in _TRANSIENT_READ_CODES:
+        if code in _TRANSIENT_READ_CODES or code == 'WECOM_SCHEDULED_TURN':
             logger.warning(f'后端日志：企微代理监控读瞬态失败本轮跳过 '
                            f'task={item["task_id"]} session={locator[:60]} code={code}')
             return
@@ -396,7 +398,7 @@ async def _process_target(item, device):
                     f'candidates={len(candidates)}')
 
 
-async def _drain_read(tenant_id, user_id, device, locator, cursor):
+async def _drain_read(tenant_id, user_id, device, locator, cursor, *, account):
     """单目标受信读按 has_more 有界排空（沿 _baseline_read 的页数上限）。
 
     返回 (页列表, None)；失败返回 (None, (code, message))——单目标 failed 数组
@@ -409,7 +411,7 @@ async def _drain_read(tenant_id, user_id, device, locator, cursor):
         if cursor:
             arguments['cursor'] = cursor
         data, call_error = await proxy_api._read_sessions_call(tenant_id, user_id,
-                                                               device, arguments)
+                                                               device, arguments, monitor_account=account)
         if call_error is not None:
             return None, _error_parts(call_error)
         # CLI 批量读对单目标失败仍返回总体成功＋failed 数组＋游标：与 P4 评审修复

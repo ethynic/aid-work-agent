@@ -4872,3 +4872,11 @@
         WHERE status IN ('queued', 'dispatched', 'running', 'unknown');
     CREATE INDEX IF NOT EXISTS idx_bs_wecom_scheduled_sends_history
         ON bs_wecom_scheduled_sends (tenant_id, user_id, due_at DESC, plan_order, target_order);
+
+- datetime: "2026-11-16 11:24:00"
+  remark: "企微定时消息平台单价覆盖设置"
+  statements: |
+    CREATE TABLE IF NOT EXISTS wecom_scheduled_send_settings (
+        singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+        unit_price NUMERIC(12,2) CHECK (unit_price >= 0)
+    );

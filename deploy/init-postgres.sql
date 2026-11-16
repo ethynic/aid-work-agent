@@ -6038,3 +6038,8 @@ CREATE INDEX IF NOT EXISTS idx_bs_wecom_scheduled_sends_queue
     WHERE status IN ('queued', 'dispatched', 'running', 'unknown');
 CREATE INDEX IF NOT EXISTS idx_bs_wecom_scheduled_sends_history
     ON bs_wecom_scheduled_sends (tenant_id, user_id, due_at DESC, plan_order, target_order);
+
+CREATE TABLE IF NOT EXISTS wecom_scheduled_send_settings (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    unit_price NUMERIC(12,2) CHECK (unit_price >= 0)
+);
