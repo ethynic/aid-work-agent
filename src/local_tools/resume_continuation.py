@@ -198,7 +198,10 @@ async def prepare_next(kwargs, operation=None):
     if parent.get('state') != 'succeeded' or parent.get('effect') != 'none':
         # R8 依赖步骤先核对：父执行已停稳但业务结果未知，续筛单独卡核对，
         # 不随停稳接续自动执行（任务内其他独立步骤与原会话接续不受影响）。
-        if (parent.get('state') == 'unknown' or parent.get('effect') == 'unknown') and repository.operation_completion_known(parent):
+        # R9：v3 停稳证明（原回执已丢）与完成证据同权，同样只卡核对不自动续筛。
+        if (parent.get('state') == 'unknown' or parent.get('effect') == 'unknown') and (
+                repository.operation_completion_known(parent)
+                or await asyncio.to_thread(repository.stop_proof_verified, parent_id, tenant_id)):
             return None, error('INVALID_CONTINUATION', '上一步筛选结果未知，需先核对原执行结果；未自动续筛')
         return None, error('INVALID_CONTINUATION', '上次筛选记录不存在、归属不符或未安全完成，请恢复原筛选记录')
     arguments = parent.get('arguments_json') or {}

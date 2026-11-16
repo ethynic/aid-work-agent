@@ -620,6 +620,32 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
           callArgs = await deps.prepareProviderCall(inv, permit, abortController.signal)
           if (!permit.isValid() || abortController.signal.aborted) throw new Error('发送许可或执行已失效')
         }
+        // R9 停止动作前最后复判（契约「停止与接续」）：started 幂等重发会让服务端
+        // 再次执行「scope 原调用已全部可信终态 → 停止无需派发」复判；拒绝（404/409
+        // 等失效类状态）说明停稳已被原回执证明或执行权失效——不执行受管停止，避免
+        // 多余关闭受管资源（服务端已按既有 superseded 路径落终态并接续）。网络瞬断
+        // 等传输失败无法复核时按原行为照常停止（多余但安全，停稳证明语义不变）。
+        if (isRecoveryObservation && Number(inv.arguments['version']) === 3) {
+          await forwarder.flush()
+          try {
+            await deps.api.started(inv.invocation_id, inv.claim_token, deps.shutdownSignal)
+          } catch (err) {
+            if (
+              err instanceof DeviceRevokedError ||
+              (err instanceof ApiError && [401, 403, 404, 409].includes(err.status))
+            ) {
+              emit(`invocation ${inv.invocation_id} 停止前复判未获接纳：停止已被原调用可信回执取代，不执行受管停止`)
+              lockPreabort = preabortFinal({
+                success: false,
+                code: 'CANCELLED',
+                message: '停止已被原调用可信回执取代（执行已停稳），未执行受管停止',
+                retryable: false,
+                safe_to_retry: false,
+              })
+              return null
+            }
+          }
+        }
         await deps.beforeProviderCall?.(inv)
         phase.lockPrepMs = Date.now() - lockAcquiredMs
         const providerCallT0 = Date.now()

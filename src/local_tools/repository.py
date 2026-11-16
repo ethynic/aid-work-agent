@@ -130,6 +130,25 @@ def operation_completion_known(invocation):
         result.get('data'))
 
 
+def stop_proof_verified(invocation_id, tenant_id):
+    """停稳证明消费（契约「停止与接续」R9）：原调用 ∈ Runner checkpoint
+    verified_local_invocations（v3 受管停稳已核）。
+
+    与自有回执完成证据同权：只放行恢复检查与结果交接、解除占用；不证明业务
+    效果，不改写原 state/effect/回执。非 Runner 业务调用无此证明 → False。
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""SELECT r.checkpoint FROM agent_runners r
+            WHERE r.tenant_id=%s AND r.runner_id=(SELECT i.business_ref->>'runner_id'
+                FROM local_tool_invocations i WHERE i.id=%s AND i.tenant_id=%s
+                AND i.business_kind='agent_runner')""",
+            (tenant_id, str(invocation_id), tenant_id))
+        row = cursor.fetchone()
+    checkpoint = (row or {}).get('checkpoint') or {}
+    return str(invocation_id) in (checkpoint.get('verified_local_invocations') or [])
+
+
 def lock_operation_admission(cursor, tenant_id):
     """Short transaction fence shared by detachment and all new device IO."""
     cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",

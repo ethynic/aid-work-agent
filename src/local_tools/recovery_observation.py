@@ -81,6 +81,8 @@ def stop_superseded_by_completion(cursor, invocation, binding):
 def supersede_completed_stop(invocation_id, tenant_id):
     """派发前复判命中：核验行按「无需派发」落终态；verified 合并与接续编排照常。
 
+    R9：running 行同样适用——Runtime 在停止动作前以 started 幂等重发复判，
+    scope 原调用已全部可信终态时不执行受管停止（服务端在本事务落终态并接续）。
     独立事务并沿用仓库既有锁序（先 Runner 行锁、后操作准入锁，与 write_result
     一致），避免与领取路径已持有的准入锁交叉等待。复判条件在领取路径每次重复
     出现，本事务任一步不满足即整体放弃，下一轮领取重新复判（自愈，无需重试器）。
@@ -99,7 +101,7 @@ def supersede_completed_stop(invocation_id, tenant_id):
         row = dict(row)
         binding = row.get('business_ref') or {}
         if (row.get('tool_name') != 'runtime_recovery_observe' or binding.get('version') != 3
-                or row['state'] not in ('queued', 'claimed') or row.get('started_at') is not None):
+                or row['state'] not in ('queued', 'claimed', 'running')):
             connection.commit()
             return False
         cursor.execute('SELECT * FROM agent_runners WHERE runner_id=%s AND tenant_id=%s FOR UPDATE',
@@ -121,7 +123,7 @@ def supersede_completed_stop(invocation_id, tenant_id):
             error_code='LOCAL_RECOVERY_STOP_SUPERSEDED',error_message=%s,result_json=%s,
             finished_at=COALESCE(finished_at,NOW()),lease_expires_at=NULL,credit_cost=0
             WHERE id=%s AND tenant_id=%s AND tool_name='runtime_recovery_observe'
-              AND state IN ('queued','claimed') AND started_at IS NULL RETURNING id""",
+              AND state IN ('queued','claimed','running') RETURNING id""",
             (message, Json(result), row['id'], tenant_id))
         if cursor.fetchone() is None:
             connection.commit()

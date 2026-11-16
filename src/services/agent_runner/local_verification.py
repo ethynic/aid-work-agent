@@ -59,6 +59,48 @@ def stop_continue_admission(cursor, row, ids, *, capability, fence, online):
     return originals, device, provider, device_id
 
 
+def _continue_settled_scope(connection, cursor, row, checkpoint, request_id, scope):
+    """R9 修复2（契约「停止与接续」）：点击时 scope 原调用已全部完成判定成立
+    （可信回执先到）——停止无需派发（与 R8 superseded 同一语义：可信终态回执本身
+    证明执行已停稳），直接执行与停稳回执同一事务语义的接续编排。
+
+    返回刷新后的行；scope 设备无法唯一确定时返回 None，调用方沿既有幂等刷新返回。
+    """
+    from .public_view import with_local_operation_facts
+    cursor.execute('SELECT DISTINCT device_id::text AS device_id FROM local_tool_invocations '
+        'WHERE tenant_id=%s AND id=ANY(%s::uuid[])', (row['tenant_id'], scope))
+    devices = [item['device_id'] for item in cursor.fetchall()]
+    if len(devices) != 1:
+        return None
+    binding = {'runner_id': row['runner_id'], 'version': 3, 'scope_id': str(uuid4()),
+        'request_id': request_id, 'original_invocation_ids': scope, 'device_id': devices[0],
+        'continue_after_stop': True}
+    checkpoint['local_verification'] = {**binding, 'invocation_id': None, 'state': 'succeeded',
+        'resource_stopped': True, 'page_observed': False, 'stop_error_code': None,
+        'page_summary': None, 'target_relation': None, 'error_code': None}
+    checkpoint['verified_local_invocations'] = sorted(
+        set(checkpoint.get('verified_local_invocations') or []) | set(scope))
+    cursor.execute('UPDATE agent_runners SET checkpoint=%s::jsonb,view_revision=view_revision+1,'
+        'updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *',
+        (capped_checkpoint_dumps(checkpoint), row['runner_id']))
+    result = decoded(cursor.fetchone())
+    from .event_repository import EventRepository
+    result = EventRepository.notify_in_tx(cursor, row, after=result)
+    # 与停稳回执同一事务语义：编排失败只跳过，不影响 verified 合并与占用解除。
+    cursor.execute('SAVEPOINT continue_after_stop')
+    try:
+        from .stop_continue import dispatch_continue_resume_in_tx
+        dispatch_continue_resume_in_tx(cursor, result, checkpoint)
+        cursor.execute('RELEASE SAVEPOINT continue_after_stop')
+    except Exception as error:  # noqa: BLE001
+        cursor.execute('ROLLBACK TO SAVEPOINT continue_after_stop')
+        from loguru import logger
+        logger.opt(exception=True).warning(
+            'AgentRunner continue-after-stop orchestration skipped: {!r}', error)
+    connection.commit()
+    return with_local_operation_facts(cursor, result)
+
+
 def verify_local(repository, principal, runner_id, request_id, *, stop_resources=False,
                  continue_after_stop=False):
     from src.local_tools import repository as local
@@ -112,16 +154,29 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
         ids = sorted(str(fact['id']) for fact in facts if fact.get('kind') == 'local'
             and fact.get('holdable') and not fact['completion_known']
             and str(fact['id']) not in checkpoint.get('verified_local_invocations', []))
-        if not ids:
-            # A late receipt may settle the hold after the page rendered its button.
-            # Treat that race as an idempotent refresh, not an error or new action.
-            return with_local_operation_facts(cursor, row)
+        pending_live = False
         if previous.get('state') in {'queued', 'claimed', 'running'}:
             cursor.execute('SELECT state,deadline_at,deadline_at>clock_timestamp() AS unexpired FROM local_tool_invocations WHERE id=%s AND tenant_id=%s',
                 (previous['invocation_id'], row['tenant_id']))
             pending = cursor.fetchone()
-            if pending and pending['state'] not in local.TERMINAL_STATES and pending['unexpired']:
-                raise RunnerError('LOCAL_VERIFICATION_PENDING', 409)
+            pending_live = bool(pending and pending['state'] not in local.TERMINAL_STATES and pending['unexpired'])
+        if not ids:
+            # R9 修复2：点击时可信回执已覆盖整个 scope（全部 completion-known）→
+            # 停止无需派发，与停稳回执走同一幂等接续编排（零输入与有输入同路径）；
+            # 在途核验仍交给既有领取前复判，不重复编排。
+            if continue_after_stop and not pending_live:
+                scope = sorted(str(fact['id']) for fact in facts
+                    if fact.get('kind') == 'local' and fact.get('holdable'))
+                if scope:
+                    settled = _continue_settled_scope(connection, cursor, row, checkpoint,
+                        request_id, scope)
+                    if settled is not None:
+                        return settled
+            # A late receipt may settle the hold after the page rendered its button.
+            # Treat that race as an idempotent refresh, not an error or new action.
+            return with_local_operation_facts(cursor, row)
+        if pending_live:
+            raise RunnerError('LOCAL_VERIFICATION_PENDING', 409)
         # R8：受理判断与网页投影共用 stop_continue_admission（单 scope、能力、
         # 在线、停止栅栏排除本 scope）；纯观察（v2）不栅栏也不要求在线。
         originals, device, provider, device_id = stop_continue_admission(cursor, row, ids,

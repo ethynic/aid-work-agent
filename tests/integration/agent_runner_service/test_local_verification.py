@@ -675,3 +675,147 @@ def test_r8_unproven_original_keeps_the_queued_stop_dispatch(lost_local, service
         data={'page': 'jobs'}, device_id=str(device['id']))
     token, args = claim_probe(row, device, probe)
     assert args['version'] == 3 and args['stop_resources'] is True
+
+
+# ---- R9：停稳证明统一消费、迟到可信回执直接接续、停止执行前最后复判 ----
+
+
+def r9_prepare_resume(service_database, repository, row, principal):
+    """R8 同款 recovery preflight 全链路：resume 控制的 prepare 不再卡工具核验。"""
+    from types import SimpleNamespace
+    from src.services.agent_runner.recovery import RecoveryCoordinator
+    from src.services.agent_runner.runtime_manifest import configuration_fingerprint
+    service_fingerprint = json.dumps(configuration_fingerprint('fixture-profile'))
+    service_database.rows("""UPDATE agent_runners SET profile_fingerprint='fixture-profile',
+        checkpoint=jsonb_set(jsonb_set(checkpoint,'{execution,resources,configuration_fingerprint}',%s::jsonb),
+            '{execution,profile_id}','"main"')
+        WHERE runner_id=%s""", (service_fingerprint, row['runner_id']))
+    current = repository.get(row['runner_id'])
+    restored = ExecutionState.restore(current['checkpoint']['execution'])
+    authority = SimpleNamespace(authorize_persisted=lambda *a, **k: principal,
+        assert_credit=lambda *a: None, authorize_child_profile=lambda *a: None)
+    control = {'action': 'resume', 'control_id': 'r9-resume-control', 'payload': {},
+               'accepted_at': datetime.now()}
+    prepared = RecoveryCoordinator(authority, SimpleNamespace(
+        resolve=lambda *a: (None, 'fixture-profile')),
+        tool_recovery=LocalRecoveryProof()).prepare(current, control)
+    return ExecutionState.restore(prepared.checkpoint['execution']), restored
+
+
+def test_r9_stop_proof_restores_result_lost_invocation_and_hands_unknown_back(
+        lost_local, service_database):
+    """R9 修复1：原调用业务回执丢失（无证据 unknown）+ v3 停稳证明 → 恢复检查与
+    worker prepare 放行接续，未知效果作为事实交回原任务、零新派发；无停稳证明且
+    无自有回执保持现状拒绝（兼容锚）。"""
+    repository, _, principal, row, device, original, _ = lost_local
+    enable(service_database, device, stop=True)
+    state = ExecutionState.restore(row['checkpoint']['execution'])
+    assert not LocalRecoveryProof().can_restore(row, state, state.tools['original-call']), \
+        '兼容锚：无停稳证明且无自有回执仍卡核验'
+    accepted = verify_local(repository, principal, row['runner_id'], 'stop-proof-recovery',
+                            stop_resources=True)
+    probe = accepted['checkpoint']['local_verification']['invocation_id']
+    token, args = claim_probe(row, device, probe)
+    completed = devices.write_runtime_result(probe, row['tenant_id'], token, True, effect='none',
+        data=stopped_proof(args), device_id=str(device['id']))
+    assert completed['state'] == 'succeeded'
+    current = repository.get(row['runner_id'])
+    assert current['checkpoint']['verified_local_invocations'] == [original]
+    from src.local_tools import repository as local_repository
+    assert local_repository.stop_proof_verified(original, row['tenant_id']) is True, '停稳证明可被恢复检查/结果交接消费'
+    assert local_repository.stop_proof_verified(str(uuid.uuid4()), row['tenant_id']) is False
+    assert devices.get_invocation(original, row['tenant_id'])['result_json'] is None, '原调用仍无业务回执'
+    restored = ExecutionState.restore(current['checkpoint']['execution'])
+    assert LocalRecoveryProof().can_restore(current, restored, restored.tools['original-call']), \
+        '停稳证明与自有回执同权：恢复检查放行'
+    tree, restored2 = r9_prepare_resume(service_database, repository, current, principal)
+    assert [call.id for call in tree.pending] == ['original-call'], '原调用保持等待由 worker 重新观察'
+    assert restored2.tools['original-call'].phase == 'dispatching'
+    assert service_database.rows('SELECT count(*) AS n FROM local_tool_invocations WHERE tenant_id=%s',
+        (row['tenant_id'],)) == [{'n': 2}], '停稳接续零新业务派发（1 原调用 + 1 核验探针）'
+
+
+def test_r9_settled_scope_continue_dispatches_resume_without_probe(lost_local, service_database):
+    """R9 修复2：点击前原回执已带可信结束证据（scope 全部 completion-known）→
+    continue_after_stop 不再「无可停调用即返回」，直接走同一接续编排（resume 投递），
+    不派发任何核验探针；原回执事实零改写。"""
+    from src.services.agent_runner.recovery_repository import RecoveryRepository
+    repository, _, principal, row, device, original, claim = lost_local
+    r8_enable(service_database, device)
+    r8_write_proven_completion(devices, row, device, original, claim)
+    accepted = verify_local(repository, principal, row['runner_id'], 'settled-continue',
+                            stop_resources=True, continue_after_stop=True)
+    verification = accepted['checkpoint']['local_verification']
+    assert verification['state'] == 'succeeded' and verification['resource_stopped'] is True
+    assert verification['continue_after_stop'] is True and verification['invocation_id'] is None
+    assert verification['original_invocation_ids'] == [original]
+    current = repository.get(row['runner_id'])
+    assert current['checkpoint']['verified_local_invocations'] == [original]
+    assert service_database.rows(
+        "SELECT count(*) AS n FROM local_tool_invocations WHERE tenant_id=%s AND business_kind='agent_runner_recovery'",
+        (row['tenant_id'],)) == [{'n': 0}], '零输入路径不派发核验探针'
+    stored = devices.get_invocation(original, row['tenant_id'])
+    assert stored['state'] == stored['effect'] == 'unknown', '原 unknown 事实零改写'
+    assert stored['result_json']['_late_result']['stopped'] is True
+    controls = resume_controls(service_database, row['runner_id'])
+    assert len(controls) == 1 and controls[0]['status'] == 'accepted'
+    assert controls[0]['client_request_id'] == row['runner_id'] + ':continue-after-stop'
+    persisted = repository.get(row['runner_id'])
+    assert persisted['resume_control_id'] == controls[0]['control_id']
+    from src.services.agent_runner.repository import public_runner
+    assert public_runner(persisted)['resume_requested'] is True
+    candidates = RecoveryRepository(repository.connection_factory).next_candidates()
+    assert any(item['runner_id'] == row['runner_id'] for item in candidates)
+    assert devices.create_invocation(row['tenant_id'], row['user_id'], str(device['id']),
+        'boss_goto', {'target': 'recommend'}), '停稳已证明：新业务放行'
+
+
+def test_r9_settled_scope_continue_replay_is_idempotent(lost_local, service_database):
+    """R9 修复2 幂等回放：同 request_id 重放读回相同编排状态；新 request_id 重复
+    点击不重复投递（resume_control_id 在途门）。"""
+    repository, _, principal, row, device, original, claim = lost_local
+    r8_enable(service_database, device)
+    r8_write_proven_completion(devices, row, device, original, claim)
+    first = verify_local(repository, principal, row['runner_id'], 'settled-replay',
+                         stop_resources=True, continue_after_stop=True)
+    replay = verify_local(repository, principal, row['runner_id'], 'settled-replay',
+                          stop_resources=True, continue_after_stop=True)
+    assert replay['checkpoint']['local_verification'] == first['checkpoint']['local_verification']
+    verify_local(repository, principal, row['runner_id'], 'settled-replay-again',
+                 stop_resources=True, continue_after_stop=True)
+    assert len(resume_controls(service_database, row['runner_id'])) == 1
+    assert repository.get(row['runner_id'])['checkpoint']['verified_local_invocations'] == [original]
+
+
+def test_r9_receipt_after_started_supersedes_stop_before_the_stop_action(lost_local, service_database):
+    """R9 修复3 服务端：/started 确认后、停止动作执行前原回执补传 → started 幂等
+    重发复判命中，核验行落 superseded 终态、verified 合并与接续编排照常；无回执时
+    复判放行照常停止（回归）。"""
+    repository, _, principal, row, device, original, claim = lost_local
+    r8_enable(service_database, device)
+    accepted = verify_local(repository, principal, row['runner_id'], 'started-race',
+                            stop_resources=True, continue_after_stop=True)
+    probe = accepted['checkpoint']['local_verification']['invocation_id']
+    token = uuid.uuid4().hex
+    queued = devices.claim_next(str(device['id']), row['tenant_id'], token, 60,
+        provider_keys=['runtime-recovery'])
+    assert str(queued['id']) == probe
+    assert devices.mark_started(probe, row['tenant_id'], token)['state'] == 'running'
+    # 无回执：复判放行，停止照常执行（回归锚）。
+    still_running = devices.mark_started(probe, row['tenant_id'], token)
+    assert still_running['state'] == 'running'
+    assert devices.get_invocation(probe, row['tenant_id'])['state'] == 'running'
+    r8_write_proven_completion(devices, row, device, original, claim)
+    assert devices.mark_started(probe, row['tenant_id'], token) is None, '停止动作前复判：不再执行受管停止'
+    superseded = devices.get_invocation(probe, row['tenant_id'])
+    assert superseded['state'] == 'failed' and superseded['effect'] == 'none'
+    assert superseded['error_code'] == 'LOCAL_RECOVERY_STOP_SUPERSEDED'
+    assert superseded['result_json']['_stop_superseded']['version'] == 1
+    assert superseded['started_at'] is not None, '已 started 的核验行在停止动作前被取代'
+    current = repository.get(row['runner_id'])
+    assert current['checkpoint']['verified_local_invocations'] == [original]
+    assert current['checkpoint']['local_verification']['state'] == 'succeeded'
+    assert current['checkpoint']['local_verification']['resource_stopped'] is True
+    assert len(resume_controls(service_database, row['runner_id'])) == 1
+    stored = devices.get_invocation(original, row['tenant_id'])
+    assert stored['state'] == stored['effect'] == 'unknown', '原 unknown 事实零改写'

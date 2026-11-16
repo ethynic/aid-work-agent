@@ -91,6 +91,17 @@ def _known(result, proxy=None):
         from .repository import runtime_completion_evidence
         if result.get('invocation_id') and runtime_completion_evidence(result.get('data')) is not None:
             return result
+        # R9 停稳证明同权：v3 停稳已核（invocation ∈ Runner checkpoint
+        # verified_local_invocations，随领取经 DurableControl.envelope 载入本 attempt）
+        # 覆盖原业务回执已丢的场景——未知效果保留为事实交回原任务，不产生新派发
+        #（未知发送仍不得重发，unknown 语义不动）；无 owner 上下文（旧链路/测试）跳过。
+        if result.get('invocation_id'):
+            from .lifecycle import current_local_operation
+            operation = current_local_operation()
+            envelope = getattr(getattr(getattr(operation, 'owner', None), 'root', None),
+                'envelope', None) or {}
+            if str(result['invocation_id']) in (envelope.get('verified_local_invocations') or []):
+                return result
         raise LocalContinuationRequired('LOCAL_EFFECT_VERIFICATION_REQUIRED',result.get('invocation_id'))
     return result
 
