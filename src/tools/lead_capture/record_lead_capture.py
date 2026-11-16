@@ -131,6 +131,10 @@ class RecordLeadCaptureTool(BaseTool):
         assignee_name = self._resolve_employee_name(assigned_to)
         assignee_phone = self._resolve_employee_phone(assigned_to)
         kf_account_name = kf_config.get("name", "")
+        # web_c（官网客服）无 kf 账号体系：名称快照按渠道固定口径，channel_chat_id
+        # 保持 None（该列是 wecom_kf open_kfid 语义），线索靠 session_id 关联渠道会话
+        if not kf_account_name and (session or {}).get("channel_type") == "web_c":
+            kf_account_name = "官网客服"
 
         from src.saas.db.lead_capture_db import LeadCaptureDB
         from src.notifications.lead_producer import publish_lead_captured_in_tx

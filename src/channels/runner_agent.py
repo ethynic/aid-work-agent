@@ -40,6 +40,24 @@ def _clarification_wait(waiting):
     return None
 
 
+class SubmitOutcome:
+    """submit() 的受理结果：轮询段所需的最小状态（process_message_sync 消费）。
+
+    direct_response 非 None 时为「不提交、直接回显」的追问纠正/重发场景，
+    调用方不进入轮询，直接把该响应交给用户。
+    """
+
+    def __init__(self, row, waiting, reply_wait_id, reply_control_id, progress_seen, verbose_seen,
+                 direct_response=None):
+        self.row = row
+        self.waiting = waiting
+        self.reply_wait_id = reply_wait_id
+        self.reply_control_id = reply_control_id
+        self.progress_seen = progress_seen
+        self.verbose_seen = verbose_seen
+        self.direct_response = direct_response
+
+
 class ChannelRunnerAgent:
     def __init__(self, *, source, session_id, channel_user_id, channel_chat_id,
                  profile_id='main', config_id=None, client=None, tenant_id=None):
@@ -102,14 +120,20 @@ class ChannelRunnerAgent:
             from loguru import logger
             logger.error('Channel Runner cancellation unconfirmed: {}', type(error).__name__)
 
-    async def process_message_sync(self, *, user_input, session_id, attachments=None,
-                                   extra_system_prompt=None, progress_callback=None,
-                                   cancel_check=None, feedback_state=None, **kwargs):
-        if session_id != self.session_id:
-            raise RunnerError('CHANNEL_SESSION_MISMATCH', 403)
-        if cancel_check and cancel_check():
-            return AgentResponse('')
-        request_id = uuid.uuid4().hex
+    async def submit(self, *, user_input, attachments=None, extra_system_prompt=None,
+                     client_request_id=None, **kwargs):
+        """受理新消息：活跃 runner 处理 + 追问 reply/controls + 新执行受理（设计 §4.3 拆分）。
+
+        既有 process_message_sync 的提交段原样抽 出；web_c 等流式渠道经此方法
+        受理后自行透传 Runner events，不再走同步轮询段。语义不变：waiting 追问
+        经 reply control 接车、普通新消息取消旧 runner 后受理。
+
+        返回 SubmitOutcome；追问「纠正提示/重发分段」等直接回复场景以
+        AgentResponse 形式在 outcome.direct_response 中返回（非 None 时调用方
+        不应进入轮询，直接把该响应交给用户）。
+        """
+        session_id = self.session_id
+        request_id = client_request_id or uuid.uuid4().hex
         params = {'source':self.source, 'profile_id':self.profile_id,
                   'channel_user_id':self.channel_user_id, 'channel_chat_id':self.channel_chat_id}
         page = await self._request('GET', '/v1/sessions/channel/' + quote(session_id, safe='') + '/runners', params=params)
@@ -141,7 +165,7 @@ class ChannelRunnerAgent:
                         kind, value = outcome
                         if kind == 'response':
                             # 纠正提示 / 重发分段：不提交、wait 不消费（一次不计数）。
-                            return value
+                            return SubmitOutcome(None, waiting, None, None, 0, set(), value)
                         body = value
                 if body is None:
                     # 自然语言（含旧 clarify 无 form 的等待）：沿现有 reply 路径
@@ -156,7 +180,8 @@ class ChannelRunnerAgent:
                     if error.errors:
                         # 受理事务内表单校验失败（同步 422 + errors）：wait 不消费、
                         # control 不创建，向用户原样转述逐题明细，修正后可直接重提。
-                        return AgentResponse(ask_render.submission_error_text(error.errors))
+                        return SubmitOutcome(None, waiting, None, None, 0, set(),
+                                             AgentResponse(ask_render.submission_error_text(error.errors)))
                     raise
                 row = accepted['runner']
                 reply_wait_id, reply_control_id = wait['wait_id'], accepted['control']['control_id']
@@ -185,9 +210,25 @@ class ChannelRunnerAgent:
                 if isinstance(kwargs.get('verbose_config'), VerboseFeedbackConfig):
                     body['request_data']['verbose_feedback'] = asdict(kwargs['verbose_config'])
             row = (await self._accept('/v1/runners', body))['runner']
-        runner_id = row['runner_id']
         progress_seen = len((waiting.get('snapshot') or {}).get('progressMessages') or []) if waiting else 0
         verbose_seen = {item.get('eventId') for item in (waiting.get('snapshot') or {}).get('verboseMessages') or []} if waiting else set()
+        return SubmitOutcome(row, waiting, reply_wait_id, reply_control_id, progress_seen, verbose_seen, None)
+
+    async def process_message_sync(self, *, user_input, session_id, attachments=None,
+                                   extra_system_prompt=None, progress_callback=None,
+                                   cancel_check=None, feedback_state=None, **kwargs):
+        if session_id != self.session_id:
+            raise RunnerError('CHANNEL_SESSION_MISMATCH', 403)
+        if cancel_check and cancel_check():
+            return AgentResponse('')
+        outcome = await self.submit(user_input=user_input, attachments=attachments,
+                                    extra_system_prompt=extra_system_prompt, **kwargs)
+        if outcome.direct_response is not None:
+            return outcome.direct_response
+        row, waiting = outcome.row, outcome.waiting
+        reply_wait_id, reply_control_id = outcome.reply_wait_id, outcome.reply_control_id
+        progress_seen, verbose_seen = outcome.progress_seen, outcome.verbose_seen
+        runner_id = row['runner_id']
         try:
             while True:
                 if cancel_check and cancel_check():

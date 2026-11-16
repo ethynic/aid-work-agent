@@ -128,6 +128,7 @@ class ChannelFactory:
         "wecom_kf": "src.channels.wecom_kf.adapter.WeComKfAdapter",
         "dingtalk": "src.channels.dingtalk.adapter.DingTalkAdapter",
         "feishu": "src.channels.feishu.adapter.FeishuAdapter",
+        "web_c": "src.channels.web_c.adapter.WebCAdapter",
     }
 
     @classmethod

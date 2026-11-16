@@ -52,7 +52,7 @@ class SessionQuery(BaseModel):
     # wecom_proxy = 企微代理批次来源（代理任务契约 §6：内部受信提交，无用户
     # Bearer，非零历史，身份按 bs_wecom_proxy_tasks 持久行核定）
     source: Literal["chat", "wecom_kf", "feishu", "dingtalk", "wecom", "scheduled",
-                    "wecom_proxy"] = "chat"
+                    "wecom_proxy", "web_c"] = "chat"
     profile_id: str = Field(default="main", min_length=1, max_length=128)
     # Only platform identifiers are submitted for a channel actor. The internal
     # tenant/user are derived from the registered session, never supplied here.

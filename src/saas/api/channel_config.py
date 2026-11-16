@@ -93,10 +93,15 @@ _REQUIRED_FIELDS = {
         "corp_id": "企业ID（在「我的企业」页面获取，格式 ww 开头）",
         "agentid": "通知应用AgentId（在应用详情页获取）",
         "secret": "通知应用Secret（在应用详情页获取）",
-    }
+    },
+    # web_c（官网客服）：无第三方凭证，channel_secret 由服务端自动生成，
+    # 其余键（enabled/greeting/identity_mode）为可选展示/行为配置
+    "web_c": {},
 }
 
 _WECHAT_MP_CHANNEL_TYPE = "wechat_mp"
+# 官网客服（web_c）：C 端免登录聊天渠道，签名链接密钥由服务端自动生成
+_WEB_C_CHANNEL_TYPE = "web_c"
 # 企业微信应用通知（长任务企微应用消息，租户自备凭据；与消息渠道 wecom_app
 # target/delivery 全链无关，仅是租户渠道配置类型名）
 _WECOM_APP_NOTIFY_CHANNEL_TYPE = "wecom_app_notify"
@@ -139,6 +144,41 @@ _DINGTALK_NOTIFY_ONLY_REQUIRED_FIELDS = {
         "agent_id": "应用AgentId（在应用详情页获取，工作通知发送必须）",
     }
 }
+
+
+def _generate_web_c_secret() -> str:
+    """生成 web_c 签名密钥（32 字节 hex，与设计 §3.2 一致）。"""
+    import secrets as _secrets
+
+    return _secrets.token_hex(32)
+
+
+_WEB_C_IDENTITY_MODES = ("ext", "anon", "both")
+# web_c config 缺省值（create 时补齐；identity_mode 非法值 400）
+_WEB_C_DEFAULT_GREETING = "您好，我是本公司的智能助手，有什么可以帮您？"
+
+
+def _normalize_web_c_config(config: dict, existing: Optional[dict] = None) -> None:
+    """原地规整 web_c config（create/update 共用）。
+
+    - channel_secret：缺失/空串/掩码保留旧值（update 场景 existing 传入），
+      create 时无旧值则自动生成；伪造防线密钥不由租户表单提供。
+    - enabled：缺省 True；greeting：缺省通用文案；identity_mode：缺省 both，
+      非法值 400（表单单选来源，出现非法值即为异常调用，不静默纠正）。
+    """
+    config["enabled"] = bool(config.get("enabled", True))
+    config["greeting"] = str(config.get("greeting") or "").strip() or _WEB_C_DEFAULT_GREETING
+    mode = str(config.get("identity_mode") or "both").strip()
+    if mode not in _WEB_C_IDENTITY_MODES:
+        raise HTTPException(status_code=400, detail="身份模式取值应为 ext / anon / both")
+    config["identity_mode"] = mode
+
+    secret = str(config.get("channel_secret") or "").strip()
+    if secret.startswith("***"):
+        secret = ""
+    if not secret:
+        old_secret = str((existing or {}).get("channel_secret") or "").strip()
+        config["channel_secret"] = old_secret or _generate_web_c_secret()
 
 
 def _notify_usage(channel_type: str, config: dict) -> str:
@@ -278,7 +318,8 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
     admin = require_admin(request)
 
     if body.channel_type not in ("wecom", "wecom_kf", "dingtalk", "feishu",
-                                 _WECHAT_MP_CHANNEL_TYPE, _WECOM_APP_NOTIFY_CHANNEL_TYPE):
+                                 _WECHAT_MP_CHANNEL_TYPE, _WECOM_APP_NOTIFY_CHANNEL_TYPE,
+                                 _WEB_C_CHANNEL_TYPE):
         raise HTTPException(status_code=400, detail=f"不支持的渠道类型: {body.channel_type}")
 
     # wecom/feishu/dingtalk 按通知用途分支必填（notify_usage 非法值在此处 400）；其余渠道静态必填表
@@ -308,6 +349,10 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
         else:
             body.config.pop("callback_token", None)
         _validate_wechat_mp_safe_mode(body.config)
+
+    if body.channel_type == _WEB_C_CHANNEL_TYPE:
+        body.config = dict(body.config)
+        _normalize_web_c_config(body.config)
 
     _validate_channel_subagent(admin["tenant_id"], body.subagent_type)
 
@@ -400,6 +445,11 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
             body.config,
             existing_appid=str((existing.get("config") or {}).get("appid") or ""),
         )
+
+    if existing["channel_type"] == _WEB_C_CHANNEL_TYPE:
+        body.config = dict(body.config)
+        # web_c get_by_id 返回明文 config（非敏感字段机制渠道），旧 secret 可直接沿用
+        _normalize_web_c_config(body.config, existing.get("config") or {})
 
     _validate_channel_subagent(admin["tenant_id"], body.subagent_type)
 
@@ -630,6 +680,45 @@ async def rotate_wechat_mp_token(config_id: str, request: Request):
         "callback_token_plaintext": new_token,
         "callback_url": _build_wechat_mp_callback_url(request, config_id),
         "message": "回调 Token 已重置，请同步更新公众平台后台服务器配置中的 Token 并重新保存",
+    }
+
+
+@router.post("/{config_id}/rotate-web-c-secret")
+@audit_action(BehaviorAction.UPDATE, BehaviorResourceType.CONFIG, id_arg="config_id")
+async def rotate_web_c_secret(config_id: str, request: Request):
+    """重置 web_c 签名密钥（渠道密钥轮换，设计 §3.2）。
+
+    旧链接全部失效，前端需提示租户更新官网签名服务。
+    """
+    admin = require_admin(request)
+    existing = ChannelConfigDB.get_by_id(config_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="渠道配置不存在")
+    if existing["tenant_id"] != admin["tenant_id"]:
+        raise HTTPException(status_code=403, detail="无权操作此配置")
+    if existing["channel_type"] != _WEB_C_CHANNEL_TYPE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"仅 web_c 渠道支持轮换签名密钥，当前渠道类型: {existing['channel_type']}",
+        )
+
+    new_secret = _generate_web_c_secret()
+    cfg = dict(existing.get("config") or {})
+    cfg["channel_secret"] = new_secret
+    success = ChannelConfigDB.update(config_id, cfg, subagent_type=existing.get("subagent_type"))
+    if not success:
+        raise HTTPException(status_code=500, detail="签名密钥轮换失败")
+    try:
+        await ChannelFactory.invalidate_adapter(
+            existing["tenant_id"], existing["channel_type"], config_id=config_id, close=True,
+        )
+    except Exception as e:
+        logger.warning(f"失效 adapter 缓存失败: {e}")
+    logger.info(f"web_c 签名密钥轮换成功: config_id={config_id} tenant={admin['tenant_id']}")
+    return {
+        "success": True,
+        "channel_secret": new_secret,
+        "message": "签名密钥已重置，旧签名链接全部失效，请更新官网的签名服务配置",
     }
 
 

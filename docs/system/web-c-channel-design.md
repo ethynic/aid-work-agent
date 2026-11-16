@@ -1,6 +1,8 @@
 # 官网客服渠道（web_c）设计方案
 
-> 状态：设计稿，开放问题已裁决（2026-11-16，裁决记录见 §6）
+> 状态：Phase 1+2 已实现（2026-11-16，代码完成待部署真机验收；实现偏离点见下）
+> 实现偏离：C 端上传落盘名用 `{file_id}{ext}`（设计原稿 upload_{uuid12}.{ext}）——Runner 侧 `resolve_scoped_uploaded_file` 磁盘兜底按 basename==file_id 匹配，Redis TTL 过期后仍可解析；C 端前端以 GET runner 快照轮询驱动流式渲染（SSE 事件流为无载荷变更通知，每帧触发快照刷新，连续失败回退轮询），SSE 透传端点保留。
+> 定版命名：channel_type = `web_c`，显示名 = **官网客服**
 > 定版命名：channel_type = `web_c`，显示名 = **官网客服**
 > 关联：[ChannelRunner 架构](agent-application-architecture-design.md)、[数据库系统表说明](database_system_table.md)、[消息表分离规则](../incidents/context-reconstruction-pitfalls.md)
 

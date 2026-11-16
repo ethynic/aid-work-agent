@@ -46,6 +46,7 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'abuse-center', name: 'tenant-abuse-center', component: () => import('@/components/saas/AbuseCenter.vue') },
       { path: 'office-sessions', name: 'tenant-office-sessions', component: () => import('@/components/saas/OfficeSessions.vue') },
       { path: 'web-sessions', name: 'tenant-web-sessions', component: () => import('@/components/saas/WebSessions.vue') },
+      { path: 'web-c-customers', name: 'tenant-web-c-customers', component: () => import('@/components/webC/WebCService.vue') },
       { path: 'data-sources', name: 'tenant-data-sources', component: () => import('@/pages/DataSourceManager.vue') },
       { path: 'social-media', name: 'tenant-social-media', component: () => import('@/components/social-media/VideoCreationWorkbench.vue') },
       { path: 'assets', name: 'tenant-video-agent-assets', component: () => import('@/components/video-agent/AssetLibrary.vue') },
