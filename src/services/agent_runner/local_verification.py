@@ -11,9 +11,13 @@ CAPABILITY = 'runtime_recovery_observe_v2'
 STOP_CAPABILITY = 'runtime_recovery_stop_v1'
 
 
-def verify_local(repository, principal, runner_id, request_id, *, stop_resources=False):
+def verify_local(repository, principal, runner_id, request_id, *, stop_resources=False,
+                 continue_after_stop=False):
     from src.local_tools import repository as local
     from .local_recovery import _cancel_facts
+    if continue_after_stop and not stop_resources:
+        # 组合校验：自动接续只与受管停止（v3）组合；纯观察无停稳事实可接续。
+        raise RunnerError('LOCAL_VERIFICATION_CONTINUE_REQUIRES_STOP', 422)
     with repository.connection_factory() as connection:
         cursor = connection.cursor()
         row = lock_runner(cursor, runner_id)
@@ -23,6 +27,13 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
         # 生命周期，任务属主可处理设备确认/人工辅助），归属检查不变
         if row['session_kind'] != 'web' or row['source'] not in ('chat', 'scheduled'):
             raise RunnerError('LOCAL_VERIFICATION_FORBIDDEN', 403)
+        if continue_after_stop and row['source'] != 'chat':
+            # 操作矩阵（设计 §5.2）：scheduled 的 resume 仅限调度服务驱动，
+            # 用户侧自动接续改变该语义，不受理（公开动作也不投影）。
+            raise RunnerError('LOCAL_VERIFICATION_CONTINUE_FORBIDDEN', 409)
+        if continue_after_stop and (checkpoint.get('detached_local_wait') or row['cancel_requested']):
+            # 已结束云端等待或已请求取消的行沿 cancel-only 终态收敛，无接续编排。
+            raise RunnerError('LOCAL_VERIFICATION_CONTINUE_NOT_APPLICABLE', 409)
         if (row.get('worker_id') is not None or row.get('lease_until') is not None
                 or checkpoint.get('detached_local_wait') and row['status'] not in {'completed', 'cancelled', 'failed'}):
             raise RunnerError('LOCAL_VERIFICATION_NOT_READY', 409)
@@ -34,7 +45,8 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
             (row['tenant_id'], 'agent_runner_recovery', runner_id + ':' + request_id))
         accepted = cursor.fetchone()
         if accepted:
-            if ((accepted.get('business_ref') or {}).get('version') == 3) != stop_resources:
+            binding = accepted.get('business_ref') or {}
+            if (binding.get('version') == 3) != stop_resources or bool(binding.get('continue_after_stop')) != continue_after_stop:
                 raise RunnerError('LOCAL_VERIFICATION_REQUEST_MISMATCH', 409)
             return with_local_operation_facts(cursor, row)  # Observe current facts, never replace scope.
         previous = checkpoint.get('local_verification') or {}
@@ -43,7 +55,12 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
         facts = _cancel_facts(cursor, row, request=False)
         if any(fact.get('kind') == 'local' and not fact['completion_known']
                 and fact.get('state') not in local.TERMINAL_STATES for fact in facts):
-            raise RunnerError('LOCAL_VERIFICATION_ORIGINAL_ACTIVE', 409)
+            if not continue_after_stop:
+                raise RunnerError('LOCAL_VERIFICATION_ORIGINAL_ACTIVE', 409)
+            # 原调用仍在运行：先协作取消（queued 即终态，claimed/running 置
+            # cancel_requested 由设备观察取消；残余进程由受管停止兜底）。
+            _cancel_facts(cursor, row, request=True)
+            facts = _cancel_facts(cursor, row, request=False)
         ids = sorted(str(fact['id']) for fact in facts if fact.get('kind') == 'local'
             and fact.get('holdable') and not fact['completion_known']
             and str(fact['id']) not in checkpoint.get('verified_local_invocations', []))
@@ -81,7 +98,9 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
             if any((item.get('provider_key') or 'boss-recruiting') != provider for item in originals):
                 raise RunnerError('LOCAL_RECOVERY_PROVIDER_UNSUPPORTED', 409)
             try:
-                local.assert_device_stop_available(cursor, row['tenant_id'], device_id)
+                # 本 scope 原调用是受管停止的目标：协作取消后的 cancel_requested
+                # 行不属于「另一任务占用」，排除后其他任务的真实占用仍栅栏。
+                local.assert_device_stop_available(cursor, row['tenant_id'], device_id, exclude_ids=ids)
             except local.DeviceOperationUnresolved as error:
                 raise RunnerError('LOCAL_RECOVERY_BUSY', 409) from error
         targets = set()
@@ -135,6 +154,8 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
                 arguments['expectation'] = expected
         binding = {'runner_id': runner_id, 'version': version, 'scope_id': scope_id, 'request_id': request_id,
             'original_invocation_ids': ids, 'device_id': device_id}
+        if continue_after_stop:
+            binding['continue_after_stop'] = True
         cursor.execute('SELECT clock_timestamp() AS database_now')
         deadline = cursor.fetchone()['database_now'] + timedelta(minutes=5)
         invocation_id = local.create_invocation_in_tx(cursor, row['tenant_id'], row['user_id'],
@@ -149,4 +170,4 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
         from .event_repository import EventRepository
         result = EventRepository.notify_in_tx(cursor, row, after=result)
         connection.commit()
-        return result
+        return with_local_operation_facts(cursor, result)

@@ -136,18 +136,21 @@ def lock_operation_admission(cursor, tenant_id):
         ('local-operation-admission:' + tenant_id,))
 
 
-def assert_device_stop_available(cursor, tenant_id, device_id, *, exclude=None, stop_only=False):
+def assert_device_stop_available(cursor, tenant_id, device_id, *, exclude=None, stop_only=False,
+                                 exclude_ids=None):
     """Short admission fence; queued recovery blocks new business, actual live work blocks stop."""
+    excluded = sorted(exclude_ids) if exclude_ids else None
     cursor.execute("""SELECT i.id FROM local_tool_invocations i
         JOIN local_tool_devices original ON original.id=i.device_id
         JOIN local_tool_devices target ON target.id=%s AND target.tenant_id=i.tenant_id AND target.user_id=i.user_id
         WHERE i.tenant_id=%s AND (%s IS NULL OR i.id::text<>%s)
+          AND (%s::text[] IS NULL OR NOT (i.id::text = ANY(%s)))
           AND (i.device_id=target.id OR original.machine_fingerprint_hash IS NOT NULL
             AND original.machine_fingerprint_hash<>'' AND target.machine_fingerprint_hash=original.machine_fingerprint_hash)
           AND ((i.business_kind='agent_runner_recovery' AND i.business_ref->>'version'='3'
                 AND i.state IN ('queued','claimed','running') AND i.deadline_at>NOW())
             OR (NOT %s AND i.state IN ('claimed','running','cancel_requested')))
-        LIMIT 1""", (device_id, tenant_id, exclude, exclude, stop_only))
+        LIMIT 1""", (device_id, tenant_id, exclude, exclude, excluded, excluded, stop_only))
     if cursor.fetchone():
         raise DeviceOperationUnresolved('LOCAL_RECOVERY_BUSY')
 
@@ -155,7 +158,10 @@ def assert_device_stop_available(cursor, tenant_id, device_id, *, exclude=None, 
 def assert_device_operations_settled(cursor, tenant_id, device_id, *, observation=None, send_status=None):
     if observation is not None:
         if observation.get('version') == 3:
-            assert_device_stop_available(cursor, tenant_id, device_id, exclude=observation.get('invocation_id'))
+            # The stop scope's own originals (cooperatively cancel_requested) are
+            # the stop target; every other task's live work still fences.
+            assert_device_stop_available(cursor, tenant_id, device_id, exclude=observation.get('invocation_id'),
+                exclude_ids=observation.get('original_invocation_ids'))
         # Only observation_scope has validated this server-created Host request.
         # Its strict producer only reads CDP; it never grants a write or
         # claims the original unknown operation stopped.

@@ -345,3 +345,200 @@ def test_stop_does_not_require_a_page_target_when_original_target_evidence_confl
     assert result['state'] == 'failed'
     assert repository.get(row['runner_id'])['checkpoint']['local_verification']['resource_stopped'] is True
     assert repository.get(row['runner_id'])['checkpoint']['verified_local_invocations'] == [original]
+
+
+# ---- Phase 4「停止与接续」：continue_after_stop 受理与自动接续编排 ----
+
+
+def resume_controls(database, runner_id):
+    return database.rows("SELECT * FROM agent_runner_controls WHERE runner_id=%s AND action='resume' ORDER BY accepted_at", (runner_id,))
+
+
+def test_continue_after_stop_requires_the_stop_mode_and_never_creates_a_probe(lost_local):
+    repository, _, principal, row, _, _, _ = lost_local
+    with pytest.raises(RunnerError) as error:
+        verify_local(repository, principal, row['runner_id'], 'combo-invalid',
+                     continue_after_stop=True)
+    assert error.value.code == 'LOCAL_VERIFICATION_CONTINUE_REQUIRES_STOP'
+    assert not repository.get(row['runner_id'])['checkpoint'].get('local_verification')
+    assert repository.get(row['runner_id'])['cancel_requested'] is False
+
+
+def test_readonly_stop_still_rejects_an_active_original_while_continue_accepts_it(
+        lost_local, service_database):
+    """旧请求语义不变：stop_resources=True 对运行中原调用仍 409；continue 受理并协作取消。"""
+    repository, _, principal, row, device, original, _ = lost_local
+    enable(service_database, device, stop=True)
+    service_database.rows("UPDATE local_tool_invocations SET state='running' WHERE id=%s", (original,))
+    with pytest.raises(RunnerError) as error:
+        verify_local(repository, principal, row['runner_id'], 'plain-stop-active', stop_resources=True)
+    assert error.value.code == 'LOCAL_VERIFICATION_ORIGINAL_ACTIVE'
+    assert service_database.rows('SELECT state FROM local_tool_invocations WHERE id=%s', (original,))[0]['state'] == 'running'
+    assert not repository.get(row['runner_id'])['cancel_requested']
+    accepted = verify_local(repository, principal, row['runner_id'], 'continue-active',
+                            stop_resources=True, continue_after_stop=True)
+    assert service_database.rows('SELECT state FROM local_tool_invocations WHERE id=%s', (original,))[0]['state'] == 'cancel_requested'
+    verification = accepted['checkpoint']['local_verification']
+    assert verification['continue_after_stop'] is True and verification['original_invocation_ids'] == [original]
+    assert not accepted['checkpoint'].get('verified_local_invocations')
+
+
+def test_cooperative_cancel_then_stop_proof_dispatches_one_trusted_resume(
+        lost_local, service_database):
+    """原调用运行中：协作取消 → v3 停稳回执 → 服务端编排一条 accepted resume 控制。"""
+    from src.services.agent_runner.recovery_repository import RecoveryRepository
+    repository, _, principal, row, device, original, _ = lost_local
+    enable(service_database, device, stop=True)
+    service_database.rows("UPDATE local_tool_invocations SET state='running' WHERE id=%s", (original,))
+    accepted = verify_local(repository, principal, row['runner_id'], 'continue-then-proof',
+                            stop_resources=True, continue_after_stop=True)
+    identifier = accepted['checkpoint']['local_verification']['invocation_id']
+    token, args = claim_probe(row, device, identifier)
+    completed = devices.write_runtime_result(identifier, row['tenant_id'], token, True, effect='none',
+        data=stopped_proof(args), device_id=str(device['id']))
+    assert completed['state'] == 'succeeded' and completed['credit_cost'] == 0
+    current = repository.get(row['runner_id'])
+    assert current['checkpoint']['local_verification']['state'] == 'succeeded'
+    assert current['checkpoint']['verified_local_invocations'] == [original]
+    assert devices.get_invocation(original, row['tenant_id'])['state'] == 'cancel_requested', '原 unknown/cancel 事实零改写'
+    controls = resume_controls(service_database, row['runner_id'])
+    assert len(controls) == 1 and controls[0]['status'] == 'accepted'
+    assert controls[0]['client_request_id'] == row['runner_id'] + ':continue-after-stop'
+    persisted = repository.get(row['runner_id'])
+    assert persisted['resume_control_id'] == controls[0]['control_id']
+    from src.services.agent_runner.repository import public_runner
+    assert public_runner(persisted)['resume_requested'] is True
+    candidates = RecoveryRepository(repository.connection_factory).next_candidates()
+    assert any(item['runner_id'] == row['runner_id'] for item in candidates), 'worker 领取链可见该 resume'
+
+
+def test_idle_park_stop_proof_dispatches_resume_and_replays_are_idempotent(
+        lost_local, service_database):
+    """空闲 parked 行：受理→停稳→自动接续；同键重放读回相同编排状态。"""
+    from src.services.agent_runner.recovery_repository import RecoveryRepository
+    repository, _, principal, row, device, original, _ = lost_local
+    enable(service_database, device, stop=True)
+    first = verify_local(repository, principal, row['runner_id'], 'same-continue-key',
+                         stop_resources=True, continue_after_stop=True)
+    identifier = first['checkpoint']['local_verification']['invocation_id']
+    replay = verify_local(repository, principal, row['runner_id'], 'same-continue-key',
+                          stop_resources=True, continue_after_stop=True)
+    assert replay['checkpoint']['local_verification']['invocation_id'] == identifier
+    with pytest.raises(RunnerError) as mismatch:
+        verify_local(repository, principal, row['runner_id'], 'same-continue-key', stop_resources=True)
+    assert mismatch.value.code == 'LOCAL_VERIFICATION_REQUEST_MISMATCH'
+    token, args = claim_probe(row, device, identifier)
+    devices.write_runtime_result(identifier, row['tenant_id'], token, True, effect='none',
+        data=stopped_proof(args), device_id=str(device['id']))
+    assert repository.get(row['runner_id'])['checkpoint']['verified_local_invocations'] == [original]
+    controls = resume_controls(service_database, row['runner_id'])
+    assert len(controls) == 1
+    assert RecoveryRepository(repository.connection_factory).next_candidates()[0]['runner_id'] == row['runner_id']
+    # 迟到重放回执不重复编排：终态回执早退。
+    devices.write_runtime_result(identifier, row['tenant_id'], token, True, effect='none',
+        data=stopped_proof(args), device_id=str(device['id']))
+    assert len(resume_controls(service_database, row['runner_id'])) == 1
+
+
+def test_another_running_operation_keeps_stop_and_continue_unprojected_until_idle(
+        lost_local, service_database):
+    from src.services.agent_runner.repository import public_runner
+    repository, _, principal, row, device, _, _ = lost_local
+    enable(service_database, device, stop=True)
+    public = public_runner(repository.get(row['runner_id']))
+    assert public['local_recovery_actions'][:3] == ['verify', 'stop', 'stop_and_continue']
+    other = devices.create_invocation(row['tenant_id'], row['user_id'], str(device['id']), 'boss_goto', {'target':'chat'})
+    devices.claim_next(str(device['id']), row['tenant_id'], 'other-active', 60, expected_invocation_id=other)
+    with pytest.raises(RunnerError) as error:
+        verify_local(repository, principal, row['runner_id'], 'continue-busy',
+                     stop_resources=True, continue_after_stop=True)
+    assert error.value.code == 'LOCAL_RECOVERY_BUSY'
+    public = public_runner(repository.get(row['runner_id']))
+    assert 'stop_and_continue' not in (public.get('local_recovery_actions') or [])
+    devices.write_result(other, row['tenant_id'], 'other-active', True, effect='none', device_id=str(device['id']))
+    accepted = verify_local(repository, principal, row['runner_id'], 'continue-after-idle',
+                            stop_resources=True, continue_after_stop=True)
+    assert accepted['checkpoint']['local_verification']['version'] == 3
+    public = public_runner(repository.get(row['runner_id']))
+    assert public['local_verification']['continue_after_stop'] is True
+    # 在途 v3 停止探针自身占用栅栏：服务端此刻不可再次受理，不再投影。
+    assert 'stop_and_continue' not in (public.get('local_recovery_actions') or [])
+
+
+def test_scheduled_source_and_cancelled_rows_keep_their_existing_matrix(
+        lost_local, service_database):
+    from dataclasses import replace
+    repository, _, principal, row, device, _, _ = lost_local
+    enable(service_database, device, stop=True)
+    scheduled_owner = replace(principal, identity=replace(principal.identity, source='scheduled'))
+    service_database.rows("""UPDATE agent_runners SET source='scheduled',
+        checkpoint=jsonb_set(checkpoint,'{execution,identity,source}','\"scheduled\"') WHERE runner_id=%s""", (row['runner_id'],))
+    with pytest.raises(RunnerError) as error:
+        verify_local(repository, scheduled_owner, row['runner_id'], 'scheduled-continue',
+                     stop_resources=True, continue_after_stop=True)
+    assert error.value.code == 'LOCAL_VERIFICATION_CONTINUE_FORBIDDEN'
+    accepted = verify_local(repository, scheduled_owner, row['runner_id'], 'scheduled-plain-stop', stop_resources=True)
+    assert accepted['checkpoint']['local_verification']['version'] == 3
+    assert resume_controls(service_database, row['runner_id']) == []
+    service_database.rows("UPDATE agent_runners SET source='chat', cancel_requested=TRUE WHERE runner_id=%s", (row['runner_id'],))
+    with pytest.raises(RunnerError) as cancelled:
+        verify_local(repository, principal, row['runner_id'], 'cancelled-continue',
+                     stop_resources=True, continue_after_stop=True)
+    assert cancelled.value.code == 'LOCAL_VERIFICATION_CONTINUE_NOT_APPLICABLE'
+
+
+def test_detached_wait_rows_reject_continue_but_keep_the_plain_stop_entry(
+        lost_local, service_database):
+    from src.services.agent_runner.local_wait import end_waiting
+    repository, _, principal, row, device, _, _ = lost_local
+    enable(service_database, device, stop=True)
+    end_waiting(repository, principal, row['runner_id'])
+    # cancel-only finalizer 已收敛为终态后，旧入口保留 verify/stop。
+    service_database.rows("UPDATE agent_runners SET status='cancelled', finished_at=clock_timestamp() WHERE runner_id=%s", (row['runner_id'],))
+    with pytest.raises(RunnerError) as error:
+        verify_local(repository, principal, row['runner_id'], 'detached-continue',
+                     stop_resources=True, continue_after_stop=True)
+    assert error.value.code == 'LOCAL_VERIFICATION_CONTINUE_NOT_APPLICABLE'
+    accepted = verify_local(repository, principal, row['runner_id'], 'detached-plain-stop', stop_resources=True)
+    assert accepted['checkpoint']['local_verification']['version'] == 3
+    assert resume_controls(service_database, row['runner_id']) == []
+
+
+def test_in_flight_resume_supersedes_the_automatic_continuation(
+        lost_local, service_database):
+    """停稳回执到达时已有在途 resume：编排静默跳过，不重复投递。"""
+    from src.services.agent_runner.control_repository import ControlRepository
+    repository, _, principal, row, device, original, _ = lost_local
+    enable(service_database, device, stop=True)
+    accepted = verify_local(repository, principal, row['runner_id'], 'continue-with-resume',
+                            stop_resources=True, continue_after_stop=True)
+    identifier = accepted['checkpoint']['local_verification']['invocation_id']
+    token, args = claim_probe(row, device, identifier)
+    from src.services.agent_runner.control_contracts import RunnerControl
+    manual = RunnerControl(client_request_id='user-explicit-resume', action='resume')
+    control, created = ControlRepository(repository.connection_factory).submit(principal, row['runner_id'], manual)
+    assert created is True
+    devices.write_runtime_result(identifier, row['tenant_id'], token, True, effect='none',
+        data=stopped_proof(args), device_id=str(device['id']))
+    current = repository.get(row['runner_id'])
+    assert current['checkpoint']['verified_local_invocations'] == [original]
+    assert len(resume_controls(service_database, row['runner_id'])) == 1
+    assert current['resume_control_id'] == control['control_id']
+
+
+def test_closed_runner_releases_occupation_without_forcing_a_resume(
+        lost_local, service_database):
+    """已结束的行：停稳只解除占用并保留事实，不强行 resume。"""
+    repository, _, principal, row, device, original, _ = lost_local
+    enable(service_database, device, stop=True)
+    accepted = verify_local(repository, principal, row['runner_id'], 'continue-closed',
+                            stop_resources=True, continue_after_stop=True)
+    identifier = accepted['checkpoint']['local_verification']['invocation_id']
+    token, args = claim_probe(row, device, identifier)
+    service_database.rows("UPDATE agent_runners SET status='cancelled', finished_at=clock_timestamp() WHERE runner_id=%s", (row['runner_id'],))
+    devices.write_runtime_result(identifier, row['tenant_id'], token, True, effect='none',
+        data=stopped_proof(args), device_id=str(device['id']))
+    current = repository.get(row['runner_id'])
+    assert current['checkpoint']['verified_local_invocations'] == [original]
+    assert devices.create_invocation(row['tenant_id'], row['user_id'], str(device['id']), 'boss_goto', {'target':'recommend'})
+    assert resume_controls(service_database, row['runner_id']) == []

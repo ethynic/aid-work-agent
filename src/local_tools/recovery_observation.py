@@ -158,6 +158,19 @@ def write_result(invocation_id, tenant_id, claim_token_hash, success, code, mess
                 (capped_checkpoint_dumps(checkpoint), binding['runner_id']))
             from src.services.agent_runner.event_repository import EventRepository
             EventRepository.notify_in_tx(cursor, dict(runner))
+            if stop_valid and (checkpoint.get('local_verification') or {}).get('continue_after_stop') is True:
+                # 契约「停止与接续」：停稳事实落定后由服务端在同一事务追加自动
+                # 接续编排；保存点保证编排半途失败不随回执提交，回执与占用解除不受影响。
+                cursor.execute('SAVEPOINT continue_after_stop')
+                try:
+                    from src.services.agent_runner.stop_continue import dispatch_continue_resume_in_tx
+                    dispatch_continue_resume_in_tx(cursor, dict(runner), checkpoint)
+                    cursor.execute('RELEASE SAVEPOINT continue_after_stop')
+                except Exception as error:  # noqa: BLE001 - 编排失败只跳过，不影响停稳回执
+                    cursor.execute('ROLLBACK TO SAVEPOINT continue_after_stop')
+                    from loguru import logger
+                    logger.opt(exception=True).warning(
+                        'AgentRunner continue-after-stop orchestration skipped: {!r}', error)
         result = {'success': bool(valid), 'code': code, 'message': message, 'data': data, 'retryable': retryable}
         cursor.execute('UPDATE local_tool_invocations SET state=%s,effect=\'none\',result_json=%s,error_code=%s,finished_at=NOW(),lease_expires_at=NULL,credit_cost=0 WHERE id=%s RETURNING *',
             ('succeeded' if valid else 'failed', Json(result), None if valid else code or 'LOCAL_VERIFICATION_FAILED', invocation_id))

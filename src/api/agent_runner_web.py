@@ -88,6 +88,15 @@ def control_body(body):
     return value
 
 
+def verify_local_body(body):
+    """verify-local 同口径条件序列化：continue_after_stop 仅在显式 True 时携带，
+    其余请求的上游字节与升级前逐字节一致（旧 runner service extra='forbid'）。"""
+    value = body.model_dump()
+    if not body.continue_after_stop:
+        value.pop('continue_after_stop')
+    return value
+
+
 def create_router(config=None, client=None):
     config = config or settings.agent_runner
     client = client or RunnerServiceClient(config)
@@ -168,7 +177,7 @@ def create_router(config=None, client=None):
 
     @router.post('/runners/{runner_id}/verify-local')
     async def verify_local(runner_id: str, body: VerifyLocalRequest, request: Request):
-        return await forward(request, 'POST', '/v1/runners/'+quote(runner_id,safe='')+'/verify-local', body=body.model_dump())
+        return await forward(request, 'POST', '/v1/runners/'+quote(runner_id,safe='')+'/verify-local', body=verify_local_body(body))
 
     @router.post('/runners/{runner_id}/end-waiting')
     async def end_waiting(runner_id: str, body: EndWaitingRequest, request: Request):

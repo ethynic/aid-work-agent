@@ -161,19 +161,55 @@ def local_recovery_applicable(row):
     return pending_local(root)
 
 
+def _stop_and_continue_acceptable(cursor, row, checkpoint):
+    """契约「停止与接续」：stop_and_continue 只在服务端可受理时投影。
+
+    只读判定，无副作用：原调用单一受支持 provider 且单设备、设备 stop 栅栏
+    当前不忙（assert_device_stop_available 不抛）、行未请求取消。pending 核验
+    期间的按钮禁用由前端按 local_verification.state 处理（与既有四按钮一致）。
+    """
+    from src.local_tools.repository import assert_device_stop_available, owned_invocation_ids
+    if row.get('cancel_requested'):
+        return False
+    ids = owned_invocation_ids(checkpoint.get('execution') or {})
+    if not ids:
+        return False
+    cursor.execute("""SELECT DISTINCT device_id::text AS device_id,
+            COALESCE(provider_key,'boss-recruiting') AS provider
+        FROM local_tool_invocations WHERE tenant_id=%s AND id=ANY(%s::uuid[])""",
+        (row['tenant_id'], sorted(ids)))
+    scopes = cursor.fetchall()
+    if len(scopes) != 1 or scopes[0]['provider'] not in {'boss-recruiting', 'wecom'}:
+        return False
+    try:
+        assert_device_stop_available(cursor, row['tenant_id'], scopes[0]['device_id'])
+    except Exception:  # DeviceOperationUnresolved：另一任务占用时不投影
+        return False
+    return True
+
+
 def with_local_operation_facts(cursor, row):
     """Transient read projection; frozen IDs and unknown history remain untouched."""
     if row is None:
         return None
     checkpoint = row.get('checkpoint') or {}
     held = set(checkpoint.get('detached_local_invocations') or []) - set(checkpoint.get('verified_local_invocations') or [])
-    if not held or not checkpoint.get('detached_local_wait'):
-        return row
-    from src.local_tools.repository import operation_completion_known
-    cursor.execute('SELECT * FROM local_tool_invocations WHERE tenant_id=%s AND user_id=%s AND session_id=%s AND id=ANY(%s::uuid[])',
-        (row['tenant_id'], row['user_id'], row['session_id'], sorted(held)))
-    settled = {str(item['id']) for item in cursor.fetchall() if operation_completion_known(dict(item))}
-    return {**row, '_unresolved_local_invocations': sorted(held - settled)}
+    value = row
+    if held and checkpoint.get('detached_local_wait'):
+        from src.local_tools.repository import operation_completion_known
+        cursor.execute('SELECT * FROM local_tool_invocations WHERE tenant_id=%s AND user_id=%s AND session_id=%s AND id=ANY(%s::uuid[])',
+            (row['tenant_id'], row['user_id'], row['session_id'], sorted(held)))
+        settled = {str(item['id']) for item in cursor.fetchall() if operation_completion_known(dict(item))}
+        value = {**row, '_unresolved_local_invocations': sorted(held - settled)}
+    # scheduled 的接续编排被操作矩阵排除（设计 §5.2），投影同样不宣称；
+    # 廉价前置先行短路，不满足时不触发完整 applicability 判定与设备栅栏查询。
+    if (value.get('source') == 'chat' and value.get('session_kind') == 'web'
+            and value.get('status') in {'waiting', 'paused', 'interrupted'}
+            and not value.get('worker_id') and not value.get('lease_until')
+            and not checkpoint.get('detached_local_wait')):
+        value = {**value, '_stop_and_continue_available':
+            _stop_and_continue_acceptable(cursor, value, checkpoint)}
+    return value
 
 
 def public_runner(row):
@@ -219,7 +255,7 @@ def public_runner(row):
             else 'SLEEP_RECOVERY_BLOCKED'}
     if isinstance(verification, dict):
         value['local_verification'] = {key: verification.get(key) for key in
-            ('invocation_id', 'state', 'resource_stopped', 'page_observed', 'target_relation', 'error_code', 'stop_error_code')}
+            ('invocation_id', 'state', 'resource_stopped', 'page_observed', 'target_relation', 'error_code', 'stop_error_code', 'continue_after_stop')}
         if isinstance(verification.get('page_summary'), dict):
             value['local_verification']['page_summary'] = _display_fields(verification['page_summary'],
                 ('observed', 'page_kind', 'result', 'filter_count', 'panel_open', 'count_result'))
@@ -236,15 +272,18 @@ def public_runner(row):
         value['local_recovery'] = True
         root = checkpoint.get('execution') or {}
         from src.local_tools.repository import owned_invocation_ids
-        value['local_recovery_kind'] = 'original_operation' if owned_invocation_ids(root) else 'dispatch_unconfirmed'
+        owned = bool(owned_invocation_ids(root))
+        value['local_recovery_kind'] = 'original_operation' if owned else 'dispatch_unconfirmed'
         if row['source'] == 'scheduled':
             # 操作矩阵（设计 §5.2）：scheduled 用户只有设备核对 verify/stop 与
             # 独立 cancel 入口；resume/end 仍被控制矩阵与 end-waiting 门拒绝，
             # 公开动作只宣称真实可执行的（避免"按钮可见、点击必失败"）
-            value['local_recovery_actions'] = (['verify', 'stop']
-                                               if owned_invocation_ids(root) else [])
+            value['local_recovery_actions'] = ['verify', 'stop'] if owned else []
         else:
-            value['local_recovery_actions'] = (['verify', 'stop', 'end'] if row.get('cancel_requested') else
-                ['verify', 'stop', 'resume', 'end']) if owned_invocation_ids(root) else (
-                    ['end'] if row.get('cancel_requested') else ['resume', 'end'])
+            actions = ['verify', 'stop'] if owned else []
+            if owned and row.get('_stop_and_continue_available'):
+                # 契约「停止与接续」：服务端可受理才投影的一键停止并继续。
+                actions.append('stop_and_continue')
+            actions += ['end'] if row.get('cancel_requested') else ['resume', 'end']
+            value['local_recovery_actions'] = actions
     return value

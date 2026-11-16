@@ -446,6 +446,69 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
   })
 
+  const continueActions: RunnerView['local_recovery_actions'] = ['verify','stop','stop_and_continue','resume','end']
+
+  it('stop_and_continue sends the managed-stop continuation shape and keeps the waiting input', async () => {
+    const row = runnerView({status:'interrupted',local_recovery:true,local_recovery_actions:continueActions})
+    await discoverParked(row)
+    const attachment = { file_id:'kept', name:'kept.txt', size:4, type:'file' as const, mime_type:'text/plain' }
+    agent.currentFiles.value = [attachment]
+    const resolving = agent.resolveLocalRecovery('stop_and_continue'); await flush()
+    const posted = request('/runners/runner-A/verify-local','POST')
+    expect(JSON.parse(posted.body!)).toMatchObject({ stop_resources:true, continue_after_stop:true })
+    posted.respond({success:true,runner:{...row,view_revision:2,
+      local_verification:{invocation_id:'stop-continue-A',state:'queued',continue_after_stop:true}}})
+    await resolving; await flush()
+    expect(agent.localVerificationMessage.value).toContain('停止上一步')
+    expect(agent.localVerificationMessage.value).toContain('自动继续')
+    expect(agent.currentFiles.value).toEqual([attachment])
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+    expect(agent.localRecoveryBusy.value).toBe(false)
+  })
+
+  it('a second click during an in-flight stop_and_continue never posts twice', async () => {
+    const row = runnerView({status:'interrupted',local_recovery:true,local_recovery_actions:continueActions})
+    await discoverParked(row)
+    const first = agent.resolveLocalRecovery('stop_and_continue'); await flush()
+    const duplicate = agent.resolveLocalRecovery('stop_and_continue'); await flush()
+    await duplicate
+    const posted = request('/runners/runner-A/verify-local','POST')
+    expect(network.requests.filter(item => item.method === 'POST' && item.url.endsWith('/verify-local'))).toHaveLength(1)
+    posted.respond({success:true,runner:{...row,view_revision:2,
+      local_verification:{invocation_id:'stop-continue-A',state:'queued',continue_after_stop:true}}})
+    await first; await flush()
+    expect(agent.localRecoveryBusy.value).toBe(false)
+  })
+
+  it('without the projected stop_and_continue action the click is refused locally', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:['verify','stop','resume','end']}))
+    await agent.resolveLocalRecovery('stop_and_continue'); await flush()
+    expect(network.requests.filter(item => item.method === 'POST')).toEqual([])
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+    expect(agent.error.value).toBeFalsy()
+  })
+
+  it('an older service error on stop_and_continue maps to the existing verify guidance', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,local_recovery_actions:continueActions}))
+    const resolving = agent.resolveLocalRecovery('stop_and_continue'); await flush()
+    request('/runners/runner-A/verify-local','POST').respond({code:'LOCAL_VERIFICATION_RUNTIME_UPGRADE_REQUIRED'},409)
+    await resolving; await flush()
+    expect(agent.error.value).toContain('更新 Runtime')
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+  })
+
+  it('the trusted stop receipt with a server-dispatched resume clears the recovery card', async () => {
+    const row = runnerView({status:'interrupted',local_recovery:true,local_recovery_actions:continueActions})
+    await discoverParked(row)
+    request('/runners/runner-A').respond({success:true,runner:{...row,view_revision:3,
+      local_recovery:true,local_recovery_actions:continueActions,resume_requested:true,
+      local_verification:{invocation_id:'stop-continue-A',state:'succeeded',resource_stopped:true,
+        page_observed:false,continue_after_stop:true,error_code:'WRONG_PAGE'}}})
+    await flush(); await vi.advanceTimersByTimeAsync(1000)
+    expect(agent.localRecovery.value).toBeUndefined()
+  })
+
   it('only-read verification reports active-original guidance through the exact safe message reducer', async () => {
     await discoverParked(runnerView({status:'interrupted',local_recovery:true}))
     const checking = agent.resolveLocalRecovery('verify'); await flush()
