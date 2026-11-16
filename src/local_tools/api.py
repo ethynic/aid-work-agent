@@ -12,8 +12,8 @@ import base64
 import binascii
 import json
 import uuid as _uuid
-from datetime import datetime
-from typing import Any, Dict, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from loguru import logger
@@ -42,6 +42,8 @@ from src.services import recruiting_match_service, resume_vl_service
 from src.services.boss_visual_service import BossVisualRequestBody, RuntimeVisualCaller, diagnose_visual
 from src.saas.db.tenant_db import TenantDB
 from src.local_tools.security import generate_claim_token, sha256_hex
+from src.local_tools.device_policy import device_ready_error
+from src.local_tools.service import LocalInvocationService
 from src.utils import sanitize_error_info
 
 router = APIRouter(prefix="/api/local-tools", tags=["local-tools"])
@@ -172,6 +174,93 @@ async def list_devices(request: Request):
     except Exception as e:
         logger.opt(exception=True).error(f"后端日志：查询设备列表失败: {e}")
         raise _http_error(500, "查询设备列表失败，请稍后重试", e)
+
+
+_XHS_ACTIONS = {"login": "xiaohongshu_login", "open": "xiaohongshu_open"}
+_XHS_KIND = "xiaohongshu_connector"
+_XHS_RECEIPT_ERRORS = frozenset({
+    "XHS_LOGIN_REQUIRED", "XHS_CHROME_UNAVAILABLE", "XHS_BROWSER_UNAVAILABLE",
+    "XHS_PROFILE_IN_USE", "XHS_PAGE_UNCONFIRMED", "XHS_BUSY", "XHS_CANCELLED",
+    "PROVIDER_NOT_AVAILABLE", "TOOL_NOT_ALLOWED",
+})
+
+
+class XiaohongshuActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["login", "open"]
+    device_id: _uuid.UUID
+
+
+async def _xiaohongshu_selected_device(tenant_id: str, user_id: str, tool_name: str):
+    devices = await asyncio.to_thread(repository.list_devices, tenant_id, user_id)
+    device = next((row for row in devices if row.get("selected") and row.get("status") == "active"), None)
+    if not device:
+        return None, "no_device"
+    error = device_ready_error(device, tool_name, datetime.now(timezone.utc))
+    if error == "offline":
+        return device, "offline"
+    capabilities = (device.get("capabilities_json") or {}).get("capabilities") or []
+    status = "missing_plugin" if error or tool_name not in capabilities else "ready"
+    return device, status
+
+
+@router.get("/xiaohongshu/device")
+async def xiaohongshu_device(request: Request):
+    user, tenant_id = await _current_user_and_tenant(request)
+    device, status = await _xiaohongshu_selected_device(tenant_id, user["user_id"], _XHS_ACTIONS["login"])
+    return {"success": True, "status": status, "device": {
+        "device_id": str(device["id"]), "name": device.get("name"),
+    } if device else None}
+
+
+@router.post("/xiaohongshu/actions", status_code=202)
+async def start_xiaohongshu_action(request: Request, body: XiaohongshuActionRequest):
+    user, tenant_id = await _current_user_and_tenant(request)
+    user_id = user["user_id"]
+    tool_name = _XHS_ACTIONS[body.action]
+    device, status = await _xiaohongshu_selected_device(tenant_id, user_id, tool_name)
+    if not device or str(device["id"]) != str(body.device_id):
+        raise _http_error(409, "当前所选设备已变化，请刷新设备后重试")
+    if status != "ready":
+        raise _http_error(409, "所选设备已离线" if status == "offline" else "所选设备缺少小红书连接器")
+    device_id = str(device["id"])
+    profile_key = sha256_hex(json.dumps([1, str(tenant_id), str(user_id), device_id], separators=(",", ":")))
+    try:
+        row = await asyncio.to_thread(
+            LocalInvocationService().enqueue,
+            tenant_id=tenant_id, user_id=user_id, device_id=device_id,
+            tool_name=tool_name, arguments={"profile_key": profile_key},
+            provider_key="xiaohongshu", business_kind=_XHS_KIND,
+            dedupe_key=str(_uuid.uuid4()), deadline_at=datetime.now(timezone.utc) + timedelta(seconds=45),
+        )
+    except repository.DeviceOperationUnresolved as exc:
+        raise _http_error(409, "当前设备有未完成的操作，请检查本地工具状态后重试") from exc
+    return {"success": True, "action_id": str(row["id"])}
+
+
+@router.get("/xiaohongshu/actions/{action_id}")
+async def xiaohongshu_action(request: Request, action_id: _uuid.UUID):
+    user, tenant_id = await _current_user_and_tenant(request)
+    row = await asyncio.to_thread(LocalInvocationService().get, str(action_id), tenant_id)
+    if (not row or str(row["user_id"]) != str(user["user_id"])
+            or row.get("business_kind") != _XHS_KIND or row.get("provider_key") != "xiaohongshu"
+            or row.get("tool_name") not in _XHS_ACTIONS.values()):
+        raise _http_error(404, "未找到小红书操作")
+    state = row["state"]
+    if state == "succeeded":
+        result = row.get("result_json") or {}
+        data = result.get("data")
+        if result.get("success") is True and isinstance(data, dict) and data.get("schema_version") == 1:
+            status = data.get("status")
+            if status == "opened" or (status == "qr_ready" and row["tool_name"] == _XHS_ACTIONS["login"]):
+                return {"success": True, "status": status}
+        return {"success": True, "status": "failed", "code": "XHS_RESULT_INVALID"}
+    if state == "queued" and row["deadline_at"] <= datetime.now(timezone.utc):
+        return {"success": True, "status": "failed", "code": "XHS_QUEUE_TIMEOUT"}
+    if state in repository.TERMINAL_STATES:
+        code = row.get("error_code")
+        return {"success": True, "status": "failed", "code": code if code in _XHS_RECEIPT_ERRORS else "XHS_ACTION_FAILED"}
+    return {"success": True, "status": "pending"}
 
 
 def _replacement_error(error: repository.DeviceReplacementError) -> HTTPException:

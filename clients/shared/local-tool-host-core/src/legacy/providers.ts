@@ -158,6 +158,15 @@ export const TRUSTED_MANIFESTS: Readonly<Record<string, ProviderManifest>> = {
     shared_lock_capable: false,
     write_tools: WECOM_WRITE_TOOLS,
   },
+  xiaohongshu: {
+    provider_key: 'xiaohongshu',
+    provider_id: 'ai.aidwork.xiaohongshu',
+    tools: ['xiaohongshu_login', 'xiaohongshu_open'],
+    execution_target: 'local_required',
+    protocol_version: 1,
+    shared_lock_capable: false,
+    write_tools: new Set(),
+  },
 }
 
 const _manifestOverrides: Partial<Record<string, ProviderManifest>> = {}

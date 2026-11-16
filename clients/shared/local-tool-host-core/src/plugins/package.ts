@@ -7,7 +7,9 @@ import semver from 'semver'
 import yauzl from 'yauzl'
 import { ManagementError } from '../management.js'
 
-export const FIRST_PARTY_PROVIDERS = ['ai.aidwork.boss-recruiting', 'ai.aidwork.weixin', 'ai.aidwork.wecom'] as const
+export const FIRST_PARTY_PROVIDERS = [
+  'ai.aidwork.boss-recruiting', 'ai.aidwork.weixin', 'ai.aidwork.wecom', 'ai.aidwork.xiaohongshu',
+] as const
 export interface PublisherTrust { key_id: string; public_key: string; providers: string[]; test_only?: boolean }
 export function publisherPublicKey(value: string) {
   // createPublicKey also accepts private PEMs; publisher assets must never carry them.

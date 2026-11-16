@@ -14,6 +14,7 @@ export const definitions = {
   boss: { directory: 'boss-resume-assistant', display_name: 'BOSS 招聘', assets: ['scripts'], ocr: false },
   weixin: { directory: 'weixin-cli', display_name: '微信', assets: ['drivers'], ocr: true },
   wecom: { directory: 'wecom-cli', display_name: '企业微信', assets: ['drivers'], localdbPython: true },
+  xiaohongshu: { directory: 'xiaohongshu-cli', display_name: '小红书', assets: [] },
 }
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
 
@@ -236,7 +237,9 @@ export async function main(argv) {
     signer = { key_id: testKeyId, private_key: pair.privateKey.export({ format: 'pem', type: 'pkcs8' }) }
     const output = resolve(options.output ?? join(root, 'release'))
     mkdirSync(output, { recursive: true })
-    writeFileSync(join(output, 'ISOLATED-TEST-TRUST-ROOT.json'), JSON.stringify({ schemaVersion: 1, profile: 'acceptance', roots: [{ test_only: true, key_id: signer.key_id, public_key: pair.publicKey.export({ format: 'pem', type: 'spki' }), providers: ['ai.aidwork.boss-recruiting', 'ai.aidwork.weixin', 'ai.aidwork.wecom'] }] }, null, 2) + '\n', { flag: 'wx' })
+    const providers = options.provider === 'xiaohongshu' ? ['ai.aidwork.xiaohongshu']
+      : ['ai.aidwork.boss-recruiting', 'ai.aidwork.weixin', 'ai.aidwork.wecom']
+    writeFileSync(join(output, 'ISOLATED-TEST-TRUST-ROOT.json'), JSON.stringify({ schemaVersion: 1, profile: 'acceptance', roots: [{ test_only: true, key_id: signer.key_id, public_key: pair.publicKey.export({ format: 'pem', type: 'spki' }), providers }] }, null, 2) + '\n', { flag: 'wx' })
     writeFileSync(join(output, 'DEVELOPMENT-ONLY.txt'), 'Isolated development packages. Production trust and release acceptance are not provided. CPython 3.12.10 needs release security review.\n', { flag: 'wx' })
   } else {
     if (options.test || !options.signer || !options.release_id) throw new Error('Production signing requires external signer metadata and immutable release-id')
@@ -245,7 +248,7 @@ export async function main(argv) {
     signer = { key_id: metadata.key_id, private_key: readFileSync(resolve(dirname(options.signer), metadata.private_key_path)) }
     createPublicKey(createPrivateKey(signer.private_key)) // validate without writing/logging the private key
   }
-  for (const name of options.provider ? [options.provider] : Object.keys(definitions)) await buildProvider(name, options, signer)
+  for (const name of options.provider ? [options.provider] : ['boss', 'weixin', 'wecom']) await buildProvider(name, options, signer)
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main(process.argv.slice(2)).catch(error => { console.error('Package build failed:', error.message); process.exitCode = 1 })

@@ -369,6 +369,8 @@ export class LegacyExecution implements HostAdapter {
   }
   private resolveEntries(config: RuntimeConfig | null): Record<string, string> {
     const entries = resolveProviderEntries(config)
+    // The new connector has no legacy entrypoint. It is executable only through a verified package.
+    delete entries.xiaohongshu
     return this.pluginStore?.resolveEntries(entries) ?? entries
   }
   private effectiveConfig(config: RuntimeConfig | null, entries = this.resolveEntries(config)): RuntimeConfig {

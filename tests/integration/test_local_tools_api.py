@@ -496,3 +496,51 @@ class TestExpireStaleClaims:
             row = cur.fetchone()
         assert row["state"] == "unknown"
         assert row["effect"] == "unknown"
+
+
+class TestXiaohongshuConnector:
+    def test_device_receipt_and_expired_queue_do_not_open_stale_browser(self, client, users):
+        from src.db.database import get_db_connection
+
+        user, another_tenant = users
+        device_id, device_token = _pair_device(client, user)
+        runtime = {"Authorization": f"Bearer {device_token}"}
+        assert client.post(f"/api/local-tools/devices/{device_id}/select", headers=_auth(user)).status_code == 200
+        action_root = "/api/local-tools/xiaohongshu/actions"
+        body = {"action": "login", "device_id": device_id}
+        assert client.post(action_root, json=body, headers=_auth(user)).status_code == 409
+        assert client.post("/api/local-tools/runtime/heartbeat", json={"capabilities": {
+            "providers": ["xiaohongshu"],
+            "capabilities": ["xiaohongshu_login", "xiaohongshu_open"],
+        }}, headers=runtime).status_code == 200
+
+        first = client.post(action_root, json=body, headers=_auth(user))
+        assert first.status_code == 202, first.text
+        expired_id = first.json()["action_id"]
+        # Simulate the configured queue time elapsing without waiting 45 seconds.
+        with get_db_connection() as conn:
+            conn.cursor().execute(
+                "UPDATE local_tool_invocations SET deadline_at = NOW() - INTERVAL '1 second' WHERE id = %s",
+                (expired_id,),
+            )
+            conn.commit()
+        assert client.get(f"{action_root}/{expired_id}", headers=_auth(user)).json()["code"] == "XHS_QUEUE_TIMEOUT"
+
+        second = client.post(action_root, json=body, headers=_auth(user))
+        assert second.status_code == 202, second.text
+        current_id = second.json()["action_id"]
+        claim = client.post("/api/local-tools/runtime/claim?wait=2", headers=runtime).json()
+        assert claim["invocation_id"] == current_id
+        assert claim["provider"] == "xiaohongshu" and claim["tool_name"] == "xiaohongshu_login"
+        assert len(claim["arguments"]["profile_key"]) == 64
+        assert client.post(f"/api/local-tools/runtime/invocations/{current_id}/started",
+                           json={"claim_token": claim["claim_token"]}, headers=runtime).status_code == 200
+        answer = client.post(f"/api/local-tools/runtime/invocations/{current_id}/result", json={
+            "claim_token": claim["claim_token"], "success": True, "effect": "none",
+            "data": {"schema_version": 1, "status": "qr_ready"},
+        }, headers=runtime)
+        assert answer.status_code == 200, answer.text
+        assert client.get(f"{action_root}/{current_id}", headers=_auth(user)).json() == {
+            "success": True, "status": "qr_ready",
+        }
+        assert client.get(f"{action_root}/{current_id}", headers=_auth(another_tenant)).status_code == 404

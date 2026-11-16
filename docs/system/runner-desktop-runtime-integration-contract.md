@@ -1,5 +1,14 @@
 # AgentRunner / Desktop / Runtime 共同集成契约
 
+### 小红书本机网页登录连接器
+
+2026-11-16 · 新 Provider 业务 schema v1。Device API、H1/H3 和既有 Provider schema 保持原接口。详见 [设计](../design/xiaohongshu-local-connector-design.md) 与 [开发计划](../plans/plan-xiaohongshu-local-connector.md)。
+
+- Runtime 使用已有离线签名包入口安装 `ai.aidwork.xiaohongshu`，通过原设备能力协商暴露本地 `xiaohongshu_login`、`xiaohongshu_open`。这两项仅供受信连接中心调用。旧设备缺该能力时，该连接器提示安装适用版本及插件。
+- 连接器服务端核对认证租户、当前用户和所选在线设备，通过 LocalInvocationService 投递固定动作。参数仅为 `{profile_key: string}`，服务端唯一生成，值为租户、用户和设备带版本的组合摘要，64 位小写十六进制。由 invocation 固定目标设备。UI 查询时核对调用所属租户、用户和业务类型。
+- 小红书 Provider 唯一生成浏览器结果。成功沿现有 OperationResult 外层回传 `data: {schema_version: 1, status: "qr_ready" | "opened"}`。扫码和打开都可能回报已打开；`qr_ready` 只证明二维码已显示。会话失效返回 `XHS_LOGIN_REQUIRED`。页面身份无法核定与浏览器不可用使用本业务错误码。调用过程与结果均不含二维码或浏览器凭据，设备不接收任意导航地址或 Profile 路径。
+- 开发者维护 Provider、服务端和 UI 接线。主控维护此契约与计划。独立验证覆盖可信安装和发现、调用归属、Profile 隔离、固定输入和结果投影，以及服务端单独升级后已交付旧 Provider 的路径。
+
 ### BOSS 筛选容错与本机操作恢复共同检查点
 
 2026-11-12 · 契约 2.20 候选，待实施。适用 BOSS 网页任务。规则见 [筛选输入](../design/recruiting/resume-job-matching-design.md#boss-筛选参数容错)、[恢复交互](agent-application-architecture-design.md#boss-本机操作恢复) 和 [计划](../plans/plan-boss-filter-input-and-local-recovery.md)。

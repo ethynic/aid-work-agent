@@ -2,7 +2,7 @@
 
 **Runtime、BOSS 和 WeCom 从源码到最终 ZIP 的操作流程见[完整打包手册](../../docs/ops/runtime-boss-release-guide.md)。** 手册包含验收签名配置默认路径及 WeCom 便携 Python 准备步骤。
 
-此目录仅在构建机运行。客户机接收 `.aidplugin.zip`，验证签名与清单后解包，不运行 npm、pip、Git 或安装 hook。支持 BOSS、微信、企业微信；工具集合由本次插件 `version --json` 和 `runtime-manifest.json` 产生，不把历史工具数量当作当前清单。Host 可执行范围由 Runtime 的受信策略决定。
+此目录仅在构建机运行。客户机接收 `.aidplugin.zip`，验证签名与清单后解包，不运行 npm、pip、Git 或安装 hook。支持 BOSS、微信、企业微信和小红书。工具集合由本次插件 `version --json` 和 `runtime-manifest.json` 产生。Host 可执行范围由 Runtime 的受信策略决定。
 
 ## 包格式
 
@@ -11,6 +11,8 @@
 ## 低层打包器及公钥文件
 
 `package.mjs` 接收已构建的 Provider 源码。`--provider boss`、`--provider wecom`、`--provider weixin` 分别选择一个 Provider，省略会遍历三个。验收公钥登记表在 `trust/acceptance-roots.json`，已交付的公开根快照在 `trust/history/`。登记工具只追加公钥，Provider 范围按实际用途设定。
+
+小红书隔离验收包单独选择 `--provider xiaohongshu`。先在 `clients/xiaohongshu-cli` 运行 `npm ci` 与 `npm run build`，再使用固定 Windows x64 Node 22.23.3 运行 `package.mjs --provider xiaohongshu --node <node.exe> --output <新目录> --test --test-key-id aid-isolated-<唯一标识>`。验收 Runtime 必须包含小红书能力并加载该批次的测试公开根。设备运行时使用本机已安装的 Chrome，扫码和会话见 [连接器设计](../../docs/design/xiaohongshu-local-connector-design.md)。
 
 ## 微信 OCR 与企微本地库 Python 资产
 

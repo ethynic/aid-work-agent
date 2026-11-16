@@ -187,6 +187,7 @@ export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessR
       capabilities.push('wecom_session_directory_search')
     }
   }
+  if (available.includes('xiaohongshu')) capabilities.push(...TRUSTED_MANIFESTS.xiaohongshu!.tools)
   return {
     providers: available,
     protocol_version: 2,

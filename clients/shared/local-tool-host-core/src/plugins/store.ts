@@ -17,6 +17,7 @@ export interface PluginStoreOptions {
 }
 const LEGACY_KEYS: Record<string, string> = {
   'ai.aidwork.boss-recruiting': 'boss-recruiting', 'ai.aidwork.weixin': 'weixin', 'ai.aidwork.wecom': 'wecom',
+  'ai.aidwork.xiaohongshu': 'xiaohongshu',
 }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const reconcile = (): never => { throw new ManagementError(11, '插件持久状态需要核对，未自动恢复或重放安装') }
@@ -65,7 +66,7 @@ export class PluginStore {
       try {
         if (!lstatSync(this.inventory).isFile() || lstatSync(this.inventory).size > 1024 * 1024) reconcile()
         const saved = JSON.parse(readFileSync(this.inventory, 'utf8'))
-        if (!saved || saved.version !== 1 || !Array.isArray(saved.records) || saved.records.length > 3
+        if (!saved || saved.version !== 1 || !Array.isArray(saved.records) || saved.records.length > FIRST_PARTY_PROVIDERS.length
           || Object.keys(saved).some(key => !['version', 'records'].includes(key))) reconcile()
         const ids = new Set<string>(); const providers = new Set<string>()
         for (const record of saved.records) {

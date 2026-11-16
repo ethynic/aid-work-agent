@@ -152,7 +152,7 @@ class TestSkillRunnerProviderEntry:
         assert catalog.get_provider("nonexistent") is None
         # Recovery is an internal provider, alongside the business/skill entries.
         assert set(catalog.TRUSTED_PROVIDERS) == {
-            'boss-recruiting', 'weixin', 'wecom', 'skill-runner', 'runtime-recovery'}
+            'boss-recruiting', 'weixin', 'wecom', 'skill-runner', 'runtime-recovery', 'xiaohongshu'}
 
     def test_device_capabilities_with_skills_resolves_skill_runner(self):
         """设备心跳上报（capabilities 含 skill-runner + skills 已安装清单）的解析：

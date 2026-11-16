@@ -33,16 +33,11 @@
       <ApiConfigTab v-show="activeTab === 'api-config'" />
       <EnvVarsTab v-show="activeTab === 'env-vars'" />
 
-      <!-- 内置连接器：Phase 2 实现 -->
-      <div v-if="activeTab === 'builtin-connectors'" class="h-full flex items-center justify-center">
-        <div class="text-center">
-          <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary-50 text-primary-500 mb-3">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M9 7V3M15 7V3M9 21v-4M15 21v-4M5 12H3M21 12h-2M7 9h10a2 2 0 012 2v2a2 2 0 01-2 2H7a2 2 0 01-2-2v-2a2 2 0 012-2z" />
-            </svg>
-          </div>
-          <p class="text-sm text-default font-medium">即将上线</p>
-          <p class="text-xs text-muted mt-1">内置连接器（Tavily、SMTP、飞书、企查查等 12-15 个）将在 Phase 2 上线</p>
+      <div v-if="activeTab === 'builtin-connectors'" class="p-4 sm:p-6">
+        <div class="max-w-sm bg-surface border border-default rounded-lg p-5">
+          <p class="text-sm font-medium text-default">小红书</p>
+          <p class="text-sm text-muted mt-2 mb-4">在选定设备的 Chrome 中扫码登录并复用登录会话。</p>
+          <BaseButton @click="router.push({ name: 'tenant-xiaohongshu', params: { tenant_id: tenantId } })">打开连接器</BaseButton>
         </div>
       </div>
 
@@ -66,6 +61,7 @@
 import { ref, computed, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
+import BaseButton from '@/components/ui/BaseButton.vue'
 import ApiConfigTab from './ApiConfigTab.vue'
 import EnvVarsTab from './EnvVarsTab.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'

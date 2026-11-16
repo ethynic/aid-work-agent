@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { ManagementError, publisherPublicKey, type PublisherTrust } from '@aid/local-tool-host-core'
+import { FIRST_PARTY_PROVIDERS, ManagementError, publisherPublicKey, type PublisherTrust } from '@aid/local-tool-host-core'
 
 /** Reads fixed assets relative to the managed entry, never a renderer/env/argv path. */
 export function loadPackagedTrust(entryDirectory: string): PublisherTrust[] | undefined {
@@ -26,7 +26,7 @@ export function loadPackagedTrust(entryDirectory: string): PublisherTrust[] | un
       if (!root || Object.keys(root).sort().join(',') !== 'key_id,providers,public_key,test_only' || typeof root.key_id !== 'string' || !root.key_id
         || keys.has(root.key_id) || typeof root.public_key !== 'string' || typeof root.test_only !== 'boolean'
         || !Array.isArray(root.providers) || !root.providers.length
-        || root.providers.some(provider => !['ai.aidwork.boss-recruiting', 'ai.aidwork.weixin', 'ai.aidwork.wecom'].includes(provider))
+        || root.providers.some(provider => !(FIRST_PARTY_PROVIDERS as readonly string[]).includes(provider))
         || publisherPublicKey(root.public_key).asymmetricKeyType !== 'ed25519'
         || (product.profile === 'production' && root.test_only)) throw new Error()
       keys.add(root.key_id)

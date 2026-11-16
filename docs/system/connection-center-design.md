@@ -11,6 +11,8 @@
 
 ## 0. 文档定位
 
+2026-11-16 新增 [小红书本机连接器](../design/xiaohongshu-local-connector-design.md)，普通租户成员使用当前已配对的设备保存自己的 Chrome 网页会话。此项的实现在 [开发计划](../plans/plan-xiaohongshu-local-connector.md) 登记。
+
 本文档为整个系统定义「连接中心」--租户管理员自助管理 API 配置、环境变量、内置连接器、自定义连接器的统一入口。**对标行业标杆（Coze、Dify、n8n、Anthropic Claude）的「连接器」一级能力**，把分散在管理后台的配置能力搬到租户前台，并扩展出连接器抽象层。
 
 ### 设计原则

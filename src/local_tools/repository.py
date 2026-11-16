@@ -1063,6 +1063,7 @@ def claim_next(
             SELECT * FROM local_tool_invocations
             WHERE state = 'queued' AND device_id = %s AND tenant_id = %s
               {lane_filter}{provider_filter}
+              AND (business_kind IS DISTINCT FROM 'xiaohongshu_connector' OR deadline_at > NOW())
               AND (business_kind IS DISTINCT FROM 'agent_runner_recovery' OR business_ref->>'version' IS DISTINCT FROM '3'
                 OR (deadline_at>NOW() AND EXISTS (SELECT 1 FROM agent_runners r
                   WHERE r.runner_id=local_tool_invocations.business_ref->>'runner_id' AND r.tenant_id=local_tool_invocations.tenant_id

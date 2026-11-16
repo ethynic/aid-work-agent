@@ -1121,6 +1121,7 @@ const connectionSubMenuItems = computed(() => {
     { path: `${base}/local-tools`, label: '本地工具', icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z', adminOnly: false },
     // 企业微信Agent：三入口合并（会话记录/每日总结/代理任务，页内 Tab 切换）
     { path: `${base}/wecom-agent`, label: '企业微信Agent', icon: 'M12 3a8 8 0 018 8v6H4v-6a8 8 0 018-8zM9 21h6M9 11h6', adminOnly: false },
+    { path: `${base}/connections/xiaohongshu`, label: '小红书', icon: 'M7 3H17A2 2 0 0119 5V19A2 2 0 0117 21H7A2 2 0 015 19V5A2 2 0 017 3zM8 8h8M8 12h8M8 16h5', adminOnly: false },
     // 外部系统：链接（管理员与普通员工均可见）
     { path: `${base}/connections/external-systems`, label: '外部系统', icon: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71', adminOnly: false },
   ]
@@ -1144,6 +1145,7 @@ const isConnectionActive = computed(() => {
   return [
     `${base}/connections`,
     `${base}/connections/external-systems`,
+    `${base}/connections/xiaohongshu`,
     `${base}/channels`,
     `${base}/wechat-mp`,
     `${base}/hongtao-shop`,

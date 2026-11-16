@@ -11,7 +11,7 @@ import { deviceCapabilities } from '../dist/legacy/config.js'
 
 const keys = generateKeyPairSync('ed25519')
 const platform = { platform: 'win32', arch: 'x64', node_version: '22.23.3', node_abi: '127', runtime_version: '0.2.14' }
-const trust = [{ key_id: 'isolated-store-test', public_key: keys.publicKey.export({ type: 'spki', format: 'pem' }), providers: ['ai.aidwork.weixin', 'ai.aidwork.wecom', 'ai.aidwork.boss-recruiting'] }]
+const trust = [{ key_id: 'isolated-store-test', public_key: keys.publicKey.export({ type: 'spki', format: 'pem' }), providers: ['ai.aidwork.weixin', 'ai.aidwork.wecom', 'ai.aidwork.boss-recruiting', 'ai.aidwork.xiaohongshu'] }]
 const zip = entries => new Promise((resolve, reject) => {
   const file = new yazl.ZipFile(); const chunks = []
   file.outputStream.on('data', value => chunks.push(value)); file.outputStream.on('end', () => resolve(Buffer.concat(chunks))); file.outputStream.on('error', reject)
@@ -81,6 +81,18 @@ test('all verified unready providers remain discoverable, while tampered or inva
   await failedStore.initialize()
   await assert.rejects(failedStore.import(await pack({ provider: 'ai.aidwork.boss-recruiting' })))
   assert.deepEqual(failedStore.resolveEntries({}, ['boss-recruiting']), {})
+})
+
+test('adding Xiaohongshu leaves all installed providers discoverable after restart', async t => {
+  const { store, options } = fixture(t)
+  await store.initialize()
+  for (const provider of trust[0].providers) await store.import(await pack({ provider }))
+  const entries = store.resolveEntries({})
+  assert.deepEqual(Object.keys(entries).sort(), ['boss-recruiting', 'wecom', 'weixin', 'xiaohongshu'])
+
+  const reopened = new PluginStore(options)
+  await reopened.initialize()
+  assert.deepEqual(reopened.resolveEntries({}), entries)
 })
 
 test('refresh checks large releases serially and publishes one complete readiness snapshot', async t => {

@@ -113,6 +113,13 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "wecom_config_calibrate",
         ],
     },
+    "xiaohongshu": {
+        "provider_id": "ai.aidwork.xiaohongshu",
+        "min_provider_version": "1.0.0",
+        "execution_target": "local_required",
+        "agent_tools": [],
+        "tools": ["xiaohongshu_login", "xiaohongshu_open"],
+    },
     # 通用 Skill 脚本执行 Provider（M2，docs/system/runtime-plugin-host-architecture-design.md 第9节）：
     # 设备端 skill-runner 通用执行器（进程内 handler，不走 MCP stdio），承载已审批
     # 插件 device 技能的脚本执行。与三 CLI「封闭 schema 工具」不同——skill_script_run

@@ -84,6 +84,34 @@ export async function listDevices(): Promise<LocalToolDevice[]> {
   return body.devices || []
 }
 
+export type XiaohongshuAction = 'login' | 'open'
+export interface XiaohongshuDevice {
+  status: 'no_device' | 'offline' | 'missing_plugin' | 'ready'
+  device: { device_id: string; name: string | null } | null
+}
+
+export async function getXiaohongshuDevice(signal: AbortSignal): Promise<XiaohongshuDevice> {
+  const res = await fetch(`${API_BASE}/xiaohongshu/device`, { headers: getAuthHeader(), signal })
+  return ensureSuccess(res, '无法查询小红书设备，请刷新后重试')
+}
+
+export async function startXiaohongshuAction(action: XiaohongshuAction, deviceId: string, signal: AbortSignal): Promise<string> {
+  const res = await fetch(`${API_BASE}/xiaohongshu/actions`, {
+    method: 'POST', headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, device_id: deviceId }), signal,
+  })
+  return (await ensureSuccess(res, '无法启动小红书操作')).action_id
+}
+
+export type XiaohongshuActionResult =
+  | { status: 'pending' | 'qr_ready' | 'opened' }
+  | { status: 'failed'; code: string }
+
+export async function getXiaohongshuAction(id: string, signal: AbortSignal): Promise<XiaohongshuActionResult> {
+  const res = await fetch(`${API_BASE}/xiaohongshu/actions/${encodeURIComponent(id)}`, { headers: getAuthHeader(), signal })
+  return ensureSuccess(res, '无法确认本机操作结果，请检查 Chrome 窗口')
+}
+
 /**
  * 生成一次性配对码（明文仅此一次返回，5 分钟有效）
  */
