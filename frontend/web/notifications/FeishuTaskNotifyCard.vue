@@ -96,10 +96,13 @@ async function refresh() {
           } catch (e) { error.value = describe(e, '自动绑定失败，请刷新重试。') }
         }
       } catch (e) {
-        // suggest 失败：已映射错误码（如未登记手机号）给出提示；其余静默，
-        // 不阻塞行展示
+        // suggest 失败：已映射错误码（如未登记手机号）给出提示；503（租户未
+        // 配置渠道）静默——行下方提示条已说明，不重复通用失败文案
+        // （用户反馈 2026-11-16）
         suggest.value = null
-        error.value = describe(e, '')
+        if ((e as { status?: number } | null)?.status !== 503) {
+          error.value = describe(e, '自动绑定失败，请刷新重试。')
+        }
       }
     }
   } catch (e) { error.value = describe(e, '读取飞书通知状态失败。') }
