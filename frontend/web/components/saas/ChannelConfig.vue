@@ -1199,7 +1199,7 @@ const NOTIFY_USAGES = [
 ]
 
 const supportsNotifyUsage = computed(() =>
-  form.value.channel_type === 'wecom' || form.value.channel_type === 'feishu')
+  form.value.channel_type === 'wecom' || form.value.channel_type === 'feishu' || form.value.channel_type === 'dingtalk')
 
 const notifyUsage = computed({
   get: () => form.value.config.notify_usage || 'agent_only',
@@ -1208,6 +1208,11 @@ const notifyUsage = computed({
 
 const isNotifyOnly = computed(() =>
   supportsNotifyUsage.value && notifyUsage.value === 'notify_only')
+
+// 钉钉「仅通知」用途补填字段：工作通知发送需应用 AgentId（2026-11-16 钉钉通知接入；
+// agent_only/both 保持原两项表单不变——存量行为零变更）
+const DINGTALK_NOTIFY_ONLY_AGENT_FIELD: { key: string; label: string; placeholder: string; hint?: string; location: string; type?: 'text' | 'file' | 'password' } =
+  { key: 'agent_id', label: '应用 AgentId', placeholder: '', location: '「应用信息」页面（基础信息 → 应用信息）' }
 
 const channelFields = computed(() => {
   const fields = channelFieldMap[form.value.channel_type] || []
@@ -1219,6 +1224,11 @@ const channelFields = computed(() => {
     // 飞书仅通知用途：纯服务端 API 发消息，Verification Token / Encrypt Key 免填
     //（encrypt_key 本就可选），保存时剔除旧值
     return fields.filter(f => f.key !== 'verification_token' && f.key !== 'encrypt_key')
+  }
+  if (isNotifyOnly.value && form.value.channel_type === 'dingtalk') {
+    // 钉钉仅通知用途：app_key/app_secret 两项基础上补填 agent_id（工作通知必填，
+    // 保存时随用途写入）；钉钉本无回调 Token / EncodingAESKey 表单项
+    return [...fields, DINGTALK_NOTIFY_ONLY_AGENT_FIELD]
   }
   return fields
 })
@@ -1270,6 +1280,7 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '在「事件与回调」中添加 im.message.receive_v1 事件',
       '将下方回调地址填入 HTTP 回调配置',
       '记录 AppKey、AppSecret（钉钉回调签名只用 AppSecret，不需要 Token / EncodingAESKey）',
+      '仅任务通知（不接对话）时，「通知用途」选「仅通知」，需 AppKey / AppSecret / AgentId 三项',
     ],
     docUrl: 'https://open.dingtalk.com/',
   },
@@ -1786,17 +1797,22 @@ async function saveChannel(): Promise<boolean> {
       config: { ...form.value.config },
       subagent_type: form.value.subagent_type || undefined
     }
-    // 企微/飞书应用：写入通知用途（缺省 agent_only，存量行为不变）；
-    // 仅通知用途无回调链路，剔除回调字段旧值（表单已隐藏）
-    if (form.value.channel_type === 'wecom' || form.value.channel_type === 'feishu') {
+    // 企微/飞书/钉钉应用：写入通知用途（缺省 agent_only，存量行为不变）；
+    // 仅通知用途无回调链路，剔除回调字段旧值（表单已隐藏或本就无回调字段）
+    if (form.value.channel_type === 'wecom' || form.value.channel_type === 'feishu' || form.value.channel_type === 'dingtalk') {
       payload.config.notify_usage = notifyUsage.value
       if (notifyUsage.value === 'notify_only') {
         if (form.value.channel_type === 'wecom') {
           delete payload.config.token
           delete payload.config.encoding_aes_key
-        } else {
+        } else if (form.value.channel_type === 'feishu') {
           delete payload.config.verification_token
           delete payload.config.encrypt_key
+        } else {
+          // 钉钉：通知发送仅需 app_key/app_secret/agent_id（agent_id 由「仅通知」
+          // 表单补填）；历史配置可能带 token/encoding_aes_key，一并剔除
+          delete payload.config.token
+          delete payload.config.encoding_aes_key
         }
       }
     }

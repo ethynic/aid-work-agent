@@ -86,6 +86,10 @@ export type NotificationErrorCode =
   | 'NOTIFICATION_FEISHU_BIND_TAKEN'
   | 'NOTIFICATION_FEISHU_BIND_MISMATCH'
   | 'NOTIFICATION_INVALID_FEISHU_OPEN_ID'
+  | 'NOTIFICATION_DINGTALK_APP_UNAVAILABLE'
+  | 'NOTIFICATION_DINGTALK_BIND_TAKEN'
+  | 'NOTIFICATION_DINGTALK_BIND_MISMATCH'
+  | 'NOTIFICATION_INVALID_DINGTALK_USERID'
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { ...getAuthHeader(), ...(init.headers as Record<string, string> || {}) }
@@ -276,6 +280,37 @@ export const notificationsAPI = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ category: 'task', channel: 'feishu_app', provider: 'feishu_app', enabled }),
     }),
+
+  /** ---------- 钉钉应用身份绑定（钉钉任务通知接入，2026-11-16；无 OAuth，手机号识别） ---------- */
+
+  /** 绑定状态：应用可用性 + 绑定态 + 姓名快照 + target 状态（纯本地，不出站） */
+  dingtalkBindStatus: () =>
+    request<DingtalkBindStatus>('/dingtalk/bind/status'),
+
+  /** 手机号识别（只读）：按当前登录用户手机号匹配钉钉通讯录 userid
+   *  （getbymobile 不返回姓名，命中时 name 恒空） */
+  dingtalkBindSuggest: () =>
+    request<DingtalkBindSuggest>('/dingtalk/bind/suggest'),
+
+  /** 确认绑定：服务端按手机号二次核实后才落库，不信任前端传的 userid */
+  dingtalkBindConfirm: (userid: string) =>
+    request<DingtalkBindSuccess>('/dingtalk/bind/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userid }),
+    }),
+
+  /** 解绑：清空 dingtalk_userid 并撤销既有 dingtalk_app target */
+  dingtalkBindUnbind: () =>
+    request<{ success: boolean }>('/dingtalk/bind', { method: 'DELETE' }),
+
+  /** 钉钉任务通知开关：启用=创建/启用 dingtalk_app 偏好行，关闭=停用 */
+  dingtalkSetPreference: (enabled: boolean) =>
+    request<NotificationPreference>('/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: 'task', channel: 'dingtalk_app', provider: 'dingtalk_app', enabled }),
+    }),
 }
 
 export interface WecomBindStatus {
@@ -339,6 +374,31 @@ export interface FeishuBindSuggest {
 export interface FeishuBindSuccess {
   success: boolean
   open_id: string
+  name: string
+  /** 通知 target 是否登记成功；false 时绑定已落库但需回设置页重试登记 */
+  target_registered: boolean
+}
+
+export interface DingtalkBindStatus {
+  /** 通知应用可用（租户配置了通知用途的钉钉应用，含 agent_id）；不可用时绑定与开关均不开放 */
+  app_available: boolean
+  bound: boolean
+  /** 绑定成员姓名快照（getbymobile 不返回姓名，本期恒空），未绑定/未登记为 null */
+  name: string | null
+  /** 最近 dingtalk_app target 状态；target_invalid 撤销后为 'invalid' 提示重绑 */
+  target_state: 'active' | 'revoked' | 'invalid' | null
+}
+
+export interface DingtalkBindSuggest {
+  matched: boolean
+  userid?: string
+  /** getbymobile 不返回姓名，命中时恒空 */
+  name?: string
+}
+
+export interface DingtalkBindSuccess {
+  success: boolean
+  userid: string
   name: string
   /** 通知 target 是否登记成功；false 时绑定已落库但需回设置页重试登记 */
   target_registered: boolean
