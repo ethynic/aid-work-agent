@@ -745,6 +745,14 @@ def select_device(tenant_id: str, user_id: str, device_id: str) -> bool:
         return ok
 
 
+def lock_selected_device(cursor, tenant_id, user_id, device_id):
+    """Serialize reading the chosen device with changes to the user's selection."""
+    _lock_pairing_user(cursor, tenant_id, user_id)
+    cursor.execute('''SELECT id FROM local_tool_devices WHERE tenant_id=%s AND user_id=%s AND id=%s
+                       AND status='active' AND selected FOR SHARE''', (tenant_id, user_id, device_id))
+    return cursor.fetchone() is not None
+
+
 # ==================== Invocation ====================
 
 

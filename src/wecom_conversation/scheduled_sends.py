@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from loguru import logger
 from psycopg2.extras import execute_values
 
 from src.db.database import get_db_connection
@@ -13,7 +14,7 @@ from src.scheduler.schedule import compute_next_due, parse_run_at
 from src.scheduler.special_plans import WECOM_SCHEDULED_SEND_MARKER, first_line_sql
 
 from . import proxy_tasks
-from .service import ConversationServiceError
+from .service import ConversationServiceError, add_verified_conversations_in_tx
 
 MARKER = WECOM_SCHEDULED_SEND_MARKER
 TIMEZONE = ZoneInfo('Asia/Shanghai')
@@ -117,6 +118,16 @@ def _validate_targets(cursor, tenant_id, user_id, definition):
         account=definition['account'], device_id=definition['device_id'])
 
 
+def _register_verified_targets(conn, cursor, tenant_id, user_id, definition, targets):
+    from src.local_tools.repository import lock_selected_device
+
+    device_id = definition['device_id']
+    if not lock_selected_device(cursor, tenant_id, user_id, device_id):
+        raise _error('DEVICE_MISMATCH', '选定设备已改变，请重新选择会话')
+    add_verified_conversations_in_tx(conn, tenant_id, user_id, targets,
+                                    account=definition['account'], device_id=device_id)
+
+
 def _device_group(task, definition):
     return (task['tenant_id'], definition['device_id'], definition['account'])
 
@@ -126,7 +137,7 @@ def _group_task(group):
 
 
 def create_plan(tenant_id, user_id, *, device_id, account, name, sessions, text,
-                schedule_type, time_config):
+                schedule_type, time_config, verified_targets=None):
     """Bind a trusted directory/device selection from the dedicated authenticated entry."""
     definition = _definition(device_id, account, sessions, text)
     name = proxy_tasks._validate_title(name)
@@ -134,6 +145,8 @@ def create_plan(tenant_id, user_id, *, device_id, account, name, sessions, text,
     task_id = f'sched_{uuid4().hex}'
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        if verified_targets is not None:
+            _register_verified_targets(conn, cursor, tenant_id, user_id, definition, verified_targets)
         _validate_targets(cursor, tenant_id, user_id, definition)
         cursor.execute(
             """INSERT INTO scheduled_tasks (task_id, tenant_id, user_id, name, task_prompt,
@@ -163,7 +176,8 @@ def list_plans(tenant_id, user_id, *, limit=50, offset=0):
         return [_plan(task) for task in cursor.fetchall()]
 
 
-def edit_plan(tenant_id, user_id, task_id, *, name, sessions, text, schedule_type, time_config):
+def edit_plan(tenant_id, user_id, task_id, *, name, sessions, text, schedule_type, time_config,
+              expected_sessions=None, verified_targets=None):
     cron, run_at = _time_fields(schedule_type, time_config)
     name = proxy_tasks._validate_title(name)
     with get_db_connection() as conn:
@@ -172,8 +186,14 @@ def edit_plan(tenant_id, user_id, task_id, *, name, sessions, text, schedule_typ
         if task['status'] != 'paused':
             raise _error('PLAN_STATE_CONFLICT', '请先暂停计划后再编辑')
         previous = _read_definition(task)
+        if expected_sessions is not None and previous['sessions'] != expected_sessions:
+            raise _error('PLAN_CHANGED', '会话配置已更新，请重新打开编辑')
         definition = _definition(previous['device_id'], previous['account'], sessions, text)
-        _validate_targets(cursor, tenant_id, user_id, definition)
+        if verified_targets is not None:
+            _register_verified_targets(conn, cursor, tenant_id, user_id, definition, verified_targets)
+        added = [locator for locator in definition['sessions'] if locator not in previous['sessions']]
+        if added:
+            _validate_targets(cursor, tenant_id, user_id, {**definition, 'sessions': added})
         cursor.execute(
             """UPDATE scheduled_tasks SET name=%s,task_prompt=%s,schedule_type=%s,
                     cron_expression=%s,run_at=%s,next_due_at=NULL,updated_at=now()
@@ -275,12 +295,17 @@ def freeze_due_in_tx(cursor, task, *, now=None):
                             definition['text'], 'expired' if expired else 'queued',
                             wall_now.replace(tzinfo=TIMEZONE) if expired else None,
                             'SEND_WINDOW_EXPIRED' if expired else None))
-    execute_values(
+    inserted = execute_values(
         cursor,
         """INSERT INTO bs_wecom_scheduled_sends
                    (tenant_id,user_id,task_id,plan_order,plan_name,due_at,deadline_at,target_order,
                     device_id,account,session,session_name,text,status,finished_at,error_code)
-            VALUES %s ON CONFLICT (tenant_id,task_id,due_at,session) DO NOTHING""", records)
+            VALUES %s ON CONFLICT (tenant_id,task_id,due_at,session) DO NOTHING
+            RETURNING id,error_code""", records, fetch=True)
+    for row in inserted:
+        if row['error_code']:
+            logger.info(f'后端日志：企微定时消息到期未派发 execution={row["id"]} tenant={task["tenant_id"]} '
+                        f'code={row["error_code"]}')
     status = 'expired' if task['schedule_type'] == 'once' and wall_now > due + SEND_WINDOW else 'active'
     cursor.execute(
         """UPDATE scheduled_tasks SET next_due_at=%s,status=%s,last_run_at=%s,updated_at=now()

@@ -29,15 +29,25 @@ WECOM_NO_SEND_CODES = frozenset({
 })
 
 
-def _price_in_tx(cursor):
+def _price_override_in_tx(cursor):
     cursor.execute('SELECT unit_price FROM wecom_scheduled_send_settings WHERE singleton')
     row = cursor.fetchone()
-    return row['unit_price'] if row and row['unit_price'] is not None else DEFAULT_PRICE
+    return row['unit_price'] if row else None
+
+
+def _price_in_tx(cursor):
+    value = _price_override_in_tx(cursor)
+    return value if value is not None else DEFAULT_PRICE
 
 
 def get_unit_price():
     with get_db_connection() as conn:
         return _price_in_tx(conn.cursor())
+
+
+def get_unit_price_override():
+    with get_db_connection() as conn:
+        return _price_override_in_tx(conn.cursor())
 
 
 def set_unit_price(value):
@@ -169,9 +179,12 @@ def retire_in_tx(cursor, condition, params, status, code):
     """Cancel or expire only calls for which /started has granted no authority."""
     cursor.execute(f'''UPDATE bs_wecom_scheduled_sends SET status=%s,error_code=%s,finished_at=clock_timestamp()
                         WHERE status IN ('queued','dispatched') AND {condition}
-                        RETURNING tenant_id,invocation_id''', (status, code, *params))
+                        RETURNING id,tenant_id,invocation_id''', (status, code, *params))
     for row in cursor.fetchall():
         _finish_unstarted_invocation(cursor, row['tenant_id'], row['invocation_id'], status, code)
+        if status == 'expired':
+            logger.info(f'后端日志：企微定时消息发送过期 execution={row["id"]} tenant={row["tenant_id"]} '
+                        f'invocation={row["invocation_id"]} code={code}')
 
 
 def invocation_in_tx(cursor, row, *, read=False):

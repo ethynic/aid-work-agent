@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import WecomAgentHub from '@/components/wecomConversation/WecomAgentHub.vue'
 
-// 三个内嵌页面打桩（页面自身已有独立测试；此处只验壳的 Tab 编排）
+// 内嵌页面打桩，此处只验壳的 Tab 编排。
 vi.mock('@/components/wecomConversation/WecomConversationCenter.vue', () => ({
   default: { name: 'WecomConversationCenter', template: '<div data-testid="page-conversations" />' },
 }))
@@ -11,6 +11,9 @@ vi.mock('@/components/wecomConversation/WecomConversationDaily.vue', () => ({
 }))
 vi.mock('@/components/wecomConversation/WecomProxyTasks.vue', () => ({
   default: { name: 'WecomProxyTasks', template: '<div data-testid="page-proxy" />' },
+}))
+vi.mock('@/components/wecomConversation/WecomScheduledSends.vue', () => ({
+  default: { name: 'WecomScheduledSends', template: '<div data-testid="page-scheduled" />' },
 }))
 
 const routeState = vi.hoisted(() => ({
@@ -41,14 +44,22 @@ describe('WecomAgentHub（企业微信Agent 三入口合并壳）', () => {
     expect(wrapper.text()).toContain('企业微信Agent')
   })
 
-  it('聊天配置标签在 tab=proxy 时高亮并显示代理页面', () => {
+  it('旧代理路径保持可访问并展示监控配置标签', () => {
     routeState.route = { params: { tenant_id: 't1', tab: 'proxy' } }
     const wrapper = mountHub()
     const tab = wrapper.find('[data-testid="wecom-agent-tab-proxy"]')
-    expect(tab.text()).toBe('聊天配置')
+    expect(tab.text()).toBe('监控配置')
     expect(tab.classes()).toContain('bg-primary-50')
     expect(wrapper.find('[data-testid="page-proxy"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="page-conversations"]').exists()).toBe(false)
+  })
+
+  it('定时消息发送与监控同级，并可由链接直达', () => {
+    routeState.route = { params: { tenant_id: 't1', tab: 'scheduled' } }
+    const wrapper = mountHub()
+    expect(wrapper.get('[data-testid="wecom-agent-tab-scheduled"]').text()).toBe('定时消息发送')
+    expect(wrapper.get('[data-testid="wecom-agent-tab-scheduled"]').attributes('aria-current')).toBe('page')
+    expect(wrapper.find('[data-testid="page-scheduled"]').exists()).toBe(true)
   })
 
   it('非法 tab 值回落会话记录', () => {

@@ -1135,6 +1135,7 @@ const isConnectionActive = computed(() => {
     `${base}/wecom-agent/conversations`,
     `${base}/wecom-agent/daily`,
     `${base}/wecom-agent/proxy`,
+    `${base}/wecom-agent/scheduled`,
   ].includes(route.path)
 })
 

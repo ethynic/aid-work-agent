@@ -2018,6 +2018,8 @@ app.include_router(external_systems.router)
 # 见 docs/design/wecom/wecom-conversation-operations-design.md）
 from src.wecom_conversation import api as wecom_conversation_api  # noqa: E402
 app.include_router(wecom_conversation_api.router)
+from src.wecom_conversation import scheduled_api as wecom_scheduled_api  # noqa: E402
+app.include_router(wecom_scheduled_api.router)
 
 # 企微代理任务（契约 §2/§4：创建检查/启动/停止/编辑/软删除；监控循环 P5、Runner P6，
 # 见 docs/design/wecom/wecom-proxy-task-contract.md）
