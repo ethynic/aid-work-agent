@@ -159,14 +159,14 @@ def _validate_instruction(value):
     return value
 
 
-def validate_opening_message(value):
+def validate_opening_message(value, *, field_name='首次发送消息'):
     """The existing CLI send limit uses UTF-16 units. Preserve the original text."""
     if value is None:
         return None
     if (not isinstance(value, str) or len(value) > 2000 or not value.strip() or '\0' in value
             or any(0xD800 <= ord(char) <= 0xDFFF for char in value)
             or len(value.encode('utf-16-le')) > 4000):
-        raise _err('VALIDATION_FAILED', '首次发送消息须为 1–2000 字的非空文本', 400)
+        raise _err('VALIDATION_FAILED', f'{field_name}须为 1–2000 字的非空文本', 400)
     return value
 
 
