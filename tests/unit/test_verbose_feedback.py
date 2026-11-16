@@ -355,8 +355,9 @@ class TestPolicyInjection:
         不触发任何 verbose / tool_start，执行正常完成。
 
         注：旧用例中「非法 JSON 参数归一为 {} 后不触发」的语义已不存在——
-        现行引擎对非法 JSON 参数直接抛 INVALID_TOOL_ARGUMENTS（engine.py），
-        由 tests/integration/test_agent_runtime_acceptance.py 覆盖。
+        现行引擎对可恢复参数截取首个 JSON 对象恢复，不可恢复参数降级为
+        回传模型自纠重试（engine.py），由 tests/unit/test_agent_engine_acceptance.py
+        与 tests/integration/test_agent_runtime_acceptance.py 覆盖。
         """
         state = VerboseFeedbackState()
         h = _policy_dispatcher(tools=[_hooked_read(VALID_TEXT)],
