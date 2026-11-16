@@ -1,0 +1,114 @@
+# 聊易私有云 PostgreSQL（47.104.107.85）
+# 基于 deploy/nuodu/docker-compose.postgres.yml 适配专用裸机（4C/7.3G，无混部）：
+# 1. 端口只绑 127.0.0.1（宿主机 psql/备份脚本本机入口；公网必不可达）。
+#    教训（诺度 2026-10-21 实测）：阿里云公网 IP 是 NAT 到内网 IP，「绑内网 IP」≠ 公网不可达；
+#    app 容器经共享 docker 网络 app_aid-network 以服务名 postgres:5432 直连
+# 2. 内存参数（7.3G 裸机，与 runner-worker 等 shared）：shared_buffers 512MB、
+#    work_mem 8MB、maintenance 256MB、effective_cache_size 3GB、/pg_temp 1G、容器上限 2G
+# 3. 密码经同目录 .env 注入（POSTGRES_PASSWORD），不入库不入对话
+
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: aid-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aid_work_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-aid_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      TZ: Asia/Shanghai
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+      LANGUAGE: en_US:en
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=40"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "effective_cache_size=3072MB"
+      - "-c"
+      - "work_mem=8MB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "temp_tablespaces=/pg_temp"
+      - "-c"
+      - "wal_level=minimal"
+      - "-c"
+      - "max_wal_senders=0"
+      - "-c"
+      - "max_wal_size=1GB"
+      - "-c"
+      - "min_wal_size=256MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "log_min_duration_statement=1000"
+      - "-c"
+      - "log_checkpoints=on"
+      - "-c"
+      - "log_connections=on"
+      - "-c"
+      - "log_disconnections=on"
+      - "-c"
+      - "log_timezone=Asia/Shanghai"
+      - "-c"
+      - "timezone=Asia/Shanghai"
+      - "-c"
+      - "idle_in_transaction_session_timeout=60000"
+      - "-c"
+      - "idle_session_timeout=600000"
+      - "-c"
+      - "tcp_keepalives_idle=60"
+      - "-c"
+      - "tcp_keepalives_interval=10"
+      - "-c"
+      - "tcp_keepalives_count=6"
+      - "-c"
+      - "statement_timeout=30000"
+      - "-c"
+      - "lock_timeout=10000"
+    ports:
+      # 只绑 127.0.0.1：仅供宿主机 psql/备份脚本使用；app 容器走 app_aid-network 服务名直连
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # init.sql 仅在数据卷首次初始化时执行（主库建表）
+      - ./init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - app_aid-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aid_user} -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.5"
+        reservations:
+          memory: 1G
+          cpus: "0.5"
+    shm_size: 512m
+    tmpfs:
+      - /pg_temp:mode=1777,size=1024m,uid=999,gid=999
+      - /tmp:mode=1777,size=200m,uid=999,gid=999
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  postgres_data:
+
+networks:
+  app_aid-network:
+    external: true
+    name: app_aid-network
