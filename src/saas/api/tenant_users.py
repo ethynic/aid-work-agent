@@ -17,7 +17,8 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 from src.saas.api.tenant_auth import require_admin
-from src.saas.db.tenant_db import TenantDB
+# TenantDB import 已随 max_users 校验停用注释（2026-11-16），恢复校验时一并恢复
+# from src.saas.db.tenant_db import TenantDB
 from src.saas.db.permission_db import UserAgentPermissionDB
 from src.saas.db.subscription_db import SubscriptionDB
 from src.saas.models.enums import BehaviorAction, BehaviorResourceType, UserStatus
@@ -83,11 +84,13 @@ async def create_user(request: Request, body: UserCreateRequest):
         tenant_id = admin["tenant_id"]
 
     # 1. 检查用户上限
-    tenant = TenantDB.get_by_id(tenant_id)
-    current_result = UserDB.list_by_tenant(tenant_id, page_size=1)  # 只需 total
-    current_count = current_result["total"]
-    if tenant and current_count >= tenant["max_users"]:
-        raise HTTPException(status_code=400, detail=f"已达到最大用户数限制（{tenant['max_users']}）")
+    # 2026-11-16 裁决：商业模式为租户充值消耗积分，用户数不设限（多一些用户消耗快一点没问题），
+    # 停用 max_users 上限校验；字段保留仅作展示用途。
+    # tenant = TenantDB.get_by_id(tenant_id)
+    # current_result = UserDB.list_by_tenant(tenant_id, page_size=1)  # 只需 total
+    # current_count = current_result["total"]
+    # if tenant and current_count >= tenant["max_users"]:
+    #     raise HTTPException(status_code=400, detail=f"已达到最大用户数限制（{tenant['max_users']}）")
 
     # 2. 检查租户内用户名是否重复
     if body.username:
@@ -224,13 +227,14 @@ async def batch_import_users(request: Request, file: UploadFile = File(...), ten
         return {"success": False, "message": "所有用户均已存在或重复", "errors": errors}
 
     # 检查上限
-    tenant = TenantDB.get_by_id(tenant_id)
-    current_count = UserDB.list_by_tenant(tenant_id, page_size=1)["total"]
-    if tenant and current_count + len(users_to_import) > tenant["max_users"]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"导入后用户数将超过上限（{tenant['max_users']}）"
-        )
+    # 2026-11-16 裁决：商业模式为租户充值消耗积分，用户数不设限，停用导入上限校验。
+    # tenant = TenantDB.get_by_id(tenant_id)
+    # current_count = UserDB.list_by_tenant(tenant_id, page_size=1)["total"]
+    # if tenant and current_count + len(users_to_import) > tenant["max_users"]:
+    #     raise HTTPException(
+    #         status_code=400,
+    #         detail=f"导入后用户数将超过上限（{tenant['max_users']}）"
+    #     )
 
     # 创建用户
     imported = 0
