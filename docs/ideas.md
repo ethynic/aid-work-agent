@@ -58,6 +58,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261117-1213 | travel-consultant 对接 qbweb3.1 推送 | 🔧 部分完成（配置已改，待部署真机验证） | 挂 pre-sales-api 技能与 http_api 等工具，开启 external_push/lead_refresh 轮后推送。 | — | — |
 | 20261112-1500 | 子智能体思考模式排查与批量关闭（enable_thinking） | 🔧 部分完成（配置贯通+3 个内置关闭已提交，候选实测后再定） | 关思考实测省 35~40% 积分（标书 trace 根因）；配置贯通含自定义数字员工三态开关。已关：ai-bid-assistant/ai-contract-assistant/auto-form-filler/contract-archive-review；6 个候选待 trace 实测，统计时须含自定义数字员工实例三态占比。 | [排查清单](audit/enable-thinking-review-20261112.md) | — |
 | 20261116-1600 | 样版板式复刻（doc-layout-clone 技能移植） | 🔧 部分完成（已提交 master 01006010，待部署真机验收） | 移植 workbuddy doc-layout-clone 技能 v1.0.0（Word/PDF 样版运行时分析 -> analysis/answers 缓存 -> 板式 1:1 回填，清单行动态增减 + 板式指纹验收）；补丁仅 prep.py --templates 改必传 + SKILL.md 工作目录/交付适配我方口径；requirements 增 pdf2docx；8 单测容器内全绿 + CLI 冒烟通过。 | — | — |
 | 20261116-2200 | Excel 模板复刻（excel-layout-clone 技能移植） | 🔧 部分完成（已提交 master aab1edce，待部署真机验收） | 移植 workbuddy excel-layout-clone 技能 v1.0.0 并于 11-17 合并上游 v1.1.0（透视缓存 worksheetSource 随明细行自动扩展 + refreshOnLoad）；样式/宏/透视/图表按字节保留，清单行动态增减 + 板式指纹验收 + 按源模板 hash 缓存复用；与 excel-to-template / doc-layout-clone 边界双向声明；补丁 3 处（--templates 必传 + 2 个上游 bug 修复：透视警告与 features 键名带 xl/ 前缀致恒不触发）；8 单测容器内全绿；零 LLM 调用点无计费需求，负载判 light 不接入 heavy_tools。 | — | — |
