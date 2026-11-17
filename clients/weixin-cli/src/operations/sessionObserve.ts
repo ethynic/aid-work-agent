@@ -93,7 +93,7 @@ export function createWeixinSessionObserveOperation(deps: {
             return observerUnavailable(args, 'viewport_unreachable', '观察不可用：缺少受控采集证据')
           }
           const stateKey = JSON.stringify([bindingId, actual.binding_version, actual.account_identity_version])
-          const state = states.get(stateKey) ?? { aligner: new ConversationAligner((first, current) => first === current), fingerprints: new Set<string>() }
+          const state = states.get(stateKey) ?? { aligner: new ConversationAligner(), fingerprints: new Set<string>() }
           const knownFingerprints = state.fingerprints
           if (args.watermark && !knownFingerprints.has(args.watermark.window_fingerprint)) {
             return {

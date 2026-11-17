@@ -5,18 +5,21 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { CodedOperationError } from '../operations/types.js'
-import { protectText, runDpapiCommand } from '../security/dpapi.js'
-import type { NameRead, NameWindow } from './nameSession.js'
+import { protectText, runDpapiCommand, type DpapiRunnerFn } from '../security/dpapi.js'
+import type { Bubble } from './aligner.js'
 import { runPowerShellDriver, type RunPowerShellDriverFn } from './powershell.js'
 
 const OBSERVE_PATH = fileURLToPath(new URL('../../../drivers/ps1/observe-native.ps1', import.meta.url))
+const RESOLVE_PATH = fileURLToPath(new URL('../../../drivers/ps1/name-resolve-native.ps1', import.meta.url))
 const bounds = z.object({
   x0: z.number().int().nonnegative(), y0: z.number().int().nonnegative(),
   x1: z.number().int().positive(), y1: z.number().int().positive(),
 }).refine((r) => r.x0 < r.x1 && r.y0 < r.y1)
-const snapshotSchema = z.object({
+const identitySchema = z.object({
   title: z.string().min(1).max(128),
   session_identity: z.string().min(1).max(256),
+})
+const snapshotSchema = identitySchema.extend({
   is_group: z.boolean(),
   input_empty: z.boolean(),
   png: z.string().min(1).optional(),
@@ -31,6 +34,47 @@ const snapshotSchema = z.object({
   })).max(256),
 })
 
+export interface NativeMessageWindow {
+  native_title: string
+  evidence_ref: string
+  frame: string
+  objects: Array<{ type: 'text' | 'image'; sender: Bubble['sender']; text: string; clipped: boolean }>
+}
+
+type NativeObservationRead = ({ unchanged: true; frame: string } | ({ unchanged: false } & NativeMessageWindow))
+  & { nativeSessionIdentity: string }
+
+interface EvidenceOptions {
+  stateDir?: string
+  dpapiRunFn?: DpapiRunnerFn
+}
+
+async function saveNativeEvidence(value: string, signal: AbortSignal, opts: EvidenceOptions = {}): Promise<string> {
+  const id = randomUUID()
+  const stateDir = opts.stateDir ?? join(process.env.LOCALAPPDATA ?? tmpdir(), 'aid-weixin', 'native-evidence')
+  const encrypted = await protectText(value, opts.dpapiRunFn ?? ((command, input) => runDpapiCommand(command, input, signal)))
+  await mkdir(stateDir, { recursive: true })
+  await writeFile(join(stateDir, id + '.dpapi'), encrypted, { flag: 'wx', signal })
+  return 'dpapi:' + id
+}
+
+export async function resolveWeixinNativeName(
+  targetName: string,
+  signal: AbortSignal,
+  runDriver: RunPowerShellDriverFn = runPowerShellDriver,
+  evidenceOptions?: EvidenceOptions,
+) {
+  const raw = await runDriver({
+    script: RESOLVE_PATH, stdin: JSON.stringify({ target_name: targetName }), signal, useVisionProxy: false,
+  })
+  const confirmation = identitySchema.strict().safeParse(raw)
+  if (!confirmation.success || confirmation.data.title !== targetName) {
+    throw new CodedOperationError('UI_CHANGED', '微信联系人原生定位证据不可用')
+  }
+  const evidenceRef = await saveNativeEvidence(JSON.stringify({ version: 1, ...confirmation.data }), signal, evidenceOptions)
+  return { ...confirmation.data, evidenceRef }
+}
+
 export function parseNativeObservation(raw: unknown, info: { targetName: string; nativeTitle?: string; nativeSessionIdentity?: string }) {
   const parsed = snapshotSchema.safeParse(raw)
   if (!parsed.success || parsed.data.title !== (info.nativeTitle ?? info.targetName)
@@ -39,7 +83,7 @@ export function parseNativeObservation(raw: unknown, info: { targetName: string;
   }
   const snapshot = parsed.data
   const messageIds = new Set<string>()
-  const objects: NameWindow['objects'] = []
+  const objects: NativeMessageWindow['objects'] = []
   let previousY = -1
   for (const row of snapshot.rows) {
     if (messageIds.has(row.runtime_id) || row.bounds.y0 < previousY) {
@@ -55,9 +99,7 @@ export function parseNativeObservation(raw: unknown, info: { targetName: string;
       type: row.kind === 'text' ? 'text' : 'image',
       sender: row.sender,
       text: row.kind === 'text' ? row.text : '',
-      bounds: row.bounds,
       clipped: row.clipped,
-      evidence_hash: createHash('sha256').update(JSON.stringify([row.kind, row.text, row.sender])).digest('hex'),
     })
   }
   const frame = createHash('sha256').update(JSON.stringify([
@@ -75,7 +117,7 @@ export async function readWeixinNativeObservation(args: {
   previousFrame?: string
   includeEvidence: boolean
   signal: AbortSignal
-}, runDriver: RunPowerShellDriverFn = runPowerShellDriver): Promise<NameRead & { nativeSessionIdentity: string }> {
+}, runDriver: RunPowerShellDriverFn = runPowerShellDriver): Promise<NativeObservationRead> {
   const raw = await runDriver({
     script: OBSERVE_PATH,
     stdin: JSON.stringify({
@@ -91,16 +133,10 @@ export async function readWeixinNativeObservation(args: {
   let evidenceRef = 'local-frame:' + frame
   if (args.includeEvidence) {
     if (!snapshot.png) throw new CodedOperationError('UI_CHANGED', '当前微信会话证据不可用')
-    const evidenceId = randomUUID()
-    const stateDir = join(process.env.LOCALAPPDATA ?? tmpdir(), 'aid-weixin', 'ocr-evidence')
-    await mkdir(stateDir, { recursive: true })
-    const evidence = await protectText(snapshot.png, (command, input) => runDpapiCommand(command, input, args.signal))
-    await writeFile(join(stateDir, evidenceId + '.dpapi'), evidence, { flag: 'wx', signal: args.signal })
-    evidenceRef = 'dpapi:' + evidenceId
+    evidenceRef = await saveNativeEvidence(snapshot.png, args.signal)
   }
   return {
-    unchanged: false, title: args.targetName, native_title: snapshot.title, exact_name: true, unique_match: true,
-    evidence_ref: evidenceRef, complete: true, input_empty: snapshot.input_empty,
+    unchanged: false, native_title: snapshot.title, evidence_ref: evidenceRef,
     frame, objects, nativeSessionIdentity: snapshot.session_identity,
   }
 }

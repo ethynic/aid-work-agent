@@ -116,7 +116,8 @@ test('Weixin packages stage native history and send drivers with their shared UI
   try {
     copyProviderDriverAssets(join(clients, 'weixin-cli/drivers'), join(home, 'drivers'))
     const paths = filesUnder(home).map(file => file.path)
-    for (const driver of ['_common.ps1', 'win32-lib.ps1', 'native-messages.ps1', 'history-read.ps1', 'message-send.ps1']) {
+    for (const driver of ['_common.ps1', 'win32-lib.ps1', 'native-messages.ps1', 'native-session-search.ps1',
+      'history-read.ps1', 'message-send.ps1', 'name-resolve-native.ps1']) {
       assert.ok(paths.includes(`drivers/ps1/${driver}`), `missing relocated Weixin driver ${driver}`)
     }
     for (const driver of ['history-read.ps1', 'message-send.ps1']) {
@@ -248,19 +249,6 @@ test('native input dependency: no declaration stays untouched; declared one is r
     // 不再包含相对路径（staged npm 无法解析）
     assert.ok(!readFileSync(join(ready, 'package.json'), 'utf8').includes('../shared'))
   } finally { rmSync(home, { recursive: true, force: true }) }
-})
-
-test('Weixin OCR asset lock retains its existing pinned timezone wheel', () => {
-  const lock = JSON.parse(readFileSync(new URL('../ocr-assets.lock.json', import.meta.url), 'utf8'))
-  const tzdata = lock.wheels.find((wheel) => wheel.name === 'tzdata')
-  assert.ok(tzdata, 'existing Weixin OCR lock keeps its pinned tzdata wheel')
-  assert.match(tzdata.filename, /^tzdata-\d+\.\d+(\.\d+)?-py2\.py3-none-any\.whl$/)
-  assert.match(tzdata.url, /^https:\/\/files\.pythonhosted\.org\//)
-  assert.match(tzdata.sha256, /^[0-9a-f]{64}$/)
-  const prepare = readFileSync(new URL('../prepare-ocr.py', import.meta.url), 'utf8')
-  // 最终便携解释器冒烟必须断言日期入口（ZoneInfo + 日期边界数学）
-  assert.match(prepare, /ZoneInfo\("Asia\/Shanghai"\)/)
-  assert.match(prepare, /assert int\(end\.timestamp\(\)\)-int\(start\.timestamp\(\)\)==86400/)
 })
 
 test('wecom release closure verifies date/IANA capability end to end (review 3 P1-5)', () => {

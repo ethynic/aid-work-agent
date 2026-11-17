@@ -3,8 +3,8 @@
  *
  * 这是常驻会话观察器的**结果/请求 schema 与错误码冻结**，不是实现：M2 的
  * weixin_unread_list 只读取当前可见的未读会话列表，
- * 不满足本契约（无常驻水位、无连续窗口对齐、无稳定消息 ID）。C2 才实现
- * 常驻 OCR/observer；实现必须通过 tests/session-observer-contract.test.ts。
+ * 不满足本契约（无常驻水位、无连续窗口对齐、无稳定消息 ID）。持续观察实现
+ * 必须通过 tests/session-observer-contract.test.ts。
  *
  * 冻结语义（与设计 §6 一致，实现不得私自放宽）：
  * - coverage 只描述「与上次水位连续对齐的窗口」，不承诺全账号全历史完整。
@@ -14,7 +14,7 @@
  *   gap/unavailable 必须 messages=[] 且 fingerprint=null，绝不返回部分猜测。
  * - sender 无法判定时降级为 gap（gap_reason=sender_ambiguous），complete_window
  *   的消息里不允许出现 sender=unknown——schema 层保留该枚举仅用于证据记录。
- * - OCR 引擎初始化失败 → coverage=unavailable + reason，不返回空列表冒充无人回复。
+ * - 采集不可用 → coverage=unavailable + reason，不能把错误解释为空窗口。
  * - ordered_messages 语义（2026-09-12 评审修订 P2-3）：水位非 null 时只含**新于水位**
  *   的连续消息（空=无新消息）；watermark=null 建基线时含整个对齐基线窗口。
  * - 观察是只读动作（effect=none）；打开会话可能清未读角标，但不产生写副作用。
@@ -101,7 +101,7 @@ export type SessionObserverRequest = z.infer<typeof sessionObserverRequestSchema
 export const sessionObserverMessageSchema = z.object({
   sender: z.enum(['peer', 'self', 'system', 'unknown']),
   /**
-   * OCR 拆行重建后的完整气泡**原文**（含首尾空白）：对齐、正文比较与完成证据引用
+   * 完整消息原文（含首尾空白）：对齐、正文比较与完成证据引用
    * 都用它，校验不得变换文本；仅拒绝纯空白（不可构成有效气泡）。
    */
   text: z

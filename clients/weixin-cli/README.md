@@ -35,6 +35,8 @@ npm test           # 构建 + 契约/单元测试
 npm run cli        # 构建后启动 human CLI
 ```
 
+便携归档在编译后用 `npm run pack:portable -- <已存在的输出绝对目录>` 生成。通过 `npm install <tgz>` 安装，在目标 Windows 上使用 Node 22 或更高版本启动。归档包含当前版本的编译文件、清单和 PowerShell 驱动。
+
 ### 本机会话历史和监控
 
 ```powershell

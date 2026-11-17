@@ -34,10 +34,10 @@ human CLI adapter ─┐
                    ├─> operations（注册表，CLI 与 MCP 共用同一实现）
 MCP stdio adapter ─┘        │
                             ▼
-              platform（powershell 驱动执行器 / targetRef / liveBridge / ocrResident / serverProxy）
+              platform（PowerShell 驱动执行器 / targetRef / nativeMessages / serverProxy）
                             │  spawn powershell -File <script>
                             ▼
-              drivers/ps1（Win32 P/Invoke + UIA）+ drivers/py（常驻 RapidOCR）
+              drivers/ps1（Win32 P/Invoke + UIA）
 ```
 
 - **驱动协议**：TS spawn PowerShell 脚本，stdout 末行 `DRIVER_JSON: {...}` 单行 JSON；
@@ -46,11 +46,7 @@ MCP stdio adapter ─┘        │
 - **操作契约**：operation 永不 reject，统一 `OperationResult`（success/code/message/
   effect ∈ none|applied|partial|unknown/data/retryable/run_id）；toolDefs↔registry
   启动期一致性校验 fail-loud。
-- **微信交互机制**（drivers/ps1/win32-lib.ps1）：PostMessage 点击 + WM_CHAR 逐字输入 +
-  回车（不占光标/剪贴板，RDP 可用）；PrintWindow 遮挡截图；UIA 枚举与标题校验；
-  视觉模型坐标定位（Kimi kimi-k3 / GLM-5.3-Flash，429 重试 25s×4）；常驻 RapidOCR
-  （drivers/py/ocr_server.py，stdin/stdout JSON 行协议，可重启）；名称会话路径用
-  剪贴板粘贴输入（name-ocr.ps1）。
+- **微信交互机制**（drivers/ps1/win32-lib.ps1）：Win32 点击、输入和回车，UIA 枚举与标题校验。原生搜索使用剪贴板输入查询。PrintWindow 在本机采集图像用于气泡方向校对或视觉模型定位。发送入口的模型请求仅含空白输入框裁剪。
 - **稳定性**：进程内单飞 + 跨进程命名管道互斥 `\\.\pipe\AidWorkAgent.AidWeixin.<scope>`
   （占用返回 `BUSY`）；写动作零重试；`ConversationAligner` 会话对齐/水位指纹；
   stderr 日志脱敏；DPAPI CurrentUser 加密 token。
@@ -61,7 +57,7 @@ MCP stdio adapter ─┘        │
 |------|------|------|
 | `weixin_probe` | 只读环境探测 | win32/交互会话/PowerShell/Weixin.exe 进程 |
 | `weixin_chat_search` | 主窗口搜索好友/群 | 返回 5 分钟有效 `target_ref`（HMAC 签名，TTL 300s） |
-| `weixin_name_resolve` | 按名称 OCR 近似匹配唯一定位会话 | 多匹配即拒绝（名称会话 v2 路径） |
+| `weixin_name_resolve` | 用 UIA 按完整显示名唯一定位联系人 | 与发送共用原生定位，保留本机证据引用 |
 | `weixin_message_send` | 向 target_ref 对应会话发送一条文本 | 多模态定位，目标和正文在本机核对，未知结果不重发 |
 | `weixin_history_read` | 本机 UIA 读聊天历史 | 翻页 ≤10、内联 ≤200 条、超出落本机文件 |
 | `weixin_unread_list` | 本机未读会话列表 | 只读不清角标 |
@@ -160,6 +156,8 @@ get_url、official_account_follow）未产品化——实际方向转向会话�
 许可发送的目标核对可以独立迁移。该步骤读取当前微信窗口同一进程的唯一 UIA 标题和输入框边界。预检与提交前精确核对已确认观察记录的原生标题，保留已有别名绑定。联系人搜索和观察的原有定位、水位与消息来源继续由各自入口负责。详见[开发计划](../../plans/plan-weixin-cli-remove-ocr.md#phase-3a-发送前标题)。
 
 发送入口收敛为 `weixin_message_send`。多模态通过计费代理定位不含聊天正文的界面控件，UIA 在本机核对会话和消息原文。签名插件声明由 CLI 生产，Runtime 优先消费实际安装包的声明。服务端继续接纳旧版本已经提交的 V2 回执。详见[发送入口收敛计划](../../plans/plan-weixin-cli-remove-ocr.md#phase-3c-发送入口收敛)。
+
+名称定位复用发送的 UIA 搜索。以完整名称、「联系人」分区和当前选中项确认目标。同名的「最常使用」项在点击前返回歧义，微信 UIA 未公开这类候选的类型。本机加密保存定位证据，工具返回原有证据引用。名称定位和观察交接使用原生会话身份。多模态仍只在发送入口定位空白输入框的点击位置。见[名称定位计划](../../plans/plan-weixin-cli-remove-ocr.md#phase-3b-名称定位复用原生搜索)。
 
 计费定位复用现有客户端 binding 与 `/api/client/v1/llm/chat`，模型使用现有白名单中的 GLM-5.3-Flash。固定控件的坐标在能验证控件与布局时可以缓存；区分客户端版本、DPI、窗口尺寸、布局和控件角色，缓存相对坐标。搜索结果行、当前联系人、发送结果和消息内容随交互变化，每次读取当前证据。
 

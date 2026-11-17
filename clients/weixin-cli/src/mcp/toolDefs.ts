@@ -113,6 +113,6 @@ export const TOOL_DEFS: WeixinToolDef[] = [
 ]
 
 TOOL_DEFS.push(
-  { name:'weixin_name_resolve', title:'定位微信名称会话', description:'按名称及OCR近似匹配唯一定位；多个近似联系人拒绝选择。只返回定位证据，不返回历史正文。', zodShape:{target_name:z.string().min(1).max(128)}, annotations:{title:'定位微信名称会话',readOnlyHint:true,destructiveHint:false,idempotentHint:false,openWorldHint:true}},
+  { name:'weixin_name_resolve', title:'定位微信名称会话', description:'通过微信原生搜索唯一精确定位并打开联系人。只返回定位证据，不读取历史正文。', zodShape:{target_name:z.string().min(1).max(128)}, annotations:{title:'定位微信名称会话',readOnlyHint:true,destructiveHint:false,idempotentHint:false,openWorldHint:true}},
 )
 export const TOOL_NAMES = TOOL_DEFS.map((t) => t.name)

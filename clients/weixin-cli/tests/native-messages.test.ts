@@ -25,7 +25,7 @@ test('native observation preserves exact multiline text and cannot treat an unco
     title: '会话', session_identity: sessionId, is_group: false, input_empty: true, png: 'local-only',
     rows: [row('1', 'time', '昨天 10:00', 'system', 0), row('2', 'text', ' 上一行\n下一行 ', 'peer', 20)],
   }
-  const alignment = new ConversationAligner((a, b) => a === b)
+  const alignment = new ConversationAligner()
   const first = parseNativeObservation(base, { targetName: '会话' })
   assert.deepEqual(first.objects.map(({ sender, text }) => ({ sender, text })), [{ sender: 'peer', text: ' 上一行\n下一行 ' }])
   const aligned = alignment.align(first.objects, null)

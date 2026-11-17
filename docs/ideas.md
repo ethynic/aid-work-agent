@@ -89,7 +89,6 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261117-1415 | 微信 CLI 移除本地 OCR | 🔧 部分完成 | 历史、观察和发送核验已本机化，剩余名称定位与 OCR 打包清理。 | [设计](design/weixin/weixin-cli-design.md#13-移除本地-ocr) | [计划](plans/plan-weixin-cli-remove-ocr.md) |
 | 20261111-1130 | lead-search-proxy 双出口扩展（46 新增出口 + web_search.py 多代理轮换） | 🔧 部分完成（agent2 双出口已部署验证，243 待部署） | sci-dialog-46（博物馆宽带出口）部署同款 tinyproxy 容器 + 双隧道（254:18081/243:18081），151→243 隧道已补建，安全组已放行双落点验证通过（123.158.82.107）；web_search.py 多代理逗号分隔 round-robin 轮换 + 失败出口 10 分钟熔断回直连（daa80168 已合并 master）；agent2 容器已切双代理并 e2e 验证（轮换交替生效、零 errors）；243 代码与 env 部署暂缓（用户裁决）。 | — | — |
 | 20261110-1130 | 跨轮 workspace 旧路径改写（防 image_render 等工具首调失败） | ✅ 已完成开发（待部署） | Runner 上一轮工作区清理后旧路径仍残留会话历史致下一轮首调失败：context_assembler 加载历史后改写（反查索引 ws_file_idx 命中转 file_id、未命中失效标记）；图片附件装配时注册 ImageRegistry（source=user_upload）；image_render 报错加自纠提示。25 单测通过。 | — | — |
 | 20261107-1120 | web-search-pro 技能合并上游 v3 效率与风控更新 | 🔧 部分完成（开发+验证完成，待提交部署） | 合并 workbuddy 2026-11-06 新版（efficiency 节流/冷却/LLM 缓存等，version 1.1.0）；我方百度代理+cookie 预热补丁重移植，11 单测+CLI 冒烟通过。 | — | — |

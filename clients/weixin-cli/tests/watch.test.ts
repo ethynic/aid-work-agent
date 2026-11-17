@@ -96,11 +96,12 @@ test('watch uses the current-only observer even for the first baseline and relea
   const requests: Record<string, unknown>[] = []
   const { observe } = createNameOperations({
     observeCurrentOnly: true,
-    driver: async (request) => {
-      requests.push(request)
+    nativeDriver: async (request) => {
+      assert.match(request.script, /observe-native\.ps1$/)
+      assert.equal(request.useVisionProxy, false)
+      requests.push(JSON.parse(request.stdin!))
       return {
-        unchanged: false, title: 'exact name', native_title: 'exact name', exact_name: true, unique_match: true, complete: true,
-        evidence_ref: 'dpapi:fixture', frame: 'a'.repeat(64), input_empty: true, objects: [],
+        title: 'exact name', session_identity: '123:42:17.1', is_group: false, input_empty: true, rows: [],
       }
     },
   })
@@ -118,7 +119,7 @@ test('watch uses the current-only observer even for the first baseline and relea
     },
     wait: async () => assert.fail('stop must cancel the interval between polls'),
   })
-  assert.deepEqual(requests, [{ action: 'read', target_name: 'exact name', previous_frame: undefined, open: false }])
+  assert.deepEqual(requests, [{ target_name: 'exact name', include_evidence: false }])
   assert.equal(releaseCount, 1)
 })
 
