@@ -392,6 +392,20 @@ class LocalToolProxyTool(BaseTool):
                 return self._attach_credit_cost(invocation, result)
 
             if durable:
+                if ((invocation or {}).get("state") == "cancel_requested"
+                        and not (invocation or {}).get("result_json")
+                        and self._stop_verified_covered(invocation_id)):
+                    # R10 停稳已核（契约「停止与接续」）：v3 停稳证明已覆盖本原调用
+                    # （受管停止已证明执行停稳），行仍 cancel_requested 且无回执——
+                    # 继续轮询只是等租约过期（生产领取租约 60s，用户多等剩余租约）。
+                    # 立即把「业务效果未知」事实交回原任务（与租约收敛同一
+                    # EXECUTION_UNKNOWN 形态，overlay_flow._known 按同一停稳事实放行），
+                    # 不等 deadline/租约、不重放该调用；已有回执仍走上方既有终态消费。
+                    # 无停稳证明保持原等待（回归锚）。
+                    result = self._map_terminal({**invocation, "state": "unknown",
+                        "effect": "unknown", "result_json": None,
+                        "error_message": "原操作已停稳但业务回执未送达"})
+                    return self._attach_credit_cost(invocation, result)
                 if durable_deadline is not None:
                     if datetime.now(durable_deadline.tzinfo) >= durable_deadline:
                         from src.local_tools.durable_flow import LocalContinuationRequired
@@ -421,6 +435,21 @@ class LocalToolProxyTool(BaseTool):
                 }
 
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
+
+    @staticmethod
+    def _stop_verified_covered(invocation_id: str) -> bool:
+        """R10（契约「停止与接续」）：原调用是否被本 Worker checkpoint
+        verified_local_invocations（v3 受管停稳已核）覆盖。
+
+        判定数据来自 Worker 直接持有的 owner（DurableControl.envelope 随领取载入，
+        与 overlay_flow._known 同一读取方式），不做服务端查询；无 owner 上下文
+        （旧链路）视为未覆盖，语义不变。
+        """
+        from .lifecycle import current_local_operation
+        operation = current_local_operation()
+        envelope = getattr(getattr(getattr(operation, 'owner', None), 'root', None),
+            'envelope', None) or {}
+        return str(invocation_id) in (envelope.get('verified_local_invocations') or [])
 
     # ==================== 设备闸门 ====================
 
