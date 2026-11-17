@@ -180,6 +180,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261117-1415 | 微信 CLI 移除本地 OCR | ✅ 已完成开发，原生名称定位复用发送搜索，签名包和便携包已清除 OCR 和内置 Python。 | [设计](design/weixin/weixin-cli-design.md#13-移除本地-ocr) | [计划](plans/plan-weixin-cli-remove-ocr.md) |
 | 20261117-0932 | 微信 CLI 添加好友 | ✅ 已完成开发，真实好友申请与扣费待验。 | [设计](design/weixin/weixin-cli-design.md#12-本机添加好友) | [计划](plans/plan-weixin-cli-add-friend.md) |
 | 20261107-0949 | 企微搜索门禁真机回炉 | ✅ 已完成开发；CLI 真机通过，Agent 工具调度待验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w28-搜索门禁真机回炉2026-11-07) |
 | 20261107-1004 | 企微标题复制剪贴板诊断 | ✅ 已完成开发；远控剪贴板阻塞已定位，Agent 工具调度待验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w29-标题复制剪贴板诊断2026-11-07) |

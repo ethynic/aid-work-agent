@@ -268,6 +268,19 @@ def _authorize_permit(tenant_id, device_row, invocation_id, args, token_hash):
     )
 
 
+def _unregister_retired_weixin():
+    from src.desktop_automation.adapters import TrustedAdapterRegistry
+    from src.session_tasks.scenario_descriptor import get_descriptor
+    from src.weixin_conversation.config import CLOUD_REPLY_RETIRED
+    from src.weixin_conversation.constants import SCENARIO_KEY
+    from src.weixin_conversation.registration import reset_registration
+
+    assert CLOUD_REPLY_RETIRED
+    reset_registration()
+    assert TrustedAdapterRegistry.get(SCENARIO_KEY) is None
+    assert get_descriptor(SCENARIO_KEY) is None
+
+
 def _delivery_of(tenant_id, invocation_id):
     from src.db.database import get_db_connection
 
@@ -403,7 +416,8 @@ class TestSubmissionReceiptChain:
             evidence_ref="weixin-submission:req-1:1", tenant_id="t",
             scenario_key="boss.chat_reply.v1", request_id="req-1"))
 
-    def test_submitted_receipt_accepted_full_chain(self, da_tenant, device_row):
+    @pytest.mark.parametrize("retired", [False, True], ids=["registered", "retired"])
+    def test_submitted_receipt_accepted_full_chain(self, da_tenant, device_row, retired):
         """真链路：名称上下文任务 → prepare-send → 许可 → applied/submitted + 精确证据 → 接纳。
 
         现状锁定：delivery state=succeeded 但 phase 保持 submitted（"已提交"不冒充
@@ -418,15 +432,19 @@ class TestSubmissionReceiptChain:
         # 现状锁定：名称上下文绑定 → 服务端冻结 submission 回执策略（非 provider 输入）
         assert args["receipt_mode"] == "submission" and args["receipt_context"] == "weixin_name"
         permit = _authorize_permit(tenant_id, device_row, invocation_id, args, token_hash)
-        result = operation_result.apply_operation_result(
+        if retired:
+            _unregister_retired_weixin()
+        receipt = dict(
             tenant_id=tenant_id, device_id=str(device_row["id"]), invocation_id=invocation_id,
             claim_token_hash=token_hash,
             request_id=args["request_id"], effect="applied", phase="submitted",
             evidence_ref=f"weixin-submission:{args['request_id']}:1",
             permit_id=permit["permit_id"], permit_token=permit["permit_token"],
         )
+        result = operation_result.apply_operation_result(**receipt)
         assert result["acked"] is True and result["late"] is False
         assert result["state"] == "succeeded" and result["effect"] == "applied"
+        assert result["run_state"] == "succeeded"
         delivery = _delivery_of(tenant_id, invocation_id)
         assert delivery == {"state": "succeeded", "effect": "applied", "phase": "submitted"}
         # attempt 保留原始上报值（phase=submitted，不被拔高为 verified）
@@ -439,6 +457,21 @@ class TestSubmissionReceiptChain:
         # 业务聚合：submitted 不冒充送达（reply_submitted ≠ reply_delivered）
         verdict = WeixinConversationAdapter().aggregate_result(None, [delivery]).verdict
         assert verdict == "reply_submitted"
+        replay = operation_result.apply_operation_result(**receipt)
+        assert replay["acked"] is True and replay["late"] is True
+        assert _evidence_rows(tenant_id) == rows
+        assert _audits(tenant_id, "operation_result_late")[-1]["evidence_registered"] is True
+
+    def test_unregistered_receipt_validator_cannot_issue_a_new_permit(self, da_tenant, device_row):
+        from src.local_tools.permits import PermitError
+
+        claimed, decision_id = _ready_reply_by_name_context(da_tenant, device_row)
+        invocation_id, args, token_hash = _materialize_running(da_tenant, device_row, claimed, decision_id)
+        _unregister_retired_weixin()
+
+        with pytest.raises(PermitError) as failure:
+            _authorize_permit(da_tenant, device_row, invocation_id, args, token_hash)
+        assert failure.value.code == "SCENARIO_NOT_REGISTERED"
 
     @pytest.mark.parametrize("mutation,expected_reason", [
         ("scenario", "submission_not_authorized"),
@@ -554,7 +587,8 @@ class TestVerifiedReceiptBaseline:
         assert len(invalids) == 1 and invalids[0]["reason"] == "adapter_rejected"
         assert _evidence_rows(tenant_id) == []
 
-    def test_verified_weixin_namespace_accepted_and_replay_idempotent(self, da_tenant, device_row, verified_binding):
+    @pytest.mark.parametrize("retired", [False, True], ids=["registered", "retired"])
+    def test_verified_weixin_namespace_accepted_and_replay_idempotent(self, da_tenant, device_row, verified_binding, retired):
         """旧 verified 回执现状：weixin-evidence:{request_id}:{seq} 结构匹配即接纳登记
         （adapters.py:401-411 仅做"命名空间+请求绑定"结构校验，不查证据存在性——
         【B1.2 泛化点】宽松匹配现状）；同操作重复回执经 evidence 表 ON CONFLICT
@@ -564,6 +598,8 @@ class TestVerifiedReceiptBaseline:
 
         tenant_id = da_tenant
         invocation_id, args, token_hash, permit = self._materialize(tenant_id, device_row, verified_binding)
+        if retired:
+            _unregister_retired_weixin()
         ref = f"weixin-evidence:{args['request_id']}:1"
         first = operation_result.apply_operation_result(
             tenant_id=tenant_id, device_id=str(device_row["id"]), invocation_id=invocation_id,
@@ -573,7 +609,7 @@ class TestVerifiedReceiptBaseline:
             permit_id=permit["permit_id"], permit_token=permit["permit_token"],
         )
         assert first["acked"] is True and first["late"] is False
-        assert first["state"] == "succeeded"
+        assert first["state"] == "succeeded" and first["run_state"] == "succeeded"
         assert _delivery_of(tenant_id, invocation_id) == {
             "state": "succeeded", "effect": "applied", "phase": "verified"
         }
@@ -589,6 +625,7 @@ class TestVerifiedReceiptBaseline:
         )
         assert replay["acked"] is True and replay["late"] is True
         assert _evidence_rows(tenant_id) == rows
+        assert _audits(tenant_id, "operation_result_late")[-1]["evidence_registered"] is True
 
 
 # ---------------------------------------------------------------------------

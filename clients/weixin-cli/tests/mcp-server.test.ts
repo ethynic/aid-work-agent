@@ -74,7 +74,7 @@ test('initialize：serverInfo + instructions（前 512 字符内含仅 Windows/�
   }
 })
 
-test('list_tools：6 个 tool（M2 + C2 session_observe），readOnly 注解 + 中文标题 + object inputSchema', async () => {
+test('list_tools：保留标准发送接口、其他本机操作，专用 v2 发送已撤下', async () => {
   const client = await startClient()
   try {
     const { tools } = await client.listTools()
@@ -85,14 +85,16 @@ test('list_tools：6 个 tool（M2 + C2 session_observe），readOnly 注解 + �
       'weixin_history_read',
       'weixin_session_observe',
       'weixin_unread_list',
-    'weixin_name_resolve',
-    'weixin_message_send_v2',
+      'weixin_name_resolve',
     ])
     const probe = tools[0]!
     assert.equal(probe.annotations?.readOnlyHint, true)
     assert.equal(probe.annotations?.destructiveHint, false)
     assert.match(probe.title ?? '', /[一-龥]/)
     assert.equal((probe.inputSchema as { type: string }).type, 'object')
+    const send = tools.find((tool) => tool.name === 'weixin_message_send')
+    assert.deepEqual(send?.inputSchema.required, ['target_ref', 'text'])
+    assert.equal(send?.annotations?.readOnlyHint, false)
   } finally {
     await client.close()
   }

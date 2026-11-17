@@ -25,10 +25,10 @@ import { redactSensitive } from '../security/redaction.js'
  */
 const INSTRUCTIONS =
   '微信操作 Provider。工具：weixin_probe（只读环境探测）、weixin_chat_search（搜索好友/群，返回 5 分钟有效的 target_ref）、' +
-  'weixin_message_send（写：发 1 条文本消息）、weixin_history_read（读聊天记录，会打开会话并清除未读角标）、' +
+  'weixin_message_send（写：经服务端视觉定位发送 1 条文本消息）、weixin_history_read（本机读取已打开的会话）、' +
   'weixin_unread_list（未读会话列表）。前提：仅 Windows（win32-x64）；' +
   '需要已登录且未锁屏的微信 Windows 客户端（Weixin.exe）与交互桌面会话。' +
-  '副作用预告：自动化会占用前台窗口（PostMessage 注入，不占剪贴板），操作期间请勿移动鼠标、勿操作键盘；' +
+  '副作用预告：自动化会占用前台窗口，搜索会话时使用剪贴板。操作期间请勿移动鼠标或操作键盘。' +
   '写动作单次单目标且有硬上限（1 条、≤500 字），结果 effect=unknown 时系统不会自动重试，请人工确认。' +
   '结果约定：structuredContent 含 success/code/message/effect/data/retryable/run_id，' +
   'effect ∈ none|applied|partial|unknown。'

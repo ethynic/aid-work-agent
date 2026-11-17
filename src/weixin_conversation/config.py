@@ -1,8 +1,6 @@
-"""weixin_conversation 场景配置（C1：骨架开关，默认关闭）。
+"""微信云端自动回复场景配置。
 
-场景 enabled/allowlist 与 session_tasks 一样按**热读**（mtime+size 缓存，文件
-缺失/损坏 fail-closed）：关闭微信场景须立即阻止发布/分配/新决策等授权点，
-迟到事实接纳不受影响（设计评审 P2-5）。
+微信消息采集现仅在本机运行。旧部署配置里的 enabled 不再授予云端自动回复权限。
 """
 
 from __future__ import annotations
@@ -10,6 +8,8 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 from typing import List, NamedTuple, Optional
+
+CLOUD_REPLY_RETIRED = True
 
 
 class _ScenarioGate(NamedTuple):
@@ -60,6 +60,8 @@ def scenario_enabled(tenant_id: str, config_path: Optional[str] = None) -> bool:
 
     enabled=false 或租户不在 allowlist → False（fail-closed）。
     """
+    if CLOUD_REPLY_RETIRED:
+        return False
     global _gate_cache
     path = Path(config_path) if config_path else _gate_yaml_path()
     try:
@@ -82,6 +84,8 @@ def scenario_enabled(tenant_id: str, config_path: Optional[str] = None) -> bool:
 
 def scenario_enabled_gate(config_path: Optional[str] = None) -> bool:
     """租户无关的场景总门控（注册/调度接线用：仅看 enabled，不看 allowlist）。"""
+    if CLOUD_REPLY_RETIRED:
+        return False
     global _gate_cache
     path = Path(config_path) if config_path else _gate_yaml_path()
     try:

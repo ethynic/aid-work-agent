@@ -6,16 +6,15 @@
 
 ### 服务端代理模式（默认，计费）
 
-UI 元素定位依赖 Kimi 视觉模型（`kimi-k3`）。默认走服务端 LLM 网关代理集中计费
-（设计见 [weixin-cli-billing.md](../../docs/design/weixin/weixin-cli-billing.md)），
-本机**不持有 Kimi key**，只需：
+UI 元素的计费视觉定位通过现有服务端 LLM 网关调用 `GLM-5.3-Flash`。
+配置服务端地址和一次性激活码即可绑定客户端。
 
 ```powershell
 $env:AID_WEIXIN_SERVER_URL = "https://<服务端地址>"
 $env:AID_WEIXIN_ACTIVATION_CODE = "AC-XXXX..."   # 一次性激活码（租户管理员在 portal 生成）
 ```
 
-首次需要 Kimi 调用时自动激活（`POST /api/client/v1/activate`）换取 access_token，
+首次需要视觉调用时自动激活（`POST /api/client/v1/activate`）换取 access_token，
 token 经 DPAPI（CurrentUser）加密存于 `%APPDATA%\aid-weixin\binding.json`，之后复用。
 余额不足时操作以 `INSUFFICIENT_CREDIT` 失败；凭据失效/缺失以 `CONFIG_MISSING` 失败
 （删除 binding.json 后重设激活码即可重新激活）。
@@ -35,6 +34,19 @@ npm run build      # 编译 TS → dist/
 npm test           # 构建 + 契约/单元测试
 npm run cli        # 构建后启动 human CLI
 ```
+
+便携归档在编译后用 `npm run pack:portable -- <已存在的输出绝对目录>` 生成。通过 `npm install <tgz>` 安装，在目标 Windows 上使用 Node 22 或更高版本启动。归档包含当前版本的编译文件、清单和 PowerShell 驱动。
+
+### 本机会话历史和监控
+
+```powershell
+aid-weixin read --domain chat-history --target-name "<当前已打开的会话全名>" --max-pages 3 --json
+aid-weixin watch --target-name "<当前已打开的会话全名>" --interval 10
+```
+
+在微信中打开要读取或监控的单聊或群聊。旧 `target_ref` 只包含会话名，读取历史时请改用 `--target-name`。
+
+监控第一轮建立本机水位，之后确认有新增消息时输出一行 `{"event":"new_messages","count":1}`。保持目标会话打开。会话切换或消息窗口无法对齐时保留原水位，按 Ctrl+C 退出。
 
 ### 添加好友
 

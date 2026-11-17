@@ -6,15 +6,15 @@
 
 ## 包格式
 
-外层仅 `envelope.json`、`payload.zip`。内层包含 `runtime-manifest.json`、`dist/src`、生产 `node_modules`、批准的驱动及适用的内部原生依赖/OCR 资产。签名及 manifest 摘要使用 RFC8785；包摘要和大小绑定内层 ZIP 字节。`distribution.required_files` 覆盖内层普通文件，仅排除 manifest 自身，避免自引用。
+外层仅 `envelope.json`、`payload.zip`。内层包含 `runtime-manifest.json`、`dist/src`、生产 `node_modules`、批准的驱动及适用的内部原生依赖。签名及 manifest 摘要使用 RFC8785；包摘要和大小绑定内层 ZIP 字节。`distribution.required_files` 覆盖内层普通文件，仅排除 manifest 自身，避免自引用。
 
 ## 低层打包器及公钥文件
 
 `package.mjs` 接收已构建的 Provider 源码。`--provider boss`、`--provider wecom`、`--provider weixin` 分别选择一个 Provider，省略会遍历三个。验收公钥登记表在 `trust/acceptance-roots.json`，已交付的公开根快照在 `trust/history/`。登记工具只追加公钥，Provider 范围按实际用途设定。
 
-## 微信 OCR 与企微本地库 Python 资产
+## 微信驱动与企微本地库 Python 资产
 
-微信 Provider 保持 `prepare-ocr.py`、`ocr-assets.lock.json` 和 `ocr-python` 原路径，用于现有 OCR 能力。企微 Provider 使用独立的 `prepare-localdb.py`、`localdb-assets.lock.json` 和 `localdb-python`，只包含锁定来源和 SHA256 的 CPython 3.12.10、pycryptodome、tzdata 与 app-local CRT；不带 RapidOCR、Pillow、ORT、OpenCV 或模型。
+微信 Provider 打包 PowerShell 驱动。企微 Provider 使用独立的 `prepare-localdb.py`、`localdb-assets.lock.json` 和 `localdb-python`，包含锁定来源和 SHA256 的 CPython 3.12.10、pycryptodome、tzdata 与 app-local CRT。
 
 两种资产均在构建机下载并核对来源摘要，MSVC 包还核对 Microsoft Authenticode，仅解包 CAB。企微资产构建、签包及离线验包分别验证包内 AES-CBC、SQLite 和 Asia/Shanghai IANA 日期能力。发行包内 Python 以 `-I -B` 运行，签名 payload 不含 `__pycache__`。`python_bootstrap.py` 保留便携解释器在 Runtime 深路径的兼容处理；开发 checkout 可用仓库 venv，已安装插件依赖包内解释器。
 

@@ -204,6 +204,30 @@ class TestParallelClaimRepository:
         )
         assert claimed is not None and str(claimed["id"]) == inv
 
+    @pytest.mark.parametrize("parallel_only", [False, True])
+    def test_stale_weixin_read_cannot_receive_claim_even_from_stale_capabilities(self, users, parallel_device, parallel_only):
+        from src.local_tools import repository
+
+        user = users[0]
+        device_id = parallel_device["device_id"]
+        private_tool = "weixin_history_read"
+        stale = _create(user, device_id, private_tool, provider_key="weixin")
+        allowed = _create(user, device_id, "wecom_read_session", provider_key=WECOM_PROVIDER_KEY)
+        stale_capabilities = {"weixin": [private_tool], **PARALLEL_TOOLS}
+        def claim():
+            return repository.claim_next(
+                device_id, user["tenant_id"], sha256_hex(generate_claim_token()), 60,
+                provider_keys=["weixin", WECOM_PROVIDER_KEY],
+                parallel_only=parallel_only, parallel_tools=stale_capabilities,
+            )
+
+        assert claim() is None
+        retired = repository.get_invocation(stale, user["tenant_id"])
+        assert retired["state"] == "failed"
+        assert retired["error_code"] == "TOOL_NOT_ALLOWED"
+        assert retired["claimed_at"] is None
+        assert str(claim()["id"]) == allowed
+
 
 class TestParallelClaimApi:
     def test_heartbeat_response_has_parallel_claim(self, client, parallel_device):

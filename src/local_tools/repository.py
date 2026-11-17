@@ -16,6 +16,7 @@ from psycopg2.extras import Json
 from src.core.cache_utils import invalidate_tenant_cache
 from src.db.client_binding_db import ClientUsageLogDB
 from src.db.database import get_db_connection
+from src.local_tools.catalog import LOCAL_ONLY_WEIXIN_MESSAGE, LOCAL_ONLY_WEIXIN_TOOLS
 from src.local_tools.pricing import tool_credit_price
 from src.local_tools.security import sha256_hex
 
@@ -1154,6 +1155,17 @@ def claim_next(
         if not row:
             conn.commit()
             return None
+        if row.get('tool_name') in LOCAL_ONLY_WEIXIN_TOOLS:
+            # Retire stale queued reads before issuing credentials to any Runtime.
+            result = {'success': False, 'code': 'TOOL_NOT_ALLOWED', 'message': LOCAL_ONLY_WEIXIN_MESSAGE,
+                      'data': None, 'retryable': False}
+            cursor.execute("""UPDATE local_tool_invocations
+                SET state='failed', effect='none', error_code='TOOL_NOT_ALLOWED', error_message=%s,
+                    result_json=%s, finished_at=NOW()
+                WHERE id=%s AND tenant_id=%s""",
+                (LOCAL_ONLY_WEIXIN_MESSAGE, Json(result), row['id'], tenant_id))
+            conn.commit()
+            return None
         from .recovery_observation import observation_scope, stop_superseded_by_completion, supersede_completed_stop
         try:
             send_status = _send_status_scope(cursor, row, dispatch=True)
@@ -1201,7 +1213,9 @@ def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str, *,
         cursor.execute('SELECT * FROM local_tool_invocations WHERE id=%s AND tenant_id=%s AND claim_token_hash=%s',
             (invocation_id, tenant_id, claim_token_hash))
         owner = cursor.fetchone()
-        if owner and owner.get('business_kind') == WECOM_SCHEDULED_SEND:
+        if not owner or owner.get('tool_name') in LOCAL_ONLY_WEIXIN_TOOLS:
+            return None
+        if owner.get('business_kind') == WECOM_SCHEDULED_SEND:
             if str(owner['device_id']) != device_id or not lock_active_device(cursor, tenant_id, device_id):
                 return None
             from src.wecom_conversation.scheduled_delivery import authorize_in_tx
@@ -1209,7 +1223,7 @@ def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str, *,
             row = authorize_in_tx(cursor, owner)
             conn.commit()
             return row
-        if not owner or not lock_active_device(cursor, tenant_id, str(owner['device_id'])):
+        if not lock_active_device(cursor, tenant_id, str(owner['device_id'])):
             return None
         from .recovery_observation import (observation_scope, stop_superseded_by_completion,
             supersede_completed_stop)
@@ -1328,6 +1342,11 @@ def append_event(
 def write_runtime_result(invocation_id, tenant_id, claim_token_hash, success, code=None,
         message=None, effect=None, data=None, retryable=None, *, device_id=None):
     invocation = get_invocation(invocation_id, tenant_id)
+    if invocation and invocation.get('tool_name') in LOCAL_ONLY_WEIXIN_TOOLS:
+        # An older Runtime may have claimed or staged this result before the cloud gate.
+        # Close the invocation with public metadata and discard the original response.
+        return write_result(invocation_id, tenant_id, claim_token_hash, False, 'TOOL_NOT_ALLOWED',
+            LOCAL_ONLY_WEIXIN_MESSAGE, 'none', None, False, device_id=device_id)
     if invocation and invocation.get('business_kind') == 'agent_runner_recovery':
         from .recovery_observation import write_result as write_observation_result
         return write_observation_result(invocation_id, tenant_id, claim_token_hash, success,

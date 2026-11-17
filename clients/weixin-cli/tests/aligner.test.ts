@@ -3,10 +3,17 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { ConversationAligner, boxesToBubbles, type AlignBox } from '../src/platform/aligner.js'
+import { ConversationAligner } from '../src/platform/aligner.js'
 
-const B = (text: string, x0: number, y0: number, x1: number, y1: number): AlignBox => ({ text, x0, y0, x1, y1 })
-const REGION = { minX: 0, maxX: 800, selfStartX: 500 }
+test('原生消息以精确正文对齐，改写历史锚点时保留旧水位', () => {
+  const aligner = new ConversationAligner()
+  const peer = (text: string) => ({ text, sender: 'peer' as const })
+  const base = aligner.align([peer('已确认。')], null)
+  assert.ok(base.kind === 'ok')
+  const watermark = base.messages[0]!.local_message_id
+  assert.deepEqual(aligner.align([peer('已确认.'), peer('新消息')], watermark), { kind: 'gap', reason: 'alignment_broken' })
+  assert.equal(aligner.lastKnownId, watermark)
+})
 
 test('基线分配稳定 ID：重复基线观察复用同一批 ID', () => {
   const a = new ConversationAligner()
@@ -112,26 +119,6 @@ test('锚点滚出、已观察后缀被改写不得推进', () => {
     assert.deepEqual(a.align([...window], anchor), { kind: 'gap', reason: 'alignment_broken' })
   }
   assert.equal(a.lastKnownId, base.messages[2]!.local_message_id)
-})
-
-test('拆行重建：同侧相邻行合并为一条消息', () => {
-  const boxes = [
-    B('这件事需要', 60, 100, 300, 120),
-    B('再对齐一下', 60, 118, 280, 138), // y 相邻 → 同一气泡
-    B('另一条消息', 520, 200, 700, 220), // self 区
-  ]
-  const bubbles = boxesToBubbles(boxes, REGION)
-  assert.equal(bubbles.length, 2)
-  assert.equal(bubbles[0]!.text, '这件事需要再对齐一下')
-  assert.equal(bubbles[0]!.sender, 'peer')
-  assert.equal(bubbles[1]!.sender, 'self')
-})
-
-test('居中短行识别为 system；时间轴不参与对齐消息', () => {
-  const boxes = [B('14:02', 380, 50, 420, 68), B('正文', 60, 100, 200, 120)]
-  const bubbles = boxesToBubbles(boxes, REGION)
-  assert.equal(bubbles[0]!.sender, 'system')
-  assert.equal(bubbles[1]!.sender, 'peer')
 })
 
 test('damaged acknowledged prefix is ignored but pending messages and media are not lost', () => {

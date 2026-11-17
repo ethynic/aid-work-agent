@@ -9,6 +9,7 @@ from src.weixin_conversation import config as scenario_config
 
 @pytest.mark.parametrize("section", ["session_tasks", "weixin_conversation"])
 def test_scoped_hot_rollback_and_broken_file_fail_closed(tmp_path, monkeypatch, section):
+    monkeypatch.setattr(scenario_config, "CLOUD_REPLY_RETIRED", False)
     path = tmp_path / "gates.yaml"
     monkeypatch.setattr(task_config, "_gate_yaml_path", lambda: path)
     monkeypatch.setattr(scenario_config, "_gate_yaml_path", lambda: path)
@@ -46,3 +47,11 @@ def test_scoped_hot_rollback_and_broken_file_fail_closed(tmp_path, monkeypatch, 
     assert not scenario_config.scenario_enabled("c5_tenant")
     path.unlink()
     assert not allowed("c5_tenant")
+
+
+def test_legacy_enabled_config_cannot_restore_weixin_cloud_reply(tmp_path, monkeypatch):
+    path = tmp_path / "legacy.yaml"
+    path.write_text("weixin_conversation:\n  enabled: true\n", encoding="utf-8")
+    monkeypatch.setattr(scenario_config, "_gate_yaml_path", lambda: path)
+    assert scenario_config.scenario_enabled("legacy-tenant") is False
+    assert scenario_config.scenario_enabled_gate() is False
