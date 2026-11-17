@@ -31,6 +31,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261117-1600 | 就业咨询智能体数据源同步（聊易就业+水城创业网） | 📋 待开发 | 宏陶模式两 module（lyjy_employment+sccy_policy）纯知识库路线：六分类映射、目录全量+内容增量双层 run、deadline→expires_at、岗位电话可给/求职者 PII 零同步、portal 开通+租户配频率、iframe 区域匹配。 | [调研](research/employment-agent-db-sync-research.md) | [计划](plans/plan-employment-kb-sync.md) |
 | 20261116-1430 | 官网客服渠道（web_c） | 🔧 部分完成（Phase 1+2 代码完成，独立 CR 修复完毕，待部署真机验收） | C 端免登录聊天渠道：签名/匿名双身份、SSE 透传流式、附件上传与代理下载、留资/防滥用/计费接入；租户侧「官网接待客户」查看页。CR P0（Runner Literal 缺 web_c）与 P1×3（文件归属绕过/direct_reply 幂等/并发双写唯一索引）已修复；单测回归 1031 passed、前端构建通过；真机验收待办。 | [设计](system/web-c-channel-design.md) | — |
 | 20261110-2032 | 技能目录重复注入去重 | ✅ 已完成开发（已合并 master，模型选型待真机观察） | use_skill 工具 schema 去名单只留使用规则，名单唯一保留系统提示；独立测试回归+CR 通过。模型选型行为待真机观察。master 专属子智能体目录重复不在本轮。 | — | [计划](plans/plan-skill-catalog-injection-dedup.md) |
 | 20261110-1524 | 管理后台系统健康监控页面 | 🔧 部分完成（四级状态徽标改版+网络 IO；重试占比口径 bug 已修待部署，待真机验收） | 平台后台新增 /portal/system-health 健康监控页（登录默认页）：四组指标+AI 研判，无曲线无历史，手机端一等公民 | [设计](system/system-health-monitor-design.md) | — |

@@ -4846,3 +4846,8 @@
     CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_messages_client_request
         ON channel_messages (session_id, (metadata->>'client_request_id'))
         WHERE metadata->>'client_request_id' IS NOT NULL;
+- datetime: "2026-11-17 10:00:00"
+  remark: "bs_content_sync_sources 增加 sync_state（模块自管水位/删除 id 集合等运行态，平台层不解读）与 connection_encrypted（外部数据库连接配置 Fernet 整包加密，data_connectors.password_encrypted 同模式）：就业咨询客户数据库同步数据源（lyjy_employment/sccy_policy）所需，与 src/services/content_sync/db.py、deploy/init-postgres.sql 三处同步"
+  statements: |
+    ALTER TABLE bs_content_sync_sources ADD COLUMN IF NOT EXISTS sync_state JSONB;
+    ALTER TABLE bs_content_sync_sources ADD COLUMN IF NOT EXISTS connection_encrypted TEXT;
