@@ -46,7 +46,7 @@
   - Python 单测用 `docker compose -f docker-compose.dev-tools.yml run --rm python <相关测试> -p no:cacheprovider -q`。
   - PostgreSQL 测试用 `docker compose -f docker-compose.test-db.yml run --rm sql <相关测试> -p no:cacheprovider -q`，本轮库自动清理。应用联调使用本地业务 PG，本轮写入的测试数据及时按 ID 清理。使用边界见 [测试规范](.claude/rules/testing.md#数据库安全入口)。
   - Web 前端测试用 `docker compose -f docker-compose.dev-tools.yml run --rm web test -- <相关测试>`，Web 构建把 `test -- <相关测试>` 换为 `run build`。
-- 委派开发、测试或评审任务时，交接已选定的 Docker 环境和工作区路径。使用独立工作区的智能体先核对容器挂载。
+- 验证开发分支或其他 worktree 时，从目标工作区运行自测；需要复用现有本地 API / Runner 时按[指定工作区验证](docs/infrastructure/local-dev-environments.md#4-指定工作区验证)切换 `AID_LOCAL_SOURCE_DIR`。核对容器的 `/app` 来源，并在委派任务时交接 Docker 环境和工作区路径。
 - 前端源码修改执行 Web 构建。交互变化验证相关行为，布局变化查看受影响页面及窄屏状态，无法查看时明确验证缺口。桌面原生打包、签名和系统交互按各客户端要求使用目标系统。
 - 本地容器无法满足验证时，将 **agent3** 作为在线开发测试环境。验证当前改动前核对实际运行版本。涉及部署时遵守 [真机部署授权](#真机部署授权)。测试脚本的宿主机兼容路径不作为默认后备。不打印配置凭据。
 - 配置字段变更同步检查 `src/config/settings.py` 与 `configs/config.yaml`。

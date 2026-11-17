@@ -30,7 +30,7 @@ docker inspect --format '{{range .Mounts}}{{if eq .Destination "/app"}}{{.Source
 docker compose -f docker-compose.local.yml ps
 ```
 
-已经运行且挂载正确的容器直接复用。多个工作区共享 Docker 引擎时，`aid-agent-api` 是固定容器名，8000 是默认端口。另一个工作区在用时，普通单测可使用下文的一次性容器，服务联调时先协调切换。
+已经运行且挂载正确的容器直接复用。多个工作区共享 Docker 引擎时，`aid-agent-api` 是默认容器名，8000 是默认端口。另一个工作区在用时，按[指定工作区验证](#4-指定工作区验证)选择自测或切换服务。
 
 WSL2 可直接使用 Windows 盘上的工作区。如果密集文件访问或测试子进程在 `/mnt/c` 下超时，可以把当前开发工作区放到 WSL2 文件系统中，再从该路径启动和自测。原工作区有未提交改动时，先确认新路径包含同样的改动。
 
@@ -43,7 +43,7 @@ docker image inspect aid-agent-api:latest --format '{{.Id}}'
 docker build --build-arg APT_MIRROR=https://mirrors.aliyun.com -t aid-agent-api:latest .
 ```
 
-只运行自测时，镜像就绪即可跳到[自测命令](#3-在容器内自测)。需要启动应用时，若 `.env` 尚不存在，复制 `.env.example` 为 `.env`。PowerShell 和 Bash 均可使用 `cp .env.example .env`。
+只运行自测时，镜像就绪即可跳到[自测命令](#3-在容器内自测)。需要启动应用时，若 `.env` 不存在或为空，复制 `.env.example` 为 `.env`。PowerShell 和 Bash 均可使用 `cp .env.example .env`。
 
 默认万相视频供应商在应用启动时读取 `WANX_API_KEY`，也可复用 `QWEN_API_KEYS`。只做健康检查、数据库和页面联调时，可在 `.env` 设置 `QWEN_API_KEYS=local-dev-placeholder` 供启动使用。验证真实模型功能时换为相应的开发凭据。联调 Runner 时在 `.env` 设置 `HEAVY_TOOLS_MODE=local`、本地 `AGENT_RUNNER_WEB_SERVICE_TOKEN`，按需设置 `AGENT_RUNNER_WORKER_SLOTS=1`。
 
@@ -98,7 +98,41 @@ docker compose -f docker-compose.dev-tools.yml run --rm web-dev
 
 从开发机打开 `http://localhost:3000`。桌面端原生运行、打包及签名按各客户端的目标系统执行。
 
-## 4. 本地容器不可用时使用 agent3
+## 4. 指定工作区验证
+
+先定位目标工作区，核对 `git rev-parse HEAD` 和 `git status --short`。需要测试另一个分支的提交时，可以在当前仓库根用 `git worktree add --detach ../aid-work-review my-feature` 创建独立 checkout。需要验证未提交改动时，直接使用包含改动的那个工作区。
+
+### 只跑自测
+
+在目标工作区根运行[自测命令](#3-在容器内自测)，Compose 将该工作区挂载到 `/app`。应用镜像、专用测试 PG 和默认前端依赖卷可继续复用。多个工作区同时用不同的前端锁文件时，给各自的 `docker-compose.dev-tools.yml` 命令加不同的 `-p` 项目名。
+
+如果目标分支还没有 Compose 入口，从已具备本手册的环境目录运行命令，并按下文设置 `AID_LOCAL_SOURCE_DIR` 指向目标。真实 SQL 测试使用目标工作区的 `scripts/dev_test_isolated_db.py` 和初始化 SQL。
+
+### 将正在使用的本地 API 和 Runner 切到目标工作区
+
+`docker compose ls` 可查看当前项目名和 Compose 文件。先记录当前 `/app` 的来源。留在负责启动该本地环境的目录，沿用同一个 `-p` 项目名、同一组 `-f` 文件与这套环境的 `.env`。使用已含 `AID_LOCAL_SOURCE_DIR` 的本地 Compose 配置。切换后，API 和 Runner 会一起读取目标工作区的源码与配置，并继续使用该项目的 PostgreSQL、Redis 和卷。
+
+下例的 `aid-local` 是原项目名，替换为实际名字。WSL2 在 Linux 终端设置目标的 `/mnt/c/...` 或 WSL 原生绝对路径。macOS 和 Linux 使用该机的绝对路径。
+
+```bash
+export AID_LOCAL_SOURCE_DIR=/mnt/c/repos/aid-work-review
+docker compose -p aid-local -f docker-compose.local.yml -f docker-compose.local-data.yml stop runner-monitor runner-worker runner-api
+docker compose -p aid-local -f docker-compose.local.yml -f docker-compose.local-data.yml up -d --no-build --wait aid-agent-api runner-api runner-worker
+```
+
+在 Windows Docker Desktop 的 PowerShell 中改用 `$env:AID_LOCAL_SOURCE_DIR = 'C:/repos/aid-work-review'`，其余 Compose 命令相同。原环境使用旧的外部数据网络时，保留原来仅使用 `-f docker-compose.local.yml` 的命令。按原环境选择应用服务，只运行 API 时执行 `up ... aid-agent-api`。原先启用了 `runner-monitor` 时，在 `up` 服务列表一并包含它。等正在使用本地环境的任务结束后切换服务。涉及可能改变本地数据结构的迁移时，使用[专用测试 PG](#3-在容器内自测)或独立 Compose 项目。
+
+如果 API 与 Runner 分属不同 Compose 项目，分别使用各自原来的项目名、文件与 `.env`。先停对应项目的 Runner 服务，再切换 API。API 健康后，在 Runner 项目用 `up -d --no-build --no-deps --wait runner-api` 启动 Runner API，再用同样参数启动原有的 worker 和 monitor。这样能沿用已运行的 API，并保持同一业务库的处理进程使用同一工作区。
+
+切换后检查 `/health` 并核对每个相关容器的 `/app` 来源，预期均为目标路径。可从 `docker compose -p aid-local -f docker-compose.local.yml -f docker-compose.local-data.yml ps` 取容器名。
+
+```bash
+docker inspect --format '{{range .Mounts}}{{if eq .Destination "/app"}}{{.Source}}{{end}}{{end}}' <容器名>
+```
+
+验证结束，把变量恢复为记录的原路径。原先使用默认路径时，用 `unset AID_LOCAL_SOURCE_DIR`（Bash）或 `Remove-Item Env:AID_LOCAL_SOURCE_DIR`（PowerShell）。按相同项目、文件组和应用服务执行上述 `stop`、`up`，最后复核挂载。复用应用镜像即可读到普通源码变更。镜像依赖有变化时，从目标工作区按[首次初始化](#首次初始化)构建，切回时使用与原工作区依赖对应的镜像。Docker 可能在目标工作区生成空 `.env` 挂载占位文件。以后单独从该目录启动应用时，按首次初始化处理空文件。
+
+## 5. 本地容器不可用时使用 agent3
 
 本机无法运行容器，或所需集成在本地无法验证时，使用已有配套服务的 **agent3 在线开发测试环境**。记录本机阻塞原因，并按验证类型选择入口。
 

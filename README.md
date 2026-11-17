@@ -61,6 +61,8 @@ docker compose -f docker-compose.dev-tools.yml run --rm web test -- web/__tests_
 docker compose -f docker-compose.dev-tools.yml run --rm web run build
 ```
 
+验证开发分支或未提交改动时，可直接从目标工作区跑这些命令，也可把现有本地 API 和 Runner 切到该工作区。[指定工作区验证](docs/infrastructure/local-dev-environments.md#4-指定工作区验证)
+
 需要命令行聊天时，在开发容器的 Bash 中运行 `CLI_MODE=true python -m src.main`。
 
 ### 访问 API

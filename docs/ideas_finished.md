@@ -58,7 +58,7 @@
 | 20260831-1515 | ✅ Agent 运行时安全债收尾 | 2026-08-31 复核确认 `X-Tenant-Id` 验权（`d517e859`/`ec177152`）… | [核对与修复设计](system/agent-runtime-security-debt-closure-design.md) | [开发计划](plans/plan-agent-runtime-security-debt-closure.md) |
 | 20260813-1328 | skill_ws 临时工作目录清理机制 | ✅ 已完成开发。修复技能执行工作目录 `skill_ws_*` 创建后永不清理的临时文件泄漏（每月堆积，2026-08-13 迁移核对时发现）。 | — | — |
 | 20260721-1521 | 后台定时/轮询任务外置 | ✅ 已完成开发（待线上验证）。 | [独立后台运行时设计](infrastructure/background-runner-design.md) | [计划](plans/plan-background-runner.md) |
-| 20260908-0945 | 容器化开发与自测环境 | ✅ 已完成开发，统一环境初始化并复用容器、测试数据库和前端依赖。 | [说明](infrastructure/local-dev-environments.md) | [计划](plans/plan-test-database-isolation-runtime-assertions.md#本地开发环境复用验收2026-11-17) |
+| 20260908-0945 | 容器化开发与自测环境 | ✅ 已完成开发，支持切换工作区并复用本地容器依赖。 | [说明](infrastructure/local-dev-environments.md) | [计划](plans/plan-test-database-isolation-runtime-assertions.md#本地开发环境复用验收2026-11-17) |
 | 20260602-1416 | 可观测性与质量保障 | 🔧 部分完成 | 分布式追踪 + LLM 质量评估 + 实时监控 + 结构化告警。 | [设计](infrastructure/observability-design.md) / [延伸设计](infrastructure/observability-channel-sessions-design.md) | [计划](infrastructure/observability-dev-plan.md) |
 | 20260901-1430 | 数据库增量升级脚本 YAML 化 | 🔧 部分完成 | 将 deploy/db_update.sql 全量哈希重跑机制改为 deploy/db_update.yaml + datetime 增量执行（last_datetime），免手动清理、… | [设计](system/database-db-update-incremental-design.md) | — |
 | 20260905-1907 | 租户附件存储规范整改（第二阶段） | 🔧 部分完成 | 主上传链路整改后仍有 7 处违规写入；存量迁移已完成（测试 09-05 / 生产 09-07），遗留归档保留 30 天。 | — | [迁移方案](plans/plan-storage-legacy-migration.md) |
