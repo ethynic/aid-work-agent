@@ -30,20 +30,7 @@
 
 ## 🚀 快速开始
 
-### 0. 启动 Redis（本地开发）
-
-生产环境使用腾讯云 Redis，本地开发需先启动 Redis 容器：
-
-```bash
-cd /var/www/agent/deploy/redis
-docker-compose up -d
-```
-
-验证连接：
-```bash
-docker exec -it aid-agent-redis redis-cli ping
-# 应返回 PONG
-```
+本地应用及其 PostgreSQL、Redis 的启动和排查见[开发环境手册](../docs/infrastructure/local-dev-environments.md#2-复用或启动本地服务)。
 
 ### 1. 首次部署
 

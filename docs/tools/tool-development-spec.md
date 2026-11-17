@@ -17,14 +17,12 @@ LLM 每轮对话都消耗两类工具 token：① **工具 schema**（`descripti
 
 ## 本地开发依赖
 
-部分工具依赖系统二进制（非 Python 包，`pip install` 装不了）。本地开发前请按平台安装：
+本项目常规开发和验证使用仓库镜像内的系统工具。启动与依赖检查见[开发环境手册](../infrastructure/local-dev-environments.md#首次初始化)。
 
-| 依赖 | 用途 | Linux/Docker | Windows（venv） | macOS |
-|------|------|------|------|------|
-| **ripgrep (`rg`)** | `grep` 工具（文件内搜索，grep_tool.py 调系统 rg 二进制） | `apt-get install -y ripgrep`（Dockerfile 已内置） | `winget install BurntSushi.ripgrep.MSVC` 或 `scoop install ripgrep` | `brew install ripgrep` |
-| **pandoc** | `word_process` 的 md_to_word 操作 | `apt-get install -y pandoc`（Dockerfile 已内置，详见 [pandoc 安装指南](md-to-word/pandoc-install-guide.md)） | `winget install JohnMacFarlane.Pandoc` | `brew install pandoc` |
-
-**验证**：`rg --version`、`pandoc --version` 能输出版本号即可。
+| 依赖 | 用途 |
+|------|------|
+| **ripgrep (`rg`)** | `grep` 工具的文件内搜索 |
+| **pandoc** | `word_process` 的 `md_to_word` 操作，独立安装的细节见 [Pandoc 安装指南](md-to-word/pandoc-install-guide.md) |
 
 > 说明：这些是**系统级 CLI**，与 Python 虚拟环境无关，venv 内无需 pip 安装。缺失时工具会优雅降级（grep 返回「ripgrep 未安装」，word 转 PDF 等功能不可用），不会导致服务启动失败。
 
