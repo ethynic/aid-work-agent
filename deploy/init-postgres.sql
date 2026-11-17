@@ -2886,6 +2886,8 @@ CREATE TABLE IF NOT EXISTS bs_content_sync_sources (
     sync_interval_hours INT NOT NULL DEFAULT 24,
     selection_mode VARCHAR(8) NOT NULL DEFAULT 'all',  -- all | ids（挑选白名单）
     selected_ids JSONB,
+    sync_state JSONB,                           -- 模块自管水位/删除 id 集合等运行态（平台层不解读）
+    connection_encrypted TEXT,                  -- 外部数据库连接配置 Fernet 整包加密（data_connectors 同模式）
     last_sync_at TIMESTAMP,
     last_error TEXT,
     created_at TIMESTAMP DEFAULT now(),
