@@ -47,16 +47,14 @@ def _int_or_0(value: Any) -> int:
 
 
 def jobs_catalog_valid(row: Dict[str, Any], now_seconds: int) -> bool:
-    """目录行有效判定（审核通过 + 展示中 + 未关闭 + 未到期）。
+    """目录行有效判定（审核通过 + 展示中 + 未到期）。
 
-    到期并入有效判定：过期岗位即使状态位仍有效也不允许 restore（防「③到期
-    软删 → 下轮目录比对恢复」循环）；close_type/deadline 语义待客户确认，
+    2026-11-17 用户拍板：close_type 是聊易平台的关闭/到期推广标记，display=1
+    的岗位仍在平台展示，不参与过滤；deadline 已过期的岗位不展示（过期即使状态
+    位仍有效也不允许 restore，防「③到期软删 → 下轮目录比对恢复」循环）。
     条件集中此处与 fetcher 常量一处可调。
     """
     if _int_or_0(row.get("audit")) != 1 or _int_or_0(row.get("display")) != 1:
-        return False
-    close_type = row.get("close_type")
-    if close_type is not None and _int_or_0(close_type) != 0:
         return False
     deadline = _int_or_0(row.get("deadline"))
     if deadline > 0 and deadline < now_seconds:

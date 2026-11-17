@@ -83,15 +83,20 @@ DELETE_TABLES = {
     "qs_jobs": "qs_jobs_delete",
 }
 
-# ③ 到期扫描与 ④ 增量条件（集中常量：close_type/deadline 语义待客户确认，
-# 只需改这里；qs_jobs 有 (audit, refreshtime) 复合索引）
-JOBS_VALID_WHERE = "audit = 1 AND display = 1 AND (close_type IS NULL OR close_type = 0)"
+# ③ 到期扫描与 ④ 增量条件（2026-11-17 用户拍板：close_type 是聊易平台的关闭/到期
+# 推广标记，display=1 的岗位仍在平台展示，不做过滤；deadline 已过期的岗位不展示
+# ——由 VALID/INCREMENT 的 deadline 条件与 ③ 到期扫描共同保证，到期后下一轮自动
+# 下架。qs_jobs 有 (audit, refreshtime) 复合索引）
+JOBS_VALID_WHERE = (
+    "audit = 1 AND display = 1 "
+    "AND NOT (deadline > 0 AND deadline < UNIX_TIMESTAMP())"
+)
 JOBS_EXPIRED_WHERE = (
     "audit = 1 AND display = 1 AND deadline > 0 AND deadline < UNIX_TIMESTAMP()"
 )
 JOBS_INCREMENT_WHERE = (
     "refreshtime > :watermark AND audit = 1 AND display = 1 "
-    "AND (close_type IS NULL OR close_type = 0)"
+    "AND NOT (deadline > 0 AND deadline < UNIX_TIMESTAMP())"
 )
 # 文章表：guide/article 有 audit；notice/explain 仅 is_display
 JOBS_INCREMENT_ORDER = "refreshtime ASC"

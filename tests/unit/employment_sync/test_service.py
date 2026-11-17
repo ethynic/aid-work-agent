@@ -636,10 +636,10 @@ def test_jobs_catalog_valid_conditions():
                                    "deadline": 0}, NOW)  # 未审核
     assert not jobs_catalog_valid({"audit": 1, "display": 0, "close_type": None,
                                    "deadline": 0}, NOW)  # 下架
-    assert not jobs_catalog_valid({"audit": 1, "display": 1, "close_type": 1,
-                                   "deadline": 0}, NOW)  # 手动关闭
-    assert not jobs_catalog_valid({"audit": 1, "display": 1, "close_type": 2,
-                                   "deadline": 0}, NOW)  # 到期关闭
+    assert jobs_catalog_valid({"audit": 1, "display": 1, "close_type": 1,
+                               "deadline": 0}, NOW)  # 手动关闭标记仍展示（拍板语义）
+    assert jobs_catalog_valid({"audit": 1, "display": 1, "close_type": 2,
+                               "deadline": 0}, NOW)  # 到期关闭标记仍展示
     assert not jobs_catalog_valid({"audit": 1, "display": 1, "close_type": None,
                                    "deadline": NOW - 1}, NOW)  # 已过期（不允许 restore）
     assert article_catalog_valid("qs_guide", {"audit": 1, "is_display": 1})
