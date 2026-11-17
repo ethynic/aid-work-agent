@@ -4,9 +4,10 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
-| Phase 1 | 同步管线（lyjy_employment + sccy_policy 两模块，幂等落库 + 删除流 + expires_at） | ✅ 完成（2026-11-17） | commit 572ff7eb；39 隔离库单测 + 127 回归 + 启动安全全过；客户测试库只读冒烟通过（四步 SQL/真实渲染；实测富文本双重 HTML 编码已修）；CR 无 P0/P1。遗留：真机全链路验收随 P3 |
+| Phase 1 | 同步管线（lyjy_employment + sccy_policy 两模块，幂等落库 + 删除流 + expires_at） | ✅ 完成（2026-11-17） | commit 572ff7eb；39 隔离库单测 + 127 回归 + 启动安全全过；客户测试库只读冒烟通过（四步 SQL/真实渲染；实测富文本双重 HTML 编码已修）；CR 无 P0/P1 |
 | Phase 2 | 调度与后台（定时 run、portal 数据源开通、租户后台） | ✅ 完成（2026-11-17） | commit 037c00c0；67 新功能 + 127 回归隔离库全绿（含时区修复）；前端 build 通过；CR 无 P0/P1（租户隔离/权限/事务原子性逐项核查）；平台挂载零改动（optional_modules 通用循环生效）。CR 登记：test_scheduler 一用例凌晨窗口脆弱性（P2 不阻断） |
-| Phase 3 | 配置与验收（无代码开发：管理员后台配置 + web_c 区域参数约定 + agent2 验收） | 📋 待执行 | 执行清单见下节 |
+| 真机验证 | 本地浏览器端到端（portal 开通→租户配置→冷启动→知识库） | ✅ 完成（2026-11-17） | agent2_1127 真机库 + 浏览器实走全流程：portal 开通两源（加密连接）→ 连接中心门控菜单出现 → 五分类范围页 → 立即同步三轮：run 2590 成功（95·严格语义正确过滤）/ 2591 放宽验证（岗位 1497+指导 58 入库，**PII 防线真实拦截 3 条身份证号岗位** pii_rejected）/ 2592 sccy 440 全量。合计落库 2090 文档六分类路由正确，计费逐 run 入账本（~110 万 tokens / 66 积分）。教程：[管理员手册](../guides/employment-sync-admin-guide.md) |
+| Phase 3 | 配置与验收（无代码开发：管理员后台配置 + web_c 区域参数约定 + agent2 验收） | 📋 待执行 | 执行清单见下节；操作教程：[管理员手册](../guides/employment-sync-admin-guide.md) |
 
 > - 日期：2026-11-17
 > - 方案依据：[就业咨询智能体客户数据库同步方案研究](../research/employment-agent-db-sync-research.md)（§7 现行方案，用户两轮决议定稿）；[关联库表数据字典](../research/employment-agent-db-data-dictionary.md)
