@@ -8,6 +8,8 @@
 | 实现 | Python测试入口/驱动guard与Runtime三项断言 | ✅ 完成（2026-10-26） | Python6文件冻结；无DB25+28subtests、私有PG28+28subtests自测通过，Runtime22通过 |
 | TEST | 独立子进程安全反证及真实私有PG回归 | ✅ 完成（2026-10-26） | Runtime22、无DB21+29subtests、私有PG20与独立入口/故障反证通过 |
 | CR | 独立审查并修复到通过 | ✅ 完成（2026-10-26） | 创建资格时点P2已红绿闭环，最终无未解决P0/P1/P2 |
+| 本地常驻测试 PG | Compose 一键运行真实 SQL 测试，明确本地业务库联调边界 | ✅ 完成（2026-11-17） | WSL2 真实 SQL 17 项通过，独立验证冷启动、复用、工作区挂载及失败清理 |
+| 本地开发环境复用 | 首次建库、Python 自测、前端依赖缓存和智能体入口 | ✅ 完成（2026-11-17） | WSL2 验证 API 和 Runner 启动、三类自测、Web 构建和依赖复用 |
 
 设计：[测试数据库隔离](../design/devtools/test-database-isolation-design.md)。工作树C:/repos/aid-work-agent-wecom，分支feature/ask-user-question-card，基线349a10ab。原clients/wecom-cli/package-lock.json三peer生成改动保留。用户仅授权第1项修复，无提交、部署、客户端安装或恢复监听授权。
 
@@ -44,3 +46,15 @@ Shell独立4场景通过：LF/CRLF一致接受、代码内容变化拒绝且无p
 已核0 aid_test数据库/连接及本批自有Python/Node/Bash进程，主控按任务meta/root/data/pid精确关闭61295 helper，端口0监听，未动其他服务；测试二进制缓存保留。修复已完成开发，实际Docker环境及未来发行验收沿原后续计划执行。
 
 独立完整命令、源码哈希、故障红绿与计数重叠说明：`%TEMP%/test-db-safety-independent-acfe7563/independent-w9-final-evidence.json`。各批方法/子测试与单独探针可能重叠，不另相加成虚构总数。
+
+## 本地常驻测试 PG 验收（2026-11-17）
+
+在 WSL2 执行 `docker compose -f docker-compose.test-db.yml run --rm -T sql tests/integration/agent_runner_service/test_storage.py -p no:cacheprovider -q`，17 项通过。纯 SQL 入口禁用 Redis，消除读取本地配置后等待 Redis 的重试。工况验证确认本地 API 实际连接 `aid_wecom_local`。专用测试实例处于健康状态，复用时无需修改应用工作区或连接配置。
+
+独立验证使用另一 Compose 项目确认空环境自动建卷并启动、网络只有回环接口、当前工作区挂载正确。实测一项 PostgreSQL 队列并发测试通过。pytest 返回预期错误码 4 后，PG 实例未重建，且无残留临时库。独立只读评审无阻断。其他平台、Docker 引擎重启以及进程被强制终止后的清理未实测。
+
+## 本地开发环境复用验收（2026-11-17）
+
+在基于 `origin/master` 的独立工作树中，用已有应用镜像启动本地数据覆盖。PostgreSQL 的 vector 扩展、Redis PING、API `/health` 和 Runner API、worker 容器健康检查通过。手册记录默认视频供应商的启动配置，可用非凭据的占位值核验本地启动。
+
+在 WSL2 按手册执行 Compose 命令，Python 11 项、真实 PostgreSQL 17 项和 Web 8 项通过，Web build 及产物检查通过。前端首次安装依赖，后续测试、构建和独立 Vite 检查命中同一卷，未重复安装。独立验收 Vite HTTP 200、源码挂载与旧 Compose 兼容。另运行的 `routes.test.ts` 有 1 项既有快照差异，当前改动与基线的前端源码相同。Docker Desktop 和原生 Linux 未实机验证。

@@ -1,0 +1,35 @@
+# 本地后端和 Web 验证入口。所有命令挂载调用者的工作区。
+name: aid-dev-tools
+
+services:
+  python:
+    image: aid-agent-api:latest
+    network_mode: none
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      DATABASE_URL: ""
+      LOGS_DATABASE_URL: ""
+      REDIS_ENABLED: "false"
+    entrypoint: ["python", "-m", "pytest"]
+
+  web:
+    image: aid-agent-api:latest
+    working_dir: /app/frontend
+    volumes:
+      - .:/app
+      - web-dependencies:/app/frontend/node_modules
+      - npm-cache:/root/.npm
+    entrypoint: ["bash", "/app/scripts/dev_web.sh"]
+
+  web-dev:
+    extends:
+      service: web
+    profiles: ["web-dev"]
+    network_mode: host
+    command: ["run", "dev", "--", "--host", "127.0.0.1", "--port", "3000", "--strictPort"]
+
+volumes:
+  web-dependencies:
+  npm-cache:

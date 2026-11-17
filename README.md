@@ -48,34 +48,22 @@ aid-work-agent/
 
 ## 快速开始
 
-### 1. 安装依赖
+1. Windows 优先在 WSL2 内使用 Docker Engine，其次使用 Docker Desktop。macOS 使用 Docker Desktop，Linux 使用 Docker Engine。
+2. 按 [开发环境手册](docs/infrastructure/local-dev-environments.md) 复用或准备本地 PostgreSQL、Redis 和 `.env`，启动开发容器，在容器内运行相关测试。
+3. 后端默认通过 `http://localhost:8000` 访问。本地容器无法满足验证时，按手册使用 agent3 在线开发测试环境。
+
+镜像就绪后，从仓库根运行以下命令开始自测。测试 PG 和前端依赖会在后续命令中复用。
 
 ```bash
-pip install -r requirements.txt
+docker compose -f docker-compose.dev-tools.yml run --rm python tests/unit/test_models.py -p no:cacheprovider -q
+docker compose -f docker-compose.test-db.yml run --rm sql tests/integration/agent_runner_service/test_storage.py -p no:cacheprovider -q
+docker compose -f docker-compose.dev-tools.yml run --rm web test -- web/__tests__/router/desktopBuildVerifier.test.ts
+docker compose -f docker-compose.dev-tools.yml run --rm web run build
 ```
 
-### 2. 配置环境变量
+需要命令行聊天时，在开发容器的 Bash 中运行 `CLI_MODE=true python -m src.main`。
 
-```bash
-# 复制环境变量模板
-cp .env.example .env
-
-# 编辑 .env 文件，填写必要的配置
-```
-
-### 3. 启动服务
-
-```bash
-# 启动Web服务
-python -m src.main
-
-# 或使用命令行聊天模式
-CLI_MODE=true python -m src.main
-```
-
-> 本地开发调试支持三种方式：①本地 venv；②WSL2 内容器（mirrored/host 网络，不走 NAT）；③macOS Docker Desktop 容器。三种方式后端统一落在 `localhost:8000`，详见 [本地开发调试环境说明](docs/infrastructure/local-dev-environments.md)。
-
-### 4. 访问API
+### 访问 API
 
 - 健康检查: `GET /health`
 - Web聊天: `POST /api/chat`
