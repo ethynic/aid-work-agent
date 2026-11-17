@@ -1,13 +1,16 @@
 ---
 name: excel-layout-clone
 description: >
-  Excel 模板复刻技能。根据 Excel 模板（.xlsx/.xlsm/.xltx/.xltm）和新数据/需求生成新的
-  Excel 文件，保留多个 Sheet、计算公式、合并单元格、表格、数据验证、条件格式、图表、批注、
-  定义名称、打印设置、宏等元素，只改变填写内容和数据行数。用户说「按这个 Excel 模板生成
-  新的」「保持模板样式换个数据」「照着这个表做一份新的」「把清单行数换成这次的」时使用。
-  若用户要求重新设计样式，应转向表格创建/美化流程（excel_process 工具）。
+  Excel 模板复刻技能：按一个现成 Excel 模板生成新文件，只换填写内容和数据行数，
+  模板里的公式、合并单元格、条件格式、图表、批注、打印设置、宏等样式元素原样保留。
+  三者分工——「一个模板 + 一份新数据，样式必须原样继承」→ 本技能；
+  「从零生成新表、读取分析、美化改样式、简单模板填充」→ excel_process 工具；
+  「多个格式各异的来源报表合并进一个标准模板」→ excel-to-template 技能；
+  「Word/PDF 样版复刻」→ doc-layout-clone 技能。
+  触发语：「按这个 Excel 模板生成一份新的」「保持模板样式换个数据」
+  「照着这个表做一份新的」「把清单行数换成这次的」。
 metadata:
-  version: "1.1.0"
+  version: "1.1.1"
   author: aid-work-agent
 dependencies:
   - lxml
