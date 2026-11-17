@@ -31,10 +31,13 @@ tests/
 
 ## 数据库安全入口
 
+- 本地 API 和 Runner 优先连接本地业务 PostgreSQL。联调时可对已确认的本地业务库执行只读查询，或写入明确归本轮的测试数据。能回滚就回滚，否则记录 ID 并在验证后按 ID 清理。迁移、全库扫描、批量写入和自动化 SQL 回归使用专用测试 PG。
+- 日常真实 SQL 测试直接执行 `docker compose -f docker-compose.test-db.yml run --rm sql <相关测试> -p no:cacheprovider -q`。Compose 自动启动或复用常驻 PostgreSQL，每轮创建并清理一个临时库，无需手配连接或占用本地业务 API 容器。
+- 日常 Python 单测使用 `docker compose -f docker-compose.dev-tools.yml run --rm python <相关测试> -p no:cacheprovider -q`。Web 测试和构建使用同文件的 `web` 服务，复用前端依赖卷。首次初始化见 [开发环境手册](../../docs/infrastructure/local-dev-environments.md)。
 - 普通pytest未明确提供`DATABASE_URL`时默认无数据库模式，实际PostgreSQL连接被测试guard拒绝；不要依赖业务`.env`或默认共享库。纯单测应mock数据库。集成SQL用例必须显式使用本机任务专属`aid_test_*`库。
-- 推荐真实SQL入口：为`./scripts/dev_test.sh --isolated-db <相关测试>`明确提供本机专属PostgreSQL管理连接（管理库名为`postgres`）；脚本创建随机`aid_test_*`库，将业务与追踪连接都指向它，结束只删除自己创建的库。不能用业务库作为管理入口，URL不接受query/service/hostaddr重定向。
+- 已有自定义测试 PG 时，可为 `bash scripts/dev_test.sh --isolated-db <相关测试>` 显式提供本机专用 PostgreSQL 管理连接（管理库名 `postgres`）。脚本创建随机 `aid_test_*` 库，将业务与追踪连接指向它，结束只删除自己创建的库。管理入口使用专用测试实例，URL 不接受 query/service/hostaddr 重定向。
 - 测试启动不直接加载业务`.env`；显式非法或共享库URL会在产品模块初始化前拒绝。不要增加`allow-unsafe`绕过，不要为测试读取或排查真实业务库。连接错误与验证输出不得包含DSN、密码或令牌。
-- Docker自动模式在测试/helper执行前核对当前工作区的三个测试安全入口；旧容器代码不一致时拒绝执行，不上传文件或重启容器。普通容器测试为无DB模式，SQL测试用显式`--isolated-db`；容器的loopback指容器自身，不能假定宿主机的测试PG会在容器内同端口可达。无法使用匹配容器时，在当前工作区已确认的虚拟环境运行等价pytest/隔离脚本。
+- `dev_test.sh` 的 Docker 自动模式在测试或 helper 执行前核对当前工作区的三个测试安全入口。代码不一致时拒绝执行。用该脚本运行 SQL 测试时显式使用 `--isolated-db`，管理连接须在测试进程所在网络命名空间内通过 loopback 访问。无法复用匹配容器时，按 [开发环境手册](../../docs/infrastructure/local-dev-environments.md) 选用 Compose 入口或 agent3。
 - 清理仅在明确隔离库模式执行，并先核对实际`current_database()`与本轮目标一致；收集测试不启动清理。独立测试需用驱动底层tripwire证明零connect/零DELETE，单独禁止Python socket不能证明C/libpq没有发起连接。
 
 详细设计与执行证据见[测试隔离计划](../../docs/plans/plan-test-database-isolation-runtime-assertions.md)。该策略仅作用于测试入口，不改变产品数据库连接配置；不宣称隔离任意恶意Python代码。

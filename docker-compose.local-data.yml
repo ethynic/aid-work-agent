@@ -1,0 +1,82 @@
+# 新机器用此覆盖文件启动本地业务 PostgreSQL 和 Redis。
+x-local-data-env: &local-data-env
+  DATABASE_URL: postgresql://aid_local@postgres:5432/aid_work_agent_local
+  LOGS_DATABASE_URL: ""
+  REDIS_ENABLED: "true"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: ""
+  REDIS_DB: "0"
+  REDIS_SSL: "false"
+  AGENT_RUNNER_API_URL: http://runner-api:8091
+  AGENT_RUNNER_WEB_SERVICE_TOKEN: ${AGENT_RUNNER_WEB_SERVICE_TOKEN:-}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aid_local
+      POSTGRES_DB: aid_work_agent_local
+      # 本地业务数据库仅加入本项目的数据网络，未发布宿主端口。
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./deploy/init-postgres.sql:/docker-entrypoint-initdb.d/10-aid.sql:ro
+    networks: [local-agent-data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "aid_local", "-d", "aid_work_agent_local"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    networks: [local-agent-data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  aid-agent-api:
+    container_name: ${AID_LOCAL_API_CONTAINER:-aid-agent-api}
+    environment: *local-data-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  runner-api:
+    environment: *local-data-env
+
+  runner-worker:
+    environment:
+      <<: *local-data-env
+      HEAVY_TOOLS_MODE: local
+
+  runner-monitor:
+    environment: *local-data-env
+
+networks:
+  local-agent-data:
+    external: false
+    name: !reset null
+
+volumes:
+  postgres-data:
+  redis-data:
+  local-agent-storage:
+    external: false
+    name: !reset null
+  local-agent-uploads:
+    external: false
+    name: !reset null
+  local-agent-logs:
+    external: false
+    name: !reset null
