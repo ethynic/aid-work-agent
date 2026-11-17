@@ -660,7 +660,7 @@ class ClientUsageLogDB:
         *,
         tenant_id: str,
         tool_name: str,
-        credit_cost: float,
+        credit_cost: float | Decimal,
         invocation_id: Optional[str] = None,
         device_id: Optional[str] = None,
         session_id: Optional[str] = None,
@@ -677,7 +677,11 @@ class ClientUsageLogDB:
 
         detail 形状见 _build_tool_usage_detail（含命令/参数/user 归属）。
         """
-        credit_cost = math.ceil(float(credit_cost) * 100) / 100
+        if isinstance(credit_cost, Decimal):
+            if not credit_cost.is_finite() or credit_cost != credit_cost.quantize(Decimal('0.01')):
+                raise ValueError('积分须为已按分冻结的 Decimal')
+        else:
+            credit_cost = math.ceil(float(credit_cost) * 100) / 100
         if credit_cost <= 0:
             return None
         detail = _build_tool_usage_detail(

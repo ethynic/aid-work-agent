@@ -15,6 +15,7 @@
       </div>
     </div>
 
+    <WecomScheduledSendPrice v-if="admin?.role === 'platform_admin'" class="mb-6" />
     <div v-if="loading" class="text-center py-12 text-muted">加载中...</div>
 
     <template v-else>
@@ -142,6 +143,10 @@ import { formatTokensToMillionsThreeDecimals } from '@/utils/formatTokens'
 import { formatCredit } from '@/utils/formatCredit'
 import DailyCreditUsageModal from '@/components/saas/DailyCreditUsageModal.vue'
 import DailyCreditUsageDetailModal from '@/components/saas/DailyCreditUsageDetailModal.vue'
+import WecomScheduledSendPrice from '@/components/saas/WecomScheduledSendPrice.vue'
+import { useTenantAuth } from '@/composables/useTenantAuth'
+
+const { admin } = useTenantAuth()
 
 const toast = useToast()
 

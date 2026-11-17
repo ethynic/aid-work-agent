@@ -129,14 +129,19 @@ async def run_tick(group_key=None):
     busy_groups = {(item['tenant_id'], str(item['device_id']), item['wecom_account_id'])
                    for item in running + orphans}
     if group_key is not None:
-        from . import proxy_opening
+        from . import proxy_opening, scheduled_dispatch
 
         lock = group_lock(group_key)
         if not lock.acquire(blocking=False):
             request_dispatch_turn(group_key)
             return
         try:
-            if await proxy_opening.run_tick(group_key, runner_busy=group_key in busy_groups):
+            opening_rows, opening_busy = await proxy_opening.settle_active(group_key)
+            scheduled_busy = await scheduled_dispatch.run_tick(
+                group_key, runner_busy=group_key in busy_groups or opening_busy)
+            if opening_busy or scheduled_busy:
+                return
+            if await proxy_opening.run_tick(group_key, runner_busy=group_key in busy_groups, rows=opening_rows):
                 return
         finally:
             lock.release()
@@ -372,6 +377,7 @@ def _occupy_batch(batch):
     启动，P4 语义）。先锁任务，再用持久组身份取得组锁，最后锁目标与批次。
     """
     from src.db.database import get_db_connection
+    from .scheduled_sends import group_has_turn_in_tx
 
     try:
         with get_db_connection() as conn:
@@ -387,7 +393,9 @@ def _occupy_batch(batch):
                 conn.rollback()
                 return False
             proxy_tasks.lock_device_group_in_tx(cursor, task)
-            if proxy_tasks.device_group_busy_in_tx(cursor, task, include_pending_opening=True):
+            group = (task['tenant_id'], str(task['device_id']), task['wecom_account_id'])
+            if (proxy_tasks.device_group_busy_in_tx(cursor, task, include_pending_opening=True)
+                    or group_has_turn_in_tx(cursor, group, include_queued=True)):
                 conn.rollback()
                 return False
             cursor.execute(

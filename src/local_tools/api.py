@@ -469,7 +469,8 @@ async def runtime_started(
     tenant_id = device["tenant_id"]
     try:
         row = await asyncio.to_thread(
-            repository.mark_started, invocation_id, tenant_id, sha256_hex(body.claim_token)
+            repository.mark_started, invocation_id, tenant_id, sha256_hex(body.claim_token),
+            device_id=str(device['id']),
         )
         if not row:
             raise _http_error(404, "invocation 不存在或 claim token 不匹配")

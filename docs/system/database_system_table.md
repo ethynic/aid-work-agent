@@ -5,6 +5,8 @@
 > 本文档介绍智能体系统核心数据表的用途和相互关系，仅覆盖非 `bs_` 前缀的系统表。
 > `bs_` 开头的业务表由各子智能体自行管理，不在此文档范围内。
 
+`wecom_scheduled_send_settings` 保存 Portal 管理的企微定时消息平台单价覆盖值。表最多一行，`unit_price` 为非负两位小数，缺行或空值使用 `0.50`。授权时将适用单价冻结到 `bs_wecom_scheduled_sends` 执行记录，后续改价只影响新授权。
+
 > 2026-07-17 Browser Run/Executor Phase 2 例外登记：新增业务审计表
 > `bs_browser_runs`、`bs_browser_assistance_requests`。两表只保存租户归属、
 > 状态枚举和恢复关联，不保存完整 URL、DOM、截图、cookie、header、表单值或
