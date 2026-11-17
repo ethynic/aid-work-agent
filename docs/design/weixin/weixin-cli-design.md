@@ -75,12 +75,9 @@ v2 路径额外要求 Runtime 签名许可（云端不可凭名字驱动发送�
 
 落地"方案 A：走服务端 LLM 网关代理"（原计费关联设计，已并入本节）：
 
-- **服务端**：`src/llm/providers/moonshot.py` MoonshotProvider（OpenAI 兼容；kimi 系模型
-  省略 temperature；reasoning_content 兜底）；`gateway.py` 注册 moonshot +
-  `use_failover=False`（模型绑定型调用禁止跨 provider 降级）；`/api/client/v1/llm/chat`
-  增加 `model` 字段 + `CLIENT_MODEL_PROVIDER_MAP` 白名单（首期 `kimi-k3 → moonshot`）+
-  定价 fail closed（无非零单价 → `MODEL_NOT_PRICED`）；`deploy/db_update.sql` 已写
-  kimi-k3 价目 SQL（用户确认单价：输入 20 元/M、输出 100 元/M），实际服务可用性取决于目标环境的价目配置。
+- **服务端**：`/api/client/v1/llm/chat` 按 `CLIENT_MODEL_PROVIDER_MAP` 白名单将
+  `GLM-5.3-Flash` 路由到智谱专用网关。沿用模型定价校验与原客户端用量计费。
+  历史 `kimi-k3` 路由已于 2026-11-05 停用。
 - **客户端**：`AID_WEIXIN_SERVER_URL` + `AID_WEIXIN_ACTIVATION_CODE` 惰性激活
   `POST /api/client/v1/activate` 换 access_token，DPAPI 加密存
   `%APPDATA%\aid-weixin\binding.json`；token 经 env 注入驱动子进程（不进命令行）；
@@ -139,8 +136,8 @@ get_url、official_account_follow）未产品化——实际方向转向会话�
 
 ## 11. 遗留与已知问题
 
-- 服务端代理视觉链路要求部署环境配置非零的 kimi-k3 价目；
-- 服务端 + 真实 Moonshot key 端到端联调与真机回归（搜索→发送走代理）待单价落库后执行；
+- 服务端代理视觉链路要求部署环境配置非零的 GLM-5.3-Flash 价目；
+- GLM 服务端真实计费及微信搜索、发送、添加好友的真机联调待验证；
 - git 历史泄漏 Kimi key 待人工轮换（§5）；
 - `provider-manifest.json` 静态快照列 6 个 tools，落后于实际 8 个（name_resolve/send_v2
   未入快照），与 `src/mcp/manifest.ts` "digest 不入文件避免漂移"的注释不一致，待对齐；
@@ -155,3 +152,13 @@ get_url、official_account_follow）未产品化——实际方向转向会话�
 点击「添加到通讯录」后，如果出现申请窗口则填写验证语并点击一次「确定」。当前标识的搜索状态明确显示申请已发送时返回 `request_sent`，微信确认直接添加为好友时返回 `friend_added`，两者均为 `effect=applied`。写入步骤后未能确认时返回 `effect=unknown`，调用方不得自动重试。
 
 视觉定位强制使用当前微信 CLI 激活绑定及 `POST /api/client/v1/llm/chat` 的现有模型和用量计费路径。新入口不写 Workbuddy 的坐标缓存或联系人日志。微信 CLI 负责产生本机回执，当前阶段可由本机终端调用。MCP 工具公开及 Runtime 调度按第 7 节在沙箱写验收后单独登记。
+
+## 13. 移除本地 OCR
+
+生产入口中有五个工具依赖 RapidOCR。名称定位用它识别搜索结果和会话标题，许可发送用它核对当前标题，历史读取和未读列表各有一个 Python 驱动，持续观察用它提取消息正文、时间、输入框状态并参与水位对齐。旧发送走多模态读取标题和回执文本，再使用按 OCR 误差设计的本地匹配。环境探测、旧聊天搜索和本机添加好友均不调用 RapidOCR。
+
+计费定位复用现有客户端 binding 与 `/api/client/v1/llm/chat`，模型使用现有白名单中的 GLM-5.3-Flash。固定控件的坐标在能验证控件与布局时可以缓存；区分客户端版本、DPI、窗口尺寸、布局和控件角色，缓存相对坐标。搜索结果行、当前联系人、发送结果和消息内容随交互变化，每次读取当前证据。
+
+原生读取优先使用 Windows UI Automation。2026-11-17 在本机微信 4.1.15.13 只读核对到会话列表、消息列表、具名文本消息项和可读取的输入框。历史分页、消息发送方、重名联系人匹配和未读数仍需分别核定，不以控件枚举证明这些业务语义。端侧持续观察沿既有约定在本机读取，保留既有消息水位、发送许可与回执外层。无原生证据时报告对应失败或缺口。
+
+本机探查中有唯一的 `current_chat_name_label`、`session_list`、`chat_message_list` 和 `chat_input_field`。消息行的原生边界横跨聊天列，不能从整行边界判断方向。可把原生文本行和现有本地气泡边界配对验证，文字始终来自原生节点。会话行名称中发现 `[n条]` 原生提示，须区分未读元数据行与相同格式的消息预览。其他 UIA 实现的原生读取和方向识别代码可作对照。 [会话列表参考](https://github.com/AngeCoo/wxauto-4.0/blob/main/wxauto4/ui/sessionbox.py) · [消息方向参考](https://github.com/FreeWisdom/wxauto-4.0/blob/main/wxauto4/msgs/msg.py)

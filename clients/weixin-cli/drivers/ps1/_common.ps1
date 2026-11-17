@@ -2,11 +2,11 @@
 # 职责：
 #   - dot-source 包内 win32-lib.ps1（由原已验证 Win32/UIA 底座迁入）
 #   - DRIVER_JSON 输出约定与 Invoke-DriverMain 包装（单飞 mutex + 统一错误映射）
-#   - Kimi 视觉调用（kimi-k3，429 重试 25s×4，```json 包裹剥离）
+#   - 视觉调用（服务端 GLM-5.3-Flash，429 重试 25s×4，```json 包裹剥离）
 #   - 主窗口解析（ClassName/标题校验 + 兜底枚举，规避 MainWindowHandle 被弹窗抢走）
 #   - 两栏布局校验（单栏模式下搜索框固定坐标失效，必须 fail closed）
-#   - Open-WeixinChat：搜索目标 → Kimi 定位 overlay 结果项 → PostMessage 点击 →
-#     截主窗口 Kimi 校验标题/输入框（message-send 与 history_read 的 resolve-open 共用）
+#   - Open-WeixinChat：搜索目标 → 视觉定位 overlay 结果项 → PostMessage 点击 →
+#     截主窗口校验标题/输入框（message-send 与 history_read 的 resolve-open 共用）
 #
 # 约定：业务失败一律 Throw-DriverError（DRIVER_JSON ok=false + 退出码 0）；
 #   只有未预期崩溃才非零退出（TS 侧映射 INTERNAL_ERROR）。
@@ -15,15 +15,9 @@
 $script:DriverPs1Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $script:DriverPs1Dir 'win32-lib.ps1')
 
-# 视觉模型配置：GLM-5.3-Flash 为默认通道，kimi-k3 保留为备份
-# （2026-08-28 评估结论：坐标定位与 kimi-k3 等效、成本约 1/40、快 3-4 倍，
-# 见 docs/research/weixin-cli/vision-model-comparison.md）。
-# 两种调用路径（与计费设计一致，见 docs/design/weixin/weixin-cli-billing.md）：
-# 1) 本机直调（开发调试）：AID_WEIXIN_ZHIPU_API_KEY → GLM；AID_WEIXIN_KIMI_API_KEY → Moonshot；
-# 2) 代理模式：TS 层注入 AID_WEIXIN_SERVER_URL + AID_WEIXIN_ACCESS_TOKEN，走服务端集中计费
-#    （代理白名单目前仅 kimi-k3，故代理通道固定用 kimi-k3）。
-# AID_WEIXIN_VISION_PROVIDER 可强制 'glm' 或 'moonshot'；缺省：有 zhipu key 则 GLM 优先、
-# Moonshot（直调或代理）作备份，GLM 调用失败自动降级。
+# 代理模式由 TS 注入 AID_WEIXIN_SERVER_URL + AID_WEIXIN_ACCESS_TOKEN，
+# 通过服务端 GLM-5.3-Flash 白名单集中计费。
+# 开发调试可用本机 GLM 或 Moonshot 密钥及 AID_WEIXIN_VISION_PROVIDER 选择。
 $script:KimiApiKey = [string]$env:AID_WEIXIN_KIMI_API_KEY
 $script:KimiApiBase = 'https://api.moonshot.cn/v1/chat/completions'
 $script:KimiModel = 'kimi-k3'   # 推理模型：答案在 content，为空则读 reasoning_content；temperature 必须为 1/省略（服务端 provider 统一省略）
@@ -112,8 +106,8 @@ function Resolve-WeixinMainWindowHwnd {
 function Invoke-KimiVision {
     # 通用视觉调用（函数名保留历史命名）：base64 PNG data URL，max_tokens=4096；
     # 每通道 429 重试 25s×4；返回可能是 ```json 包裹，正则提取首个 { 到末个 }。
-    # 多通道：默认 GLM-5.3-Flash 优先、Moonshot（直调或代理）备份，GLM 失败自动降级；
-    # 402/401 属计费/凭据业务性失败，不降级直接报 INSUFFICIENT_CREDIT/CONFIG_MISSING。
+    # 代理使用 GLM-5.3-Flash。兼容既有本机直调配置，ProxyOnly 仅允许计费代理。
+    # 402/401 直接报 INSUFFICIENT_CREDIT/CONFIG_MISSING。
     param(
         [Parameter(Mandatory, ParameterSetName = 'Path')][string]$ImagePath,
         [Parameter(Mandatory, ParameterSetName = 'Bytes')][byte[]]$ImageBytes,
@@ -133,29 +127,30 @@ function Invoke-KimiVision {
     $glmDirect = @{ ApiUrl = $script:ZhipuApiBase; Token = $script:ZhipuApiKey; Model = $script:ZhipuModel; Mode = 'direct'; Tag = 'glm' }
     $moonDirect = @{ ApiUrl = $script:KimiApiBase; Token = $script:KimiApiKey; Model = $script:KimiModel; Mode = 'direct'; Tag = 'moonshot-direct' }
     $serverUrl = ([string]$env:AID_WEIXIN_SERVER_URL).TrimEnd('/')
-    $moonProxy = $null
+    $billingProxy = $null
     if (-not [string]::IsNullOrWhiteSpace($serverUrl)) {
-        $moonProxy = @{ ApiUrl = ($serverUrl + '/api/client/v1/llm/chat'); Token = [string]$env:AID_WEIXIN_ACCESS_TOKEN; Model = $script:KimiModel; Mode = 'proxy'; Tag = 'moonshot-proxy' }
+        $billingProxy = @{ ApiUrl = ($serverUrl + '/api/client/v1/llm/chat'); Token = [string]$env:AID_WEIXIN_ACCESS_TOKEN; Model = $script:ZhipuModel; Mode = 'proxy'; Tag = 'glm-proxy' }
     }
     if ($ProxyOnly) {
-        if ($null -eq $moonProxy -or [string]::IsNullOrWhiteSpace([string]$moonProxy.Token)) {
+        if ($null -eq $billingProxy -or [string]::IsNullOrWhiteSpace([string]$billingProxy.Token)) {
             Throw-DriverError 'CONFIG_MISSING' '添加好友需要启用微信 CLI 服务端计费代理，请配置服务端地址并完成客户端激活'
         }
-        $candidates += $moonProxy
+        $candidates += $billingProxy
     } elseif ($forced -eq 'glm') {
         if (-not [string]::IsNullOrWhiteSpace($script:ZhipuApiKey)) { $candidates += $glmDirect }
+        elseif ($null -ne $billingProxy) { $candidates += $billingProxy }
     } elseif ($forced -eq 'moonshot') {
         if (-not [string]::IsNullOrWhiteSpace($script:KimiApiKey)) { $candidates += $moonDirect }
-        elseif ($null -ne $moonProxy) { $candidates += $moonProxy }
+        elseif ($null -ne $billingProxy) { $candidates += $billingProxy }
     } else {
         if (-not [string]::IsNullOrWhiteSpace($script:ZhipuApiKey)) { $candidates += $glmDirect }
         if (-not [string]::IsNullOrWhiteSpace($script:KimiApiKey)) { $candidates += $moonDirect }
-        elseif ($null -ne $moonProxy) { $candidates += $moonProxy }
+        elseif ($null -ne $billingProxy) { $candidates += $billingProxy }
     }
     if ($candidates.Count -eq 0) {
         Throw-DriverError 'CONFIG_MISSING' '未配置视觉模型调用凭据：请设置 AID_WEIXIN_ZHIPU_API_KEY（GLM-5.3-Flash，推荐）或 AID_WEIXIN_KIMI_API_KEY（kimi-k3 备份）；生产用法也可设 AID_WEIXIN_SERVER_URL + AID_WEIXIN_ACTIVATION_CODE 走服务端代理计费'
     }
-    if ($null -ne $moonProxy -and [string]::IsNullOrWhiteSpace([string]$moonProxy.Token) -and
+    if ($null -ne $billingProxy -and [string]::IsNullOrWhiteSpace([string]$billingProxy.Token) -and
         $candidates.Count -eq 1 -and $candidates[0].Mode -eq 'proxy') {
         Throw-DriverError 'CONFIG_MISSING' '已配置 AID_WEIXIN_SERVER_URL 但缺少 AID_WEIXIN_ACCESS_TOKEN（应由 CLI 自动注入；直接运行 ps1 时请改用 AID_WEIXIN_ZHIPU_API_KEY / AID_WEIXIN_KIMI_API_KEY 降级模式）'
     }
