@@ -2,6 +2,7 @@
 > - 采集方式：只读账号经 information_schema 读取字段名/类型/注释，行数为 `COUNT(*)` 实计（2026-11-11）
 > - 覆盖范围：`gt_lyjy`（聊易就业）与 `gt_sccy`（水城创业网）中与「就业咨询智能体」四类需求相关的表；未列出的其余表与智能体无直接关联
 > - 凭据：连接信息在采集端本地配置文件，不入库不入档
+> - **客户官方字段说明**（2026-11-17 客户提供，[附件](files/employment-db-field-spec-20261117.xlsx)，单 sheet 6438 行）：与本字典的字段注释核对一致；关键枚举官方口径——`qs_jobs.close_type`：1-手动关闭 2-到期自动关闭；`qs_jobs.audit`/`qs_guide.audit`/`qs_article.audit`：0-未审核 1-审核通过 2-审核未通过（同步侧按 audit=1 过滤，测试库文章全 0 未审核故不入库为正确行为）；`qs_jobs.display`/`is_display`：是否显示
 
 ## gt_lyjy（聊易就业平台）
 

@@ -27,7 +27,7 @@
 | ~~客户确认 `close_type`/`deadline` 语义~~ **已拍板（2026-11-17 用户决议）**：`close_type` 不过滤（display=1 即展示）、`deadline` 已过期不展示（到期扫描保留）；`deadline=0` 为长期招聘。已按此修正（commit 72cc7d03），真机恢复 1474 长期岗 | 已解决 | — |
 | **`expires_at` 时区口径**：已修复（P2 随 commit 037c00c0 改 Asia/Shanghai 挂钟） | 已解决 | — |
 | `subsite_id` → 地区名映射数据 | P1 分站文章的区域字段 | 兜底用 qs_article 分类树专区名（彭水/潍坊等），生产映射到手后仅改渲染输入 |
-| `qs_guide/qs_article` 审核位语义（测试库实测 audit 全 0；若客户工作流"audit=0 即可见"需放宽 `audit=1` 过滤） | P1 文章类冷启动数据 | 常量集中一处；冒烟已实测 notice/explain 渲染正确 |
+| ~~`qs_guide/qs_article` 审核位语义~~ **已确认（2026-11-17 客户官方字段说明）**：audit 0-未审核 1-审核通过 2-审核未通过——与实现的 `audit=1` 过滤一致；测试库文章全 0（未审核）不入库为正确行为，客户平台审核后下一轮自动入库。官方文档见 [数据字典附件](../research/files/employment-db-field-spec-20261117.xlsx) | 已解决 | — |
 | 生产库网络白名单（agent2 / 生产出口 IP） | P3 真机验收 | P1/P2 全程用测试库（只读账号已就绪） |
 | 客户维护 `qs_consultant` 数据 | P3 转人工验收 | 非转人工功能开发阻塞 |
 | 记账缺口（commit 72cc7d03 登记）：同 run 内条目先记 skip 后被目录比对 restore 升级时，items 行因 ON CONFLICT DO NOTHING 不升级为 restore，`restored_count` 少记 | 无功能影响 | 后续小改：`_finish_item` restore 场景升级已存在行 |
