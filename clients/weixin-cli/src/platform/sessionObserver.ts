@@ -2,7 +2,7 @@
  * session_observer_v1 契约（端侧会话任务 C0 冻结，设计 §6 / 计划 §3）。
  *
  * 这是常驻会话观察器的**结果/请求 schema 与错误码冻结**，不是实现：M2 的
- * weixin_unread_list 仍是逐次 spawn Python + 每次构造 RapidOCR 的未读列表接口，
+ * weixin_unread_list 只读取当前可见的未读会话列表，
  * 不满足本契约（无常驻水位、无连续窗口对齐、无稳定消息 ID）。C2 才实现
  * 常驻 OCR/observer；实现必须通过 tests/session-observer-contract.test.ts。
  *
