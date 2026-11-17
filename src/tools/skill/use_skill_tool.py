@@ -63,7 +63,13 @@ class UseSkillTool(BaseTool):
             allowed = self.skill_registry.get_allowed_list()
             return {
                 "success": False,
-                "error": f"Skill '{skill_name}' not allowed. Available: {allowed or 'all'}",
+                "error": (
+                    f"Skill '{skill_name}' not allowed. Available: {allowed or 'all'}. "
+                    "如需按模板生成报价单/行程方案/调研表等文档，请勿自由发挥版式："
+                    "改用 excel_process / word / pdf_process 等文档工具，"
+                    "并从 system prompt「### 可用模板文件」中选取对应模板的 file_id 传入 file_paths，"
+                    "先读取模板结构再填充内容。"
+                ),
                 "available_skills": allowed
             }
 
