@@ -275,6 +275,54 @@ _ALTER_STATEMENTS = (
          )""",
 )
 
+SCHEDULED_SENDS_DDL = """
+CREATE TABLE IF NOT EXISTS bs_wecom_scheduled_sends (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    plan_order INTEGER NOT NULL,
+    plan_name TEXT NOT NULL,
+    due_at TIMESTAMPTZ NOT NULL,
+    deadline_at TIMESTAMPTZ NOT NULL,
+    target_order INTEGER NOT NULL,
+    device_id UUID NOT NULL,
+    account TEXT NOT NULL,
+    session TEXT NOT NULL,
+    session_name TEXT,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    invocation_id UUID,
+    reconcile_invocation_id UUID,
+    started_at TIMESTAMPTZ,
+    released_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    unit_price NUMERIC(12,2),
+    billed_at TIMESTAMPTZ,
+    error_code TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, task_id, due_at, session)
+)
+"""
+
+SCHEDULED_SENDS_QUEUE_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_bs_wecom_scheduled_sends_queue
+    ON bs_wecom_scheduled_sends (tenant_id, device_id, account, due_at, plan_order, target_order)
+    WHERE status IN ('queued', 'dispatched', 'running', 'unknown')
+"""
+
+SCHEDULED_SENDS_HISTORY_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_bs_wecom_scheduled_sends_history
+    ON bs_wecom_scheduled_sends (tenant_id, user_id, due_at DESC, plan_order, target_order)
+"""
+
+SCHEDULED_SEND_SETTINGS_DDL = """
+CREATE TABLE IF NOT EXISTS wecom_scheduled_send_settings (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    unit_price NUMERIC(12,2) CHECK (unit_price >= 0)
+)
+"""
+
 _DDL_ITEMS = (
     CONVERSATIONS_DDL,
     CONVERSATIONS_OWNER_INDEX_DDL,
@@ -292,6 +340,10 @@ _DDL_ITEMS = (
     PROXY_BATCHES_QUEUE_INDEX_DDL,
     PROXY_BATCHES_TASK_INDEX_DDL,
     PROXY_BATCHES_UNDECIDED_UNIQUE_DDL,
+    SCHEDULED_SENDS_DDL,
+    SCHEDULED_SENDS_QUEUE_INDEX_DDL,
+    SCHEDULED_SENDS_HISTORY_INDEX_DDL,
+    SCHEDULED_SEND_SETTINGS_DDL,
 )
 
 

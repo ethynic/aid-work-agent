@@ -24,7 +24,7 @@ from src.scheduler.schedule import (
     min_interval_hours,
     validate_task_attachments,
 )
-from src.scheduler.special_plans import ordinary_task_prompt_allowed, special_plan_marker
+from src.scheduler.special_plans import WECOM_SCHEDULED_SEND_MARKER, ordinary_task_prompt_allowed, special_plan_marker
 
 router = APIRouter(prefix="/api/scheduled-tasks", tags=["定时任务"])
 
@@ -70,8 +70,10 @@ async def _owned_task(request: Request, task_id: str,
         ScheduledTaskDB.get_by_id, task_id, tenant_id=tenant_id, user_id=user_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在或无权操作")
-    if special_plan_marker(task.get('task_prompt')):
-        raise HTTPException(status_code=409, detail="该计划请到每日总结页面管理")
+    marker = special_plan_marker(task.get('task_prompt'))
+    if marker:
+        page = '企业微信定时消息发送' if marker == WECOM_SCHEDULED_SEND_MARKER else '每日总结'
+        raise HTTPException(status_code=409, detail=f'该计划请到{page}页面管理')
     return task
 
 

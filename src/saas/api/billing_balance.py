@@ -9,12 +9,14 @@
 权限：tenant_admin / user / platform_admin（代管理需带 X-Tenant-Id）
 """
 
+import asyncio
 import json
 from datetime import datetime
-from typing import Optional
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, Request, Query
+from fastapi import APIRouter, HTTPException, Request, Query
 from loguru import logger
+from pydantic import BaseModel, ConfigDict, StringConstraints
 
 from src.saas.api.tenant_auth import require_admin, sanitize_error_info
 from src.config.settings import settings
@@ -85,6 +87,44 @@ def _clean_num(v) -> float:
 
 
 # ============== API 端点 ==============
+
+class WecomScheduledPriceWrite(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    unit_price: Annotated[str, StringConstraints(strict=True, pattern=r'^[0-9]{1,10}(\.[0-9]{1,2})?$')] | None
+
+
+async def _require_scheduled_price_admin(request: Request):
+    admin = await asyncio.to_thread(require_admin, request)
+    if admin.get('role') != 'platform_admin':
+        raise HTTPException(status_code=403, detail='仅平台管理员可管理企业微信定时消息单价')
+
+
+def _wecom_scheduled_price_response(override):
+    from src.wecom_conversation.scheduled_delivery import DEFAULT_PRICE
+
+    value = override if override is not None else DEFAULT_PRICE
+    return {'success': True, 'data': {'unit_price': f'{value:.2f}', 'default_price': f'{DEFAULT_PRICE:.2f}',
+                                      'overridden': override is not None}}
+
+
+@router.get('/wecom-scheduled-send-price')
+async def get_wecom_scheduled_send_price(request: Request):
+    from src.wecom_conversation.scheduled_delivery import get_unit_price_override
+
+    await _require_scheduled_price_admin(request)
+    override = await asyncio.to_thread(get_unit_price_override)
+    return _wecom_scheduled_price_response(override)
+
+
+@router.put('/wecom-scheduled-send-price')
+async def update_wecom_scheduled_send_price(request: Request, body: WecomScheduledPriceWrite):
+    from src.wecom_conversation.scheduled_delivery import set_unit_price
+
+    await _require_scheduled_price_admin(request)
+    price = await asyncio.to_thread(set_unit_price, body.unit_price)
+    return _wecom_scheduled_price_response(price if body.unit_price is not None else None)
+
 
 @router.get("/balance")
 async def get_balance(request: Request):

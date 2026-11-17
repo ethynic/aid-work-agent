@@ -14,7 +14,8 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from src.db.database import get_db_connection
-from .special_plans import ordinary_task_prompt_allowed, ordinary_task_sql, special_plan_marker
+from .special_plans import (WECOM_SCHEDULED_SEND_MARKER, first_line_sql,
+                            ordinary_task_prompt_allowed, ordinary_task_sql, special_plan_marker)
 from src.db.models import generate_session_id
 
 # pause_reason 与 runner error_code 的映射（设计 §5.4：仅执行侧两类触发自动暂停）
@@ -285,14 +286,18 @@ class ScheduledTaskDB:
         不重复进入候选）。"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            first_line = first_line_sql()
+            marker = WECOM_SCHEDULED_SEND_MARKER + '%'
+            cursor.execute(f"""
                 SELECT * FROM scheduled_tasks
                 WHERE status = 'active'
-                  AND next_due_at <= %s
+                  AND ((next_due_at <= %s AND {first_line} NOT LIKE %s)
+                       OR (next_due_at <= statement_timestamp() AT TIME ZONE 'Asia/Shanghai'
+                           AND {first_line} LIKE %s))
                   AND pending_occurrence_key IS NULL
-                ORDER BY next_due_at
+                ORDER BY next_due_at, id
                 LIMIT %s
-            """, (now, limit))
+            """, (now, marker, marker, limit))
             return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
@@ -460,21 +465,30 @@ class ScheduledTaskDB:
           重建不重新生成。
         """
         from src.scheduler.schedule import compute_next_due, once_expired
+        from src.wecom_conversation import scheduled_sends
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            first_line = first_line_sql()
+            marker = WECOM_SCHEDULED_SEND_MARKER + '%'
+            cursor.execute(f"""
                 SELECT * FROM scheduled_tasks
                 WHERE task_id = %s
                   AND status = 'active'
-                  AND next_due_at <= now()
+                  AND ((next_due_at <= now() AND {first_line} NOT LIKE %s)
+                       OR (next_due_at <= COALESCE(%s::timestamp, statement_timestamp() AT TIME ZONE 'Asia/Shanghai')
+                           AND {first_line} LIKE %s))
                   AND pending_occurrence_key IS NULL
                 FOR UPDATE
-            """, (task_id,))
+            """, (task_id, marker, scheduled_sends.local_time(now) if now is not None else None, marker))
             row = cursor.fetchone()
             if not row:
                 return None
             task = dict(row)
+            if special_plan_marker(task['task_prompt']) == WECOM_SCHEDULED_SEND_MARKER:
+                scheduled_sends.freeze_due_in_tx(cursor, task, now=now)
+                conn.commit()
+                return None  # The WeCom queue is the handoff. No Runner pending.
             now = now or datetime.now()
             if once_expired(task, now):
                 cursor.execute("""

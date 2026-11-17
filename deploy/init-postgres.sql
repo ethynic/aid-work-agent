@@ -6014,3 +6014,43 @@ CREATE INDEX IF NOT EXISTS idx_bs_wecom_proxy_batches_task
 CREATE UNIQUE INDEX IF NOT EXISTS uq_bs_wecom_proxy_batches_session_undecided
     ON bs_wecom_proxy_batches (tenant_id, session)
     WHERE status IN ('pending', 'running', 'waiting', 'reconcile_hold');
+
+
+-- 企业微信定时消息逐会话执行记录
+CREATE TABLE IF NOT EXISTS bs_wecom_scheduled_sends (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    plan_order INTEGER NOT NULL,
+    plan_name TEXT NOT NULL,
+    due_at TIMESTAMPTZ NOT NULL,
+    deadline_at TIMESTAMPTZ NOT NULL,
+    target_order INTEGER NOT NULL,
+    device_id UUID NOT NULL,
+    account TEXT NOT NULL,
+    session TEXT NOT NULL,
+    session_name TEXT,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    invocation_id UUID,
+    reconcile_invocation_id UUID,
+    started_at TIMESTAMPTZ,
+    released_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    unit_price NUMERIC(12,2),
+    billed_at TIMESTAMPTZ,
+    error_code TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, task_id, due_at, session)
+);
+CREATE INDEX IF NOT EXISTS idx_bs_wecom_scheduled_sends_queue
+    ON bs_wecom_scheduled_sends (tenant_id, device_id, account, due_at, plan_order, target_order)
+    WHERE status IN ('queued', 'dispatched', 'running', 'unknown');
+CREATE INDEX IF NOT EXISTS idx_bs_wecom_scheduled_sends_history
+    ON bs_wecom_scheduled_sends (tenant_id, user_id, due_at DESC, plan_order, target_order);
+
+CREATE TABLE IF NOT EXISTS wecom_scheduled_send_settings (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    unit_price NUMERIC(12,2) CHECK (unit_price >= 0)
+);
