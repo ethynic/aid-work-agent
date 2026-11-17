@@ -1,5 +1,7 @@
 # 容器化开发与自测环境
 
+本文是本仓库本地开发与自测的唯一执行手册。环境选择、服务启动与切换、测试入口和排查命令集中在这里维护。修改本地 Compose、测试入口或依赖时，同步更新本手册。项目入口和专项测试文档链接到本手册。
+
 需要启动项目或自测时，优先使用本机 Linux 容器。各平台复用仓库的 [Dockerfile](../../Dockerfile)、[本地 Compose](../../docker-compose.local.yml) 和测试入口，容器挂载本次开发的工作区。
 
 ## 1. 选择 Docker 环境
@@ -43,6 +45,8 @@ docker image inspect aid-agent-api:latest --format '{{.Id}}'
 docker build --build-arg APT_MIRROR=https://mirrors.aliyun.com -t aid-agent-api:latest .
 ```
 
+应用镜像包含工具所需的 `rg`、`pandoc`、`soffice`、`ffmpeg` 和 Chromium。工具报缺少二进制时，先确认容器使用的镜像，在容器内用 `command -v <命令>` 或 `--version` 核对。相关工具用途见[工具开发规范](../tools/tool-development-spec.md)。
+
 只运行自测时，镜像就绪即可跳到[自测命令](#3-在容器内自测)。需要启动应用时，若 `.env` 不存在或为空，复制 `.env.example` 为 `.env`。PowerShell 和 Bash 均可使用 `cp .env.example .env`。
 
 默认万相视频供应商在应用启动时读取 `WANX_API_KEY`，也可复用 `QWEN_API_KEYS`。只做健康检查、数据库和页面联调时，可在 `.env` 设置 `QWEN_API_KEYS=local-dev-placeholder` 供启动使用。验证真实模型功能时换为相应的开发凭据。联调 Runner 时在 `.env` 设置 `HEAVY_TOOLS_MODE=local`、本地 `AGENT_RUNNER_WEB_SERVICE_TOKEN`，按需设置 `AGENT_RUNNER_WORKER_SLOTS=1`。
@@ -59,6 +63,20 @@ docker compose -f docker-compose.local.yml -f docker-compose.local-data.yml up -
 
 访问 `http://localhost:8000/health`，只记录响应的 `status` 字段，应看到 `healthy`。Runner 联调另外确认 Runner API 和 worker 的状态。API 使用 uvicorn 热重载监视 `src/`。修改 `.env` 后重建受影响的本地容器。WSL2 访问默认端口时先检查 WSL 和 Windows 两侧的 `localhost:8000`。仅在已有 WSL mirrored 网络且需要让 API 使用宿主网络时考虑 [host 网络覆盖](../../docker-compose.local.hostnet.yml)。依赖 `postgres`、`redis`、`runner-api` 等容器 DNS 的本机配置使用默认 bridge。
 
+### 本地联调排查
+
+排查时沿用启动环境的项目名与 Compose 文件。使用本地数据覆盖文件时，从仓库根执行：
+
+```bash
+docker compose -f docker-compose.local.yml -f docker-compose.local-data.yml ps
+docker compose -f docker-compose.local.yml -f docker-compose.local-data.yml exec redis redis-cli ping
+docker compose -f docker-compose.local.yml -f docker-compose.local-data.yml exec postgres pg_isready -h 127.0.0.1 -U aid_local -d aid_work_agent_local
+```
+
+Redis 应返回 `PONG`，PostgreSQL 应开始接受连接。沿用旧数据网络时，在那个环境现有的 Redis 和 PostgreSQL 容器中执行相应检查。需要定位初始化或连接失败时，用同一 Compose 项目的 `logs --tail 100` 指定相关服务，记录结果前脱敏。
+
+在当前工作区的 API 容器中调试命令行聊天时，进容器执行 `CLI_MODE=true python -m src.main`。
+
 ## 3. 在容器内自测
 
 **后端。** 从当前仓库根运行，替换示例测试路径。命令复用已有镜像并直接挂载当前源码。普通单测无需启动 API、PostgreSQL 或 Redis，也无需宿主机安装 Python。
@@ -68,6 +86,10 @@ docker compose -f docker-compose.dev-tools.yml run --rm python tests/unit/test_m
 ```
 
 已有 API 容器挂载当前工作区时，也可以沿用 `bash scripts/dev_test.sh`。浏览器用例按该 [测试脚本](../../scripts/dev_test.sh) 使用 Redis helper。测试或检查指向其他工作区的结果不得用于当前改动。
+
+可将示例路径换成测试文件、子目录或具体测试节点，用 `-k` 选择用例。默认排除 `e2e` 和 `real_browser`。显式传入 `-m` 会替换默认筛选，需要保留的排除条件应写进表达式，例如 `-m 'tools and not e2e and not real_browser'`。
+
+需要实际浏览器与 Redis helper 时，确认默认名为 `aid-agent-api` 的本地 API 容器正在运行并挂载当前工作区。在能调用该 Docker 引擎的 Bash 中运行 `bash scripts/dev_test.sh -m 'not e2e and real_browser' -p no:cacheprovider -q`。脚本使用该终端的 `python` 核对测试入口，实际测试在容器内运行。
 
 **PostgreSQL。** 本地 API 和 Runner 默认连本地业务库。联调已有业务流程时，可以查询本地业务数据，也可以写入本轮专用记录。先核对实际目标是本机容器和预期数据库。有事务的测试可回滚，需要提交的联调记录按确切 ID 及时清理。[测试规范](../../.claude/rules/testing.md#数据库安全入口)
 
@@ -83,12 +105,16 @@ docker compose -f docker-compose.test-db.yml run --rm sql tests/integration/agen
 
 首次自动启动专用 PG，之后复用同一个容器。每轮 pytest 连接自己的 `aid_test_*` 库并在结束时清理。测试入口直接使用当前工作区和已有的 `aid-agent-api:latest` 镜像，连接配置已在 Compose 中提供。纯 SQL 路径禁用 Redis，避免等待本地业务 Redis。可用 `docker compose -f docker-compose.test-db.yml ps` 查看状态，用 `docker compose -f docker-compose.test-db.yml up -d --wait postgres` 提前启动。手工验证 SQL 时可在专用 PG 内用 `docker compose -f docker-compose.test-db.yml exec postgres psql -U postgres -d postgres`，按需创建并清理本轮临时库。
 
+已有自定义专用测试 PG 时，可通过环境变量 `DATABASE_URL` 显式提供管理连接，再运行 `bash scripts/dev_test.sh --isolated-db <相关测试>`。管理库名为 `postgres`，连接地址须在测试进程的网络命名空间内通过 loopback 访问。日常 SQL 验证直接使用上面的 Compose 入口。
+
 **Web 前端。** 使用应用镜像内的 Node.js 和 npm。首次命令按 lockfile 安装依赖并写入命名卷，此后测试、构建、Vite 复用该卷。`package.json`、lockfile 或工具链变更时自动刷新。更新同一工作区的依赖前先退出 Vite。并行验证依赖不同的分支时，用 `-p <项目名>` 为其中一个工作区指定自己的缓存卷。
 
 ```bash
 docker compose -f docker-compose.dev-tools.yml run --rm web test -- web/__tests__/router/desktopBuildVerifier.test.ts
 docker compose -f docker-compose.dev-tools.yml run --rm web run build
 ```
+
+需要覆盖率或监听时，使用同一 `web` 入口运行 `run test:coverage` 或 `run test:watch`。默认 Web 构建产物位于当前工作区 `frontend/dist/`。
 
 页面联调时，Vite 的 `/api` 代理访问 `127.0.0.1:8000`。WSL2 和 Linux 使用 `web-dev` 的 host 网络，后端用默认 bridge 并发布 8000 端口。Docker Desktop 4.34 及以上在本机启用 host networking 后也可使用此入口。[Vite 配置](../../frontend/vite.config.ts) · [Docker host 网络说明](https://docs.docker.com/engine/network/drivers/host/#docker-desktop)
 
@@ -97,6 +123,8 @@ docker compose -f docker-compose.dev-tools.yml run --rm web-dev
 ```
 
 从开发机打开 `http://localhost:3000`。桌面端原生运行、打包及签名按各客户端的目标系统执行。
+
+手动联调 Portal 登录可访问 `/portal/login`，页面验证见 [Portal 测试指南](../../frontend/web/__tests__/saas-portal-test-guide.md#手动测试用例)。
 
 ## 4. 指定工作区验证
 

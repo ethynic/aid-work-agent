@@ -105,18 +105,7 @@
 
 ## 命令
 
-```bash
-cd frontend && npm install               # 安装前端依赖
-cd frontend && npm run dev               # 开发服务器（端口 5173）
-cd frontend && npm run build             # 生产环境构建
-```
-
-### 测试
-```bash
-cd frontend && npm test                   # 运行前端测试
-cd frontend && npm run test:coverage      # 带覆盖率
-cd frontend && npm run test:watch         # 监听模式
-```
+Web 本地启动、构建、测试、覆盖率与监听模式见[开发环境手册](../../docs/infrastructure/local-dev-environments.md#3-在容器内自测)。
 
 ## 开发规范
 
@@ -331,12 +320,8 @@ new Date('2026-05-15T11:49:45.429739' + 'Z')  // 结果会变成 19:49
 ```
 
 ## 运行构建
-所有前端代码修改后，都需要运行构建命令，确保没有语法错误。构建命令如下：
 
-```bash
-cd frontend
-npm run build
-```
+修改前端源码后，执行[开发环境手册](../../docs/infrastructure/local-dev-environments.md#3-在容器内自测)里的 Web 构建。
 
 ## 测试指南
 

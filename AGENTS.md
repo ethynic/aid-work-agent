@@ -40,12 +40,9 @@
 
 ## 开发环境与验证
 
-开始需要运行项目或自测的开发任务时，先按 [开发环境手册](docs/infrastructure/local-dev-environments.md) 选择环境。Windows 优先使用已安装的 WSL2 发行版内的 Docker Engine，WSL2 路径不可用时使用 Docker Desktop 的 Linux 容器。macOS 使用 Docker Desktop 的 Linux 容器，Linux 使用 Docker Engine。已在 WSL2 内时直接检查该发行版的 Docker。先复用挂载当前工作区的本地容器，需要时按手册创建。
+开始需要运行项目或自测的任务时，先读[开发环境手册](docs/infrastructure/local-dev-environments.md)。该手册是环境选择、启动、本地 Python、SQL 和 Web 验证的唯一执行入口。优先复用当前工作区的本地依赖。修改启动、依赖或自测入口时同步更新手册。
 
-- 从仓库根运行下列入口。首次按手册构建应用镜像，需要启动应用时按手册初始化本地业务 PostgreSQL 和 Redis。日常验证复用已有镜像、测试 PG 和前端依赖卷，无需为每轮新建环境。
-  - Python 单测用 `docker compose -f docker-compose.dev-tools.yml run --rm python <相关测试> -p no:cacheprovider -q`。
-  - PostgreSQL 测试用 `docker compose -f docker-compose.test-db.yml run --rm sql <相关测试> -p no:cacheprovider -q`，本轮库自动清理。应用联调使用本地业务 PG，本轮写入的测试数据及时按 ID 清理。使用边界见 [测试规范](.claude/rules/testing.md#数据库安全入口)。
-  - Web 前端测试用 `docker compose -f docker-compose.dev-tools.yml run --rm web test -- <相关测试>`，Web 构建把 `test -- <相关测试>` 换为 `run build`。
+- SQL 自动化测试使用专用测试 PG。应用联调使用本地业务 PG，按 ID 清理本轮写入的数据。[测试规范](.claude/rules/testing.md#数据库安全入口)
 - 验证开发分支或其他 worktree 时，从目标工作区运行自测；需要复用现有本地 API / Runner 时按[指定工作区验证](docs/infrastructure/local-dev-environments.md#4-指定工作区验证)切换 `AID_LOCAL_SOURCE_DIR`。核对容器的 `/app` 来源，并在委派任务时交接 Docker 环境和工作区路径。
 - 前端源码修改执行 Web 构建。交互变化验证相关行为，布局变化查看受影响页面及窄屏状态，无法查看时明确验证缺口。桌面原生打包、签名和系统交互按各客户端要求使用目标系统。
 - 本地容器无法满足验证时，将 **agent3** 作为在线开发测试环境。验证当前改动前核对实际运行版本。涉及部署时遵守 [真机部署授权](#真机部署授权)。测试脚本的宿主机兼容路径不作为默认后备。不打印配置凭据。
