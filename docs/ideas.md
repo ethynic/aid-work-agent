@@ -24,12 +24,15 @@
 | 20261012-1230 | file_assets 历史文件名补录 | ✅ agent2 已补录，生产待执行 | commit 8825d880 上线 file_assets 表持久化文件元数据（根治下载文件名退化）后，存量历史文件名需跑补录脚本恢复（磁盘 + 消息表原始名优先，幂等）。agent2 已执行（磁盘 1241 + 消息 769，共 1457 行）；生产 243 发布后需同样执行。 | — | —（执行步骤见 [生产发布备忘](../deploy/生产发布备忘.md)） |
 | 20261012-2130 | docs 文档清理（3 个月前失效文档） | ✅ 已执行（2026-10-13） | 41 个删除项已 git rm；待定 wecom-integration.md 摘取有效章节至 wecom-crypto-troubleshooting.md 后删除；research_index 8 条目 + 全部悬空引用已清理；B 级重点项 6 处已修（含 2 个部署文档凭证脱敏），其余 32 个 B 级小修待后续顺手处理。 | [清理计划](plans/plan-docs-cleanup-20261012.md) | — |
 | 20261021-2200 | 私有云生产环境部署指南 | ✅ 已完成（2026-10-21） | 新增 [deploy/生产环境部署指南.md](../deploy/生产环境部署指南.md)：面向客户私有云全新部署的通用 playbook，综合 243 独占迁移档案与济南诺度混部实例（摸底决策、Docker/codeup 三通道、sparse-checkout、PG 绑址、.env 必改项、宝塔 TLS、发布后事项、验收清单、两例踩坑速查）。 | [部署指南](../deploy/生产环境部署指南.md) | — |
+| 20261116-1230 | 聊易私有云部署（agent.0635easy.com） | 🔧 部分完成（基础设施+PG+nginx+证书完成，容器验收进行中） | 阿里云 47.104.107.85 裸机全栈部署：百炼 LLM、DigiCert 证书、deploy/liaoyi/ 部署材料与脚本；遗留 253 短信通道、管理员初始化、备份/巡检等（见文档遗留清单）。 | [部署文档](../deploy/liaoyi/聊易私有云部署.md) | — |
+| 20261116-1240 | 创蓝253 短信通道（聊易） | 🔧 部分完成（代码+单测完成，待发版联调） | 新增 ChuangLan253Sender 通道+配置+单测；待配 env/IP 白名单与真机验收。 | [任务文档](../deploy/liaoyi/创蓝253短信通道开发任务.md) | — |
 | 20261028-1255 | 外发邮箱配置指南（域名 DNS 侧） | ✅ 已完成（2026-10-28） | 新增 [docs/ops/outbound-email-dns-setup-guide.md](ops/outbound-email-dns-setup-guide.md)：面向租户外发邮件域名配置的实操指南，沉淀 tulin.cn 体检实战——SPF/DKIM/DMARC/MX 四记录要点（163 免费企业邮 + 阿里云解析逐步操作）、MX 主机记录误填子域致主域收信中断、权威 DNS 与公共缓存验证口径、DMARC 报告解读与 p 策略升级路径、缺 DKIM 决策参考与验收清单。 | [指南](ops/outbound-email-dns-setup-guide.md) | — |
 
 ## 系统功能
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261116-1430 | 官网客服渠道（web_c） | 🔧 部分完成（Phase 1+2 代码完成，独立 CR 修复完毕，待部署真机验收） | C 端免登录聊天渠道：签名/匿名双身份、SSE 透传流式、附件上传与代理下载、留资/防滥用/计费接入；租户侧「官网接待客户」查看页。CR P0（Runner Literal 缺 web_c）与 P1×3（文件归属绕过/direct_reply 幂等/并发双写唯一索引）已修复；单测回归 1031 passed、前端构建通过；真机验收待办。 | [设计](system/web-c-channel-design.md) | — |
 | 20261110-2032 | 技能目录重复注入去重 | ✅ 已完成开发（已合并 master，模型选型待真机观察） | use_skill 工具 schema 去名单只留使用规则，名单唯一保留系统提示；独立测试回归+CR 通过。模型选型行为待真机观察。master 专属子智能体目录重复不在本轮。 | — | [计划](plans/plan-skill-catalog-injection-dedup.md) |
 | 20261110-1524 | 管理后台系统健康监控页面 | 🔧 部分完成（四级状态徽标改版+网络 IO；重试占比口径 bug 已修待部署，待真机验收） | 平台后台新增 /portal/system-health 健康监控页（登录默认页）：四组指标+AI 研判，无曲线无历史，手机端一等公民 | [设计](system/system-health-monitor-design.md) | — |
 | 20261110-2201 | 系统健康真实模型错误率 | 📋 待规划 | 模型网关侧 LLM 调用失败率统计（KeyPool/CircuitBreaker 补失败计数），发现「限流被重试兜住、对话未失败」隐患；替代已删除的同源重复行（2026-11-10） | — | — |
@@ -55,6 +58,7 @@
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 20261112-1500 | 子智能体思考模式排查与批量关闭（enable_thinking） | 🔧 部分完成（配置贯通+3 个内置关闭已提交，候选实测后再定） | 关思考实测省 35~40% 积分（标书 trace 根因）；配置贯通含自定义数字员工三态开关。已关：ai-bid-assistant/ai-contract-assistant/auto-form-filler/contract-archive-review；6 个候选待 trace 实测，统计时须含自定义数字员工实例三态占比。 | [排查清单](audit/enable-thinking-review-20261112.md) | — |
+| 20261116-1600 | 样版板式复刻（doc-layout-clone 技能移植） | 🔧 部分完成（已提交 master 01006010，待部署真机验收） | 移植 workbuddy doc-layout-clone 技能 v1.0.0（Word/PDF 样版运行时分析 -> analysis/answers 缓存 -> 板式 1:1 回填，清单行动态增减 + 板式指纹验收）；补丁仅 prep.py --templates 改必传 + SKILL.md 工作目录/交付适配我方口径；requirements 增 pdf2docx；8 单测容器内全绿 + CLI 冒烟通过。 | — | — |
 | 20261112-1620 | AI投标助手扩容（bid-opportunity-evaluator 技能移植 + 子智能体改造） | 🔧 部分完成（开发+单测完成，待提交部署真机验收） | 移植 workbuddy bid-opportunity-evaluator 技能 v1.0.0（四步法投标可行性评估，规则化 0 模型调用产出 Word 评估报告，负载等级判 light）；ai-bid-assistant 显示名改「AI投标助手」，挂载该技能并定两阶段分流（先评估决策后编标）；7 单测绿 + 容器端到端冒烟通过。 | — | — |
 | 20261110-2030 | 采购比价助手（quote-price-comparison 技能移植 + 薄壳子智能体） | 🔧 部分完成（上游 v1.2.1 已合并，待提交部署） | 已合并 v1.2.0（金额守恒单位换算 + run_pipeline 流水线）与 v1.2.1（摘要改 Word summary.docx，python-docx 直出正式交付物）；脚本与上游逐字节一致零补丁，13 单测容器内全绿 + CLI 冒烟通过，待部署真机验收。 | — | — |
 | 20261111-0945 | 项目进度管家（project-progress-tracker 技能移植 + 薄壳子智能体） | 🔧 部分完成（已合并 master 1608eda6，待部署真机验收） | 移植 workbuddy 同名技能 v1.2.0（多源归集→三态研判→离线单文件看板→增量闭环）+ 薄壳子智能体；9 单测绿，待真机验收。 | — | — |
@@ -107,7 +111,8 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261113-1126 | 长任务企业微信应用通知（企微+飞书） | ✅ 已完成开发（已合并 master，2026-11-16；本地 E2E 通过，真机扫码与隔离库集成待环境验收） | web 渠道长任务（≥5 分钟可配）完成/失败时经企微独立通知应用一对一推送 textcard，点击回原会话；OAuth 为主+手机号确认兜底绑定身份；替换 web push 投递渠道（保留停用）。飞书通知已同模式接入（决策 7 追加）。 | [设计](system/wecom-app-task-notification-design.md) | [计划](plans/plan-wecom-app-task-notification.md) |
+| 20261116-1130 | 官网客服渠道（web_c，C 端 Web 聊天） | 📋 待开发（设计已裁决待评审） | 租户官网按钮/iframe 嵌入，C 端免登录对话；签名链接/匿名双身份，附件上传与留资纳入，复用渠道管线零新表；Phase 1 渠道核心 + Phase 2 官网接待客户查看页（含留资 Tab）。 | [设计](system/web-c-channel-design.md) | — |
+| 20261113-1126 | 长任务企业微信/飞书/钉钉应用通知 | ✅ 已完成开发（已合并 master，2026-11-16；本地 E2E 通过，真机扫码与隔离库集成待环境验收） | web 渠道长任务（≥5 分钟可配）完成/失败时经企微/飞书/钉钉租户自备应用一对一推送 textcard，点击回原会话；OAuth 为主+手机号确认兜底绑定身份；替换 web push 投递渠道（保留停用）。飞书通知已同模式接入（决策 7 追加）。 | [设计](system/wecom-app-task-notification-design.md) | [计划](plans/plan-wecom-app-task-notification.md) |
 | 20261106-1145 | wecom_kf 人工超时智能体接管 | 📋 待开发（设计待评审） | 转人工后人工超时限无发言且客户来新消息时，自动结束人工会话切回智能体接待（企业微信状态图 3 只能转 4，无热切换）；含 reason 白名单豁免、接管标记与审计字段、配置字段及前端表单。 | [设计](channel/wecom_kf/wecom_kf_design.md)（§十五） | — |
 | 20261109-2203 | 三渠道入站文件消息支持（飞书/钉钉/企微应用） | 💡 灵感 | 非图片文件输出侧三渠道已具备（textcard/文件消息直发），输入侧缺文件消息分支；机制与图片分支同构（媒体模块已有下载接口），有实际需求时按图片模式补齐。 | — | — |
 | 20261109-2159 | 多渠道图片收发支持（飞书/钉钉/企微应用，对齐 wecom_kf） | 🔧 部分完成（开发+单测完成，待真机验收） | 复刻 wecom_kf 图片链路到三渠道：入站图片下载落盘 -> attachment 入 Runner；出站公共 helper（ImageRef/files 解析+租户校验）+ 企微补 images 直发（>2MB 降级 textcard）+ 飞书/钉钉对齐口径。真机缺口：飞书 image_key、钉钉 downloadCode/photoURL、企微 media_id 收发待各渠道租户配置验证。 | — | — |

@@ -154,11 +154,14 @@ class RunnerServiceClient:
         validate_response(value, path)
         return value
 
-    async def open_events(self, path, *, authorization, tenant=None, after_seq=0):
+    async def open_events(self, path, *, authorization, tenant=None, after_seq=0,
+                          channel_source=None, channel_user=None, channel_chat=None):
         """Return a live response/client only after a bounded successful handshake.
 
         Caller owns closing both resources. This is not the short JSON request
         method, and never forwards incoming service/channel credentials.
+        channel_* 参数（web_c 渠道事件流透传）：渠道会话行读取需要 actor 头，
+        与 request() 的渠道头语义一致；缺省不携带，B 端 web 行为不变。
         """
         if not self.token:
             raise RunnerError('RUNNER_GATEWAY_NOT_CONFIGURED', 503)
@@ -166,6 +169,11 @@ class RunnerServiceClient:
                    'X-AgentRunner-Service-Token': self.token, 'Authorization': authorization}
         if tenant:
             headers['X-Tenant-Id'] = tenant
+        if channel_source:
+            headers.update({'X-AgentRunner-Source': channel_source,
+                            'X-AgentRunner-Channel-User': channel_user})
+            if channel_chat:
+                headers['X-AgentRunner-Channel-Chat'] = channel_chat
         client = httpx.AsyncClient(base_url=self.config.api_url.rstrip('/'),
             timeout=httpx.Timeout(connect=5, pool=5, write=5, read=20),
             follow_redirects=False, trust_env=False, http2=False)

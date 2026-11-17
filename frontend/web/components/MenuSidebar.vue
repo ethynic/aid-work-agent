@@ -721,6 +721,23 @@
           </svg>
           <span>网页端会话</span>
         </button>
+
+        <!-- 官网接待客户：仅租户管理员可见（web_c 渠道租户侧只读查看页，设计 §5.2） -->
+        <button
+          v-if="tenantId && isTenantAdmin"
+          @click="router.push(`/t/${tenantId}/web-c-customers`); closeFlyout()"
+          :class="[
+            'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm',
+            route.path === `/t/${tenantId}/web-c-customers`
+              ? 'bg-primary-50 text-primary-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-50'
+          ]"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z" />
+          </svg>
+          <span>官网接待客户</span>
+        </button>
       </template>
 
       <!-- 管理子菜单 -->

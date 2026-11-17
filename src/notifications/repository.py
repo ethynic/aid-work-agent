@@ -64,9 +64,11 @@ def _effective_event_types(stored):
 # 资格判断对白名单内 provider 的 target 在既有偏好/事件集合判定之上 AND 本
 # 白名单，其他渠道不受影响。adapter 渲染层同样只留终态映射（fail loud 兜底）。
 # feishu_app：2026-11-15 决策 7 追加（飞书通知完全复刻企微租户级模式）。
+# dingtalk_app：2026-11-16 决策 7 追加（钉钉通知同模式复刻）。
 PROVIDER_ALLOWED_EVENT_TYPES = {
     'wecom_app': ('task.completed', 'task.failed'),
     'feishu_app': ('task.completed', 'task.failed'),
+    'dingtalk_app': ('task.completed', 'task.failed'),
 }
 
 
@@ -919,6 +921,12 @@ class NotificationRepository:
         最近的 feishu_app target 状态与绑定姓名快照。口径与 wecom_bind_profile
         一致，未登记 target 时两个字段均为 None。"""
         return self._bind_profile(subject, 'feishu_app')
+
+    def dingtalk_bind_profile(self, subject):
+        """设置页绑定状态（钉钉通知接入，2026-11-16 决策 7 追加）：当前用户
+        最近的 dingtalk_app target 状态与绑定姓名快照。口径与 feishu_bind_profile
+        一致，未登记 target 时两个字段均为 None。"""
+        return self._bind_profile(subject, 'dingtalk_app')
 
     def _bind_profile(self, subject, channel):
         with self.connection_factory() as conn:

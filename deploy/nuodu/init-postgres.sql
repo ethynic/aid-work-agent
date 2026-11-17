@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS users (
     wx_unionid TEXT,
     wecom_userid TEXT,
     feishu_open_id TEXT,
+    dingtalk_userid TEXT,
     avatar_url TEXT,
     gender SMALLINT DEFAULT 0,
     nickname TEXT,

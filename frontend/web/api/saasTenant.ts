@@ -469,6 +469,24 @@ export async function verifyChannel(configId: string): Promise<{
 }
 
 /**
+ * 重置 web_c（官网客服）签名密钥（密钥轮换）。
+ * 旧签名链接全部失效，轮换后需同步更新官网的签名服务配置。
+ */
+export async function rotateWebCSecret(configId: string): Promise<{
+  success: boolean
+  channel_secret?: string
+  message?: string
+}> {
+  const res = await fetch(`${API_BASE}/channels/${configId}/rotate-web-c-secret`, {
+    method: 'POST',
+    headers: getSaasAuthHeader()
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error((data as { detail?: string }).detail || '重置签名密钥失败')
+  return data
+}
+
+/**
  * 重置 wechat_mp 渠道回调 Token（密钥轮换）。
  * 新 token 明文仅此一次返回；轮换后需在公众平台后台同步更新 Token 并重新保存。
  */

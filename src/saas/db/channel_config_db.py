@@ -40,6 +40,9 @@ _WECOM_APP_NOTIFY_CHANNEL_TYPE = "wecom_app_notify"
 _WECOM_CHANNEL_TYPE = "wecom"
 # 飞书应用消息渠道（agent 对话接入；secret 明文存储——同 wecom 不在加密范围）
 _FEISHU_CHANNEL_TYPE = "feishu"
+# 钉钉应用消息渠道（agent 对话接入；secret 明文存储——同 wecom/feishu 不在加密范围；
+# 钉钉通知接入 2026-11-16 起支持通知用途）
+_DINGTALK_CHANNEL_TYPE = "dingtalk"
 
 # wechat_mp 运行时/三态字段：更新配置时若调用方未提供则保留旧值
 # WP13-r1（CR P2-3 修复）：纳入清单源运行时状态与租户选择字段——前端旧快照
@@ -420,6 +423,36 @@ class ChannelConfigDB:
                 ORDER BY id DESC LIMIT 1
                 """,
                 (tenant_id, _FEISHU_CHANNEL_TYPE, "both", "notify_only"),
+            )
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d["config"] = json.loads(d["config"]) if d.get("config") else {}
+                if _has_sensitive_fields(d.get("channel_type")):
+                    d["config"] = wechat_mp_codec.decrypt_sensitive_fields(d["config"])
+                return d
+            return None
+
+    @staticmethod
+    def get_latest_dingtalk_notify_usage_decrypted(tenant_id: str) -> Optional[Dict[str, Any]]:
+        """按 tenant_id 取最新一条「通知用途」钉钉应用配置（钉钉通知接入 2026-11-16）。
+
+        channel_type=dingtalk 且 config.notify_usage ∈ {both, notify_only}，同租户
+        多条时取 id 最大（最新保存）一条；仅供钉钉应用通知凭据解析服务端内部
+        使用。dingtalk 类型敏感字段明文存储，无需解密（与
+        get_latest_feishu_notify_usage_decrypted 返回结构一致，decrypt 分支仅作
+        形态对齐）。
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM tenant_channel_configs
+                WHERE tenant_id = %s AND channel_type = %s
+                  AND (config::jsonb)->>'notify_usage' IN (%s, %s)
+                ORDER BY id DESC LIMIT 1
+                """,
+                (tenant_id, _DINGTALK_CHANNEL_TYPE, "both", "notify_only"),
             )
             row = cursor.fetchone()
             if row:

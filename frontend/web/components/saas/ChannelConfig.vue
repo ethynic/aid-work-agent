@@ -209,6 +209,80 @@
           </div>
         </div>
 
+        <!-- 官网客服专属：身份模式 / 签名密钥 / 集成代码（设计 §4.8） -->
+        <div v-if="form.channel_type === 'web_c'" class="mt-3 pt-3 border-t border-default space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-sm text-muted mb-1 block">身份模式</label>
+              <BaseSelect v-model="form.config.identity_mode">
+                <option value="both">签名 + 匿名（默认）</option>
+                <option value="ext">仅签名链接</option>
+                <option value="anon">仅匿名</option>
+              </BaseSelect>
+              <p class="mt-1 text-xs text-muted">签名：官网服务端按密钥生成，同一官网用户跨设备可见历史；匿名：浏览器本地保留，换浏览器丢失。Safari 对第三方 iframe 的本地存储约 7 天不活跃清除（浏览器策略，非缺陷）。</p>
+            </div>
+            <div v-if="editingId">
+              <label class="text-sm text-muted mb-1 block">签名密钥</label>
+              <div class="flex items-center gap-2">
+                <code class="text-xs bg-canvas rounded px-2 py-2 flex-1 truncate font-mono break-all whitespace-normal">{{ form.config.channel_secret || '保存后由服务端生成' }}</code>
+                <BaseButton size="sm" intent="ghost" @click="copyWebCSecret">复制</BaseButton>
+                <BaseButton size="sm" intent="secondary" @click="rotateWebCSecretKey">重置</BaseButton>
+              </div>
+              <p class="mt-1 text-xs text-muted">服务端自动生成；重置后旧签名链接全部失效，需同步更新官网签名服务。</p>
+            </div>
+          </div>
+
+          <!-- 集成代码 -->
+          <div class="bg-canvas rounded-lg p-3">
+            <div class="text-sm font-medium text-default mb-2">集成代码（保存后复制）</div>
+            <template v-if="editingId">
+              <div class="space-y-2 text-xs">
+                <div>
+                  <div class="text-muted mb-1">聊天页地址（按钮链接，推荐）</div>
+                  <div class="flex items-center gap-2">
+                    <code class="flex-1 bg-surface border border-default rounded px-2 py-1.5 font-mono break-all whitespace-normal text-default">{{ webCChatUrl }}</code>
+                    <BaseButton size="sm" intent="ghost" @click="copyText(webCChatUrl, '聊天页地址')">复制</BaseButton>
+                  </div>
+                </div>
+                <div>
+                  <div class="text-muted mb-1">iframe 嵌入</div>
+                  <div class="flex items-center gap-2">
+                    <code class="flex-1 bg-surface border border-default rounded px-2 py-1.5 font-mono break-all whitespace-normal text-default">{{ webCIframeCode }}</code>
+                    <BaseButton size="sm" intent="ghost" @click="copyText(webCIframeCode, 'iframe 代码')">复制</BaseButton>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <p v-else class="text-xs text-muted">保存配置后即可生成聊天页地址与 iframe 嵌入代码</p>
+          </div>
+
+          <!-- 签名算法说明（ext 模式） -->
+          <details class="bg-canvas rounded-lg p-3">
+            <summary class="text-sm font-medium text-default cursor-pointer">签名链接算法说明（官网有登录体系时必读）</summary>
+            <div class="mt-2 text-xs text-muted space-y-2">
+              <p>签名必须在<b class="text-default">官网服务端</b>生成（官网有登录体系即有服务端；前端 JS 内嵌密钥等于没有签名，任何人都可伪造身份读取他人会话）。无法做服务端签名的官网请使用匿名模式。</p>
+              <p>链接形态：<code class="font-mono">/c/{tenant_id}/{config_id}?u={userid}&amp;name={urlencode(昵称)}&amp;ts={unix秒}&amp;sig={签名}</code></p>
+              <p>签名算法：<code class="font-mono">sig = HMAC-SHA256(key=channel_secret, message=f"{u}.{ts}.{name}")</code> hex 小写；name 可缺省（缺省时签名串用空串）；ts 与服务端时间差 ≤ 24 小时。</p>
+              <pre class="bg-surface border border-default rounded p-2 font-mono text-[11px] overflow-x-auto text-default">Python:
+import hmac, hashlib, time, urllib.parse
+def sign_url(base, tenant_id, config_id, secret, userid, name=""):
+    ts = int(time.time())
+    sig = hmac.new(secret.encode(), f"{userid}.{ts}.{name}".encode(), hashlib.sha256).hexdigest()
+    name_q = urllib.parse.quote(name)
+    return f"{base}/c/{tenant_id}/{config_id}?u={userid}&amp;name={name_q}&amp;ts={ts}&amp;sig={sig}"
+
+Node.js:
+const crypto = require('crypto');
+const ts = Math.floor(Date.now() / 1000);
+const sig = crypto.createHmac('sha256', secret).update(`${'$'}{userid}.${'$'}{ts}.${'$'}{name}`).digest('hex');
+
+PHP:
+$ts = time();
+$sig = hash_hmac('sha256', "{$userid}.{$ts}.{$name}", $secret);</pre>
+            </div>
+          </details>
+        </div>
+
         <!-- 微信客服特有：客服账号管理（编辑模式内嵌完整管理；新增模式仅提示） -->
         <div v-if="form.channel_type === 'wecom_kf'" class="mt-3 pt-3 border-t border-default">
           <template v-if="editingId">
@@ -707,7 +781,7 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
-import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, type SubagentOption, rotateWechatMpToken, listTenantUsers, listKfAccounts, createKfAccount, updateKfAccount, deleteKfAccount } from '@/api/saasTenant'
+import { listChannels, createChannel, updateChannel, deleteChannel, verifyChannel, getAvailableSubagents, type SubagentOption, rotateWechatMpToken, rotateWebCSecret, listTenantUsers, listKfAccounts, createKfAccount, updateKfAccount, deleteKfAccount } from '@/api/saasTenant'
 import AbusePolicyEditor from '@/components/saas/AbusePolicyEditor.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
@@ -1127,6 +1201,7 @@ const channelTypes = [
   { value: 'wechat_mp', label: '公众号内容', icon: '' },
   { value: 'dingtalk', label: '钉钉', icon: '' },
   { value: 'feishu', label: '飞书', icon: '' },
+  { value: 'web_c', label: '官网客服', icon: '' },
 ]
 
 function channelTypeLabel(type: string) {
@@ -1137,6 +1212,7 @@ function channelTypeLabel(type: string) {
     wecom_app_notify: '企业微信应用通知（任务消息）',
     dingtalk: '钉钉',
     feishu: '飞书',
+    web_c: '官网客服',
   }
   return map[type] || type
 }
@@ -1186,6 +1262,11 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
     { key: 'agentid', label: '应用 AgentId', placeholder: '1000002', location: '「应用管理」→ 通知应用详情页' },
     { key: 'secret', label: '应用 Secret', type: 'password', placeholder: '', hint: '点击「查看」获取；保存后加密存储，回显脱敏', location: '「应用管理」→ 通知应用详情页' },
   ],
+  // 官网客服（web_c）：无第三方凭证；greeting 开场文案；身份模式/签名密钥/
+  // 集成代码在下方 web_c 专属面板维护（channel_secret 由服务端自动生成）
+  web_c: [
+    { key: 'greeting', label: '开场白', placeholder: '您好，我是本公司的智能助手，有什么可以帮您？', hint: '访客打开聊天页时展示的开场欢迎语', location: '' },
+  ],
 }
 
 // ==================== 应用「通知用途」（企微渠道合并 2026-11-15、飞书通知接入 2026-11-15） ====================
@@ -1199,7 +1280,7 @@ const NOTIFY_USAGES = [
 ]
 
 const supportsNotifyUsage = computed(() =>
-  form.value.channel_type === 'wecom' || form.value.channel_type === 'feishu')
+  form.value.channel_type === 'wecom' || form.value.channel_type === 'feishu' || form.value.channel_type === 'dingtalk')
 
 const notifyUsage = computed({
   get: () => form.value.config.notify_usage || 'agent_only',
@@ -1208,6 +1289,11 @@ const notifyUsage = computed({
 
 const isNotifyOnly = computed(() =>
   supportsNotifyUsage.value && notifyUsage.value === 'notify_only')
+
+// 钉钉「仅通知」用途补填字段：工作通知发送需应用 AgentId（2026-11-16 钉钉通知接入；
+// agent_only/both 保持原两项表单不变——存量行为零变更）
+const DINGTALK_NOTIFY_ONLY_AGENT_FIELD: { key: string; label: string; placeholder: string; hint?: string; location: string; type?: 'text' | 'file' | 'password' } =
+  { key: 'agent_id', label: '应用 AgentId', placeholder: '', location: '「应用信息」页面（基础信息 → 应用信息）' }
 
 const channelFields = computed(() => {
   const fields = channelFieldMap[form.value.channel_type] || []
@@ -1220,6 +1306,11 @@ const channelFields = computed(() => {
     //（encrypt_key 本就可选），保存时剔除旧值
     return fields.filter(f => f.key !== 'verification_token' && f.key !== 'encrypt_key')
   }
+  if (isNotifyOnly.value && form.value.channel_type === 'dingtalk') {
+    // 钉钉仅通知用途：app_key/app_secret 两项基础上补填 agent_id（工作通知必填，
+    // 保存时随用途写入）；钉钉本无回调 Token / EncodingAESKey 表单项
+    return [...fields, DINGTALK_NOTIFY_ONLY_AGENT_FIELD]
+  }
   return fields
 })
 
@@ -1228,6 +1319,12 @@ function selectChannelType(type: string) {
   form.value.channel_type = type
   if (type === 'wechat_mp' && form.value.config.enabled === undefined) {
     form.value.config.enabled = true
+  }
+  // web_c：身份模式缺省 both；channel_secret 由服务端生成不进表单
+  if (type === 'web_c') {
+    if (!form.value.config.identity_mode) form.value.config.identity_mode = 'both'
+    if (form.value.config.channel_secret === undefined) form.value.config.channel_secret = ''
+    if (form.value.config.enabled === undefined) form.value.config.enabled = true
   }
   // WP13：切到公众号类型时加载清单源绑定状态（v1 每租户仅一个扫码绑定，
   // 新建弹窗同样展示既有绑定）
@@ -1270,6 +1367,7 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '在「事件与回调」中添加 im.message.receive_v1 事件',
       '将下方回调地址填入 HTTP 回调配置',
       '记录 AppKey、AppSecret（钉钉回调签名只用 AppSecret，不需要 Token / EncodingAESKey）',
+      '仅任务通知（不接对话）时，「通知用途」选「仅通知」，需 AppKey / AppSecret / AgentId 三项',
     ],
     docUrl: 'https://open.dingtalk.com/',
   },
@@ -1306,6 +1404,16 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '在本页保存凭据即可：成员在「通知设置」绑定企微后，长任务完成/失败会收到应用消息',
     ],
     docUrl: 'https://work.weixin.qq.com/wework_admin/frame',
+  },
+  web_c: {
+    title: '官网客服接入步骤（嵌入租户官网，访客免登录对话）',
+    steps: [
+      '选择身份模式：官网有登录体系选「签名链接」（推荐，跨设备可见）；无登录体系选「匿名」',
+      '保存配置后复制签名密钥，配置到官网服务端（前端 JS 内嵌密钥等于没有签名）',
+      '复制下方集成代码（按钮链接或 iframe）嵌入官网页面',
+      '访客对话产生的用量计入租户积分；匿名身份在 Safari iframe 下约 7 天有效（浏览器策略）',
+    ],
+    docUrl: '',
   },
 }
 
@@ -1724,6 +1832,43 @@ function editChannel(ch: any) {
   }
 }
 
+// ==================== 官网客服（web_c）：签名密钥与集成代码 ====================
+
+const webCChatUrl = computed(() => {
+  if (!editingId.value) return ''
+  return `${window.location.origin}/c/${tenantId.value}/${editingId.value}`
+})
+
+const webCIframeCode = computed(() => {
+  if (!editingId.value) return ''
+  return `<iframe src="${webCChatUrl.value}?embed=1" style="width:420px;height:640px;border:0" allow="clipboard-write"></iframe>`
+})
+
+function copyText(text: string, label: string) {
+  navigator.clipboard.writeText(text).then(() => toast.success(`${label}已复制`))
+}
+
+function copyWebCSecret() {
+  const secret = form.value.config.channel_secret
+  if (!secret) {
+    toast.warning('密钥尚未生成，请先保存配置')
+    return
+  }
+  copyText(secret, '签名密钥')
+}
+
+async function rotateWebCSecretKey() {
+  if (!editingId.value) return
+  if (!confirm('确定重置签名密钥？重置后旧签名链接全部失效，需同步更新官网的签名服务配置。')) return
+  try {
+    const res = await rotateWebCSecret(editingId.value)
+    if (res.channel_secret) form.value.config.channel_secret = res.channel_secret
+    toast.success(res.message || '签名密钥已重置')
+  } catch (e: any) {
+    toast.error(e.message || '重置失败')
+  }
+}
+
 // 防滥用策略弹窗（scope_type=channel）
 const showAbusePolicy = ref(false)
 const abuseChannel = ref<any>(null)
@@ -1786,17 +1931,22 @@ async function saveChannel(): Promise<boolean> {
       config: { ...form.value.config },
       subagent_type: form.value.subagent_type || undefined
     }
-    // 企微/飞书应用：写入通知用途（缺省 agent_only，存量行为不变）；
-    // 仅通知用途无回调链路，剔除回调字段旧值（表单已隐藏）
-    if (form.value.channel_type === 'wecom' || form.value.channel_type === 'feishu') {
+    // 企微/飞书/钉钉应用：写入通知用途（缺省 agent_only，存量行为不变）；
+    // 仅通知用途无回调链路，剔除回调字段旧值（表单已隐藏或本就无回调字段）
+    if (form.value.channel_type === 'wecom' || form.value.channel_type === 'feishu' || form.value.channel_type === 'dingtalk') {
       payload.config.notify_usage = notifyUsage.value
       if (notifyUsage.value === 'notify_only') {
         if (form.value.channel_type === 'wecom') {
           delete payload.config.token
           delete payload.config.encoding_aes_key
-        } else {
+        } else if (form.value.channel_type === 'feishu') {
           delete payload.config.verification_token
           delete payload.config.encrypt_key
+        } else {
+          // 钉钉：通知发送仅需 app_key/app_secret/agent_id（agent_id 由「仅通知」
+          // 表单补填）；历史配置可能带 token/encoding_aes_key，一并剔除
+          delete payload.config.token
+          delete payload.config.encoding_aes_key
         }
       }
     }

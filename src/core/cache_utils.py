@@ -72,6 +72,11 @@ class CacheKeys:
     VIDEO_PROMPT_DRAFT = "video_prompt_draft"
     # 文件资产 / 企微客服 / 独立会话状态（登记前缀，消除管理后台"裸键"告警）
     UPLOADED_FILE = "uploaded_file"        # uploaded_file:{file_id}（文件/图片元数据）
+    # 官网客服（web_c）C 端限流（滑动窗口，SlidingWindowRateLimiter 前缀）
+    WEB_C_RATE_LIMIT_CHAT = "rate_limit:web_c_chat"    # rate_limit:web_c_chat:{channel_user_id}（每身份每分钟）
+    WEB_C_RATE_LIMIT_IP = "rate_limit:web_c_ip"        # rate_limit:web_c_ip:{ip}（每 IP 每小时）
+    WEB_C_RATE_LIMIT_UPLOAD = "rate_limit:web_c_upload"  # rate_limit:web_c_upload:{channel_user_id}（每身份每分钟）
+    WEB_C_RATE_LIMIT_BOOTSTRAP = "rate_limit:web_c_bootstrap"  # rate_limit:web_c_bootstrap:{channel_user_id}（每身份每分钟）
     SUBAGENT_GREETING = "subagent_greeting"  # subagent_greeting:{agent_id}；租户上下文为 subagent_greeting:{tenant_id}:{agent_id}（数字员工空态摘要+快捷按钮，LLM 生成后缓存）
     WECOM_KF = "wecom_kf"                  # wecom_kf:{corp_id}:{key}（企微客服，key 必须带企业维度）
     WECOM_KF_PULL_LOCK = "wecom_kf_pull_lock"          # wecom_kf_pull_lock:{tenant_id}:{open_kfid}（拉取任务互斥锁，防并发 sync_msg 撞微信 45009 限频）

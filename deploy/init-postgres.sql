@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS users (
     wx_unionid TEXT,
     wecom_userid TEXT,
     feishu_open_id TEXT,
+    dingtalk_userid TEXT,
     avatar_url TEXT,
     gender SMALLINT DEFAULT 0,
     nickname TEXT,
@@ -159,6 +160,14 @@ CREATE TABLE IF NOT EXISTS channel_messages (
 
 CREATE INDEX IF NOT EXISTS idx_channel_sessions_tenant_channel ON channel_sessions(tenant_id, channel_type, channel_user_id);
 CREATE INDEX IF NOT EXISTS idx_channel_messages_session ON channel_messages(session_id, created_at);
+-- web_c 幂等唯一部分索引（终态消息按 runner_id、用户消息按 client_request_id，防并发双写）
+CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_messages_runner_final
+    ON channel_messages (session_id, (metadata->>'runner_id'))
+    WHERE metadata->>'runner_id' IS NOT NULL AND metadata->>'runner_id' <> ''
+      AND COALESCE(metadata->>'kind', '') = '';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_messages_client_request
+    ON channel_messages (session_id, (metadata->>'client_request_id'))
+    WHERE metadata->>'client_request_id' IS NOT NULL;
 -- v3.2.1 P2-1：chat_messages 表同样需要 (session_id, created_at) 索引，
 -- 供 MessageDB.count_messages_by_session（压缩阈值快路径）走索引扫描
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(session_id, created_at DESC);

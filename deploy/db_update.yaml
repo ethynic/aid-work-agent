@@ -4832,3 +4832,17 @@
   remark: "users 增加 feishu_open_id 列（飞书任务通知身份绑定，存飞书用户 open_id）：存量库升级补列"
   statements: |
     ALTER TABLE users ADD COLUMN IF NOT EXISTS feishu_open_id TEXT;
+- datetime: "2026-11-16 10:00:00"
+  remark: "users 增加 dingtalk_userid 列（钉钉任务通知身份绑定，存钉钉用户 userid）：存量库升级补列"
+  statements: |
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS dingtalk_userid TEXT;
+- datetime: "2026-11-16 15:00:00"
+  remark: "channel_messages 幂等唯一部分索引（web_c 终态/用户消息防并发双写，CR P1-3）：终态消息按 (session_id, runner_id) 且无 kind；用户消息按 (session_id, client_request_id)。存量数据无该形态元数据，建索引安全"
+  statements: |
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_messages_runner_final
+        ON channel_messages (session_id, (metadata->>'runner_id'))
+        WHERE metadata->>'runner_id' IS NOT NULL AND metadata->>'runner_id' <> ''
+          AND COALESCE(metadata->>'kind', '') = '';
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_messages_client_request
+        ON channel_messages (session_id, (metadata->>'client_request_id'))
+        WHERE metadata->>'client_request_id' IS NOT NULL;

@@ -14,6 +14,7 @@ SESSION_SOURCE_TYPES: Tuple[str, ...] = (
     "wecom_kf",
     "dingtalk",
     "feishu",
+    "web_c",
 )
 
 RULE_CATALOG: List[Dict[str, Any]] = [
