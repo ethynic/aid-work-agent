@@ -1,6 +1,13 @@
 # AID Work Agent Docker Compose 配置
 # 支持 FastAPI 和 Gradio 两种部署模式
 
+x-local-source: &local-source
+  type: bind
+  source: ${AID_LOCAL_SOURCE_DIR:-.}
+  target: /app
+  bind:
+    create_host_path: false
+
 services:
   # FastAPI 服务（默认）
   aid-agent-api:
@@ -25,7 +32,8 @@ services:
       - DEBUG=true
       - WATCHFILES_FORCE_POLLING=true
     volumes:
-      - .:/app
+      - *local-source
+      - ./.env:/app/.env:ro
       - local-agent-storage:/app/storage
       - local-agent-uploads:/app/uploads
       - local-agent-logs:/app/log
@@ -48,7 +56,7 @@ services:
     entrypoint: []
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir src --no-access-log
 
-  # 复用公共 Runner 定义；开发进程与 API 一样直接读取 master 挂载。
+  # 复用公共 Runner 定义，源码、配置和 Skills 与 API 使用同一工作区。
   runner-api:
     extends:
       file: docker-compose.agent-runner.yml
@@ -57,6 +65,10 @@ services:
     entrypoint: []
     command: [python, -m, src.services.agent_runner.bootstrap, --host, "0.0.0.0", --port, "8091"]
     volumes:
+      - *local-source
+      - ./.env:/app/.env:ro
+      - ${AID_LOCAL_SOURCE_DIR:-.}/configs:/app/configs
+      - ${AID_LOCAL_SOURCE_DIR:-.}/skills:/app/skills
       - local-agent-storage:/app/storage
       - local-agent-uploads:/app/uploads
       - local-agent-logs:/app/log
@@ -74,6 +86,10 @@ services:
     entrypoint: []
     command: [python, -m, src.services.agent_runner.supervisor]
     volumes:
+      - *local-source
+      - ./.env:/app/.env:ro
+      - ${AID_LOCAL_SOURCE_DIR:-.}/configs:/app/configs
+      - ${AID_LOCAL_SOURCE_DIR:-.}/skills:/app/skills
       - local-agent-storage:/app/storage
       - local-agent-uploads:/app/uploads
       - local-agent-logs:/app/log
@@ -88,6 +104,9 @@ services:
     entrypoint: []
     command: [python, -m, src.services.agent_runner.monitor]
     volumes:
+      - *local-source
+      - ./.env:/app/.env:ro
+      - ${AID_LOCAL_SOURCE_DIR:-.}/configs:/app/configs
       - local-agent-logs:/app/log
     networks:
       - local-agent-data

@@ -18,26 +18,11 @@
 
 ### 方式一：单元/集成测试（Vitest + MSW）
 
-```bash
-cd frontend && npm test                     # 运行全部
-cd frontend && npx vitest run saas          # 只跑 SaaS 相关
-```
-
-需要先在 `src/__tests__/mocks/handlers.ts` 添加 SaaS API mock handlers，然后编写测试文件。
+在 [MSW handlers](./mocks/handlers.ts) 中维护所需的 SaaS API mock，再按[开发环境手册](../../../docs/infrastructure/local-dev-environments.md#3-在容器内自测)运行相关测试。
 
 ### 方式二：浏览器手动测试
 
-1. **启动后端**（需要 SaaS 模块已注册）
-   ```bash
-   python -m src.main  # port 8000
-   ```
-
-2. **启动前端 dev server**
-   ```bash
-   cd frontend && npm run dev  # port 3000
-   ```
-
-3. **访问** `http://localhost:3000/portal/login`
+按[开发环境手册](../../../docs/infrastructure/local-dev-environments.md)启动本地 API 和 Vite。确认 SaaS 模块已注册，再从 `/portal/login` 开始执行下方用例。
 
 ---
 
