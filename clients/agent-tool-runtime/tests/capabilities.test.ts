@@ -134,12 +134,14 @@ test('D5 能力上报与实际生效 manifest 同源：默认 v1；v2Send 显式
   const { deviceCapabilities } = await import('../src/config.js')
   const baseConfig: Record<string, unknown> = {
     server: 'http://x', device_id: 'd',
-    providers: { weixin: { entry: existingEntry } },
+    providers: { weixin: { entry: existingEntry } }, sessionTasks: true,
   }
   // 默认（未协商）：协议 1、工具集合无 v2、能力不含 v2 发送
   const def = deviceCapabilities(baseConfig as never) as { providers: string[]; capabilities: string[]; provider_manifests: Record<string, { protocol_version: number; manifest_digest: string }> }
   assert.equal(def.provider_manifests['weixin']!.protocol_version, 1)
   assert.ok(!def.capabilities.includes('weixin_message_send_v2'))
+  assert.ok(!def.capabilities.includes('session_task_v1'))
+  assert.ok(!def.capabilities.includes('session_observer_v1'))
   // 显式协商 v2Send：manifest 升级 v2 变体（cli 启动注入，此处直接模拟）后，
   // 上报协议 2、摘要 = v2 变体摘要、能力含 v2 发送
   setManifestOverride('weixin', weixinV2Manifest())
@@ -150,6 +152,8 @@ test('D5 能力上报与实际生效 manifest 同源：默认 v1；v2Send 显式
     assert.equal(negotiated.provider_manifests['weixin']!.protocol_version, 2)
     assert.equal(negotiated.provider_manifests['weixin']!.manifest_digest, manifestDigestOf(v2))
     assert.ok(negotiated.capabilities.includes('weixin_message_send_v2'))
+    assert.ok(!negotiated.capabilities.includes('session_task_v1'))
+    assert.ok(!negotiated.capabilities.includes('session_observer_v1'))
   } finally {
     setManifestOverride('weixin', null)
   }

@@ -41,7 +41,7 @@ from .constants import (
     SessionTaskError,
 )
 from .scenario_hooks import require_hooks
-from .service import _conn, _lock_task_subject, _now, _tz, task_spend
+from .service import _conn, _lock_task_subject, _now, _tz, ensure_weixin_cloud_reply_enabled, task_spend
 from .texts import load_text, store_text
 
 DECISION_STATUS_TERMINAL = ("ready", "superseded", "failed")
@@ -1859,6 +1859,7 @@ def prepare_send(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: in
         a = cursor.fetchone()
         if a is None or a["fence"] != fence:
             raise SessionTaskError("assignment 已过时（STALE_ASSIGNMENT）", ERR_STALE_ASSIGNMENT, 409)
+        ensure_weixin_cloud_reply_enabled(tenant_id, a["scenario_key"])
         if _tz(a["lease_expires_at"]) <= now:
             raise SessionTaskError("租约已过期", ERR_LEASE_EXPIRED, 409)
         if task_row is None or task_row["status"] != STATUS_ACTIVE:
@@ -2250,7 +2251,7 @@ def claim_session_invocation(tenant_id: str, device_id: UUID, assignment_id: UUI
         _task_status_row = cursor.fetchone()
         cursor.execute(
             """
-            SELECT a.fence, a.lease_expires_at, t.status
+            SELECT a.fence, a.lease_expires_at, t.status, t.scenario_key
             FROM session_task_assignments a JOIN session_tasks t ON t.tenant_id=a.tenant_id AND t.id=a.task_id
             WHERE a.tenant_id=%s AND a.id=%s AND a.is_current=TRUE FOR UPDATE OF a
             """,
@@ -2259,6 +2260,7 @@ def claim_session_invocation(tenant_id: str, device_id: UUID, assignment_id: UUI
         a = cursor.fetchone()
         if a is None or a["fence"] != fence:
             raise SessionTaskError("assignment 已过时（STALE_ASSIGNMENT）", ERR_STALE_ASSIGNMENT, 409)
+        ensure_weixin_cloud_reply_enabled(tenant_id, a["scenario_key"])
         if _tz(a["lease_expires_at"]) <= now:
             raise SessionTaskError("租约已过期", ERR_LEASE_EXPIRED, 409)
         task_status = a["status"]

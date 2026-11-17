@@ -502,10 +502,10 @@ session_tasks:
   execution_reserve_units: 0.0    # 单次发送执行预留积分（weixin v2 发送现无按次积分价；>0 才预留，不虚构按轮收费）
   opening_enabled: true           # 开场白决策开关（false 拒绝 opening 创建）
 
-# 微信会话场景（weixin.conversation.v1；场景能力开关，业务绑定骨架 C1 已建）
+# 微信云端自动回复已停用。微信聊天正文通过本机 CLI 读取。
 weixin_conversation:
-  enabled: true
-  tenant_allowlist: ["tenant_1dc997a1806b"]  # Demo 租户
+  enabled: false
+  tenant_allowlist: []
 
 # BOSS 会话场景（boss.chat_reply.v1；B1.3 注册骨架默认关闭，完整场景包 B2 交付。
 # 热读门控同微信范式：enabled=false（或文件缺失/损坏）时零注册零授权，fail-closed；

@@ -24,6 +24,8 @@ export interface PowerShellScriptOptions {
   args?: string[]
   /** 业务输入可经 UTF-8 stdin 传递，避免出现在子进程命令行。 */
   stdin?: string
+  /** 纯本地驱动设为 false，跳过视觉代理绑定读取和惰性激活。缺省沿用代理解析。 */
+  useVisionProxy?: boolean
   timeoutMs?: number
   signal?: AbortSignal
 }
@@ -69,6 +71,7 @@ export async function runPowerShellScript(opts: PowerShellScriptOptions): Promis
     }
     // 服务端代理凭据（server_url/token）经环境变量传给驱动，不进命令行参数
     void (async () => {
+      if (opts.useVisionProxy === false) return {}
       try {
         return await resolveDriverProxyEnv()
       } catch {
@@ -79,7 +82,7 @@ export async function runPowerShellScript(opts: PowerShellScriptOptions): Promis
     const child = spawn('powershell.exe', args, {
       windowsHide: true,
       stdio: [opts.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...proxyEnv, AID_WEIXIN_NODE_EXECUTABLE: process.execPath },
+      env: { ...process.env, ...proxyEnv },
     })
     let stdout = ''
     let stderr = ''

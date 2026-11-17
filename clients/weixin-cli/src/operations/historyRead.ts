@@ -1,159 +1,167 @@
-/**
- * weixin_history_read operation（M2）：读取与目标的聊天记录（只读，effect=none）。
- *
- * 注意：会打开会话窗口、清除该会话未读角标，但无外部写副作用。
- *
- * 流程：TS 验 ref → drivers/ps1/resolve-open.ps1（搜索+定位+点击+校验标题，
- * 与 message_send 共用 Open-WeixinChat）→ 调 drivers/ps1/
- * history-read.ps1（滚动截屏 + RapidOCR）抓取 → TS 读输出文本，解析 `[时间]/[我]/[对方名]`
- * 行为 messages。内联最多 200 条，超出只返回最新 200 条并给 file 路径。
- */
 import { randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runWeixinOperation } from './context.js'
-import { CodedOperationError, type OperationResult, type OpContext, type WeixinOperation } from './types.js'
-import {
-  runPowerShellDriver,
-  runPowerShellScript,
-  type RunPowerShellDriverFn,
-  type RunPowerShellScriptFn,
-} from '../platform/powershell.js'
+import { z } from 'zod'
+import { runPowerShellDriver, type RunPowerShellDriverFn } from '../platform/powershell.js'
 import { verifyTargetRef, type VerifyTargetRefFn } from '../platform/targetRef.js'
+import { runWeixinOperation } from './context.js'
+import { CodedOperationError, type WeixinOperation } from './types.js'
 
-/** dist/src/operations → 包根 drivers/ps1 */
-const RESOLVE_OPEN_PATH = fileURLToPath(new URL('../../../drivers/ps1/resolve-open.ps1', import.meta.url))
-const HISTORY_CAPTURE_PATH = fileURLToPath(
-  new URL('../../../drivers/ps1/history-read.ps1', import.meta.url),
-)
+const HISTORY_CAPTURE_PATH = fileURLToPath(new URL('../../../drivers/ps1/history-read.ps1', import.meta.url))
+const DEFAULT_MAX_PAGES = 3
+const MAX_PAGES_LIMIT = 10
+const INLINE_MESSAGE_LIMIT = 200
+const HISTORY_TIMEOUT_MS = 600_000
+
+const historyRowSchema = z.object({
+  kind: z.enum(['text', 'time', 'media', 'unknown']),
+  text: z.string(),
+  sender: z.enum(['self', 'peer', 'system', 'unknown']),
+  sender_name: z.string().nullish(),
+  runtime_id: z.string(),
+  clipped: z.boolean(),
+})
+type HistoryRow = z.infer<typeof historyRowSchema>
+
+const historyCaptureSchema = z.object({
+  title: z.string(),
+  is_group: z.boolean(),
+  pages: z.array(z.array(historyRowSchema)).min(1).max(MAX_PAGES_LIMIT),
+})
 
 export interface WeixinHistoryReadArgs {
-  target_ref: string
+  target_ref?: string
+  target_name?: string
   since_days?: number
   max_pages?: number
 }
 
 export interface HistoryMessage {
-  sender: 'me' | 'peer' | 'time'
+  sender: 'me' | 'peer' | 'time' | 'unknown'
   text: string
+  sender_name?: string | null
+  kind?: 'media' | 'unknown'
 }
 
-const DEFAULT_MAX_PAGES = 3
-const MAX_PAGES_LIMIT = 10
-/** 内联消息上限：超出只返回最新 INLINE_MESSAGE_LIMIT 条并落 file 路径 */
-const INLINE_MESSAGE_LIMIT = 200
-/** 历史抓取按页滚动+OCR 较慢，预算 600s */
-const HISTORY_TIMEOUT_MS = 600_000
+function sameHistoryRow(earlier: HistoryRow, later: HistoryRow): boolean {
+  return Boolean(earlier.runtime_id && earlier.runtime_id === later.runtime_id
+    && earlier.kind === later.kind && earlier.text === later.text
+    && (earlier.sender === later.sender || earlier.sender === 'unknown' || later.sender === 'unknown')
+    && (!earlier.sender_name || !later.sender_name || earlier.sender_name === later.sender_name))
+}
 
-const MESSAGE_LINE = /^\[(.+?)\]\s?(.*)$/
-
-/** 解析 p4 输出文本行：`[时间] xxx` / `[我] xxx` / `[对方名] xxx` */
-export function parseHistoryLines(text: string): HistoryMessage[] {
-  const messages: HistoryMessage[] = []
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue
-    const m = MESSAGE_LINE.exec(line)
-    if (!m) continue
-    const tag = m[1]!
-    const sender: HistoryMessage['sender'] = tag === '时间' ? 'time' : tag === '我' ? 'me' : 'peer'
-    messages.push({ sender, text: m[2] ?? '' })
+function mergeHistoryPages(pages: HistoryRow[][]): HistoryRow[] {
+  let merged = pages[0]!
+  for (const older of pages.slice(1)) {
+    let overlap = Math.min(older.length, merged.length)
+    for (; overlap > 0; overlap--) {
+      if (older.slice(-overlap).every((row, index) => sameHistoryRow(row, merged[index]!))) break
+    }
+    if (overlap === 0) throw new CodedOperationError('CONTENT_UNAVAILABLE', '无法确认微信历史分页连续，请缩小读取范围')
+    const shared = older.slice(-overlap).map((earlier, index) => {
+      const later = merged[index]!
+      return {
+        ...later,
+        sender: later.sender === 'unknown' ? earlier.sender : later.sender,
+        sender_name: later.sender_name ?? earlier.sender_name,
+      }
+    })
+    merged = [...older.slice(0, -overlap), ...shared, ...merged.slice(overlap)]
   }
-  return messages
+  return merged
 }
 
-export function createWeixinHistoryReadOperation(
-  deps: {
-    runDriverFn?: RunPowerShellDriverFn
-    runScriptFn?: RunPowerShellScriptFn
-    verifyRefFn?: VerifyTargetRefFn
-    readFileFn?: (path: string) => Promise<string>
-  } = {},
-): WeixinOperation<WeixinHistoryReadArgs> {
+function toHistoryMessage(row: HistoryRow, isGroup: boolean): HistoryMessage {
+  if (row.kind === 'time') return { sender: 'time', text: row.text }
+  const sender = row.sender === 'self' ? 'me' : row.sender === 'peer' ? 'peer' : 'unknown'
+  return {
+    sender,
+    text: row.text,
+    ...(isGroup && sender !== 'me' ? { sender_name: row.sender_name ?? null } : {}),
+    ...(row.kind !== 'text' ? { kind: row.kind } : {}),
+  }
+}
+
+function renderHistory(messages: HistoryMessage[], target: string): string {
+  return messages.map((message) => {
+    const speaker = message.sender === 'time' ? '时间' : message.sender === 'me' ? '我'
+      : message.sender === 'peer' ? message.sender_name ?? (message.sender_name === null ? '未确认' : target) : '未确认'
+    return `[${speaker}] ${message.text}`
+  }).join('\n')
+}
+
+export function createWeixinHistoryReadOperation(deps: {
+  runDriverFn?: RunPowerShellDriverFn
+  verifyRefFn?: VerifyTargetRefFn
+  writeFileFn?: (path: string, contents: string) => Promise<void>
+} = {}): WeixinOperation<WeixinHistoryReadArgs> {
   const runDriverFn = deps.runDriverFn ?? runPowerShellDriver
-  const runScriptFn = deps.runScriptFn ?? runPowerShellScript
   const verifyRefFn = deps.verifyRefFn ?? verifyTargetRef
-  const readFileFn = deps.readFileFn ?? ((p: string) => readFile(p, 'utf8'))
+  const writeFileFn = deps.writeFileFn ?? ((path, contents) => writeFile(path, contents, { flag: 'wx', mode: 0o600 }))
   return {
     name: 'weixin_history_read',
-    execute(args: WeixinHistoryReadArgs, ctx: OpContext): Promise<OperationResult> {
-      return runWeixinOperation(
-        'readonly',
-        ctx,
-        () => {
-          if (args === null || typeof args !== 'object' || Array.isArray(args)) {
-            return '参数必须是对象（target_ref 必填；since_days/max_pages 可选）'
-          }
-          if (typeof args.target_ref !== 'string' || args.target_ref.length === 0) {
-            return 'target_ref 必填且必须是非空字符串（先经 weixin_chat_search 获取）'
-          }
-          if (args.since_days !== undefined && (typeof args.since_days !== 'number' || !Number.isFinite(args.since_days) || args.since_days <= 0)) {
-            return 'since_days 必须是 > 0 的数字'
-          }
-          if (
-            args.max_pages !== undefined &&
-            (!Number.isInteger(args.max_pages) || args.max_pages < 1 || args.max_pages > MAX_PAGES_LIMIT)
-          ) {
-            return `max_pages 必须是 1..${MAX_PAGES_LIMIT} 的整数`
-          }
-          return null
-        },
-        async (opCtx) => {
-          const target = verifyRefFn(args.target_ref)
-          const maxPages = args.max_pages ?? DEFAULT_MAX_PAGES
-
-          opCtx.progress({ stage: 'execute', message: `打开与「${target.name}」的会话` })
-          await runDriverFn({ script: RESOLVE_OPEN_PATH, args: ['-TargetName', target.name], signal: opCtx.signal })
-
-          const outFile = join(tmpdir(), `weixin-history-${randomUUID()}.txt`)
-          const scriptArgs = ['-PeerName', target.name, '-MaxPages', String(maxPages), '-OutFile', outFile]
-          if (args.since_days !== undefined) scriptArgs.push('-UntilDaysAgo', String(Math.ceil(args.since_days)))
-          opCtx.progress({ stage: 'execute', message: `滚动抓取聊天记录（最多 ${maxPages} 页）` })
-          const capture = await runScriptFn({
-            script: HISTORY_CAPTURE_PATH,
-            args: scriptArgs,
-            timeoutMs: HISTORY_TIMEOUT_MS,
-            signal: opCtx.signal,
+    execute(args, ctx) {
+      return runWeixinOperation('readonly', ctx, () => {
+        if (args === null || typeof args !== 'object' || Array.isArray(args)) return '参数必须是对象'
+        if ((args.target_ref === undefined) === (args.target_name === undefined)) return 'target_ref 与 target_name 必须且只能提供一项'
+        if (args.target_ref !== undefined && (typeof args.target_ref !== 'string' || !args.target_ref)) return 'target_ref 必须是非空字符串'
+        if (args.target_name !== undefined && (typeof args.target_name !== 'string' || !args.target_name.trim() || args.target_name.length > 128)) {
+          return 'target_name 必须是当前已打开的微信会话全名（1..128 字）'
+        }
+        if (args.since_days !== undefined && (typeof args.since_days !== 'number' || !Number.isFinite(args.since_days) || args.since_days <= 0)) {
+          return 'since_days 必须是 > 0 的数字'
+        }
+        if (args.max_pages !== undefined && (!Number.isInteger(args.max_pages) || args.max_pages < 1 || args.max_pages > MAX_PAGES_LIMIT)) {
+          return `max_pages 必须是 1..${MAX_PAGES_LIMIT} 的整数`
+        }
+        return null
+      }, async (opCtx) => {
+        if (args.target_ref !== undefined) {
+          verifyRefFn(args.target_ref)
+          throw new CodedOperationError('TARGET_AMBIGUOUS', '旧会话引用仅含显示名，无法区分重名会话。请在微信中打开目标，再用 target_name 读取')
+        }
+        const targetName = args.target_name!
+        const maxPages = args.max_pages ?? DEFAULT_MAX_PAGES
+        opCtx.progress({ stage: 'execute', message: `在本机读取微信聊天记录（最多 ${maxPages} 页）` })
+        const raw = await runDriverFn({
+          script: HISTORY_CAPTURE_PATH,
+          stdin: JSON.stringify({
+            target_name: targetName,
+            max_pages: maxPages,
+            since_days: args.since_days === undefined ? undefined : Math.ceil(args.since_days),
+          }),
+          timeoutMs: HISTORY_TIMEOUT_MS,
+          signal: opCtx.signal,
+          useVisionProxy: false,
+        })
+        const capture = historyCaptureSchema.safeParse(raw)
+        if (!capture.success) throw new CodedOperationError('UI_CHANGED', '微信原生历史返回格式无效')
+        const { title, is_group: isGroup, pages } = capture.data
+        if (title !== targetName) {
+          throw new CodedOperationError('TARGET_AMBIGUOUS', '原生历史标题与当前会话不一致')
+        }
+        const messages = mergeHistoryPages(pages).map((row) => toHistoryMessage(row, isGroup))
+        const truncated = messages.length > INLINE_MESSAGE_LIMIT
+        const data: Record<string, unknown> = {
+          target: targetName,
+          total: messages.length,
+          messages: truncated ? messages.slice(-INLINE_MESSAGE_LIMIT) : messages,
+        }
+        if (truncated) {
+          const file = join(tmpdir(), `weixin-history-${randomUUID()}.txt`)
+          await writeFileFn(file, renderHistory(messages, targetName)).catch(() => {
+            throw new CodedOperationError('INTERNAL_ERROR', '保存本机微信历史文件失败')
           })
-          if (capture.exitCode !== 0) {
-            const stderrSummary = capture.stderr.trim().slice(0, 300)
-            throw new CodedOperationError(
-              'INTERNAL_ERROR',
-              `历史抓取脚本异常退出（exit=${capture.exitCode}）${stderrSummary ? `：${stderrSummary}` : ''}`,
-            )
-          }
-          if (!capture.stdout.includes('PROBE_RESULT: CAPTURED')) {
-            throw new CodedOperationError('INTERNAL_ERROR', '历史抓取脚本未报告 CAPTURED（抓取失败）')
-          }
-
-          let text: string
-          try {
-            text = await readFileFn(outFile)
-          } catch (err) {
-            throw new CodedOperationError(
-              'INTERNAL_ERROR',
-              `读取抓取结果文件失败：${err instanceof Error ? err.message : String(err)}`,
-            )
-          }
-          const messages = parseHistoryLines(text)
-          const truncated = messages.length > INLINE_MESSAGE_LIMIT
-          const inline = truncated ? messages.slice(-INLINE_MESSAGE_LIMIT) : messages
-          const data: Record<string, unknown> = {
-            target: target.name,
-            total: messages.length,
-            messages: inline,
-          }
-          if (truncated) {
-            data.truncated = true
-            data.file = outFile
-          }
-          return {
-            message: `已读取与「${target.name}」的聊天记录 ${messages.length} 条${truncated ? `（内联最新 ${INLINE_MESSAGE_LIMIT} 条，完整见 file）` : ''}`,
-            data,
-          }
-        },
-      )
+          data.truncated = true
+          data.file = file
+        }
+        return {
+          message: `已读取微信聊天记录 ${messages.length} 条${truncated ? `（内联最新 ${INLINE_MESSAGE_LIMIT} 条）` : ''}`,
+          data,
+        }
+      })
     },
   }
 }

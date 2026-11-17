@@ -2,7 +2,7 @@
  * CLI 子命令 read：M2 落地 chat-history / unread 两个域。
  *
  * 用法：
- *   aid-weixin read --domain chat-history --target-ref <ref> [--since-days N] [--max-pages N]
+ *   aid-weixin read --domain chat-history --target-name <当前会话全名> [--since-days N] [--max-pages N]
  *   aid-weixin read --domain unread [--name <名>]
  *
  * article 域尚未产品化，明确拒绝（退出码 2）。
@@ -17,6 +17,7 @@ import type { WeixinUnreadListArgs } from '../../operations/unreadList.js'
 export interface ReadCommandOptions {
   domain: CliDomain | undefined | 'invalid'
   targetRef?: string
+  targetName?: string
   sinceDays?: string
   maxPages?: string
   name?: string
@@ -33,7 +34,8 @@ export async function readCommand(opts: ReadCommandOptions): Promise<number> {
     case 'chat-history': {
       // 数字参数原样转换；非法值（NaN）留给 operation 统一返回 INVALID_ARGUMENT
       const args: WeixinHistoryReadArgs = {
-        target_ref: opts.targetRef as string,
+        target_ref: opts.targetRef,
+        target_name: opts.targetName,
         since_days: opts.sinceDays === undefined ? undefined : Number(opts.sinceDays),
         max_pages: opts.maxPages === undefined ? undefined : Number(opts.maxPages),
       }

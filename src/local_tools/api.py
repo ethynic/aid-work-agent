@@ -383,8 +383,9 @@ async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dic
 
     行级放行（契约 2.20 修订，声明即调度授权）：已上报 tool_declarations_v1 且
     declared_tools 非空的设备，非 NULL provider 行以设备 declared_tools 为准
-    （串行与 parallel_only 两条领取路径共用同一判定）；provider 未被声明覆盖
-    （runtime-recovery/skill-runner 等）与 NULL provider 行回退目录判定；
+    （串行与 parallel_only 两条领取路径共用同一判定）；显式空列表不给该 provider
+    授权。未被声明覆盖的 provider 与旧 NULL 行沿用目录判定，默认 provider
+    明确声明空列表时也拒绝 NULL 行；
     无声明/旧设备/解析异常完整回退 catalog.is_tool_allowed，行为不变。
     """
     device_id = str(device["id"])

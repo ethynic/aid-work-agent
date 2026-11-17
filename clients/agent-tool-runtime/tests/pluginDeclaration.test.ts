@@ -6,10 +6,17 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { RuntimeManifest } from '@aid/local-tool-host-core'
-import { deviceCapabilities } from '../src/config.js'
+import { ApiClient } from '../src/apiClient.js'
+import { deviceCapabilities, saveConfig } from '../src/config.js'
 import { deriveProviderManifest } from '../src/providers.js'
-import type { ProviderManifest } from '../src/providers.js'
+import { manifestDigestOf, type ProviderManifest } from '../src/providers.js'
+import type { ProviderSet } from '../src/providerManager.js'
+import { LegacyExecution } from '../src/runtimeHost.js'
+import { FakeCloud } from './helpers/fakeCloud.js'
 import { fakeProviderEntry, startTestStack, type TestStack } from './helpers/runtimeStack.js'
 
 // 商店验签清单 fixture（等价 PluginStore 派生输入）：两个工具，一串行一并行（企微本地库读先例的抽象样例）
@@ -96,4 +103,62 @@ test('无并行工具声明仅上报 tool_declarations_v1 与 declared_tools，�
   assert.equal(caps['parallel_tools'], undefined, '无并行工具的 provider 不出现键，全空则字段省略')
   assert.deepEqual(caps['declared_tools'], { 'test-tool': ['test_tool_status', 'test_tool_poll'] })
   assert.ok((caps['capabilities'] as string[]).includes('tool_declarations_v1'))
+})
+
+test('商店微信声明优先于存量 v2Send，配对和心跳同源且不向微信传设备凭据', {
+  skip: process.platform !== 'win32', timeout: 30_000,
+}, async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'aid-weixin-store-'))
+  const cloud = new FakeCloud()
+  await cloud.start()
+  const adapter = new LegacyExecution(process.execPath, home, undefined, true)
+  const tools = [
+    { name: 'weixin_probe', annotations: { readOnlyHint: true } },
+    { name: 'weixin_message_send', annotations: { readOnlyHint: false } },
+  ]
+  const declaration = { version: 1 as const, tools: tools.map(({ name }) => ({ name })) }
+  const manifest = {
+    ...TEST_TOOL_MANIFEST, provider_id: 'ai.aidwork.weixin', tools, tool_declaration: declaration,
+  }
+  const expected = { provider_id: manifest.provider_id, manifest_digest: manifestDigestOf(deriveProviderManifest(manifest)), protocol_version: 1 }
+  const entry = fakeProviderEntry()
+  const pair = t.mock.method(ApiClient.prototype, 'pair')
+  try {
+    await adapter.initialize()
+    saveConfig({ server: cloud.baseUrl, device_id: 'legacy', providers: { weixin: { entry, v2Send: true } } })
+    // Substitute only the already verified store boundary. Pair/start use the real Host and HTTP loopback.
+    Object.assign(adapter, { pluginStore: {
+      async refresh() {},
+      resolveEntries: () => ({ weixin: entry }),
+      declaredPlugins: () => [{ plugin_id: manifest.provider_id, provider_key: 'weixin', manifest, declaration }],
+    } })
+    cloud.issueCode('SIGNEDWX')
+    await adapter.pair({ server: cloud.baseUrl, device_name: 'fixture', pairing_code: 'SIGNEDWX' })
+    assert.deepEqual(pair.mock.calls[0]?.arguments[0].capabilities.provider_manifests, { weixin: expected })
+    await adapter.start(() => {}, () => {})
+    const token = cloud.lastPairToken!
+    await cloud.waitFor(() => Boolean(cloud.lastHeartbeatBody(token)), 10_000, '商店微信心跳')
+    const caps = cloud.lastHeartbeatBody(token)!.capabilities as Record<string, unknown>
+    assert.deepEqual(caps.provider_manifests, { weixin: expected })
+    assert.deepEqual(caps.declared_tools, { weixin: tools.map(({ name }) => name) })
+    assert.ok(!(caps.capabilities as string[]).includes('weixin_message_send_v2'))
+
+    const providers = (adapter as unknown as { providers: ProviderSet }).providers
+    const wxManager = providers.get('weixin') as unknown as { providerEnv: Record<string, string> }
+    assert.deepEqual(wxManager.providerEnv, { AID_WEIXIN_SERVER_URL: cloud.baseUrl })
+
+    const request = cloud.enqueueInvocation('weixin_message_send_v2', {}, { provider: 'weixin' })
+    await cloud.waitFor(() => cloud.callsFor(request).some(call =>
+      call.type === 'operation_result' || call.type === 'result'), 10_000, '旧 v2 拒绝')
+    const calls = cloud.callsFor(request)
+    assert.ok(!calls.some(call => call.type === 'started'))
+    const result = calls.find(call => call.type === 'operation_result' || call.type === 'result')
+    assert.equal(result?.payload.code, 'PROTOCOL_NOT_SUPPORTED')
+    assert.equal(providers.get('weixin').isRunning, false)
+  } finally {
+    await adapter.stop()
+    adapter.onDisposed()
+    await cloud.stop()
+    rmSync(home, { recursive: true, force: true })
+  }
 })

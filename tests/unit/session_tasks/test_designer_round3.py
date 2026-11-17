@@ -60,8 +60,9 @@ class TestRealConfigLoading:
         cfg = st_config.get_session_tasks_config()
         assert cfg.enabled is True and cfg.lease_seconds == 120 and cfg.tenant_allowlist == ["t1"]
 
-    def test_scenario_enabled_hot_read(self, tmp_path):
+    def test_scenario_enabled_hot_read(self, tmp_path, monkeypatch):
         """场景开关热读真实解析路径：enabled/allowlist 生效且 fail-closed。"""
+        monkeypatch.setattr("src.weixin_conversation.config.CLOUD_REPLY_RETIRED", False)
         gate_yaml = tmp_path / "gate.yaml"
         gate_yaml.write_text("weixin_conversation:\n  enabled: true\n", encoding="utf-8")
         assert _real_scenario_enabled("any-tenant", str(gate_yaml)) is True
@@ -236,6 +237,32 @@ class TestDecisionGate:
 
 
 class TestHistoricalFacts:
+    def test_disabled_weixin_rejects_current_and_backfilled_message_batches(self, tenant_id, device_row, verified_binding, monkeypatch):
+        from src.db.database import get_db_connection
+        from src.weixin_conversation import config
+
+        _publish(tenant_id, verified_binding)
+        device = _device_dict(tenant_id, device_row)
+        old = service.claim_task(device, "rt-1")
+        c.expire_assignment_lease(tenant_id, old["assignment_id"])
+        current = service.claim_task(device, "rt-2")
+        monkeypatch.setattr(config, "scenario_enabled", _real_scenario_enabled)
+        assignment_id = uuid.UUID(current["assignment_id"])
+        with pytest.raises(SessionTaskError) as err:
+            service.renew_assignment(tenant_id, device["id"], assignment_id, current["fence"], current["control_epoch"])
+        assert err.value.code == ERR_FEATURE_DISABLED
+        for assigned in (old, current):
+            with pytest.raises(SessionTaskError) as err:
+                service.ingest_events(tenant_id, device["id"], uuid.UUID(assigned["assignment_id"]), assigned["fence"], [{
+                    "local_seq": 1, "event_id": str(uuid.uuid4()), "type": "batch",
+                    "payload": {"messages": [{"sender": "peer", "text": "本机测试消息"}]},
+                }])
+            assert err.value.code == ERR_FEATURE_DISABLED
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM session_task_events WHERE tenant_id=%s", (tenant_id,))
+            assert cursor.fetchone() is None
+
     def test_superseded_assignment_can_backfill_facts(self, tenant_id, device_row, verified_binding):
         """换代后旧 assignment 未同步事实可补交（historical=true，不授予执行权）（P2-8）。"""
         published = _publish(tenant_id, verified_binding)

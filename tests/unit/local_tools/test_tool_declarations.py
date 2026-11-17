@@ -18,9 +18,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 
 from src.local_tools import api as local_tools_api
-from src.local_tools import catalog, device_policy
+from src.local_tools import catalog, device_policy, operation_result, repository
 
 pytestmark = pytest.mark.unit
 
@@ -117,6 +118,20 @@ class TestIsToolAllowedForDevice:
         assert catalog.is_tool_allowed_for_device(caps, "wecom", "wecom_chat_search") is False
         # 声明覆盖 provider 的跨 provider 工具
         assert catalog.is_tool_allowed_for_device(caps, "wecom", "boss_send_to") is False
+
+    @pytest.mark.parametrize("reported", [[], ["weixin_history_read"]])
+    def test_empty_weixin_declaration_confers_no_static_tools(self, reported):
+        caps = declared_capabilities({
+            "provider_id": "ai.aidwork.weixin",
+            "providers": ["weixin", "skill-runner"],
+            "declared_tools": {"weixin": reported},
+        })
+        assert catalog.declared_tools_for_device(caps) == {"weixin": []}
+        assert catalog.is_tool_allowed_for_device(caps, "weixin", "weixin_chat_search") is False
+        assert catalog.is_tool_allowed_for_device(caps, None, "weixin_chat_search", "weixin") is False
+        assert device_policy.device_ready_error(_device(caps), "weixin_chat_search", datetime.now(timezone.utc)) == "unsupported"
+        assert catalog.is_tool_allowed_for_device(caps, "skill-runner", "skill_script_run") is True
+        assert device_policy.device_ready_error(_device(caps), "skill_script_run", datetime.now(timezone.utc)) is None
 
     def test_declared_device_new_tool_not_in_catalog_allowed(self):
         """声明即调度授权：新版本插件声明的工具即使尚未进服务端静态目录也放行"""
@@ -266,3 +281,87 @@ class TestRuntimeClaimDeclarationGate:
         assert result == {"success": True, "invocation": None}
         writes = [entry for entry in executed if entry[0] == "write_runtime_result"]
         assert len(writes) == 1 and writes[0][1][4] == "TOOL_NOT_ALLOWED", "旧设备目录外工具照常拒绝"
+
+    @pytest.mark.parametrize("tool", sorted(catalog.LOCAL_ONLY_WEIXIN_TOOLS))
+    def test_weixin_plaintext_tools_stay_local_even_when_old_package_declared_them(self, tool):
+        legacy = {"provider_id": "ai.aidwork.weixin"}
+        declared = declared_capabilities({
+            **legacy, "providers": ["weixin"],
+            "declared_tools": {"weixin": ["weixin_probe", tool]},
+        })
+        for caps in (legacy, declared):
+            assert device_policy.device_ready_error(_device(caps), tool, datetime.now(timezone.utc)) == "unsupported"
+            executed = []
+            device = {"id": DEVICE, "tenant_id": TENANT, "capabilities_json": caps}
+            patches = self._patch_repository(self._invocation(tool, "weixin"), executed)
+            with patches[0], patches[1], patches[2]:
+                result = asyncio.run(local_tools_api.runtime_claim(wait=0, device=device))
+            assert result == {"success": True, "invocation": None}
+            assert executed[0][1][3:5] == (False, "TOOL_NOT_ALLOWED")
+        assert device_policy.device_ready_error(_device(declared), "weixin_probe", datetime.now(timezone.utc)) is None
+
+
+def test_late_legacy_weixin_receipt_discards_body_before_persistence():
+    body = local_tools_api.ResultRequest(
+        claim_token="claimed", success=True, message="private text", effect="none",
+        data={"messages": [{"text": "private text"}]},
+    )
+    device = {"id": DEVICE, "tenant_id": TENANT}
+    stored = {"state": "failed", "effect": "none", "tool_name": "weixin_history_read", "provider_key": "weixin"}
+    with (
+        patch.object(repository, "get_invocation", return_value=stored),
+        patch.object(repository, "write_result", return_value=stored) as write,
+    ):
+        result = asyncio.run(local_tools_api.runtime_result("inv-old", body, device=device))
+    assert result == {"success": True, "state": "failed", "effect": "none"}
+    write.assert_called_once_with(
+        "inv-old", TENANT, local_tools_api.sha256_hex("claimed"), False, "TOOL_NOT_ALLOWED",
+        catalog.LOCAL_ONLY_WEIXIN_MESSAGE, "none", None, False, device_id=DEVICE,
+    )
+
+
+def test_old_claim_cannot_start_a_plaintext_weixin_read_after_policy_change():
+    queries = []
+    cursor = SimpleNamespace(
+        execute=lambda sql, args: queries.append(sql),
+        fetchone=lambda: {"tool_name": "weixin_history_read", "device_id": DEVICE, "state": "claimed"},
+    )
+
+    @contextmanager
+    def db():
+        yield SimpleNamespace(cursor=lambda: cursor)
+
+    body = local_tools_api.StartedRequest(claim_token="claimed")
+    with (
+        patch.object(repository, "get_db_connection", db),
+        patch.object(repository, "lock_operation_admission"),
+        pytest.raises(HTTPException) as failure,
+    ):
+        asyncio.run(local_tools_api.runtime_started(DEVICE, body, device={"id": DEVICE, "tenant_id": TENANT}))
+    assert failure.value.status_code == 404
+    assert len(queries) == 1 and queries[0].startswith("SELECT * FROM local_tool_invocations")
+
+
+def test_old_v2_weixin_observation_receipt_never_reaches_business_storage():
+    observed_invocation = {
+        "claim_token_hash": local_tools_api.sha256_hex("claimed"),
+        "device_id": DEVICE,
+        "tool_name": "weixin_session_observe",
+    }
+    writes = []
+    cursor = SimpleNamespace(execute=lambda sql, args: writes.append(sql), fetchone=lambda: observed_invocation)
+    conn = SimpleNamespace(cursor=lambda: cursor, rollback=lambda: None)
+
+    @contextmanager
+    def db():
+        yield conn
+
+    body = local_tools_api.OperationResultRequest(
+        claim_token="claimed", request_id="old-observation", effect="none", message="private text",
+        data={"ordered_messages": [{"text": "private text"}]},
+    )
+    with patch.object(operation_result, "get_db_connection", db), pytest.raises(HTTPException) as failure:
+        asyncio.run(local_tools_api.runtime_operation_result(DEVICE, body, device={"id": DEVICE, "tenant_id": TENANT}))
+    assert failure.value.status_code == 409
+    assert failure.value.detail == {"error": "TOOL_NOT_ALLOWED", "message": catalog.LOCAL_ONLY_WEIXIN_MESSAGE}
+    assert len(writes) == 1 and writes[0].startswith("SELECT * FROM local_tool_invocations")

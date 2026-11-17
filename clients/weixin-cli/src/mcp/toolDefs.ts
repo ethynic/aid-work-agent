@@ -45,7 +45,7 @@ export const TOOL_DEFS: WeixinToolDef[] = [
     description:
       '在微信主窗口全局搜索好友/群（只读，不打开会话、不读历史消息）。' +
       '返回结果列表（label/section），每个结果附带 5 分钟有效的 target_ref，' +
-      '供 weixin_message_send / weixin_history_read 定位目标。',
+      '供 weixin_message_send 定位目标。',
     zodShape: {
       query: z.string().min(1).max(100).describe('搜索词（好友昵称/群名关键字）'),
       type: z.enum(['friend', 'group', 'any']).optional().describe('结果类型过滤：friend 联系人 / group 群聊 / any 全部，默认 any'),
@@ -58,8 +58,8 @@ export const TOOL_DEFS: WeixinToolDef[] = [
     title: '微信发送消息',
     description:
       '向 target_ref 指定的会话发送 1 条文本消息（写动作，单次单目标，1..500 字）。' +
-      'target_ref 必须先经 weixin_chat_search 获取且未过期。发送前校验会话标题与输入框无残留草稿，' +
-      '此旧路径发送后按OCR近似匹配核对最新本人消息；effect=unknown 表示消息可能已发出但无法确认，系统不会自动重试。名称会话v2路径仅记录发送操作完成，不做发送后OCR。',
+      'target_ref 必须先经 weixin_chat_search 获取且未过期。使用服务端视觉定位并核对微信操作。' +
+      'effect=unknown 表示消息可能已发出但无法确认，系统不会自动重试。',
     zodShape: {
       target_ref: z.string().min(1).describe('weixin_chat_search 返回的 target_ref（5 分钟有效）'),
       text: z.string().min(1).max(500).describe('要发送的文本（1..500 字，不支持换行）'),
@@ -70,11 +70,13 @@ export const TOOL_DEFS: WeixinToolDef[] = [
     name: 'weixin_history_read',
     title: '微信聊天记录读取',
     description:
-      '读取与 target_ref 目标的聊天记录（只读，但会打开会话窗口并清除该会话未读角标）。' +
-      '返回 messages[{sender: me|peer|time, text}]；内联最多 200 条，超出返回最新 200 条并给出完整文本 file 路径。',
+      '用本机 UIA 读取已打开会话的聊天历史，target_name 必须与会话全名一致。' +
+      '返回 messages[{sender: me|peer|time|unknown, text}]；群成员昵称无法核实时 sender_name 为 null。' +
+      '内联最多 200 条，超出时返回最新 200 条与本机完整文本 file 路径。',
     zodShape: {
-      target_ref: z.string().min(1).describe('weixin_chat_search 返回的 target_ref（5 分钟有效）'),
-      since_days: z.number().positive().optional().describe('只抓最近 N 天的记录（可选，缺省按 max_pages 上限抓取）'),
+      target_ref: z.string().min(1).optional().describe('已弃用。请手动打开目标会话，并改传 target_name'),
+      target_name: z.string().min(1).max(128).optional().describe('当前已打开的微信会话全名'),
+      since_days: z.number().positive().optional().describe('遇到早于 N 天的日期分隔线时停止继续翻页（可选）'),
       max_pages: z.number().int().min(1).max(10).optional().describe('最多向上翻页数，默认 3，最大 10'),
     },
     annotations: { title: '微信聊天记录读取', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -83,11 +85,11 @@ export const TOOL_DEFS: WeixinToolDef[] = [
     name: 'weixin_session_observe',
     title: '微信会话观察（session_observer_v1）',
     description:
-      '对已绑定会话执行常驻观察（截图→OCR→对齐→水位），返回 session_observer_v1 冻结契约结果。' +
-      '真机截图接线未开放时返回 coverage=unavailable（不冒充无人回复）。',
+      '在本机读取、对齐已绑定会话的 UIA 消息并核对观察水位，返回 session_observer_v1 契约结果。' +
+      '断层或目标不可达时返回 gap 或 unavailable。',
     zodShape: {
       conversation_binding_id: z.string().min(1).describe('会话绑定 ID'),
-      target_name: z.string().min(1).max(128).optional().describe('当前登录微信的目标联系人名称；OCR近似匹配必须唯一'),
+      target_name: z.string().min(1).max(128).optional().describe('当前登录微信的已绑定会话名称'),
       binding_version: z.number().int().min(0).describe('绑定版本（期望值，观察结果回显核对）'),
       account_identity_version: z.number().int().min(0).describe('账号身份版本（期望值）'),
       watermark: z
@@ -111,7 +113,6 @@ export const TOOL_DEFS: WeixinToolDef[] = [
 ]
 
 TOOL_DEFS.push(
-  { name:'weixin_name_resolve', title:'定位微信名称会话', description:'按名称及OCR近似匹配唯一定位；多个近似联系人拒绝选择。只返回定位证据，不返回历史正文。', zodShape:{target_name:z.string().min(1).max(128)}, annotations:{title:'定位微信名称会话',readOnlyHint:true,destructiveHint:false,idempotentHint:false,openWorldHint:true}},
-  { name:'weixin_message_send_v2', title:'微信许可单条发送', description:'仅接受Runtime签名执行上下文；一条发送，新本人气泡后验，未知不重发。', zodShape:{context:z.string().min(1).max(32768),signature:z.string().regex(/^[a-f0-9]{64}$/)}, annotations:{title:'微信许可单条发送',readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:true}},
+  { name:'weixin_name_resolve', title:'定位微信名称会话', description:'通过微信原生搜索唯一精确定位并打开联系人。只返回定位证据，不读取历史正文。', zodShape:{target_name:z.string().min(1).max(128)}, annotations:{title:'定位微信名称会话',readOnlyHint:true,destructiveHint:false,idempotentHint:false,openWorldHint:true}},
 )
 export const TOOL_NAMES = TOOL_DEFS.map((t) => t.name)
