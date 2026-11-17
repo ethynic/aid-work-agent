@@ -224,7 +224,11 @@ class PromptSources:
                 tpl_lines = [
                     "\n\n### 可用模板文件",
                     "",
-                    "以下为模板的 file_id。调用 excel_process / word / pdf_process 等文档工具时，"
+                    "以下为租户配置的模板文件。生成报价单、行程方案、调研表等业务文档时，"
+                    "**必须优先匹配下方模板**：先读取模板的完整结构与版式，再按模板填充内容，"
+                    "**禁止自行设计版式或从空白文件生成**。也不要为文档生成调用 use_skill 加载"
+                    "不存在的技能（如 docx-generator），一律走文档工具 + 模板路线。",
+                    "调用 excel_process / word / pdf_process 等文档工具时，"
                     "将 file_id 原样放入 file_paths 参数即可，工具会自动解析为真实路径，"
                     "禁止自行拼接 storage/uploads 等目录路径。",
                     "",
