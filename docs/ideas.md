@@ -26,6 +26,7 @@
 | 20261021-2200 | 私有云生产环境部署指南 | ✅ 已完成（2026-10-21） | 新增 [deploy/生产环境部署指南.md](../deploy/生产环境部署指南.md)：面向客户私有云全新部署的通用 playbook，综合 243 独占迁移档案与济南诺度混部实例（摸底决策、Docker/codeup 三通道、sparse-checkout、PG 绑址、.env 必改项、宝塔 TLS、发布后事项、验收清单、两例踩坑速查）。 | [部署指南](../deploy/生产环境部署指南.md) | — |
 | 20261116-1230 | 聊易私有云部署（agent.0635easy.com） | 🔧 部分完成（基础设施+PG+nginx+证书完成，容器验收进行中） | 阿里云 47.104.107.85 裸机全栈部署：百炼 LLM、DigiCert 证书、deploy/liaoyi/ 部署材料与脚本；遗留 253 短信通道、管理员初始化、备份/巡检等（见文档遗留清单）。 | [部署文档](../deploy/liaoyi/聊易私有云部署.md) | — |
 | 20261116-1240 | 创蓝253 短信通道（聊易） | 🔧 部分完成（代码+单测完成，待发版联调） | 新增 ChuangLan253Sender 通道+配置+单测；待配 env/IP 白名单与真机验收。 | [任务文档](../deploy/liaoyi/创蓝253短信通道开发任务.md) | — |
+| 20261117-2040 | 聊易上线首日错误日志排查 | ✅ 已完成（待真机验证一条） | 上线首日 log_error 4084 行三类：DeepSeek 400（.env provider 链与 qwen 模型名错配，用户已修）、空态摘要同因、企微客服消息 RunnerError（旧配置 worker 残留，19:56 全量重建后 35 分钟零错误）；缺真机复发验证。 | [排查文档](../deploy/liaoyi/错误日志排查_20261117.md) | — |
 | 20261028-1255 | 外发邮箱配置指南（域名 DNS 侧） | ✅ 已完成（2026-10-28） | 新增 [docs/ops/outbound-email-dns-setup-guide.md](ops/outbound-email-dns-setup-guide.md)：面向租户外发邮件域名配置的实操指南，沉淀 tulin.cn 体检实战——SPF/DKIM/DMARC/MX 四记录要点（163 免费企业邮 + 阿里云解析逐步操作）、MX 主机记录误填子域致主域收信中断、权威 DNS 与公共缓存验证口径、DMARC 报告解读与 p 策略升级路径、缺 DKIM 决策参考与验收清单。 | [指南](ops/outbound-email-dns-setup-guide.md) | — |
 
 ## 系统功能
