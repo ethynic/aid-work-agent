@@ -38,7 +38,7 @@ import { fileURLToPath } from 'node:url'
 import { atomicWrite, recoverPairing } from './pairingStore.js'
 import { assertNoLegacyRuntimeProcess } from './legacyProcessCheck.js'
 import { probePlugin } from './pluginProbe.js'
-import { loadPackagedTrust } from './productTrust.js'
+import { loadPackagedTrust, providerIdsOfTrust } from './productTrust.js'
 import { hasJournalCompletionProof } from '@aid/local-tool-host-core/legacy/completionProof'
 import { hasSessionCompletion } from './sessionTasks/completionProof.js'
 import { ProcessSupervision } from './processSupervision.js'
@@ -147,6 +147,10 @@ export class LegacyExecution implements HostAdapter {
     try { await recoverPairing() } catch { throw new ManagementError(11, '设备配对资料未能恢复，原身份文件和待处理事务已保留') }
     if (this.pluginOptions) {
       const makeStore = () => new PluginStore({ home: this.home, trust: this.pluginOptions!.trust,
+        // 契约 2.20 修订：安装白名单由产品信任配置驱动（trust roots 覆盖的 provider_id
+        // 并集）——往信任配置加新 provider 身份即可安装接入，无需改源码；无信任配置的
+        // CLI/A1 资产不产生安装权限，PluginStore 维持 FIRST_PARTY_PROVIDERS 默认
+        ...(this.pluginOptions!.trust ? { providers: providerIdsOfTrust(this.pluginOptions!.trust) } : {}),
         platform: { platform: process.platform, arch: process.arch, node_version: process.versions.node, node_abi: process.versions.modules, runtime_version: RUNTIME_VERSION },
         probe: (root, manifest) => probePlugin(this.nodeExecutable, root, manifest, providerEnvironment()),
         onChanged: () => this.pluginsChanged?.() })
@@ -245,12 +249,19 @@ export class LegacyExecution implements HostAdapter {
     const nameBridge = new NameSessionBridge(providers, api, bridgeKey)
     // #6 能力真实性：v2 会话 manifest 变体仅经 config.providers.weixin.v2Send 显式
     // 协商（隔离测试 / 真实 v2 Provider 交付后）；未协商保持真实 v1 受信形态
-    const { setManifestOverride, weixinV2Manifest } = await import('./providers.js')
+    const { setManifestOverride, weixinV2Manifest, assembleStoreManifests } = await import('./providers.js')
     setManifestOverride('weixin', null)
     if (config?.providers?.['weixin']?.v2Send === true) {
       setManifestOverride('weixin', weixinV2Manifest())
       logInfo('[runtime] weixin v2 会话能力已显式协商（v2Send=true）：manifest 升级 v2 变体')
     }
+    // 契约 2.20：商店插件派生 manifest（已验签、启用且带有效调度声明）优先于 TRUSTED 回退；
+    // runner 门禁、session engine 与能力上报共用同一份装配。weixin v2Send 显式协商时以
+    // v2 变体覆盖派生结果（协商语义优先）。遗留直配 entry 不产生派生 manifest。
+    const declaredPlugins = this.pluginStore?.declaredPlugins() ?? []
+    const { manifests: storeManifests, parallelTools, declaredTools } = assembleStoreManifests(declaredPlugins)
+    if (config?.providers?.['weixin']?.v2Send === true) storeManifests.weixin = weixinV2Manifest()
+    if (declaredPlugins.length > 0) logInfo(`[runtime] 商店声明插件: ${declaredPlugins.map(plugin => plugin.provider_key).join(', ')}`)
     logInfo(`[runtime] providers: ${Object.keys(entries).join(', ')}`)
     // v2 写路径数据目录（journal/ + result-outbox/，跟随 runtime home；启动重投共用同一 outbox 实例）
     const dataDir = runtimeHomeDir()
@@ -267,7 +278,8 @@ export class LegacyExecution implements HostAdapter {
       void wecom?.inspectWecomBusinessTools().catch(() => {})
       const value = deviceCapabilities(this.effectiveConfig(config), wecom?.wecomBusinessReady,
         wecom?.wecomDirectoryReady, wecom?.wecomDirectorySearchReady,
-        wecom?.wecomConfigDoctorReady, wecom?.wecomConfigCalibrateReady)
+        wecom?.wecomConfigDoctorReady, wecom?.wecomConfigCalibrateReady,
+        { parallelTools, declaredTools, hasDeclarations: declaredPlugins.length > 0, manifests: storeManifests })
       if (recoveryReady && this.supervision.enabled) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_stop_v1']
       if (wecomRecoveryReady) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_wecom_v1']
       if (recoveryReady) { value.providers = [...(value.providers as string[]), 'runtime-recovery']; value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_observe_v2'] }
@@ -277,6 +289,7 @@ export class LegacyExecution implements HostAdapter {
       api,
       runnerDeps: {
         providers,
+        manifests: storeManifests,
         beforeProviderCall: async (inv) => {
           const provider = inv.provider ?? 'boss-recruiting'
           if (provider === 'boss-recruiting' && inv.tool_name !== 'boss_recovery_probe'
@@ -297,6 +310,9 @@ export class LegacyExecution implements HostAdapter {
       capabilities,
       canClaim: () => Object.values(this.resolveEntries(config)).some(entry => existsSync(entry)),
       onConnection: connection,
+      // 契约 2.20：并行接单——与能力上报同源（assembleStoreManifests 派生），PollLoop
+      // 据此判定领到的作业是否后台并行执行；无声明插件 parallel_tools 为空 → 行为与现状一致
+      parallelTools,
     })
 
     // ----- 端侧会话任务引擎（C2）：与 pollLoop 共存，共享 Provider 与桌面锁 -----
@@ -326,6 +342,7 @@ export class LegacyExecution implements HostAdapter {
             runInvocation(inv, {
               api,
               providers,
+              manifests: storeManifests,
               desktopCheck: async () => (await checkDesktopInteractive()).interactive,
               desktopResourceKey: deriveResourceKey(),
               runtimeDataDir: dataDir,

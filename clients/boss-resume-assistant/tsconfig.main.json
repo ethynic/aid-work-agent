@@ -9,6 +9,7 @@
     "noUncheckedIndexedAccess": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "noEmitOnError": true,
     "sourceMap": false,
     "declaration": false,
     "types": ["node"]

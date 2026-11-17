@@ -127,11 +127,16 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
             # 邮件打开追踪（ai-lead-gen）：收件方邮箱客户端匿名发起，
             # 归属由 tracking_key（k 参数）承载，读取端点再做 secret 鉴权
             public_track = path.startswith("/api/track/")
+            # 官网客服 C 端 API（/api/c/web_c/{tenant_id}/...）：C 端访客免登录，
+            # 租户归属从 URL path 参数取，端点层自行做 HMAC/匿名身份验签（设计 §8）
+            web_c_match = re.fullmatch(r'/api/c/web_c/([^/]+)/[^/]+(?:/.*)?', path)
 
             # 1. 租户级回调路由：/t/{tenant_id}/...
             tenant_match = _TENANT_CALLBACK_PATTERN.match(path)
             if public_share or public_track:
                 pass
+            elif web_c_match:
+                tenant_id = web_c_match.group(1)
             elif tenant_match:
                 tenant_id = tenant_match.group(1)
                 logger.debug(f"[TenantMiddleware] Tenant callback: tenant_id={tenant_id}")

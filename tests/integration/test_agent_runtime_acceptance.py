@@ -494,6 +494,10 @@ async def test_real_parent_engine_preserves_child_wait_instead_of_completed_answ
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arguments", ["{invalid", "[]", '"string"'])
 async def test_invalid_provider_arguments_record_actual_usage_before_rejecting_side_effect(boundaries, arguments):
+    """不可恢复的非法工具参数不再中止执行：回传模型自纠重试一次，连续两次
+    仍失败才终态 FAILED（error_code=INVALID_TOOL_ARGUMENTS）；全程保证带
+    垃圾参数的工具永不分派，且每次真实模型调用都记录 usage。"""
+    from src.core.agent_engine.contracts import Outcome
     from src.services.agent_runner.runtime.executor import RuntimeExecution, CompatibilityObserver
     from src.services.agent_runner.runtime.profile import RuntimeResources
     resources = RuntimeResources(mode=AgentMode.STANDALONE, subagent_config=config())
@@ -501,15 +505,50 @@ async def test_invalid_provider_arguments_record_actual_usage_before_rejecting_s
     resources.tool_registry, resources.tool_executor = registry, ToolExecutor(registry)
     call = tool_call()
     call["function"]["arguments"] = arguments
-    resources.llm = Gateway(response("", [call]))
+    resources.llm = Gateway(response("", [call]), response("", [call]))
     record = Record()
     runtime = RuntimeExecution(resources, Identity("tenant-a", "user-a", "session-a"),
         observer=CompatibilityObserver(record), history_reader=Reader())
-    with pytest.raises(ValueError, match="INVALID_TOOL_ARGUMENTS"):
-        [event async for event in runtime.run("bad call")]
+    events = [event async for event in runtime.run("bad call")]
     assert probe.contexts == []
-    assert len(record.usages) == 1
-    assert len(runtime.state.model_calls) == 1
+    assert len(record.usages) == 2
+    assert runtime.state.outcome == Outcome.FAILED
+    assert runtime.state.error_code == "INVALID_TOOL_ARGUMENTS"
+    error_events = [event for event in events if event.get("type") == "error"]
+    assert len(error_events) == 1
+    assert error_events[0].get("error_code") == "INVALID_TOOL_ARGUMENTS"
+    completed = [fact for fact in runtime.state.model_calls if fact["phase"] == "completed"]
+    assert len(completed) == 2
+
+
+@pytest.mark.asyncio
+async def test_trailing_extra_data_arguments_recover_first_json_object(boundaries):
+    """方案1恢复："Extra data" 型参数（完整 JSON 对象后跟多余内容）由
+    raw_decode 截取首个 JSON 对象恢复，工具以恢复后的参数正常分派，
+    不触发降级重试也不中止执行。"""
+    from src.core.agent_engine.contracts import Outcome
+    from src.services.agent_runner.runtime.executor import RuntimeExecution, CompatibilityObserver
+    from src.services.agent_runner.runtime.profile import RuntimeResources
+    resources = RuntimeResources(mode=AgentMode.STANDALONE, subagent_config=config())
+    registry, probe = registry_with_probe()
+    resources.tool_registry, resources.tool_executor = registry, ToolExecutor(registry)
+    bad = tool_call()
+    bad["function"]["arguments"] = '{"name": "x"} 尾部多余内容'
+    resources.llm = Gateway(response("", [bad]), response("done"))
+    record = Record()
+    runtime = RuntimeExecution(resources, Identity("tenant-a", "user-a", "session-a"),
+        observer=CompatibilityObserver(record), history_reader=Reader())
+    events = [event async for event in runtime.run("bad args but recoverable")]
+    assert runtime.state.outcome == Outcome.COMPLETED
+    assert len(probe.contexts) == 1
+    assert len(record.usages) == 2
+    messages = runtime.state.messages
+    corrections = [m for m in messages if m["role"] == "user" and "arguments 不是合法 JSON" in str(m.get("content"))]
+    assert corrections == [], "可恢复参数不得触发降级重试"
+    assistant_calls = [m for m in messages if m["role"] == "assistant" and m.get("tool_calls")]
+    assert assistant_calls and json.loads(
+        assistant_calls[0]["tool_calls"][0]["function"]["arguments"]) == {"name": "x"}
+    assert events
 
 
 @pytest.mark.asyncio

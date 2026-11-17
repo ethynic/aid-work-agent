@@ -1,0 +1,43 @@
+# 本地后端和 Web 验证入口。默认挂载当前工作区，可指定源码绝对路径。
+name: aid-dev-tools
+
+x-local-source: &local-source
+  type: bind
+  source: ${AID_LOCAL_SOURCE_DIR:-.}
+  target: /app
+  bind:
+    create_host_path: false
+
+services:
+  python:
+    image: aid-agent-api:latest
+    network_mode: none
+    working_dir: /app
+    volumes:
+      - *local-source
+    environment:
+      DATABASE_URL: ""
+      LOGS_DATABASE_URL: ""
+      REDIS_ENABLED: "false"
+    entrypoint: ["python", "-m", "pytest"]
+
+  web:
+    image: aid-agent-api:latest
+    working_dir: /app/frontend
+    volumes:
+      - *local-source
+      - ./scripts/dev_web.sh:/usr/local/bin/aid-dev-web:ro
+      - web-dependencies:/app/frontend/node_modules
+      - npm-cache:/root/.npm
+    entrypoint: ["bash", "/usr/local/bin/aid-dev-web"]
+
+  web-dev:
+    extends:
+      service: web
+    profiles: ["web-dev"]
+    network_mode: host
+    command: ["run", "dev", "--", "--host", "127.0.0.1", "--port", "3000", "--strictPort"]
+
+volumes:
+  web-dependencies:
+  npm-cache:

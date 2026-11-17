@@ -160,6 +160,15 @@ CREATE TABLE IF NOT EXISTS channel_messages (
 
 CREATE INDEX IF NOT EXISTS idx_channel_sessions_tenant_channel ON channel_sessions(tenant_id, channel_type, channel_user_id);
 CREATE INDEX IF NOT EXISTS idx_channel_messages_session ON channel_messages(session_id, created_at);
+-- 官网客服专用幂等索引，普通请求和直接回复按角色分别防重。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_web_c_messages_runner_final
+    ON channel_messages (session_id, (metadata->>'runner_id'))
+    WHERE starts_with(session_id, tenant_id || '_web_c_') AND role = 'assistant'
+      AND metadata->>'runner_id' <> '' AND COALESCE(metadata->>'kind', '') = '';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_web_c_messages_client_request
+    ON channel_messages (session_id, role, (metadata->>'client_request_id'))
+    WHERE starts_with(session_id, tenant_id || '_web_c_')
+      AND metadata->>'client_request_id' IS NOT NULL;
 -- v3.2.1 P2-1：chat_messages 表同样需要 (session_id, created_at) 索引，
 -- 供 MessageDB.count_messages_by_session（压缩阈值快路径）走索引扫描
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(session_id, created_at DESC);
@@ -2878,6 +2887,8 @@ CREATE TABLE IF NOT EXISTS bs_content_sync_sources (
     sync_interval_hours INT NOT NULL DEFAULT 24,
     selection_mode VARCHAR(8) NOT NULL DEFAULT 'all',  -- all | ids（挑选白名单）
     selected_ids JSONB,
+    sync_state JSONB,                           -- 模块自管水位/删除 id 集合等运行态（平台层不解读）
+    connection_encrypted TEXT,                  -- 外部数据库连接配置 Fernet 整包加密（data_connectors 同模式）
     last_sync_at TIMESTAMP,
     last_error TEXT,
     created_at TIMESTAMP DEFAULT now(),

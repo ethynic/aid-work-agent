@@ -10,6 +10,7 @@ from loguru import logger
 
 from .base import SmsSender
 from .aliyun import AliyunSmsSender
+from .chuanglan import ChuangLan253Sender
 from .tencent import TencentSmsSender
 from .zhutong import ZhuTongSmsSender
 
@@ -123,3 +124,4 @@ sms_manager = SmsManager()
 sms_manager.register(ZhuTongSmsSender())
 sms_manager.register(AliyunSmsSender())
 sms_manager.register(TencentSmsSender())
+sms_manager.register(ChuangLan253Sender())

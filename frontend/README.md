@@ -53,6 +53,8 @@ frontend/
 
 ## 工程边界与验证
 
+在本机执行 Web 测试或构建时，使用[开发环境手册](../docs/infrastructure/local-dev-environments.md#3-在容器内自测)的容器入口。
+
 四类 alias 由 `config/aliases.ts` 统一提供给 Vite/Vitest；TypeScript 使用同名 paths：
 `@web/*`、`@desktop/*`、`@shared/*`，以及兼容现有 Web 的 `@/*`。
 
@@ -66,7 +68,6 @@ npm run typecheck
 npm run typecheck:desktop
 npm run check:boundaries
 npm run check:protocol
-npm run build
 npm run build:desktop
 ```
 
@@ -81,34 +82,7 @@ Windows 本地 smoke 可执行；macOS 截图和真机 smoke 必须在真实 mac
 
 ## 快速开始
 
-### 1. 安装依赖
-
-```bash
-cd frontend
-npm install
-```
-
-### 2. 启动后端API服务
-
-```bash
-cd ..
-python -m src.main
-```
-
-后端服务将在 `http://localhost:8000` 启动。
-
-### 3. 启动前端开发服务器
-
-```bash
-cd frontend
-npm run dev
-```
-
-前端将在 `http://localhost:3000` 启动。
-
-### 4. 打开浏览器
-
-访问 `http://localhost:3000` 查看界面。
+本地 API、Vite 和 Web 自测按[开发环境手册](../docs/infrastructure/local-dev-environments.md)启动与执行。
 
 ## API 接口
 
@@ -202,12 +176,7 @@ GET /api/tools
 
 ## 构建生产版本
 
-```bash
-cd frontend
-npm run build
-```
-
-构建产物在 `dist/` 目录。
+Web 构建命令和产物位置见[开发环境手册](../docs/infrastructure/local-dev-environments.md#3-在容器内自测)。
 
 ## 环境变量
 

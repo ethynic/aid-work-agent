@@ -5,7 +5,8 @@
 """
 
 from .base import SmsSender
+from .chuanglan import ChuangLan253Sender
 from .manager import sms_manager
 from .zhutong import ZhuTongSmsSender
 
-__all__ = ["SmsSender", "sms_manager", "ZhuTongSmsSender"]
+__all__ = ["SmsSender", "sms_manager", "ZhuTongSmsSender", "ChuangLan253Sender"]

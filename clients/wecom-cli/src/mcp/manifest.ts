@@ -34,6 +34,41 @@ export interface ProviderManifest {
   schema_digest: string
   execution_target: 'local_required'
   min_mcp_protocol_version: string
+  /** 调度声明（契约 2.20）：工具名单 + 并行标记；不计入 schema_digest（digest 沿用旧规则只覆盖 tools） */
+  tool_declaration: { version: 1; tools: Array<{ name: string; parallel?: true }> }
+}
+
+/** 并行工具白名单（契约 2.20 本批）：仅企微两个纯本地库读工具；其余全部串行（缺省不带 parallel） */
+const PARALLEL_TOOLS = new Set(['wecom_read_session', 'wecom_read_sessions'])
+
+/** 调度声明白名单（契约 2.20 修订：声明即调度授权，内部命令不声明）——现 12 个受信
+ * 工具（与 runtime TRUSTED_MANIFESTS/服务端目录同一集合）。chat_search/chat_select/
+ * watch_poll/group_list/group_read 为内部命令：仅被开放命令进程内调用、不经云端派发，
+ * 不进声明（Runtime 不受信、不上报、云端无法派发）。清单 tools 数组本身不动——它们
+ * 仍是 CLI 真实 MCP 工具，schema_digest 不变。 */
+const DECLARED_TOOLS = new Set([
+  'wecom_probe',
+  'wecom_message_send',
+  'wecom_send_status',
+  'wecom_send_image',
+  'wecom_send_file',
+  'wecom_unread_list',
+  'wecom_read_session',
+  'wecom_read_sessions',
+  'wecom_session_directory',
+  'wecom_group_poll',
+  'wecom_config_doctor',
+  'wecom_config_calibrate',
+])
+
+/** 调度声明：白名单工具按清单顺序一项 {name}，并行工具加 parallel:true */
+export function buildToolDeclaration(): ProviderManifest['tool_declaration'] {
+  return {
+    version: 1,
+    tools: TOOL_DEFS
+      .filter((def) => DECLARED_TOOLS.has(def.name))
+      .map((def) => (PARALLEL_TOOLS.has(def.name) ? { name: def.name, parallel: true as const } : { name: def.name })),
+  }
 }
 
 /** 包根 provider-manifest.json 的静态身份字段（digest/tools/version 不入文件，避免漂移） */
@@ -103,5 +138,6 @@ export function buildManifest(): ProviderManifest {
     provider_version: providerVersion(),
     tools: manifestTools(),
     schema_digest: computeSchemaDigest(),
+    tool_declaration: buildToolDeclaration(),
   }
 }

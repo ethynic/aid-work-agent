@@ -113,6 +113,7 @@ const runnerFeedback = ref<{ message: string; canPresent: () => boolean } | null
 
 const LOCAL_RECOVERY_MESSAGES = {
   stopBusy: '原设备还有正在执行的任务，本次未停止。请等该任务结束后重试，仍可只读观察页面。',
+  stopOffline: '原执行设备当前离线，「停止上一步并继续」暂不能受理。设备上线后按钮会重新出现，可再次点击；本次输入和附件已保留。',
   verification: '原本机操作结果尚未核对，不能重复执行。请保持原 Runtime 连接，使用“核对并继续”；也可结束等待后继续对话。补充消息和附件已保留，但尚未应用。',
   instruction: '原本机操作需要核对。请使用“核对并继续”或“结束等待，继续对话”；本次输入和附件已保留。',
   ending: '正在结束原任务，请稍候再发送。本次输入和附件已保留。',
@@ -122,6 +123,7 @@ const LOCAL_RECOVERY_MESSAGES = {
   verifyActive: '原本机调用仍在排队或执行，暂不能只读核验。请等待原结果，或先选择结束等待；核验不会自动取消原操作。',
   verifyUnavailable: '本机只读核验暂不可用，请确认原 Runtime 连接后重试；原操作不会重新执行。',
   unavailable: '原操作暂不能结束等待。请保持原 Runtime 连接以回传结果，再核对原操作；补充消息和附件仍保留。',
+  stopContinue: '正在停止上一步并解锁设备；停稳后将自动继续原任务，也可以直接发送新指令。本次输入和附件已保留。',
 } as const
 
 const RECOVERY_REPLY_MESSAGES: Record<string, string> = {
@@ -277,8 +279,10 @@ export function useAgent() {
     void state.isProcessing.value
     if (state.pendingControl) return undefined
     const rows = [...state.runnerViews.values()].sort((a,b) => b.queue_order-a.queue_order)
+    // resume_requested（含服务端停稳后的自动接续）让位：恢复被拒绝时控制链
+    // 清除 resume_control_id，卡片随投影自动回归。
     return rows.find(row => (row.local_recovery || row.local_verification_available) && !row.resume_requested)
-      || (rows[0]?.local_verification?.resource_stopped ? rows[0] : undefined)
+      || (rows[0]?.local_verification?.resource_stopped && !rows[0].resume_requested ? rows[0] : undefined)
   })
   const localVerificationMessage = computed(() => {
     const value = localRecovery.value?.local_verification
@@ -290,7 +294,9 @@ export function useAgent() {
     if (value.resource_stopped) return value.target_relation === 'original'
       ? '旧执行已停稳，已只读观察原页面。请结束等待，再明确提出新的页面操作；未知发送不会重发。'
       : '旧执行已停稳，已只读观察当前页面，但无法核对原目标。请结束等待，再明确提出当前页的新意图；未知发送不会重发。'
-    if (value.state === 'queued' || value.state === 'running' || value.state === 'claimed') return '正在等待原 Runtime 处理核验请求，不会重新执行原操作。'
+    if (value.state === 'queued' || value.state === 'running' || value.state === 'claimed') return value.continue_after_stop
+      ? LOCAL_RECOVERY_MESSAGES.stopContinue
+      : '正在等待原 Runtime 处理核验请求，不会重新执行原操作。'
     const stopIssue = value.stop_error_code
     if (stopIssue === 'LOCAL_RECOVERY_BUSY') return '原设备还有正在执行的任务，本次未回收受管进程。请等该任务结束后重试；只读观察仍可使用。'
     if (stopIssue === 'LOCAL_RECOVERY_LEGACY_UNMANAGED') return '检测到未受管的旧 Runtime 实例。请先结束该旧实例，再停止旧执行并解锁设备；无需重启 Windows。'
@@ -305,7 +311,7 @@ export function useAgent() {
     return '未取得停止及页面核验证据。请检查原 Runtime、已有 Chrome 和原标签；不会切换标签或重新执行原操作。'
   })
   const localRecoveryBusy = ref(false)
-  async function resolveLocalRecovery(action: 'resume' | 'end' | 'verify' | 'stop') {
+  async function resolveLocalRecovery(action: 'resume' | 'end' | 'verify' | 'stop' | 'stop_and_continue') {
     const row = localRecovery.value
     if (!row || localRecoveryBusy.value || action === 'resume' && row.cancel_requested) return
     if (row.local_recovery_actions && !row.local_recovery_actions.includes(action)) return
@@ -315,8 +321,10 @@ export function useAgent() {
     const headers = getEffectiveAuthHeader()
     localRecoveryBusy.value = true
     try {
-      if (action === 'verify' || action === 'stop') {
-        const updated = await state.runnerClient.verifyLocal(row.runner_id, crypto.randomUUID(), headers, action === 'stop')
+      if (action === 'verify' || action === 'stop' || action === 'stop_and_continue') {
+        // stop_and_continue：受管停止（v3）+ 服务端停稳后自动接续编排（契约「停止与接续」）。
+        const updated = await state.runnerClient.verifyLocal(row.runner_id, crypto.randomUUID(), headers,
+          action !== 'verify', action === 'stop_and_continue')
         if (!currentRunnerContext(state,sid,generation,headers)) return
         observeRunner(state,updated,headers)
       } else if (action === 'resume') {
@@ -332,9 +340,11 @@ export function useAgent() {
       }
     } catch (issue) {
       if (currentRunnerContext(state,sid,generation,headers)) runnerError(sid,
-        new Error(action === 'verify' || action === 'stop'
+        new Error(action === 'verify' || action === 'stop' || action === 'stop_and_continue'
           ? issue instanceof RunnerRequestError && issue.code === 'LOCAL_RECOVERY_BUSY'
             ? LOCAL_RECOVERY_MESSAGES.stopBusy
+            : issue instanceof RunnerRequestError && issue.code === 'LOCAL_VERIFICATION_DEVICE_OFFLINE'
+            ? LOCAL_RECOVERY_MESSAGES.stopOffline
             : issue instanceof RunnerRequestError && issue.code === 'LOCAL_VERIFICATION_ORIGINAL_ACTIVE'
             ? LOCAL_RECOVERY_MESSAGES.verifyActive
             : issue instanceof RunnerRequestError && (issue.status === 404 || issue.code === 'LOCAL_VERIFICATION_RUNTIME_UPGRADE_REQUIRED')

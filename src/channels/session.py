@@ -2410,6 +2410,7 @@ class ChannelSessionManager:
         tenant_id: Optional[str] = None,
         channel_chat_id: Optional[str] = None,
         subagent_id: Optional[str] = None,
+        channel_user_id: Optional[str] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """
@@ -2418,6 +2419,7 @@ class ChannelSessionManager:
         Args:
             channel_type: 渠道类型过滤
             user_id: 用户ID过滤
+            channel_user_id: 渠道侧用户ID过滤（可选，web_c C 端按验签身份列会话用）
             tenant_id: 租户ID过滤
             channel_chat_id: 渠道会话/群ID过滤（可选）。None 不过滤；
                 空串匹配 NULL 或空串（legacy 会话）；非空精确匹配
@@ -2445,6 +2447,10 @@ class ChannelSessionManager:
             if user_id:
                 conditions.append(f"user_id = %s")
                 values.append(user_id)
+
+            if channel_user_id:
+                conditions.append("channel_user_id = %s")
+                values.append(channel_user_id)
 
             if channel_chat_id is not None:
                 if channel_chat_id == "":

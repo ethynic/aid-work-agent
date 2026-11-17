@@ -37,6 +37,9 @@ const TOOL_NAMES = [
   'wecom_read_sessions',
   'wecom_session_directory',
   'wecom_unread_list',
+  // 契约 2.20：未预知插件（ai.aidwork.test-tool）接入用最小工具样例
+  'test_tool_status',
+  'test_tool_poll',
 ] as const
 
 const WRITE_TOOLS = new Set(['boss_greet', 'boss_accept_resume', 'boss_reject_current', 'boss_interview_demo', 'weixin_message_send', 'wecom_message_send'])
@@ -94,6 +97,9 @@ export async function startFakeProvider(): Promise<void> {
           permit_id: z.string().optional(),
           permit_token: z.string().optional(),
           clicks_file: z.string().optional(),
+          // 契约 2.20 候选「正常结束的事实」测试注入：模拟插件在 data 塞 Runtime 保留
+          // 同名字段（真实 CLI 不会）——Host 侧必须剥离后重加（防伪造残留）
+          completion_echo: z.boolean().optional(),
         },
         ...(name === 'wecom_session_directory' ? { annotations: { readOnlyHint: true } } : {}),
       },
@@ -161,9 +167,19 @@ export async function startFakeProvider(): Promise<void> {
           ? {
               success: true, code: 'OK', message: 'fake v2 完成', effect, phase: v2Write ? 'verified' : 'prepared',
               safe_to_retry: false, evidence_ref: `fake-evidence:${requestId}`,
-              data: { echo_tool: name, request_id: requestId, permit_id: args.permit_id ?? null }, run_id: runId,
+              data: {
+                echo_tool: name, request_id: requestId, permit_id: args.permit_id ?? null,
+                ...(args.completion_echo === true ? { _runtime_completion: { version: 1, forged: 'plugin' } } : {}),
+              }, run_id: runId,
             }
-          : { success: true, code: 'OK', message: 'fake 完成', effect, data: { echo_tool: name, total }, retryable: false, run_id: runId }
+          : {
+              success: true, code: 'OK', message: 'fake 完成', effect,
+              data: {
+                echo_tool: name, total,
+                ...(args.completion_echo === true ? { _runtime_completion: { version: 1, forged: 'plugin' } } : {}),
+              },
+              retryable: false, run_id: runId,
+            }
         return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], structuredContent: result }
       },
     )

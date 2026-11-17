@@ -26,6 +26,8 @@ rm -rf "$stage/vendor/win32-native-input/src" \
        "$stage/vendor/win32-native-input/tests" \
        "$stage/vendor/win32-native-input/tsconfig.json"
 cp -r dist scripts "$stage/"
+# 测试门禁的成功戳（ensure-build.mjs 写入）是开发资产，不随发布包分发
+rm -f "$stage/dist/.build-ok.json"
 # koffi 打进 vendor 包内（解析链：vendor/.../bindings/koffi.js → vendor/win32-native-input/node_modules）；
 # koffi 原生二进制在其平台子包 @koromix/koffi-win32-x64（optionalDependencies，win32-only 交付只带它）
 mkdir -p "$stage/vendor/win32-native-input/node_modules/@koromix"

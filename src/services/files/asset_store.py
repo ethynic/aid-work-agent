@@ -153,3 +153,48 @@ def delete_file_asset(file_id: str) -> None:
         conn.commit()
 
     _safe_db(_run, context=f"delete {file_id}")
+
+
+def register_uploaded_file(
+    file_id: str,
+    path: str,
+    *,
+    name: str,
+    size: int,
+    mime_type: str,
+    file_type: str,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    source: str = "upload",
+    ttl_seconds: int = 86400,
+) -> None:
+    """注册上传文件元数据：Redis uploaded_file:{file_id} 命名空间 + file_assets DB 持久化。
+
+    web_c 上传（2026-11-16）与既有聊天上传/渠道出站注册共用同一命名空间，
+    /api/files/{file_id}/download 与 Runner 侧 resolve_scoped_uploaded_file
+    （tenant 根目录磁盘兜底，要求落盘 basename == file_id）均可解析。
+    Redis 故障不阻断（DB 兜底 + 磁盘自愈）；DB 故障同样不阻断上传主流程。
+    """
+    meta = {
+        "file_id": file_id,
+        "name": name,
+        "path": path,
+        "size": size,
+        "mime_type": mime_type,
+        "type": file_type,
+    }
+    try:
+        from src.core.redis_client import redis_client
+
+        key = redis_client.make_key("uploaded_file", file_id)
+        for field, value in meta.items():
+            redis_client.hset(key, field, value)
+        if tenant_id:
+            redis_client.hset(key, "tenant_id", tenant_id)
+        redis_client.expire(key, ttl_seconds)
+    except Exception:
+        logger.opt(exception=True).warning("上传文件 Redis 元数据写入异常（DB 兜底）")
+    try:
+        upsert_file_asset(meta, tenant_id=tenant_id, user_id=user_id, source=source)
+    except Exception:
+        logger.opt(exception=True).warning("上传文件 file_assets 持久化异常（不影响上传主流程）")

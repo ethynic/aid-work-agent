@@ -21,3 +21,11 @@ Runtime仅修tests/providers.test.ts：当前25项包括只读boss_recovery_prob
 ## 验收
 
 子进程反证必须覆盖：无DSN/恶意业务.env/显式共享或远端DSN均不触达DB；正常无DB单测与collect-only可执行；实际池/SkillLoader连接不能逃出guard；异常不泄露凭据；真实私有PG随机库能创建/初始化/清理，trace同库，cleanup实际库名错误时零DELETE。测试真实的连接边界与SQL，不用仅断言环境字符串冒充隔离。覆盖Windows及shell宿主/容器参数转发，无法实际启动容器则明确模拟边界。Runtime修后广跑原失败的整个providers文件并检查写属性、跨Provider隔离及历史锚点，不能直接把当前摘要抄为历史摘要。
+
+## 本地常驻测试 PostgreSQL（2026-11-17）
+
+应用联调默认由 API 和 Runner 通过 Compose 服务名 `postgres` 连接本地业务库。可对已核实的本地业务库做只读检查，以及写入有明确归属的联调数据。优先回滚或记录测试记录 ID，结束后按本轮数据精确清理。全库扫描、迁移、批量更新和自动化 SQL 回归使用专用测试 PG。
+
+新增独立的 `docker-compose.test-db.yml`。使用 `pgvector/pgvector:pg16` 作为常驻测试服务，保留命名卷，随本地 Docker 引擎自动恢复。PG 只在自己的回环网络内接受连接，无宿主端口和业务网络。一次性测试容器共享测试 PG 的网络命名空间，直接调用现有 `scripts/dev_test_isolated_db.py`，在同一实例上为每次执行创建、初始化和删除独有的 `aid_test_*` 库。命令仅需 Docker Compose，且绑定命令所在仓库的源码。原有无数据库模式和手工指定本地隔离库的入口继续可用。
+
+验收覆盖首次自动启动、后续复用、真实 PG 回归、失败后删除自有库和当前工作区挂载。开发机使用同一条 Compose 命令，按实际执行平台记录验证范围。

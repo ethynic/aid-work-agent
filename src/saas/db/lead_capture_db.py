@@ -207,6 +207,7 @@ class LeadCaptureDB:
         channel_chat_id: Optional[str] = None,
         stage: Optional[str] = None,
         assigned_to: Optional[str] = None,
+        channel_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """线索列表（分页，created_at DESC）。
 
@@ -217,6 +218,8 @@ class LeadCaptureDB:
             channel_chat_id: 客服账号（open_kfid）筛选
             stage: 阶段筛选
             assigned_to: 归属员工筛选（普通用户仅见自己）
+            channel_type: 渠道类型筛选（web_c 官网接待页用）：线索 session_id 归属
+                该渠道会话才可见（EXISTS join channel_sessions，零 DDL，2026-11-16）
         """
         conditions = ["tenant_id = %s"]
         params: list = [tenant_id]
@@ -229,6 +232,13 @@ class LeadCaptureDB:
         if channel_chat_id:
             conditions.append("channel_chat_id = %s")
             params.append(channel_chat_id)
+        if channel_type:
+            conditions.append(
+                "EXISTS (SELECT 1 FROM channel_sessions cs "
+                "WHERE cs.session_id = bs_lead_capture_leads.session_id "
+                "AND cs.channel_type = %s AND cs.tenant_id = bs_lead_capture_leads.tenant_id)"
+            )
+            params.append(channel_type)
         if stage:
             conditions.append("stage = %s")
             params.append(stage)
@@ -375,11 +385,13 @@ class LeadCaptureDB:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         assigned_to: Optional[str] = None,
+        channel_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """留资统计：总留资 / 按留资方式分组 / 按客服账号分组（含 ratio）。
 
         过滤基准 = bs_lead_capture_leads.created_at。
         assigned_to 传入时（普通用户）仅统计该归属员工自己的线索。
+        channel_type 传入时按线索会话渠道过滤（web_c 官网接待页口径）。
         """
         date_cond = ""
         params: list = [tenant_id]
@@ -393,6 +405,12 @@ class LeadCaptureDB:
         if assigned_to:
             date_cond += " AND assigned_to = %s"
             params.append(assigned_to)
+        if channel_type:
+            date_cond += (" AND EXISTS (SELECT 1 FROM channel_sessions cs "
+                          "WHERE cs.session_id = bs_lead_capture_leads.session_id "
+                          "AND cs.channel_type = %s "
+                          "AND cs.tenant_id = bs_lead_capture_leads.tenant_id)")
+            params.append(channel_type)
 
         with get_db_connection() as conn:
             cursor = conn.cursor()

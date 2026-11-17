@@ -60,6 +60,7 @@
               <p v-if="localVerificationMessage" class="mt-1">{{ localVerificationMessage }}</p>
               <p v-if="localRecovery.cancel_requested && localRecovery.local_recovery" class="mt-1">原任务已请求取消，仍有本机结果待核对。可以结束等待后继续对话。</p>
               <div class="mt-2 flex flex-wrap gap-2">
+                <BaseButton v-if="localRecovery.local_recovery_actions?.includes('stop_and_continue')" size="sm" :disabled="localRecoveryBusy || ['queued','claimed','running'].includes(localRecovery.local_verification?.state || '')" @click="resolveLocalRecovery('stop_and_continue')">停止上一步并继续</BaseButton>
                 <BaseButton v-if="!localRecovery.local_verification?.resource_stopped && (localRecovery.local_recovery_actions?.includes('verify') ?? true)" size="sm" :disabled="localRecoveryBusy || ['queued','claimed','running'].includes(localRecovery.local_verification?.state || '')" @click="resolveLocalRecovery('verify')">只读核验页面</BaseButton>
                 <BaseButton v-if="!localRecovery.local_verification?.resource_stopped && (localRecovery.local_recovery_actions?.includes('stop') ?? true)" size="sm" intent="secondary" :disabled="localRecoveryBusy || ['queued','claimed','running'].includes(localRecovery.local_verification?.state || '')" @click="resolveLocalRecovery('stop')">停止旧执行并解锁设备</BaseButton>
                 <BaseButton v-if="localRecovery.local_recovery" size="sm" :disabled="localRecoveryBusy || localRecovery.cancel_requested" @click="resolveLocalRecovery('resume')">核对并继续</BaseButton>

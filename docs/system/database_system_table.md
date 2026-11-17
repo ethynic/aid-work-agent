@@ -277,6 +277,8 @@ chat_records（计费记录，独立存储，不随会话删除）
 
 渠道会话中的消息，支持多种消息类型和附件。
 
+官网客服使用两个专用部分唯一索引。`uq_web_c_messages_runner_final` 对无 `kind` 的非空 Runner 终态回复按会话和 `runner_id` 防重。`uq_web_c_messages_client_request` 按会话、角色和 `client_request_id` 防重，允许同次请求分别写入用户消息与助手直接回复。两者均要求 `session_id` 以该消息的租户 ID 加 `_web_c_` 开头。2026-11-17 迁移批次原子替换此前的全渠道索引，保留原有消息。
+
 **关键字段**：
 - `message_type` — 消息类型（`text` / `image` / `file` 等）
 - `attachments` — 附件信息（JSON）

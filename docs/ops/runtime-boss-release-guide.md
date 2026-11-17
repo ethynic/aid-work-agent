@@ -30,6 +30,7 @@ python.exe clients/runtime-plugin-packaging/prepare-localdb.py --output (Join-Pa
 
 ## 3. 出包前核对源码与版本
 
+- 从 1.0 起，Runtime、BOSS CLI 与 WeCom CLI 的交付版本使用 `主版本.次版本`（如 `1.0`、`1.1`）。npm、安装器和离线插件清单继续使用三段式版本，第三段固定为 `0`（如 `1.0.0`、`1.1.0`）。Runtime 内部 Host 和 Core 的版本独立维护。
 - 一个批次使用同一个 Git `-SourceRef`（默认 `HEAD`）。先确认该提交已包含所有所选组件的改动。若各组件还在不同分支，使用已包含所需改动的集成提交，或分别指定来源出包。
 - 脚本在 `%TEMP%\aid-release-…\workspace` 归档已提交源码，仅叠加入口列明的打包相关文件。未提交的业务源码不会进入包。仓库工作区中的版本和锁文件由各自开发任务维护。
 - `-RuntimeVersion`、`-BossVersion`、`-WecomVersion` 可分别设置，省略时取源码提交中的版本。显式版本只写隔离副本，不会把旧源码变成新版本的实现。新内容应使用新版本与发行 ID，已经交付的版本及摘要保留用于追溯。
