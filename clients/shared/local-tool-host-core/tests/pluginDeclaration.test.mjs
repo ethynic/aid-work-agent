@@ -6,12 +6,12 @@
  * 三插件 fixture 工具名单与 readOnlyHint 镜像三个 CLI 的 buildManifest 实况
  * （boss 25 工具/14 写、wecom 17 工具/4 写、weixin 8 工具/1 写+v2 写），
  * 与各 CLI tests/manifest.test.ts 的「注解派生写集合 == 原写集合清单」断言互为锁。
- * 声明子集镜像各 CLI buildToolDeclaration 白名单（wecom 12、weixin 6 个 v1 工具）。
+ * 声明子集镜像各 CLI buildToolDeclaration 白名单（wecom 12、weixin 4 个 v1 工具）。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { parseToolDeclaration } from '../dist/plugins/package.js'
-import { assembleStoreManifests, deriveProviderManifest, providerKeyOfPlugin, TRUSTED_MANIFESTS } from '../dist/legacy/providers.js'
+import { assembleStoreManifests, deriveProviderManifest, isToolAllowedFor, providerKeyOfPlugin, TRUSTED_MANIFESTS, weixinV2Manifest } from '../dist/legacy/providers.js'
 
 // 与 boss CLI TOOL_DEFS 一致（含 boss_recovery_probe）；写集合 = BOSS_WRITE_TOOLS（14）
 const BOSS_TOOLS = [
@@ -48,11 +48,11 @@ const WEIXIN_TOOLS = [
   'weixin_session_observe', 'weixin_unread_list', 'weixin_name_resolve', 'weixin_message_send_v2',
 ]
 const WEIXIN_WRITE = ['weixin_message_send', 'weixin_message_send_v2']
-// weixin 声明白名单（CLI buildToolDeclaration）：6 个 v1 工具；session_observe/v2 发送不声明
+// weixin 声明白名单（CLI buildToolDeclaration）：4 个 v1 工具
 const WEIXIN_DECLARED = [
-  'weixin_probe', 'weixin_chat_search', 'weixin_message_send', 'weixin_history_read',
-  'weixin_unread_list', 'weixin_name_resolve',
+  'weixin_probe', 'weixin_chat_search', 'weixin_message_send', 'weixin_name_resolve',
 ]
+const WEIXIN_LOCAL_ONLY = ['weixin_history_read', 'weixin_unread_list', 'weixin_session_observe']
 
 const tools = (names, write) => names.map(name => ({ name, annotations: { readOnlyHint: !write.includes(name) } }))
 const declaration = (names, parallel = []) => ({
@@ -93,7 +93,7 @@ test('providerKeyOfPlugin：去除 ai.aidwork. 前缀，其余原样', () => {
   assert.equal(providerKeyOfPlugin('vendor.plugin'), 'vendor.plugin')
 })
 
-test('已交付三插件派生结果与 TRUSTED_MANIFESTS 逐字段一致（声明已收敛到同一集合，12/6/25）', () => {
+test('已交付三插件派生结果与 TRUSTED_MANIFESTS 逐字段一致', () => {
   const cases = [
     ['ai.aidwork.boss-recruiting', BOSS_TOOLS, BOSS_WRITE, [], BOSS_TOOLS, 'boss-recruiting'],
     ['ai.aidwork.wecom', WECOM_TOOLS, WECOM_WRITE, WECOM_PARALLEL, WECOM_DECLARED, 'wecom'],
@@ -124,7 +124,7 @@ test('未预知插件与已交付插件同一逻辑：受信面 = 声明 tools �
   assert.equal(unknown.execution_target, 'local_required')
 })
 
-test('清单未声明的内部工具不进受信面（wecom 5 个内部命令、weixin v2 协商专用 2 项）', () => {
+test('清单未声明的本机工具不进云端受信面', () => {
   // wecom 清单 17 项 vs 声明 12 项：内部命令不经云端派发，不进声明也不进受信面
   const wecom = deriveProviderManifest(pluginManifest('ai.aidwork.wecom', WECOM_TOOLS, WECOM_WRITE, WECOM_PARALLEL, WECOM_DECLARED))
   assert.equal(wecom.tools.length, 12, 'wecom 受信面 = 声明 12 工具')
@@ -136,13 +136,24 @@ test('清单未声明的内部工具不进受信面（wecom 5 个内部命令、
   assert.deepEqual([...wecom.write_tools].sort(), [...WECOM_WRITE].sort())
   assert.ok(wecom.tools.includes('wecom_config_calibrate'), '声明内的配置工具照常受信')
 
-  // weixin 清单 8 项 vs 声明 6 项：v2 协商专用 2 项不声明（v2 override 机制不受声明驱动）
   const weixin = deriveProviderManifest(pluginManifest('ai.aidwork.weixin', WEIXIN_TOOLS, WEIXIN_WRITE, [], WEIXIN_DECLARED))
-  assert.equal(weixin.tools.length, 6, 'weixin 受信面 = 声明 6 个 v1 工具')
-  for (const tool of ['weixin_session_observe', 'weixin_message_send_v2']) {
+  assert.equal(weixin.tools.length, 4, 'weixin 受信面 = 声明 4 个 v1 工具')
+  for (const tool of [...WEIXIN_LOCAL_ONLY, 'weixin_message_send_v2']) {
     assert.ok(!weixin.tools.includes(tool), `${tool} 未声明，不得进入受信面`)
   }
   assert.deepEqual([...weixin.write_tools].sort(), ['weixin_message_send'], '写集合仅 v1 发送（与 TRUSTED v1 受信面一致）')
+})
+
+test('已安装的旧签名包无法重新启用或上报正文读取工具', () => {
+  const pluginId = 'ai.aidwork.weixin'
+  const manifest = pluginManifest(pluginId, WEIXIN_TOOLS, WEIXIN_WRITE, [], WEIXIN_TOOLS.slice(0, -1))
+  const assembled = assembleStoreManifests([{ plugin_id: pluginId, manifest, declaration: parseToolDeclaration(manifest) }])
+  assert.deepEqual(assembled.declaredTools.weixin, WEIXIN_DECLARED)
+  assert.deepEqual(assembled.parallelTools, {})
+  for (const effective of [assembled.manifests.weixin, TRUSTED_MANIFESTS.weixin, weixinV2Manifest()]) {
+    for (const tool of WEIXIN_LOCAL_ONLY) assert.equal(isToolAllowedFor(effective, tool), false)
+    assert.equal(isToolAllowedFor(effective, 'weixin_probe'), true)
+  }
 })
 
 test('assembleStoreManifests：派生 manifest、并行工具与声明全集同源上报（legacy 直配不参与）', () => {

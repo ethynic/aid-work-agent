@@ -104,7 +104,7 @@ test('注解派生写集合与 runtime 受信写集合一致（v1 写=message_se
     'runtime v1 受信写集合 = {weixin_message_send}；message_send_v2 仅进入显式协商的 v2 变体写集合')
 })
 
-test('tool_declaration：version 1、声明恰为 6 个 v1 工具（写死防漂移）；微信全部串行无 parallel', () => {
+test('tool_declaration：version 1、声明恰为 4 个云端 v1 工具；微信全部串行', () => {
   const m = buildManifest()
   assert.equal(m.tool_declaration.version, 1)
   // 声明即调度授权（契约 2.20 修订）：写死预期名单，防声明面漂移（与 runtime
@@ -113,8 +113,6 @@ test('tool_declaration：version 1、声明恰为 6 个 v1 工具（写死防漂
     'weixin_probe',
     'weixin_chat_search',
     'weixin_message_send',
-    'weixin_history_read',
-    'weixin_unread_list',
     'weixin_name_resolve',
   ])
   assert.equal(new Set(m.tool_declaration.tools.map((t) => t.name)).size, m.tool_declaration.tools.length, '声明名不重复')
@@ -126,12 +124,14 @@ test('tool_declaration：version 1、声明恰为 6 个 v1 工具（写死防漂
   assert.equal(m.schema_digest, computeSchemaDigest())
 })
 
-test('tool_declaration：weixin_session_observe 不声明（v2 显式协商变体专用，不经云端常规派发）', () => {
+test('微信正文读取仅供本机 MCP，v2 发送经独立许可协议协商', () => {
   const m = buildManifest()
   const declared = new Set(m.tool_declaration.tools.map((t) => t.name))
-  assert.ok(!declared.has('weixin_session_observe'), 'session_observe 为 v2 协商变体专用，不进调度声明')
   assert.ok(!declared.has('weixin_message_send_v2'), 'v2 发送经显式协商升级，不受声明驱动')
-  assert.ok(TOOL_NAMES.includes('weixin_session_observe'), 'session_observe 仍是 CLI 真实 MCP 工具（清单 tools 不动）')
+  for (const name of ['weixin_history_read', 'weixin_unread_list', 'weixin_session_observe']) {
+    assert.ok(!declared.has(name), `${name} 不能从云端调度`)
+    assert.ok(m.tools.some(tool => tool.name === name), `${name} 仍可在本机 MCP 使用`)
+  }
   // 清单 tools 数组本身不动：仍是全部 8 个工具，schema_digest 不变
   assert.equal(TOOL_NAMES.length, 8)
   assert.equal(m.tools.length, 8)

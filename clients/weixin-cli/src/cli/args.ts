@@ -2,7 +2,7 @@
  * CLI argv 极简解析（纯函数，可单测）：--key value / --flag / 位置参数。
  *
  * 命名铁律（设计 §4.1）：动词子命令集合固定为
- * mcp / doctor / version / probe / search / collect / read / get-url / send / add / follow / lab；
+ * mcp / doctor / version / probe / search / collect / read / watch / get-url / send / add / follow / lab；
  * 操作对象（搜一搜/文章/聊天/公众号）只能作为参数值表达（--domain <值>），
  * 不允许出现按对象命名的子命令。M1 只实现 mcp/doctor/version/probe，
  * parseDomainFlag 供后续 search/collect/read/get-url 动词复用。

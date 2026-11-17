@@ -253,6 +253,22 @@ async function deliverOriginalOutboxEntry(
   entry: OutboxEntry,
   opts: DeliverOptions = {},
 ): Promise<OutboxOutcome> {
+  // Older entries have no tool name. Recognize the three original WeChat read result
+  // envelopes before replaying them, without changing the outbox format or sending the body.
+  const data = entry.payload.data
+  const message = entry.payload.message ?? ''
+  const unread: unknown[] = Array.isArray(data?.unread) ? data.unread : []
+  if ((/^已读取(?:微信|与「[\s\S]*」的)聊天记录 /.test(message)
+      && typeof data?.target === 'string' && typeof data.total === 'number' && Array.isArray(data.messages))
+    || (message.startsWith('未读会话') && unread.some(item => item !== null && typeof item === 'object'
+      && 'preview' in item && typeof item.preview === 'string'
+      && 'unread_count' in item && typeof item.unread_count === 'number'))
+    || (typeof data?.observation_id === 'string' && typeof data.conversation_binding_id === 'string'
+      && Array.isArray(data.ordered_messages))) {
+    outbox.markGaveUp(entry.invocation_id, 'WEIXIN_READ_LOCAL_ONLY')
+    logError(`invocation ${entry.invocation_id} 微信本机读取回执已停止上传`)
+    return 'gave-up'
+  }
   const base = opts.retryBaseMs ?? 1_000
   const max = opts.retryMaxMs ?? 30_000
   const maxAttempts = opts.maxAttempts ?? Number.POSITIVE_INFINITY

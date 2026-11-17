@@ -70,11 +70,13 @@ export const TOOL_DEFS: WeixinToolDef[] = [
     name: 'weixin_history_read',
     title: '微信聊天记录读取',
     description:
-      '读取与 target_ref 目标的聊天记录（只读，但会打开会话窗口并清除该会话未读角标）。' +
-      '返回 messages[{sender: me|peer|time, text}]；内联最多 200 条，超出返回最新 200 条并给出完整文本 file 路径。',
+      '用本机 UIA 读取已打开会话的聊天历史，target_name 必须与会话全名一致。' +
+      '返回 messages[{sender: me|peer|time|unknown, text}]；群成员昵称无法核实时 sender_name 为 null。' +
+      '内联最多 200 条，超出时返回最新 200 条与本机完整文本 file 路径。',
     zodShape: {
-      target_ref: z.string().min(1).describe('weixin_chat_search 返回的 target_ref（5 分钟有效）'),
-      since_days: z.number().positive().optional().describe('只抓最近 N 天的记录（可选，缺省按 max_pages 上限抓取）'),
+      target_ref: z.string().min(1).optional().describe('已弃用。请手动打开目标会话，并改传 target_name'),
+      target_name: z.string().min(1).max(128).optional().describe('当前已打开的微信会话全名'),
+      since_days: z.number().positive().optional().describe('遇到早于 N 天的日期分隔线时停止继续翻页（可选）'),
       max_pages: z.number().int().min(1).max(10).optional().describe('最多向上翻页数，默认 3，最大 10'),
     },
     annotations: { title: '微信聊天记录读取', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -83,11 +85,11 @@ export const TOOL_DEFS: WeixinToolDef[] = [
     name: 'weixin_session_observe',
     title: '微信会话观察（session_observer_v1）',
     description:
-      '对已绑定会话执行常驻观察（截图→OCR→对齐→水位），返回 session_observer_v1 冻结契约结果。' +
-      '真机截图接线未开放时返回 coverage=unavailable（不冒充无人回复）。',
+      '在本机读取、对齐已绑定会话的 UIA 消息并核对观察水位，返回 session_observer_v1 契约结果。' +
+      '断层或目标不可达时返回 gap 或 unavailable。',
     zodShape: {
       conversation_binding_id: z.string().min(1).describe('会话绑定 ID'),
-      target_name: z.string().min(1).max(128).optional().describe('当前登录微信的目标联系人名称；OCR近似匹配必须唯一'),
+      target_name: z.string().min(1).max(128).optional().describe('当前登录微信的已绑定会话名称'),
       binding_version: z.number().int().min(0).describe('绑定版本（期望值，观察结果回显核对）'),
       account_identity_version: z.number().int().min(0).describe('账号身份版本（期望值）'),
       watermark: z

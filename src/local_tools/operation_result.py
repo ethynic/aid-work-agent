@@ -57,6 +57,7 @@ from src.desktop_automation.constants import (
     PHASE_SUBMITTED,
 )
 from src.local_tools import permits
+from src.local_tools.catalog import LOCAL_ONLY_WEIXIN_MESSAGE, LOCAL_ONLY_WEIXIN_TOOLS
 from src.local_tools.security import sha256_hex
 
 EVIDENCE_REF_MAX_LENGTH = 512
@@ -122,6 +123,17 @@ def _check_evidence_and_register(
         return reason
     # ② 适配器校验（scenario_key 缺失/未注册 → fail-closed 拒绝）
     adapter = TrustedAdapterRegistry.get(scenario_key) if scenario_key else None
+    retired_descriptor = None
+    if adapter is None:
+        from src.weixin_conversation.config import CLOUD_REPLY_RETIRED
+        from src.weixin_conversation.constants import SCENARIO_KEY
+
+        if CLOUD_REPLY_RETIRED and scenario_key == SCENARIO_KEY:
+            from src.weixin_conversation.descriptor import build_weixin_descriptor
+
+            # Already-issued permits must still settle after the scenario stops registering.
+            retired_descriptor = build_weixin_descriptor()
+            adapter = retired_descriptor.adapter
     if phase == PHASE_SUBMITTED:
         # B1.2（九处 #9）：submitted 接纳白名单由场景描述器 receipt_policy +
         # operation_descriptor 提供（微信逐值一致：submission/weixin_name/
@@ -130,6 +142,7 @@ def _check_evidence_and_register(
         from src.session_tasks.scenario_descriptor import get_descriptor
 
         policy_descriptor = get_descriptor(scenario_key) if scenario_key else None
+        policy_descriptor = policy_descriptor or retired_descriptor
         policy = getattr(policy_descriptor, "receipt_policy", None) if policy_descriptor is not None else None
         op_descriptor = getattr(policy_descriptor, "operation_descriptor", None) if policy_descriptor is not None else None
         if (policy is None
@@ -430,6 +443,9 @@ def apply_operation_result(
         if str(inv["device_id"]) != str(device_id):
             conn.rollback()
             raise OperationResultError("DEVICE_MISMATCH", 403, "invocation 不属于当前设备")
+        if inv.get("tool_name") in LOCAL_ONLY_WEIXIN_TOOLS:
+            conn.rollback()
+            raise OperationResultError("TOOL_NOT_ALLOWED", 409, LOCAL_ONLY_WEIXIN_MESSAGE)
         if inv["business_kind"] != BUSINESS_KIND_DESKTOP_AUTOMATION:
             conn.rollback()
             raise OperationResultError(

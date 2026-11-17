@@ -178,6 +178,9 @@ export async function submitNameWithCapture(request:Record<string,unknown>,signa
 
 /** Existing PrintWindow + resident RapidOCR; no cloud message transcription. */
 export const defaultNameDriver: NameDriver = async(request,signal,diagnostic)=>{
+  // Sends already carry an authorized observation baseline and check the live native title.
+  // The OCR resolver's local name cache is only a prerequisite for its own read path.
+  if(request.action==='submit')return submitNameWithCapture(request,signal,diagnostic)
   const name=String(request.target_name??'')
   if(request.open===true){
     resolvedNameLabels.delete(name)
@@ -191,7 +194,6 @@ export const defaultNameDriver: NameDriver = async(request,signal,diagnostic)=>{
     knownNames.add(name)
   }
   if(!knownNames.has(name))throw new CodedOperationError('TARGET_NOT_FOUND','须先通过本地OCR唯一名称定位')
-  if(request.action==='submit')return submitNameWithCapture(request,signal,diagnostic)
   return readWithoutOverlay(()=>withCapture(signal,async(c,path)=>{
     if(knownNames.has(name)&&request.previous_frame===c.frame)return{unchanged:true,frame:c.frame}
     await assertTitle(c,path,name,signal)

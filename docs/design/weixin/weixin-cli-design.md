@@ -64,9 +64,9 @@ MCP stdio adapter ─┘        │
 | `weixin_name_resolve` | 按名称 OCR 近似匹配唯一定位会话 | 多匹配即拒绝（名称会话 v2 路径） |
 | `weixin_message_send` | 向 target_ref 发 1 条文本（≤500 字） | 写动作，发送后 OCR 核验，unknown 不重试 |
 | `weixin_message_send_v2` | 仅接受 Runtime HMAC 签名许可 | `context`+`signature`（AIDWORK_WEIXIN_BRIDGE_KEY，90s 租约），发送前本机核对标题，回执记录已提交的输入动作 |
-| `weixin_history_read` | 读聊天记录 | 翻页 ≤10、内联 ≤200 条、超出落文件 |
-| `weixin_unread_list` | 未读会话列表 | 只读不清角标 |
-| `weixin_session_observe` | 截图→常驻 OCR→拆行→对齐→水位 | 返回 `session_observer_v1` 冻结契约；无真机截图返回 `coverage=unavailable` |
+| `weixin_history_read` | 本机 UIA 读聊天历史 | 翻页 ≤10、内联 ≤200 条、超出落本机文件 |
+| `weixin_unread_list` | 本机未读会话列表 | 只读不清角标 |
+| `weixin_session_observe` | 本机 UIA 消息与气泡方向对齐 | 返回 `session_observer_v1` 结果；断层保留原水位 |
 
 写动作硬约束：MCP 不接受裸显示名，必须先经只读 tool 获取未过期 target_ref；
 v2 路径额外要求 Runtime 签名许可（云端不可凭名字驱动发送）。
@@ -166,3 +166,11 @@ get_url、official_account_follow）未产品化——实际方向转向会话�
 原生读取优先使用 Windows UI Automation。2026-11-17 在本机微信 4.1.15.13 只读核对到会话列表、消息列表、具名文本消息项和可读取的输入框。历史分页、消息发送方、重名联系人匹配和未读数仍需分别核定，不以控件枚举证明这些业务语义。端侧持续观察沿既有约定在本机读取，保留既有消息水位、发送许可与回执外层。无原生证据时报告对应失败或缺口。
 
 本机探查中有唯一的 `current_chat_name_label`、`session_list`、`chat_message_list` 和 `chat_input_field`。消息行的原生边界横跨聊天列，不能从整行边界判断方向。可把原生文本行和现有本地气泡边界配对验证，文字始终来自原生节点。会话行名称中发现 `[n条]` 原生提示，须区分未读元数据行与相同格式的消息预览。其他 UIA 实现的原生读取和方向识别代码可作对照。 [会话列表参考](https://github.com/AngeCoo/wxauto-4.0/blob/main/wxauto4/ui/sessionbox.py) · [消息方向参考](https://github.com/FreeWisdom/wxauto-4.0/blob/main/wxauto4/msgs/msg.py)
+
+### 历史读取和持续观察的本机原生消息
+
+原生 UIA 提供正文、时间标签和文件等媒体描述。本机同帧画面提供气泡方向证据，并限定群聊昵称的匹配区域。群成员没有独立可核验节点时以未确认表示。正文、时间与昵称读取全链路无 OCR。
+
+历史读和持续观察保留原结果协议，限本机 CLI/MCP 读取。先手动打开目标会话，由驱动核对精确标题并绑定该窗口进程的 UIA 选中会话行。旧 `target_ref` 只有显示名，历史读取要求改用当前会话的 `target_name`。观察水位只随有连续证据且方向已确认的消息前移。MCP 截图证据只保存本机，独立 `watch` 在内存中处理画面。
+
+微信后台轮询沿用企微 CLI watch 的单轮串行模式。运行 `aid-weixin watch --target-name "<已打开会话全名>"` 启动一个本机轮询进程，默认间隔 10 秒。第一轮建立进程内水位，后续只输出新增条数。会话切换或视口无法连续对齐时保留水位。云端自动回复和 Runtime 消息批次上报已停用。实现和验收见[开发计划 Phase 4](../../plans/plan-weixin-cli-remove-ocr.md#phase-4-历史与持续观察)。

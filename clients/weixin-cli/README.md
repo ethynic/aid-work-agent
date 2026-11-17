@@ -35,6 +35,17 @@ npm test           # 构建 + 契约/单元测试
 npm run cli        # 构建后启动 human CLI
 ```
 
+### 本机会话历史和监控
+
+```powershell
+aid-weixin read --domain chat-history --target-name "<当前已打开的会话全名>" --max-pages 3 --json
+aid-weixin watch --target-name "<当前已打开的会话全名>" --interval 10
+```
+
+在微信中打开要读取或监控的单聊或群聊。旧 `target_ref` 只包含会话名，读取历史时请改用 `--target-name`。
+
+监控第一轮建立本机水位，之后确认有新增消息时输出一行 `{"event":"new_messages","count":1}`。保持目标会话打开。会话切换或消息窗口无法对齐时保留原水位，按 Ctrl+C 退出。
+
 ### 添加好友
 
 ```powershell

@@ -175,12 +175,9 @@ export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessR
     }
   }
   const first = available[0]
-  // 会话任务能力名（C1 REQUIRED_DEVICE_CAPABILITIES：session_task_v1 +
-  // session_observer_v1 + v2 写链）。weixin Provider 安装才上报——未安装的设备
-  // 不会通过会话任务的发布/分配能力检查（设计 §10 fail-closed）
+  // 微信 UIA 会话观察只供本机调用，设备不再发布云端会话任务能力。
   const capabilities: string[] = ['local_v2']
   if (available.includes('weixin')) {
-    capabilities.push('session_task_v1', 'session_observer_v1')
     // #6/D5 能力真实性：v2 发送能力与实际生效 manifest 的工具集合同源判定——
     // 显式协商（v2Send）使 manifest 升级 v2 变体后才上报；旧 Provider 不得宣称
     const effectiveWeixin = currentManifestFor('weixin')

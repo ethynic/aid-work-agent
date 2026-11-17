@@ -73,8 +73,7 @@ const BOSS_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'boss_resume_next',
 ])
 
-// 与 weixin CLI 的 TOOL_DEFS（src/mcp/toolDefs.ts）保持同步；写集合按现 CLI：
-// 仅 message_send 为写。真实 Provider 尚无 weixin_message_send_v2——受信 manifest
+// 与 weixin CLI 的调度声明保持同步；仅 message_send 为写。受信 manifest
 // 保持真实 v1 形态；v2 会话发送能力经 config.providers.weixin.v2Send=true 显式
 // 协商（隔离测试/未来真实 v2 Provider），由 cli 在启动时调用 setManifestOverride
 // 升级为 V2 变体。能力上报与 v2 门禁同源，缺能力不得通过发布/分配门禁（#6）
@@ -83,14 +82,15 @@ const WEIXIN_TOOLS = [
   'weixin_name_resolve',
   'weixin_chat_search',
   'weixin_message_send',
-  'weixin_history_read',
-  'weixin_unread_list',
 ] as const
+
+// 已安装旧签名包可能仍声明这些工具。云端执行不能调用返回微信正文的本机工具。
+const LOCAL_ONLY_WEIXIN_TOOLS = new Set(['weixin_history_read', 'weixin_unread_list', 'weixin_session_observe'])
 
 const WEIXIN_WRITE_TOOLS: ReadonlySet<string> = new Set(['weixin_message_send'])
 
-/** v2 会话变体（显式协商时启用）：追加 observe + v2 发送，协议 2 + 共享锁 */
-const WEIXIN_V2_TOOLS = [...WEIXIN_TOOLS, 'weixin_session_observe', 'weixin_message_send_v2'] as const
+/** v2 会话变体（显式协商时启用）：追加 v2 发送，协议 2 + 共享锁 */
+const WEIXIN_V2_TOOLS = [...WEIXIN_TOOLS, 'weixin_message_send_v2'] as const
 const WEIXIN_V2_WRITE_TOOLS: ReadonlySet<string> = new Set(['weixin_message_send', 'weixin_message_send_v2'])
 
 // 与 wecom CLI 的 TOOL_DEFS（src/mcp/toolDefs.ts，M11b 起 read_session 进 MCP）保持同步
@@ -204,7 +204,7 @@ export function weixinV2Manifest(): ProviderManifest {
 }
 
 export function isToolAllowedFor(manifest: ProviderManifest, toolName: string): boolean {
-  return manifest.tools.includes(toolName)
+  return !LOCAL_ONLY_WEIXIN_TOOLS.has(toolName) && manifest.tools.includes(toolName)
 }
 
 export function isWriteToolFor(manifest: ProviderManifest, toolName: string): boolean {
@@ -234,7 +234,7 @@ export function providerKeyOfPlugin(pluginId: string): string {
  * 验签清单 → 通用 ProviderManifest 派生（Runtime 消费端唯一入口）。
  *
  * - 契约 2.20 修订：声明即调度授权——受信面 = tool_declaration.tools 全集（内部命令
- *   不声明的工具不进受信面）；不与历史写死名单取交集，未知插件与已交付插件同一逻辑。
+ *   不声明的工具不进受信面）；排除仅供本机读取微信消息的保留工具名。
  *   store 门禁已保证到达此处的清单带有效声明（声明名 ⊆ 清单 tools、无重复）。
  * - write_tools = 声明工具的 annotations.readOnlyHint !== true（缺省按写，保守）
  * - protocol_version=1 / shared_lock_capable=false / execution_target=local_required（验签已固定）
@@ -245,7 +245,7 @@ export function deriveProviderManifest(manifest: RuntimeManifest): ProviderManif
   const declaration = (manifest as { tool_declaration?: { tools?: unknown } }).tool_declaration
   const names = [...new Set((Array.isArray(declaration?.tools) ? declaration.tools : [])
     .map(tool => (tool as { name?: unknown } | null)?.name)
-    .filter((name): name is string => typeof name === 'string' && name !== ''))]
+    .filter((name): name is string => typeof name === 'string' && name !== '' && !LOCAL_ONLY_WEIXIN_TOOLS.has(name)))]
   const readOnlyHints = new Map((Array.isArray(manifest.tools) ? manifest.tools : [])
     .map(tool => tool as { name?: unknown; annotations?: { readOnlyHint?: unknown } } | null)
     .filter((def): def is { name: string; annotations?: { readOnlyHint?: unknown } } => typeof def?.name === 'string' && def.name !== '')
@@ -285,9 +285,10 @@ export function assembleStoreManifests(declared: readonly PluginDeclaration[]): 
   const declaredTools: Record<string, string[]> = {}
   for (const item of declared) {
     const key = providerKeyOfPlugin(item.plugin_id)
-    manifests[key] = deriveProviderManifest(item.manifest)
-    declaredTools[key] = item.declaration.tools.map(tool => tool.name)
-    const parallel = item.declaration.tools.filter(tool => tool.parallel === true).map(tool => tool.name)
+    const manifest = deriveProviderManifest(item.manifest)
+    manifests[key] = manifest
+    declaredTools[key] = [...manifest.tools]
+    const parallel = item.declaration.tools.filter(tool => tool.parallel === true && isToolAllowedFor(manifest, tool.name)).map(tool => tool.name)
     if (parallel.length > 0) parallelTools[key] = parallel
   }
   return { manifests, parallelTools, declaredTools }

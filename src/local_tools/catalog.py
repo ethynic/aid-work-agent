@@ -15,6 +15,10 @@ schema_digest 强校验留 M0.5 接 LLM schema 时实现。
 
 from typing import Any, Dict, List, Optional
 
+# Reserved names of local MCP tools whose results can contain WeChat messages.
+LOCAL_ONLY_WEIXIN_TOOLS = frozenset({"weixin_history_read", "weixin_unread_list", "weixin_session_observe"})
+LOCAL_ONLY_WEIXIN_MESSAGE = "此微信读取工具仅支持本机 CLI 或 MCP"
+
 TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "runtime-recovery": {"provider_id":"ai.aidwork.runtime-recovery", "min_provider_version":"1.0.0",
         "execution_target":"local_required", "tools":["runtime_recovery_observe"], "agent_tools": []},
@@ -64,12 +68,7 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "boss_close_detail",
         ],
     },
-    # 微信 Provider（P3-A1）：与 Runtime src/providers.ts 的 weixin manifest（5 工具）
-    # 对齐，但**不含 weixin_message_send（v1 写）**——v1 写不经底座许可链路；
-    # weixin_message_send_v2 为底座 v2 统一操作名（真 v2 capability 随 P0 交付前，
-    # Runtime 侧 PROTOCOL_NOT_SUPPORTED 门控拒绝，写路径安全不依赖本清单）。
-    # 4 个只读工具（probe/chat_search/history_read/unread_list）供搜索/核验/预检
-    # 经 local_tool 队列下发，读链路走旧 /result 回传。
+    # 微信 Provider 的云端静态目录。保留 v2 许可发送；微信正文读取仅在本机提供。
     "weixin": {
         "provider_id": "ai.aidwork.weixin",
         "min_provider_version": "1.0.0",
@@ -78,8 +77,6 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
             "weixin_probe",
             "weixin_name_resolve",
             "weixin_chat_search",
-            "weixin_history_read",
-            "weixin_unread_list",
             "weixin_message_send_v2",
         ],
     },
@@ -206,7 +203,7 @@ def get_provider_keys_for_device(capabilities: Optional[Dict[str, Any]]) -> List
                 _add(key)
     # (4) 声明驱动（契约 2.20 修订）：declared_tools 的 provider_key 并入
     declared = declared_tools_for_device(capabilities)
-    if declared:
+    if declared is not None:
         for key in declared:
             if key not in keys:
                 keys.append(key)
@@ -231,7 +228,7 @@ def declared_tools_for_device(capabilities: Optional[Dict[str, Any]]) -> Optiona
     仅当 capabilities 含能力串 `tool_declarations_v1` 且 `declared_tools` 为非空合法映射
     时返回 {provider_key: [tool,...]}（键为字符串、值为字符串列表；非字符串项剔除，
     键序保持上报原序）；否则返回 None——调用方完整回退静态目录，旧设备行为不变。
-    只做最小形态归一（防止异常上报形态抛 500），不做名单校验（设备上报什么按什么放行）。
+    显式空列表或移除微信本机工具后变空的列表，仍是对应 provider 的有效声明。
     """
     if not isinstance(capabilities, dict):
         return None
@@ -245,8 +242,8 @@ def declared_tools_for_device(capabilities: Optional[Dict[str, Any]]) -> Optiona
     for key, tools in raw.items():
         if isinstance(key, str) and isinstance(tools, list):
             names = [tool for tool in tools if isinstance(tool, str)]
-            if names:
-                tools_map[key] = names
+            if not tools or names:
+                tools_map[key] = [name for name in names if name not in LOCAL_ONLY_WEIXIN_TOOLS]
     return tools_map or None
 
 
@@ -272,16 +269,17 @@ def is_tool_allowed_for_device(capabilities: Optional[Dict[str, Any]], provider_
     - 声明设备（declared_tools 非空）且行 provider_key 被声明覆盖：以 declared_tools
       为准（未声明工具拒绝，含清单有但声明排除的内部命令）；
     - 未被声明覆盖的 provider（runtime-recovery/skill-runner 等非商店来源）与
-      provider_key NULL 行（旧聊天链路）：回退静态目录判定，行为不变；
+      provider_key NULL 行（旧聊天链路）：回退静态目录判定。默认 provider 显式
+      声明空列表时，NULL 行也不能借静态目录获得权限；
     - 无声明/旧设备/解析异常：完整回退 is_tool_allowed（default_provider_key 沿用
       旧行为兜底 NULL 行），逐字节一致。
     """
     declared = declared_tools_for_device(capabilities)
-    if declared and provider_key:
-        allowed = declared.get(provider_key)
-        if allowed is not None:
-            return tool_name in allowed
-        # provider 未被声明覆盖（legacy 直配/云端原语 provider）：回退目录
+    if declared is not None:
+        if provider_key in declared:
+            return tool_name in declared[provider_key]
+        if provider_key is None and default_provider_key in declared and not declared[default_provider_key]:
+            return False
     return is_tool_allowed(provider_key or default_provider_key, tool_name)
 
 

@@ -1,131 +1,82 @@
-﻿# p4-history-capture probe 主脚本
-# 流程：滚到底 -> 逐页上滚 + PrintWindow 截图 -> RapidOCR 识别 -> 按坐标区分发言人
-#       -> 翻页重叠去重合并 -> 存文本 -> 滚回底部恢复原位
-# 全程 PostMessage + PrintWindow：不占光标/剪贴板，窗口被遮挡也能工作，RDP 会话适用。
-param(
-    [string]$PeerName = '对方',        # 对方显示名（仅用于输出行标签，不参与定位）
-    [int]$MaxPages = 3,                # 最多向上翻几页（含底部当前页）
-    [int]$UntilDaysAgo = 0,            # >0 时：某页最早时间分割线早于该天数则停止继续上翻
-    [string]$OutFile = '',             # 输出文本路径，默认 %TEMP%\weixin-chat-<peer>-<时间戳>.txt
-    [int]$PageScrollNotches = 8        # 每翻一页的滚轮格数（120/格）
-)
+﻿param()
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$probeDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-. (Join-Path $probeDir '_common.ps1')
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+. (Join-Path $PSScriptRoot '_common.ps1')
+. (Join-Path $PSScriptRoot 'native-messages.ps1')
 
-# 发行包内 OCR，开发 checkout 可使用既有 venv。
-$pythonExe = Resolve-WeixinOcrPython
-$ocrScript = Join-Path $probeDir '..\py\history_chat.py'
-if ($OutFile -eq '') { $OutFile = Join-Path $env:TEMP ("weixin-chat-{0}-{1:yyyyMMdd-HHmmss}.txt" -f $PeerName, (Get-Date)) }
-
-function Invoke-OcrPage([string]$ImgPath) {
-    $out = & $pythonExe -I -B $ocrScript $ImgPath $PeerName 2>$null
-    @($out | Where-Object { $_ -and $_.Trim() -ne '' })
-}
-
-function Get-PageFirstDate([string[]]$Lines) {
-    # 取本页第一条 [时间] 行并解析为日期；无年份的按月日推断（月份晚于当前月则视为去年）
-    foreach ($ln in $Lines) {
-        if ($ln -notmatch '^\[时间\]') { continue }
-        $m = [regex]::Match($ln, '(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日')
-        if (-not $m.Success) { continue }
-        $year = if ($m.Groups[1].Success) { [int]$m.Groups[1].Value } else {
-            $now = Get-Date
-            if ([int]$m.Groups[2].Value -gt $now.Month) { $now.Year - 1 } else { $now.Year }
+function Send-WeixinHistoryWheel($Session, $Viewport, [int]$Delta, [int]$Count) {
+    Assert-WeixinNativeSelectedSession $Session
+    if ([WeixinProbeWin32]::GetForegroundWindow().ToInt64() -ne $Session.Handle) {
+        Throw-DriverError 'UI_CHANGED' '微信会话或前台窗口已变化，请重试历史读取'
+    }
+    $x = [int](($Viewport.left + $Viewport.right) / 2)
+    $y = [int](($Viewport.top + $Viewport.bottom) / 2)
+    $point = [IntPtr](($y -shl 16) -bor ($x -band 0xFFFF))
+    for ($index = 0; $index -lt $Count; $index++) {
+        if (-not [WeixinProbeWin32]::PostMessage([IntPtr]$Session.Handle, 0x020A, [IntPtr]($Delta -shl 16), $point)) {
+            Throw-DriverError 'UI_CHANGED' '无法滚动微信历史'
         }
-        return Get-Date -Year $year -Month ([int]$m.Groups[2].Value) -Day ([int]$m.Groups[3].Value) -Hour 0 -Minute 0 -Second 0
+        Start-Sleep -Milliseconds 35
     }
-    return $null
+    Start-Sleep -Milliseconds 500
 }
 
-function Send-WeixinWheel([int64]$Hwnd, [int]$Delta, [int]$Count, [int]$GapMs = 40) {
-    # WM_MOUSEWHEEL：wParam 高字=delta（正=上滚看历史，负=下滚），lParam=屏幕坐标
-    $sx = $script:WheelScreenX; $sy = $script:WheelScreenY
-    $lp = [IntPtr](($sy -shl 16) -bor ($sx -band 0xFFFF))
-    foreach ($i in 1..$Count) {
-        [void][WeixinProbeWin32]::PostMessage([IntPtr]$Hwnd, 0x020A, [IntPtr]($Delta -shl 16), $lp)
-        Start-Sleep -Milliseconds $GapMs
+function Test-WeixinHistoryCutoff($Rows, [int]$Days) {
+    if ($Days -le 0) { return $false }
+    $today = (Get-Date).Date
+    foreach ($row in $Rows) {
+        if ($row.kind -ne 'time' -or $row.text -notmatch '(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日') { continue }
+        $year = if ($Matches[1]) { [int]$Matches[1] } else { $today.Year }
+        $month = [int]$Matches[2]
+        $day = [int]$Matches[3]
+        if ($month -lt 1 -or $month -gt 12 -or $day -lt 1 -or $day -gt [DateTime]::DaysInMonth($year, $month)) { continue }
+        if (-not $Matches[1] -and ($month -gt $today.Month -or ($month -eq $today.Month -and $day -gt $today.Day))) { $year-- }
+        if ($day -gt [DateTime]::DaysInMonth($year, $month)) { continue }
+        return ($today - [DateTime]::new($year, $month, $day)).Days -gt $Days
     }
+    return $false
 }
 
-$mutex = New-Object Threading.Mutex($false, 'Local\AidWorkAgent.WeixinCliProbe.HistoryCapture', [ref]$null)
-if (-not $mutex.WaitOne(0)) { throw 'PROBE_BUSY' }
-try {
-    Initialize-WeixinProbeWin32
-    Set-WeixinProbeDpiContext
-    Add-Type -AssemblyName System.Drawing
+Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WeixinCli.NativeObserve' -Body {
+    $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $session = Get-WeixinCurrentNativeSession -TargetName $request.target_name
+    $chat = Get-WeixinNativeTitleInfo $session
+    if (-not (Invoke-WeixinActivation -Hwnd $session.Handle)) {
+        Throw-DriverError 'UI_CHANGED' '无法将微信主窗口切换到前台'
+    }
 
-    $windows = @(Get-VisibleWindowList)
-    $main = Select-WeixinMainWindow $windows
-    $mainHwnd = [int64]$main.Hwnd
-    Write-Host "[1] main hwnd=$mainHwnd （目标=当前打开的会话，请确认）"
-
-    # 滚轮落点：聊天区中心
-    $rect = New-Object WeixinProbeWin32+RECT
-    [void][WeixinProbeWin32]::GetWindowRect([IntPtr]$mainHwnd, [ref]$rect)
-    $script:WheelScreenX = $rect.Left + [int](($rect.Right - $rect.Left) * 0.63)
-    $script:WheelScreenY = $rect.Top + [int](($rect.Bottom - $rect.Top) * 0.55)
-
-    # 1. 先滚到底（也是结束后的恢复位置）
-    Send-WeixinWheel $mainHwnd -120 40
-    Start-Sleep -Milliseconds 800
-    Write-Host "[2] 已滚到底部"
-
-    # 2. 自底向上逐页截图 + OCR
-    $pages = New-Object Collections.Generic.List[object]   # 每个元素 = string[] 行
-    for ($page = 1; $page -le $MaxPages; $page++) {
-        $shotPath = Join-Path $env:TEMP "weixin-probe-p4-page$page.png"
-        $snap = Get-WeixinWindowSnapshot $mainHwnd $shotPath
-        $lines = @(Invoke-OcrPage $shotPath)
-        Write-Host "[3] page$page : $($lines.Count) 行 (printwindow=$($snap[4]))"
-        if ($lines.Count -eq 0) { Write-Host "[3] 本页无内容，停止"; break }
-        $pages.Add([string[]]$lines)
-        if ($UntilDaysAgo -gt 0) {
-            $firstDate = Get-PageFirstDate $lines
-            if ($null -ne $firstDate) {
-                $age = ((Get-Date).Date - $firstDate).Days
-                Write-Host "[3] 本页最早时间线: $($firstDate.ToString('yyyy-MM-dd')) (${age}天前)"
-                if ($age -gt $UntilDaysAgo) { Write-Host "[3] 已超出 $UntilDaysAgo 天范围，停止上翻"; break }
+    $viewport = (Get-WeixinNativeRows $session).viewport
+    Send-WeixinHistoryWheel $session $viewport -120 40
+    $pages = New-Object 'Collections.Generic.List[object]'
+    $last = $null
+    $notches = [int][Math]::Max(1, [Math]::Min(4, [Math]::Floor(($viewport.bottom - $viewport.top) / 170)))
+    $scrolledUp = $false
+    try {
+        for ($page = 1; $page -le $request.max_pages; $page++) {
+            $capture = Get-WeixinNativeMessageSnapshot -Session $session
+            $rows = @($capture.rows)
+            # Only stop on an identical viewport, including which visible rows are clipped.
+            $signature = ConvertTo-Json -InputObject $rows -Depth 6 -Compress
+            if ($last -ceq $signature) { break }
+            if ($pages.Count -gt 0 -and $rows.Count -eq 0) {
+                Throw-DriverError 'CONTENT_UNAVAILABLE' '微信历史分页返回空视口，请重试'
+            }
+            $last = $signature
+            $pages.Add($rows)
+            if ($rows.Count -eq 0 -or (Test-WeixinHistoryCutoff $rows $request.since_days) -or $page -eq $request.max_pages) { break }
+            $scrolledUp = $true
+            Send-WeixinHistoryWheel $session $capture.viewport 120 $notches
+        }
+    } finally {
+        # Do not scroll a different conversation when the user switches during capture.
+        if ($scrolledUp) {
+            $canRestore = $false
+            try { Assert-WeixinNativeSelectedSession $session; $canRestore = $true } catch {}
+            if ($canRestore -and [WeixinProbeWin32]::GetForegroundWindow().ToInt64() -eq $session.Handle) {
+                Send-WeixinHistoryWheel $session $viewport -120 40
             }
         }
-        if ($page -lt $MaxPages) {
-            Send-WeixinWheel $mainHwnd 120 $PageScrollNotches
-            Start-Sleep -Milliseconds 800
-        }
     }
-
-    # 3. 合并：页按新->旧采集（pages[0]=最新的底部页），逐页把更旧的页拼到前面，
-    #    按"旧页后缀 == 已合并前缀"的最大重叠去重
-    $merged = New-Object 'Collections.Generic.List[string]'
-    $merged.AddRange([string[]]($pages[0]))
-    for ($i = 1; $i -lt $pages.Count; $i++) {
-        $older = [string[]]($pages[$i])
-        $maxOverlap = [Math]::Min($older.Count, $merged.Count)
-        $overlap = 0
-        for ($k = $maxOverlap; $k -ge 1; $k--) {
-            $match = $true
-            for ($j = 0; $j -lt $k; $j++) {
-                if ($older[$older.Count - $k + $j] -ne $merged[$j]) { $match = $false; break }
-            }
-            if ($match) { $overlap = $k; break }
-        }
-        $prependCount = $older.Count - $overlap
-        if ($prependCount -gt 0) {
-            $prepend = $older[0..($prependCount - 1)]
-            $merged.InsertRange(0, [string[]]$prepend)
-        }
-        Write-Host "[4] page$($i+1) 重叠 $overlap 行，前插 $prependCount 行"
-    }
-
-    # 4. 存文本
-    [IO.File]::WriteAllLines($OutFile, [string[]]$merged, [Text.Encoding]::UTF8)
-    Write-Host "[5] 已保存 $($merged.Count) 行 -> $OutFile"
-    Write-Host "PROBE_RESULT: CAPTURED pages=$($pages.Count) lines=$($merged.Count) file=$OutFile"
-} finally {
-    # 恢复：滚回底部
-    if ($null -ne $mainHwnd -and $mainHwnd -ne 0) {
-        try { Send-WeixinWheel $mainHwnd -120 40 } catch {}
-    }
-    [void]$mutex.ReleaseMutex(); $mutex.Dispose()
+    return @{title=$chat.title; is_group=[bool]$chat.is_group; pages=$pages.ToArray()}
 }

@@ -393,3 +393,33 @@ test('resultOutbox：loadAll 忽略解析失败的残留文件（不抛错、不
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('resultOutbox：旧微信历史、未读预览和会话观察正文不会在启动时补传', async () => {
+  const root = tmpRoot('weixin-private-replay')
+  try {
+    const outbox = new ResultOutbox(resultOutboxDir(root))
+    const v1 = { success: true, claim_token: 'legacy', effect: 'none' }
+    outbox.saveLegacy('history', { ...v1, message: '已读取与「chat」的聊天记录 1 条', data: {
+      target: 'chat', total: 1, messages: [{ sender: 'peer', text: 'private' }],
+    } })
+    outbox.saveLegacy('unread', { ...v1, message: '未读会话 1 个', data: {
+      unread: [{ name: 'chat', preview: 'private', unread_count: 1 }],
+    } })
+    outbox.save('observe', { ...v2Payload(), data: {
+      observation_id: 'observed', conversation_binding_id: 'chat', ordered_messages: [{ text: 'private' }],
+    } })
+    outbox.saveLegacy('other', { ...v1, data: { unread: [{ session_name: 'other channel', last_message: 'valid' }] } })
+    const uploads: string[] = []
+    const api = Object.assign(stubApi(async (id) => { uploads.push(id); return { state: 'succeeded', effect: 'none' } }), {
+      result: async (id: string) => { uploads.push(id); return { state: 'succeeded', effect: 'none' } },
+    })
+    const counts = await replayPendingOutbox(api, outbox, { maxAttempts: 1 })
+    assert.deepEqual(uploads, ['other'])
+    assert.deepEqual(counts, { acked: 1, rejected: 3, kept: 0, skippedGaveUp: 0 })
+    for (const id of ['history', 'unread', 'observe']) {
+      assert.equal(outbox.load(id)?.gave_up_reason, 'WEIXIN_READ_LOCAL_ONLY')
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

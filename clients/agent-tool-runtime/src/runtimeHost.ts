@@ -1,6 +1,6 @@
 import { recoveryObservation } from './recoveryObservation.js'
 import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { randomUUID, randomBytes } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { ApiClient } from './apiClient.js'
 import { registrationBlocksExecution } from './connectionRegistration.js'
 import {
@@ -17,14 +17,8 @@ import { checkDesktopInteractive } from './desktopCheck.js'
 import { deriveResourceKey } from './desktopLock.js'
 import { PollLoop } from './pollLoop.js'
 import { ProviderSet, type ProviderManager } from './providerManager.js'
-import { runInvocation } from './invocationRunner.js'
 import { ResultOutbox, resultOutboxDir } from './resultOutbox.js'
-import { SessionTaskEngine } from './sessionTasks/engine.js'
-import { NameSessionBridge } from './sessionTasks/nameBridge.js'
-import { acquireSessionTasksSingleInstance, type SingleInstanceGuard } from './sessionTasks/singleInstance.js'
-import { enforceRetention } from './sessionTasks/retention.js'
 import { dpapiProtect, dpapiUnprotect } from './dpapi.js'
-import { withDesktopLock, desktopLockName } from './desktopLock.js'
 import { logInfo } from './log.js'
 import { readdirSync } from 'node:fs'
 
@@ -61,8 +55,6 @@ export class LegacyExecution implements HostAdapter {
   preparePluginImport?: HostAdapter['preparePluginImport']
   private loop: PollLoop | null = null
   private providers: ProviderSet | null = null
-  private engine: SessionTaskEngine | null = null
-  private sessionGuard: SingleInstanceGuard | null = null
   private runPromise: Promise<void> | null = null
   private runFailure: unknown = null
   private stopping = false
@@ -121,7 +113,6 @@ export class LegacyExecution implements HostAdapter {
   }
   pauseForConnectionRecovery(): void {
     this.loop?.stopClaiming()
-    this.engine?.shutdown()
     this.providers?.stopAdmission()
   }
   plugins() { return this.pluginStore?.list() ?? [] }
@@ -139,7 +130,7 @@ export class LegacyExecution implements HostAdapter {
   async canChangePlugins(method?: string): Promise<boolean> {
     // Management drains these execution lanes before switching a release. Historical
     // journals/outbox stay authoritative, but do not prevent unrelated maintenance.
-    return !this.loop && !this.engine && !this.providers && !this.runPromise && !this.sessionGuard
+    return !this.loop && !this.providers && !this.runPromise
   }
   async initialize(): Promise<void> {
     configureRuntimeHome(this.home)
@@ -233,7 +224,6 @@ export class LegacyExecution implements HostAdapter {
     await this.pluginStore?.refresh()
     const entries = Object.fromEntries(Object.entries(this.resolveEntries(config)).filter(([, entry]) => existsSync(entry)))
     const api = new ApiClient(server, token)
-    const bridgeKey = randomBytes(32).toString('hex')
     const wecomLegacyEnv: Record<string, string> = {}
     for (const key of ['AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN']) {
       if (process.env[key] !== undefined) wecomLegacyEnv[key] = process.env[key]!
@@ -242,11 +232,10 @@ export class LegacyExecution implements HostAdapter {
     const pairedEnv = { AIDWORK_RUNTIME_SERVER: server, AIDWORK_RUNTIME_DEVICE_TOKEN: token }
     const providers = new ProviderSet(entries, { nodeExecutable: this.nodeExecutable, baseEnv: providerEnvironment(),
       ...(this.supervision.enabled ? { prepareLaunch: (entry: string) => this.supervision.prepareLaunch(entry) } : {}),
-      providerEnv: { weixin: { AIDWORK_WEIXIN_BRIDGE_KEY: bridgeKey }, wecom: { ...wecomLegacyEnv, ...pairedEnv }, 'boss-recruiting': pairedEnv } })
+      providerEnv: { wecom: { ...wecomLegacyEnv, ...pairedEnv }, 'boss-recruiting': pairedEnv } })
     this.providers = providers
     this.runFailure = null
     this.stopping = false
-    const nameBridge = new NameSessionBridge(providers, api, bridgeKey)
     // #6 能力真实性：v2 会话 manifest 变体仅经 config.providers.weixin.v2Send 显式
     // 协商（隔离测试 / 真实 v2 Provider 交付后）；未协商保持真实 v1 受信形态
     const { setManifestOverride, weixinV2Manifest, assembleStoreManifests } = await import('./providers.js')
@@ -256,7 +245,7 @@ export class LegacyExecution implements HostAdapter {
       logInfo('[runtime] weixin v2 会话能力已显式协商（v2Send=true）：manifest 升级 v2 变体')
     }
     // 契约 2.20：商店插件派生 manifest（已验签、启用且带有效调度声明）优先于 TRUSTED 回退；
-    // runner 门禁、session engine 与能力上报共用同一份装配。weixin v2Send 显式协商时以
+    // runner 门禁与能力上报共用同一份装配。weixin v2Send 显式协商时以
     // v2 变体覆盖派生结果（协商语义优先）。遗留直配 entry 不产生派生 manifest。
     const declaredPlugins = this.pluginStore?.declaredPlugins() ?? []
     const { manifests: storeManifests, parallelTools, declaredTools } = assembleStoreManifests(declaredPlugins)
@@ -315,71 +304,27 @@ export class LegacyExecution implements HostAdapter {
       parallelTools,
     })
 
-    // ----- 端侧会话任务引擎（C2）：与 pollLoop 共存，共享 Provider 与桌面锁 -----
-    let sessionEngine: SessionTaskEngine | null = null
-    let sessionGuard: SingleInstanceGuard | null = null
     if (config.sessionTasks === true) {
-      sessionGuard = await acquireSessionTasksSingleInstance(dataDir)
-      if (sessionGuard === null) {
-        throw new ManagementError(4, '已有旧会话任务实例，不能并行启动Runtime')
-      } else {
-        this.sessionGuard = sessionGuard
-        const retention = enforceRetention(dataDir, [], {}) // 启动时评估磁盘水位（终态清理由引擎周期执行）
-        if (retention.stopNew) logInfo('[session-tasks] 本地会话日志已达上限（256MiB），停止新观察持久化')
-        else if (retention.warn80) logInfo('[session-tasks] 本地会话日志超 80% 水位')
-        sessionEngine = new SessionTaskEngine({
-          api,
-          runtimeHome: dataDir,
-          crypto: { protect: dpapiProtect, unprotect: dpapiUnprotect },
-          runtimeInstanceId: `rt-${RUNTIME_VERSION}-${randomUUID().slice(0, 8)}`,
-          withLock: <T,>(fn: () => Promise<T>) => withDesktopLock(desktopLockName(deriveResourceKey()), fn),
-          observer: nameBridge.observe,
-          emit: (msg) => logInfo(`[session-tasks] ${msg}`),
-          // C3：会话任务发送复用既有 v2 单动作执行器（许可/journal/outbox 全在原链内）；
-          // sessionPrecheck 为引擎构造的锁内会话复核（§7 顺序 4），由 runner 在桌面锁内、
-          // write-authorize 之前执行
-          runInvocation: (inv, sessionPrecheck) =>
-            runInvocation(inv, {
-              api,
-              providers,
-              manifests: storeManifests,
-              desktopCheck: async () => (await checkDesktopInteractive()).interactive,
-              desktopResourceKey: deriveResourceKey(),
-              runtimeDataDir: dataDir,
-              resultOutbox: new ResultOutbox(resultOutboxDir(dataDir)),
-              sessionPrecheck,
-              prepareProviderCall: nameBridge.prepare,
-            }),
-        })
-        logInfo('[session-tasks] 会话任务引擎已启动（共享桌面锁；observer 经 weixin Provider）')
-      }
+      logInfo('[session-tasks] 微信自动回复已停用，聊天正文仅在本机读取')
     }
     this.loop = loop
-    this.providers = providers
-    this.engine = sessionEngine
-    this.sessionGuard = sessionGuard
-    const loops = [loop.run()]
-    if (sessionEngine) loops.push(sessionEngine.run())
-    this.runPromise = Promise.all(loops).then(() => {
+    this.runPromise = loop.run().then(() => {
       if (!this.stopping) executionEnded()
     }, error => {
-      this.runFailure = error; loop.shutdown(); sessionEngine?.shutdown()
+      this.runFailure = error; loop.shutdown()
       if (!this.stopping) executionEnded()
     })
   }
   async stop(): Promise<void> {
     this.stopping = true
     this.loop?.stopClaiming()
-    this.engine?.shutdown()
     await this.loop?.drain()
     await this.runPromise
-    await this.engine?.drain()
     // All lanes have stopped admitting work; accepted calls may still resolve their Provider first.
     this.providers?.stopAdmission()
     await this.providers?.waitForIdle()
     await this.providers?.shutdownAll()
-    await this.sessionGuard?.release()
-    this.loop = null; this.providers = null; this.engine = null; this.sessionGuard = null; this.runPromise = null
+    this.loop = null; this.providers = null; this.runPromise = null
     // A loop error is not proof of an active process after every execution lane
     // and provider has drained. Business journals/outbox remain unchanged.
     this.runFailure = null

@@ -38,17 +38,12 @@ export interface ProviderManifest {
   tool_declaration: { version: 1; tools: Array<{ name: string; parallel?: true }> }
 }
 
-/** 调度声明白名单（契约 2.20 修订：声明即调度授权，内部命令不声明）——6 个 v1 工具
- * （与 runtime TRUSTED_MANIFESTS weixin v1 受信面同一集合）。weixin_session_observe 为
- * v2 显式协商变体专用、weixin_message_send_v2 为 v2 许可发送：均不进声明（v2 override
- * 机制 runtime 侧保持现状，不受声明驱动）。清单 tools 数组本身不动——它们仍是 CLI
- * 真实 MCP 工具，schema_digest 不变。微信全部桌面操作，整插件串行（无 parallel 标记）。 */
+/** 调度声明白名单（契约 2.20）。历史、未读预览和会话观察仅供本机 CLI/MCP 使用。
+ * weixin_message_send_v2 经独立许可协议协商；微信全部桌面操作均串行。 */
 const DECLARED_TOOLS = new Set([
   'weixin_probe',
   'weixin_chat_search',
   'weixin_message_send',
-  'weixin_history_read',
-  'weixin_unread_list',
   'weixin_name_resolve',
 ])
 
