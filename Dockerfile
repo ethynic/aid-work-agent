@@ -55,10 +55,10 @@ RUN python -c "import redis; print('redis loaded OK:', redis.__version__)" || \
 # 镜像缺包时 skill 依赖自动安装会触发运行时 pip install，pypi.org 直连大包下载
 # 必超 600s 命令超时 -> 用量存储 guard 破坏 -> 整任务中断
 # （2026-11-17 agent2 tr_runner_8c2c2b59 事故，RUNNER_USAGE_STORAGE_FAILED）
-RUN python -c "import pdf2docx; print('pdf2docx loaded OK:', pdf2docx.__version__)" || \
+RUN python -c "import importlib.metadata as m; import pdf2docx; print('pdf2docx loaded OK:', m.version('pdf2docx'))" || \
     (echo "ERROR: pdf2docx not installed, reinstalling from pypi.org..." && \
      pip install --no-cache-dir 'pdf2docx>=0.5.8' -i https://pypi.org/simple/ && \
-     python -c "import pdf2docx; print('pdf2docx loaded OK:', pdf2docx.__version__)")
+     python -c "import importlib.metadata as m; import pdf2docx; print('pdf2docx loaded OK:', m.version('pdf2docx'))")
 
 # MCP 单独安装（依赖较多，独立一层便于排查与缓存）
 # 注意 1：不要使用 --no-deps，mcp 2.0.0 依赖 httpx2/mcp-types/opentelemetry-api，
