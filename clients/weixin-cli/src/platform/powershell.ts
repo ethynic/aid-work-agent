@@ -22,6 +22,8 @@ export interface PowerShellScriptOptions {
   /** .ps1 绝对路径 */
   script: string
   args?: string[]
+  /** 业务输入可经 UTF-8 stdin 传递，避免出现在子进程命令行。 */
+  stdin?: string
   timeoutMs?: number
   signal?: AbortSignal
 }
@@ -76,17 +78,22 @@ export async function runPowerShellScript(opts: PowerShellScriptOptions): Promis
     if (opts.signal?.aborted) { reject(new CancelledError()); return }
     const child = spawn('powershell.exe', args, {
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [opts.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       env: { ...process.env, ...proxyEnv, AID_WEIXIN_NODE_EXECUTABLE: process.execPath },
     })
     let stdout = ''
     let stderr = ''
     let settled = false
     let timedOut = false
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
-    child.stdout.on('data', (d: string) => (stdout += d))
-    child.stderr.on('data', (d: string) => (stderr += d))
+    child.stdout!.setEncoding('utf8')
+    child.stderr!.setEncoding('utf8')
+    child.stdout!.on('data', (d: string) => (stdout += d))
+    child.stderr!.on('data', (d: string) => (stderr += d))
+    if (child.stdin) {
+      // The child can exit before reading all input. Its exit and driver result still decide the outcome.
+      child.stdin.on('error', () => {})
+      child.stdin.end(opts.stdin, 'utf8')
+    }
 
     const timer = setTimeout(() => {
       timedOut = true

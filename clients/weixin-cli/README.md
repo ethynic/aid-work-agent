@@ -35,3 +35,13 @@ npm run build      # 编译 TS → dist/
 npm test           # 构建 + 契约/单元测试
 npm run cli        # 构建后启动 human CLI
 ```
+
+### 添加好友
+
+```powershell
+aid-weixin add --domain friend --identifier "<手机号或微信号>" --verify-message "你好，我想添加你为好友" --json
+```
+
+请在微信已登录、桌面未锁屏时执行。每次处理一个标识，省略 `--verify-message` 时使用微信预填的验证语。此命令的视觉定位使用上述服务端计费配置。
+
+`request_sent` 表示已提交申请，`friend_added` 表示微信直接添加为好友，`already_friend` 和 `already_requested` 表示本次未发送。遇到 `effect=unknown` 时先在微信中核对申请状态。

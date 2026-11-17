@@ -180,6 +180,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261117-0932 | 微信 CLI 添加好友 | ✅ 已完成开发，真实好友申请与扣费待验。 | [设计](design/weixin/weixin-cli-design.md#12-本机添加好友) | [计划](plans/plan-weixin-cli-add-friend.md) |
 | 20261107-0949 | 企微搜索门禁真机回炉 | ✅ 已完成开发；CLI 真机通过，Agent 工具调度待验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w28-搜索门禁真机回炉2026-11-07) |
 | 20261107-1004 | 企微标题复制剪贴板诊断 | ✅ 已完成开发；远控剪贴板阻塞已定位，Agent 工具调度待验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w29-标题复制剪贴板诊断2026-11-07) |
 | 20261021-1625 | pptx-vi-gen 技能：模板 VI 提取 + 原生可编辑 PPT 生成与修改 | ✅ 已完成并部署：python-pptx 原生可编辑渲染 14 版式 + edit_deck 修改 + 模板填充，三轮上游合并至 v2.2.0，单测与上游 verify 全过（5719f10f4）。 | — | — |
