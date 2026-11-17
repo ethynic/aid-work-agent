@@ -95,12 +95,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # 临时目录（/tmp 权限可能被外部工具重置为 755，使用应用自有目录）
     TMPDIR=/home/appuser/tmp \
     # Playwright 浏览器安装路径（与 Dockerfile 中 PLAYWRIGHT_BROWSERS_PATH 一致）
-    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
-    # pip 运行时镜像源：skill 依赖自动安装（prepare_dependencies）在容器内跑
-    # pip install，无镜像源时 pypi.org 直连拉大包必超 600s 命令超时，
-    # 导致任务中断（2026-11-17 agent2 tr_runner_8c2c2b59 事故）。构建阶段已显式
-    # 传 -i 腾讯云源；此 ENV 兜底运行时 pip（243/254 均为腾讯云内网，TTFB 最低）
-    PIP_INDEX_URL=https://mirrors.cloud.tencent.com/pypi/simple
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
 # 与阶段1相同的 apt 源参数（ARG 是 stage 级作用域，在此阶段重新声明）
 ARG APT_MIRROR=https://mirrors.cloud.tencent.com
@@ -232,6 +227,14 @@ RUN printf '%s\n' \
 
 # 创建必要的目录（日志等）
 RUN mkdir -p log/agent && chown -R appuser:appgroup log
+
+# pip 运行时镜像源：skill 依赖自动安装（prepare_dependencies）在容器内跑
+# pip install，无镜像源时 pypi.org 直连拉大包必超 600s 命令超时，
+# 导致任务中断（2026-11-17 agent2 tr_runner_8c2c2b59 事故）。构建阶段已显式
+# 传 -i 腾讯云源；此 ENV 兜底运行时 pip（243/254 均为腾讯云内网，TTFB 最低）。
+# 注意：单独放 Playwright 层之后，避免改顶部 ENV 块令 apt/Playwright 层缓存
+# 失效（2026-11-17 曾因 ENV 位置导致 Chromium 199MiB 重走 Azure 源、10 分钟仅 10%）
+ENV PIP_INDEX_URL=https://mirrors.cloud.tencent.com/pypi/simple
 
 # 复制应用代码
 # 注意：从这里开始的层会因项目代码改动而失效，所以 Playwright 安装必须放在此行之前。
