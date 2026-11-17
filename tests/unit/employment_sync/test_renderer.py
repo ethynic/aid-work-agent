@@ -142,11 +142,32 @@ def test_render_job_contact_show_flags():
 
 
 def test_render_job_deadline_to_expires_at():
-    """deadline>0 → UTC naive datetime；deadline=0/空 → None（长期）。"""
+    """deadline>0 → Asia/Shanghai 挂钟 naive datetime；deadline=0/空 → None（长期）。"""
     doc = render_job(_job(), None, None, DICT_CACHE)
-    assert doc.expires_at == datetime(2030, 1, 1, 0, 0)
+    # 1893456000 = 2030-01-01T00:00:00Z → 上海挂钟 08:00（检索会话时区解释）
+    assert doc.expires_at == datetime(2030, 1, 1, 8, 0)
     assert render_job(_job(deadline=0), None, None, DICT_CACHE).expires_at is None
     assert render_job(_job(deadline=None), None, None, DICT_CACHE).expires_at is None
+
+
+def test_deadline_to_expires_at_timezone_wall_clock():
+    """时区回归（CR P2 登记项）：expires_at 必须是上海挂钟时间，不能是 UTC 挂钟。
+
+    documents.expires_at 为无时区列，检索按会话时区（PG 固定 Asia/Shanghai）
+    解释；写 UTC 挂钟会让岗位提前约 8h 从检索消失。
+    """
+    from datetime import timezone
+    from zoneinfo import ZoneInfo
+
+    from src.tenant_custom.lyjy_employment.renderer import deadline_to_expires_at
+
+    seconds = 1893456000  # 2030-01-01T00:00:00Z
+    expected_utc = datetime.fromtimestamp(seconds, tz=timezone.utc)
+    expected_sh = expected_utc.astimezone(ZoneInfo("Asia/Shanghai"))
+    got = deadline_to_expires_at(seconds)
+    assert got == expected_sh.replace(tzinfo=None)
+    assert got.hour == expected_sh.hour  # 上海挂钟 8 点（非 UTC 0 点）
+    assert deadline_to_expires_at(-1) is None
 
 
 def test_render_job_metadata_whitelist_and_hash_stability():

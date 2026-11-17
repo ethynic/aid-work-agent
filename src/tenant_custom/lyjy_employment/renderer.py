@@ -77,7 +77,7 @@ class RenderedDoc:
     metadata: Dict[str, Any]
     content_hash: str
     category_display_name: str
-    expires_at: Optional[Any] = None  # UTC naive datetime；无有效期 None
+    expires_at: Optional[Any] = None  # Asia/Shanghai 挂钟 naive datetime；无有效期 None
 
 
 def compute_content_hash(content_md: str) -> str:
@@ -322,13 +322,22 @@ def render_job(
 
 
 def deadline_to_expires_at(deadline: Any) -> Optional[Any]:
-    """岗位 deadline（Unix 秒）→ UTC naive datetime；0/空/非法返回 None（长期）。"""
+    """岗位 deadline（Unix 秒）→ Asia/Shanghai 挂钟 naive datetime；0/空/非法 None。
+
+    documents.expires_at 是无时区列，检索按会话时区（PG 固定 Asia/Shanghai）解释：
+    必须写上海挂钟时间（deadline 时刻在上海的钟面值），写 UTC 会让岗位提前约 8h
+    从检索消失（CR P2 登记项修复）。
+    """
     seconds = _int(deadline)
     if seconds <= 0:
         return None
-    from datetime import datetime, timezone
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
 
-    return datetime.fromtimestamp(seconds, tz=timezone.utc).replace(tzinfo=None)
+    return (
+        datetime.fromtimestamp(seconds, tz=ZoneInfo("Asia/Shanghai"))
+        .replace(tzinfo=None)
+    )
 
 
 _deadline_to_expires_at = deadline_to_expires_at  # 兼容别名（模块内历史引用）

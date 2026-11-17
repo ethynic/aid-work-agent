@@ -1128,6 +1128,13 @@ const connectionSubMenuItems = computed(() => {
   if (grantedModules.value.has('hongtao_shop')) {
     all.push({ path: `${base}/hongtao-shop`, label: '商城产品同步', icon: 'M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4H6zM3 6h18M16 10a4 4 0 01-8 0', adminOnly: true })
   }
+  // 数据源授权门控：就业/创业数据源（同上，portal 授权记录驱动）
+  if (grantedModules.value.has('lyjy_employment')) {
+    all.push({ path: `${base}/lyjy-employment`, label: '就业数据同步', icon: 'M21 21l-4.35-4.35M11 18a7 7 0 110-14 7 7 0 010 14zM16 8h5M16 12h5M3 8h1M3 12h1', adminOnly: true })
+  }
+  if (grantedModules.value.has('sccy_policy')) {
+    all.push({ path: `${base}/sccy-policy`, label: '创业政策同步', icon: 'M9 12h6m-6 4h6M9 8h6M5 21h14a1 1 0 001-1V4a1 1 0 00-1-1H5a1 1 0 00-1 1v16a1 1 0 001 1z', adminOnly: true })
+  }
   return all.filter(item => !item.adminOnly || isTenantAdmin.value)
 })
 
@@ -1147,6 +1154,8 @@ const isConnectionActive = computed(() => {
     `${base}/channels`,
     `${base}/wechat-mp`,
     `${base}/hongtao-shop`,
+    `${base}/lyjy-employment`,
+    `${base}/sccy-policy`,
     `${base}/local-tools`,
     `${base}/wecom-agent`,
     `${base}/wecom-agent/conversations`,

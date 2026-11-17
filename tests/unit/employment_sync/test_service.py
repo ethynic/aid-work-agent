@@ -508,6 +508,66 @@ async def test_user_deleted_self_heal_and_republish(harness):
 # ------------------------------- 范围开关与失败路径 -------------------------------
 
 
+async def test_reconcile_run_ignores_watermarks(harness, monkeypatch):
+    """对账 run（trigger_type='reconcile'）：水位清零全量拉取（④全量 hash 比对），
+    常规 run 仍走水位增量（每日对账兜底 refreshtime 不随编辑更新的滞后）。"""
+    from src.tenant_custom.lyjy_employment.service import LyjyEmploymentSyncService
+
+    base_fake = LyjyEmploymentSyncService._fetch_plan
+    seen: Dict[str, Dict] = {}
+    current = {"trigger_type": ""}
+
+    def spy_fetch_plan(self, engine, tables, sync_state, limit):
+        seen[current["trigger_type"]] = dict(sync_state or {})
+        return base_fake(self, engine, tables, sync_state, limit)
+
+    monkeypatch.setattr(LyjyEmploymentSyncService, "_fetch_plan", spy_fetch_plan)
+
+    stale_row = _job_row(201, refreshtime=1)  # 旧 refreshtime：水位下不进增量
+    harness["plans"].append(_plan(
+        catalogs={"qs_jobs": [stale_row]},
+        increments={"qs_jobs": [stale_row]},
+    ))
+    harness["create_source"]()
+    # 预置水位：常规 run 不再拉 refreshtime=1 的旧行
+    harness["service"]._save_sync_state(
+        harness["tenant_id"], {"watermarks": {"qs_jobs": 1700000100}}
+    )
+
+    async def run_with(trigger_type):
+        current["trigger_type"] = trigger_type
+        from src.db.database import get_db_connection
+
+        with get_db_connection() as conn:  # RETURNING 路径须显式 commit（query 助手不提交）
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO bs_content_sync_runs "
+                "(tenant_id, module, trigger_type, status, owner_token, started_at, heartbeat_at) "
+                "VALUES (%s, 'lyjy_employment', %s, 'running', 'tok', now(), now()) "
+                "RETURNING id",
+                (harness["tenant_id"], trigger_type),
+            )
+            run_id = cursor.fetchone()["id"]
+            conn.commit()
+        return await harness["service"]._execute_run(
+            harness["tenant_id"], {"id": run_id, "trigger_type": trigger_type}, "tok"
+        )
+
+    reconcile_result = await run_with("reconcile")
+    assert reconcile_result["status"] == "success"
+    assert seen["reconcile"] == {}  # 水位清零 → 全量比对
+
+    # 常规 run：保留水位语义
+    fresh_row = _job_row(202, refreshtime=1700000200)
+    harness["plans"].append(_plan(
+        catalogs={"qs_jobs": [fresh_row]},
+        increments={"qs_jobs": [fresh_row]},
+    ))
+    manual_result = await run_with("manual")
+    assert manual_result["status"] == "success"
+    assert seen["manual"].get("watermarks", {}).get("qs_jobs") == 1700000100
+
+
 async def test_selection_ids_filters_tables(harness):
     """selection_mode='ids'：selected_ids=源表白名单，范围外不拉不建。"""
     plan = _plan(

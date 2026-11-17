@@ -32,6 +32,8 @@ from src.tenant_custom.lyjy_employment.renderer import (
 # 失败退避：300s × 2^fail_count，上限 24h（防毒行反复烧 embedding，宏陶同款）
 RETRY_BASE_SECONDS = 300
 RETRY_MAX_SECONDS = 24 * 3600
+# stale 回收集阈：heartbeat 超 1h 的 running run 视为中断残留（宏陶单闸决议同款）
+STALE_HEARTBEAT_SECONDS = 3600
 
 ERR_FETCH_FAILED = "fetch_failed"
 ERR_CONTENT_EMPTY = "content_empty"
@@ -239,6 +241,10 @@ class KbSyncServiceBase:
                 )
                 run_id = cursor.fetchone()["id"]
                 conn.commit()
+                # best-effort 唤醒调度器（失败由 60s 兜底扫描接管）
+                from src.tenant_custom.lyjy_employment.notify import notify_queued_work
+
+                notify_queued_work(self.MODULE)
                 return {"run_id": run_id, "status": "queued"}
             except Exception:
                 conn.rollback()
@@ -299,6 +305,112 @@ class KbSyncServiceBase:
         if run is None or run == "conflict":
             return {"run_id": accepted["run_id"], "status": "queued"}
         return await self._execute_run(tenant_id, run, owner_token, limit=limit)
+
+    async def claim_and_run(
+        self, tenant_id: str, owner_tokens: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """调度器领取入口：循环领取该租户本模块 queued run 并逐个执行（宏陶同款）。"""
+        run_ids: List[int] = []
+        reason = "empty"
+        while True:
+            owner_token = uuid.uuid4().hex
+            run = self._claim_next_run(tenant_id, owner_token)
+            if run is None:
+                break
+            if run == "conflict":
+                reason = "conflict"
+                break
+            run_ids.append(run["id"])
+            if owner_tokens is not None:
+                owner_tokens.append(owner_token)
+            await self._execute_run(tenant_id, run, owner_token)
+        if run_ids:
+            reason = "executed"
+        return {"executed": bool(run_ids), "run_ids": run_ids, "reason": reason}
+
+    def interrupt_runs_by_owners(self, owner_tokens: List[str]) -> int:
+        """按 owner 主动置 interrupted（调度器 stop 取消在飞 run 后收尾用）。"""
+        owners = [o for o in owner_tokens if o]
+        if not owners:
+            return 0
+        interrupted = 0
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id FROM bs_content_sync_runs
+                WHERE module = %s AND status = 'running' AND owner_token = ANY(%s)
+                """,
+                (self.MODULE, owners),
+            )
+            for row in cursor.fetchall():
+                cursor.execute(
+                    """
+                    UPDATE bs_content_sync_runs
+                    SET status = 'interrupted', completed_at = now(),
+                        error_message = COALESCE(error_message, '') || '调度器停机中断'
+                    WHERE id = %s AND status = 'running'
+                    """,
+                    (row["id"],),
+                )
+                if cursor.rowcount:
+                    cursor.execute(
+                        """
+                        UPDATE bs_content_sync_items
+                        SET status = 'interrupted', completed_at = now()
+                        WHERE run_id = %s AND status IN ('pending', 'running')
+                        """,
+                        (row["id"],),
+                    )
+                    interrupted += 1
+            conn.commit()
+        return interrupted
+
+    def recover_stale_runs(self) -> Dict[str, Any]:
+        """stale 回收：heartbeat 超 STALE_HEARTBEAT_SECONDS 的 running run → interrupted。
+
+        owner 守卫：run 终态化只按 id+status='running' 更新（旧 worker 若仍活着，
+        后续 _finalize/_heartbeat 的 owner 守卫会使其写入失效，不会双写）。
+        """
+        recovered = 0
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id FROM bs_content_sync_runs
+                WHERE module = %s AND status = 'running'
+                  AND COALESCE(heartbeat_at, started_at, created_at)
+                      < now() - make_interval(secs => %s)
+                """,
+                (self.MODULE, STALE_HEARTBEAT_SECONDS),
+            )
+            stale_ids = [r["id"] for r in cursor.fetchall()]
+            for run_id in stale_ids:
+                cursor.execute(
+                    """
+                    UPDATE bs_content_sync_runs
+                    SET status = 'interrupted', completed_at = now(),
+                        error_message = COALESCE(error_message, '') || 'heartbeat 超时回收'
+                    WHERE id = %s AND status = 'running'
+                    """,
+                    (run_id,),
+                )
+                if cursor.rowcount:
+                    cursor.execute(
+                        """
+                        UPDATE bs_content_sync_items
+                        SET status = 'interrupted', completed_at = now()
+                        WHERE run_id = %s AND status IN ('pending', 'running')
+                        """,
+                        (run_id,),
+                    )
+                    recovered += 1
+            conn.commit()
+        if recovered:
+            logger.bind(module=self.MODULE).warning(
+                "{} 回收 stale run {} 个（heartbeat 超时）", self.MODULE, recovered
+            )
+        return {"interrupted": recovered}
 
     # ==================== 账本与退避 ====================
 

@@ -126,9 +126,15 @@ class LyjyEmploymentSyncService(KbSyncServiceBase):
 
         connection = fetcher.load_connection_config(source_row)
         engine = fetcher.build_engine(connection)
+        # 对账 run（trigger_type='reconcile'，每日凌晨调度）：水位清零 → ④全量
+        # hash 比对（未变跳过零计费，防 refreshtime 不随编辑更新的滞后）；①②③
+        # 本就是全量语义照常执行。常规 run 走水位增量。
+        effective_state = (
+            {} if str(run.get("trigger_type") or "") == "reconcile" else sync_state
+        )
         try:
             plan = await asyncio.to_thread(
-                self._fetch_plan, engine, tables, sync_state, limit
+                self._fetch_plan, engine, tables, effective_state, limit
             )
         finally:
             engine.dispose()
