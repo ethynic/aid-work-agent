@@ -4,7 +4,7 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
-| Phase 1 | 同步管线（lyjy_employment + sccy_policy 两模块，幂等落库 + 删除流 + expires_at） | 📋 待开发 | |
+| Phase 1 | 同步管线（lyjy_employment + sccy_policy 两模块，幂等落库 + 删除流 + expires_at） | ✅ 完成（2026-11-17） | commit 572ff7eb；39 隔离库单测 + 127 回归 + 启动安全全过；客户测试库只读冒烟通过（四步 SQL/真实渲染；实测富文本双重 HTML 编码已修）；CR 无 P0/P1。遗留：真机全链路验收随 P3 |
 | Phase 2 | 调度与后台（定时 run、portal 数据源开通、租户后台） | 📋 待开发 | |
 | Phase 3 | 智能体接入与验收（六分类授权、iframe 区域对接、agent2 验收） | 📋 待开发 | |
 
@@ -24,7 +24,9 @@
 | 项 | 阻塞 | 缓解 |
 |---|---|---|
 | 客户确认 `close_type` 0/NULL 语义、`deadline=0` 语义 | P1 过滤条件定稿 | 按推定实现（0/NULL=在招、0=长期），条件集中为常量可一处调整 |
+| **`expires_at` 时区口径**（CR P2 登记）：deadline 转 UTC 挂钟写入无时区列，检索按会话时区（PG 固定 Asia/Shanghai）解释 → 岗位提前约 8h 从检索消失（保守方向不漏删） | P3 验收前定稿 | 与 close_type/deadline 语义确认一并处理：`renderer.deadline_to_expires_at` 一行改 Asia/Shanghai 挂钟（或列改 timestamptz），一处常量 |
 | `subsite_id` → 地区名映射数据 | P1 分站文章的区域字段 | 兜底用 qs_article 分类树专区名（彭水/潍坊等），生产映射到手后仅改渲染输入 |
+| `qs_guide/qs_article` 审核位语义（测试库实测 audit 全 0；若客户工作流"audit=0 即可见"需放宽 `audit=1` 过滤） | P1 文章类冷启动数据 | 常量集中一处；冒烟已实测 notice/explain 渲染正确 |
 | 生产库网络白名单（agent2 / 生产出口 IP） | P3 真机验收 | P1/P2 全程用测试库（只读账号已就绪） |
 | 客户维护 `qs_consultant` 数据 | P3 转人工验收 | 非转人工功能开发阻塞 |
 
