@@ -71,6 +71,7 @@ llm:
     deepseek-flash: 393216
     deepseek-v4-pro: 393216
     deepseek-v4-flash: 393216   # deepseek-flash 改名后的新模型码，缺失会回退默认 16384 截断长输出
+    deepseek-v4.1-flash: 393216 # 千问百炼平台仍叫这个名字
     GLM-5.3-Flash: 131072
   qwen:
     api_keys: ${QWEN_API_KEYS:-}
