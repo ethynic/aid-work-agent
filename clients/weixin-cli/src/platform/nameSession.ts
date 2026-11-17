@@ -19,16 +19,22 @@ import { runPowerShellDriver } from './powershell.js'
 
 const bounds = z.object({ x0: z.number().nonnegative(), y0: z.number().nonnegative(), x1: z.number().positive(), y1: z.number().positive() }).refine(b => b.x1 > b.x0 && b.y1 > b.y0)
 const objectSchema = z.object({ type: z.enum(['text', 'image', 'card', 'file', 'system', 'unknown']), sender: z.enum(['peer', 'self', 'system', 'unknown']), text: z.string().max(20_000), bounds, clipped: z.boolean(), evidence_hash: z.string().regex(/^[a-f0-9]{64}$/) })
+const nativeTitleSchema = z.string().min(1).max(128)
 // exact_name is a legacy canonical-target confirmation flag, not exact OCR equality.
-export const nameWindowSchema = z.object({ unchanged: z.literal(false), title: z.string(), exact_name: z.literal(true), unique_match: z.literal(true), name_match_mode:z.literal('ocr_fuzzy_unique').optional(), evidence_ref: z.string().regex(/^dpapi:[a-zA-Z0-9_-]+$/), complete: z.boolean(), frame: z.string().regex(/^[a-f0-9]{64}$/), objects: z.array(objectSchema).max(256), input_empty: z.boolean() })
+export const nameWindowSchema = z.object({ unchanged: z.literal(false), title: z.string(), native_title:nativeTitleSchema.optional(), exact_name: z.literal(true), unique_match: z.literal(true), name_match_mode:z.literal('ocr_fuzzy_unique').optional(), evidence_ref: z.string().regex(/^dpapi:[a-zA-Z0-9_-]+$/), complete: z.boolean(), frame: z.string().regex(/^[a-f0-9]{64}$/), objects: z.array(objectSchema).max(256), input_empty: z.boolean() })
 export type NameWindow = z.infer<typeof nameWindowSchema>
 export type NameRead = NameWindow | { unchanged: true; frame: string }
 export type SendDiagnosticStage = 'precheck' | 'type' | 'enter' | 'submitted'
 export type NameDriver = (request: Record<string, unknown>, signal?: AbortSignal, diagnostic?: (stage:SendDiagnosticStage)=>Promise<void>) => Promise<Record<string, unknown>>
 
 interface CaptureImage { width:number;height:number;png:string;title_region:Bounds;input_region:Bounds }
-interface LocalCapture extends CaptureImage { frame:string;full_frame:string;title_frame:string;rgba:string;message_region:Bounds }
-export const sendCaptureSchema=z.object({width:z.number().int().positive(),height:z.number().int().positive(),png:z.string(),title_region:bounds,input_region:bounds,handle:z.number().int().positive(),rect:z.tuple([z.number(),z.number(),z.number().positive(),z.number().positive()])})
+interface LocalCapture extends CaptureImage { frame:string;full_frame:string;title_frame:string;rgba:string;message_region:Bounds;native_title?:string }
+export const sendCaptureSchema=z.object({
+  title:nativeTitleSchema,
+  input_region:bounds,
+  handle:z.number().int().positive(),
+  rect:z.tuple([z.number().int(),z.number().int(),z.number().int().positive(),z.number().int().positive()]),
+}).strict()
 export type SendCapture=z.infer<typeof sendCaptureSchema>
 const localOcr=new ResidentOcr()
 const knownNames=new Set<string>()
@@ -95,12 +101,11 @@ async function localPrimitive(request:Record<string,unknown>,signal?:AbortSignal
   const dir=join(tmpdir(),'aid-name-ocr');await mkdir(dir,{recursive:true})
   const path=join(dir,randomUUID()+'.dpapi')
   await writeFile(path,await protectText(JSON.stringify(request),(command,input)=>runDpapiCommand(command,input,signal)),{flag:'wx',signal})
-  try{return await runPowerShellDriver({script:fileURLToPath(new URL('../../../drivers/ps1/name-ocr.ps1',import.meta.url)),args:['-InputFile',path],signal})}
+  try{return await runPowerShellDriver({script:fileURLToPath(new URL('../../../drivers/ps1/name-ocr.ps1',import.meta.url)),args:['-InputFile',path],signal,useVisionProxy:false})}
   finally{await unlink(path).catch(()=>{})}
 }
-async function withCapture<T,C extends CaptureImage=LocalCapture>(signal:AbortSignal|undefined,fn:(c:C,path:string)=>Promise<T>,action='capture'):Promise<T>{
-  const raw=await localPrimitive({action},signal)
-  const c=(action==='send_capture'?sendCaptureSchema.parse(raw):raw) as unknown as C
+async function withCapture<T>(signal:AbortSignal|undefined,fn:(c:LocalCapture,path:string)=>Promise<T>,action='capture'):Promise<T>{
+  const c=await localPrimitive({action},signal) as unknown as LocalCapture
   if(!Number.isInteger(c.width)||!Number.isInteger(c.height)||c.width*c.height>16_000_000)throw new CodedOperationError('UI_CHANGED','截图尺寸非法')
   const path=join(tmpdir(),`aid-ocr-${randomUUID()}.png`)
   await writeFile(path,Buffer.from(c.png,'base64'),{flag:'wx'})
@@ -146,36 +151,28 @@ export function objectsFromTextRegions(regions:TextBubbleRegion[],boxes:OcrBox[]
   })
 }
 
-async function withSendCapture<T>(signal:AbortSignal|undefined,fn:(c:SendCapture,path:string)=>Promise<T>,action:'send_capture'):Promise<T>{
-  return withCapture<T,SendCapture>(signal,fn,action)
-}
-export interface NameSubmitDependencies {
-  capture: typeof withSendCapture
-  title: typeof assertTitle
-  primitive: typeof localPrimitive
-}
-/** Caller holds the desktop lock across this entire capture/OCR/input sequence. */
-export async function submitNameWithCapture(request:Record<string,unknown>,signal?:AbortSignal,diagnostic?:Parameters<NameDriver>[2],dependencies:NameSubmitDependencies={capture:withSendCapture,title:assertTitle,primitive:localPrimitive}):Promise<Record<string,unknown>>{
-    const name=String(request.target_name??'')
+/** Caller holds the desktop lock across native title lookup and input. */
+export async function submitNameWithCapture(request:Record<string,unknown>,signal?:AbortSignal,diagnostic?:Parameters<NameDriver>[2],primitive=localPrimitive):Promise<Record<string,unknown>>{
+    const name=String(request.expected_native_title??request.target_name??'')
     signal?.throwIfAborted()
     await diagnostic?.('precheck')
     const started=performance.now()
-    const capture=await dependencies.capture(signal,async(c,path)=>{
-      signal?.throwIfAborted()
-      const captured=performance.now()
-      await dependencies.title(c,path,name,signal)
-      return {c,capture_ms:captured-started,title_ocr_ms:performance.now()-captured}
-    },'send_capture')
+    const raw=await primitive({action:'send_capture'},signal)
     signal?.throwIfAborted()
+    const capture=sendCaptureSchema.safeParse(raw)
+    if(!capture.success)throw new CodedOperationError('UI_CHANGED','无法核对微信当前会话或输入框')
+    if(capture.data.title!==name)throw new CodedOperationError('TARGET_AMBIGUOUS','当前会话标题与已核验目标不一致')
+    const captureMs=performance.now()-started
     await diagnostic?.('type')
     signal?.throwIfAborted()
     const submitStarted=performance.now()
-    const entered=await dependencies.primitive({...request,action:'submit',handle:capture.c.handle,rect:capture.c.rect,input_region:capture.c.input_region},signal)
+    const {handle,rect,input_region}=capture.data
+    const entered=await primitive({...request,action:'submit',expected_native_title:name,handle,rect,input_region},signal)
     if(entered.done!==true)throw new CodedOperationError('EXECUTION_UNKNOWN','粘贴与回车动作未确认完成')
     // No payload, recipient, screenshot or request content enters diagnostics.
     const driverTimings=entered.timings_ms as Record<string,unknown>|undefined
     const driverMs=Object.fromEntries(['click','clipboard','input','total'].flatMap(key=>typeof driverTimings?.[key]==='number'&&Number.isFinite(driverTimings[key])&&driverTimings[key]>=0?[[key,driverTimings[key]]]:[]))
-    process.stderr.write(JSON.stringify({event:'name_send_timing',capture_ms:Math.round(capture.capture_ms),title_ocr_ms:Math.round(capture.title_ocr_ms),submit_ms:Math.round(performance.now()-submitStarted),total_ms:Math.round(performance.now()-started),driver_ms:driverMs})+'\n')
+    process.stderr.write(JSON.stringify({event:'name_send_timing',capture_ms:Math.round(captureMs),submit_ms:Math.round(performance.now()-submitStarted),total_ms:Math.round(performance.now()-started),driver_ms:driverMs})+'\n')
     return{submitted:true}
 }
 
@@ -198,6 +195,10 @@ export const defaultNameDriver: NameDriver = async(request,signal,diagnostic)=>{
   return readWithoutOverlay(()=>withCapture(signal,async(c,path)=>{
     if(knownNames.has(name)&&request.previous_frame===c.frame)return{unchanged:true,frame:c.frame}
     await assertTitle(c,path,name,signal)
+    // The native title supplements a verified observation for this binding and frame.
+    const nativeTitle=nativeTitleSchema.safeParse(c.native_title)
+    const nativeEvidence=nativeTitle.success&&ocrNameMatches(name,nativeTitle.data)&&
+      ocrNameMatches(resolvedNameLabels.get(name)??name,nativeTitle.data)?{native_title:nativeTitle.data}:{}
     const r=c.message_region
     const rgba=Buffer.from(c.rgba,'base64')
     const candidates=segmentTextBubbles({width:c.width,height:c.height,rgba},{messageRegion:r,peerLeft:Math.round(r.x0+c.width*0.073),selfRight:Math.round(c.width*0.92),edgeTolerance:Math.round(c.width*0.015),peerFill:[238,238,240],selfFill:[157,242,159],minWidth:Math.max(15,Math.round(c.width*0.02)),minHeight:Math.max(12,Math.round(c.height*0.015))})
@@ -220,7 +221,7 @@ export const defaultNameDriver: NameDriver = async(request,signal,diagnostic)=>{
     await writeFile(join(root,evidenceId+'.dpapi'),await protectText(c.png,(command,input)=>runDpapiCommand(command,input,signal)),{flag:'wx',signal})
     signal?.throwIfAborted()
     knownNames.add(name);if(knownNames.size>32){const oldest=knownNames.values().next().value!;knownNames.delete(oldest);resolvedNameLabels.delete(oldest)}
-    return{unchanged:false,title:name,exact_name:true,unique_match:true,name_match_mode:'ocr_fuzzy_unique',evidence_ref:'dpapi:'+evidenceId,complete:true,input_empty:input.length===0,frame:c.frame,objects}
+    return{unchanged:false,title:name,exact_name:true,unique_match:true,name_match_mode:'ocr_fuzzy_unique',evidence_ref:'dpapi:'+evidenceId,complete:true,input_empty:input.length===0,frame:c.frame,objects,...nativeEvidence}
   }),signal)
 }
 
@@ -289,7 +290,7 @@ export async function sendNameSessionOnce(args: { targetName: string; text: stri
   try { await fd.writeFile(JSON.stringify({ digest: identity, status: 'may_have_started' })); await fd.sync() } finally { await fd.close() }
   try {
     if (opts.signal?.aborted) {await record(stage,'CANCELLED');return { status: 'unknown' }}
-    const acknowledged=await driver({ action: 'submit', target_name: args.targetName, text: args.text, expected_frame: args.baseline.frame, deadline_ms: args.deadlineMs }, opts.signal,record)
+    const acknowledged=await driver({ action: 'submit', target_name: args.targetName, expected_native_title: args.baseline.native_title ?? args.targetName, text: args.text, expected_frame: args.baseline.frame, deadline_ms: args.deadlineMs }, opts.signal,record)
     opts.signal?.throwIfAborted()
     if(acknowledged.submitted!==true || Date.now()>=args.deadlineMs)throw new CodedOperationError('EXECUTION_UNKNOWN','发送操作未确认完成')
     const evidenceRef=`weixin-submission:${args.requestId}:1`

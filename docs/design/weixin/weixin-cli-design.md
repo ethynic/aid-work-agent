@@ -63,7 +63,7 @@ MCP stdio adapter ─┘        │
 | `weixin_chat_search` | 主窗口搜索好友/群 | 返回 5 分钟有效 `target_ref`（HMAC 签名，TTL 300s） |
 | `weixin_name_resolve` | 按名称 OCR 近似匹配唯一定位会话 | 多匹配即拒绝（名称会话 v2 路径） |
 | `weixin_message_send` | 向 target_ref 发 1 条文本（≤500 字） | 写动作，发送后 OCR 核验，unknown 不重试 |
-| `weixin_message_send_v2` | 仅接受 Runtime HMAC 签名许可 | `context`+`signature`（AIDWORK_WEIXIN_BRIDGE_KEY，90s 租约），本人气泡后验 |
+| `weixin_message_send_v2` | 仅接受 Runtime HMAC 签名许可 | `context`+`signature`（AIDWORK_WEIXIN_BRIDGE_KEY，90s 租约），发送前本机核对标题，回执记录已提交的输入动作 |
 | `weixin_history_read` | 读聊天记录 | 翻页 ≤10、内联 ≤200 条、超出落文件 |
 | `weixin_unread_list` | 未读会话列表 | 只读不清角标 |
 | `weixin_session_observe` | 截图→常驻 OCR→拆行→对齐→水位 | 返回 `session_observer_v1` 冻结契约；无真机截图返回 `coverage=unavailable` |
@@ -158,6 +158,8 @@ get_url、official_account_follow）未产品化——实际方向转向会话�
 迁移前有五个工具直接依赖 RapidOCR。名称定位用它识别搜索结果和会话标题，许可发送用它核对当前标题，历史读取和未读列表各有一个 Python 驱动，持续观察用它提取消息正文、时间、输入框状态并参与水位对齐。旧发送走多模态读取标题和回执文本，再使用按 OCR 误差设计的本地匹配。环境探测、旧聊天搜索和本机添加好友均不调用 RapidOCR。
 
 未读列表现已读取同进程 UIA 会话行的原生名称、预览和数字角标，候选项在本机用对应位置的红色像素复核。读取不会打开会话。同版真机验证覆盖三个带数字的角标，只有红点而无原生计数的行不推测数字。
+
+许可发送的目标核对可以独立迁移。该步骤读取当前微信窗口同一进程的唯一 UIA 标题和输入框边界。预检与提交前精确核对已确认观察记录的原生标题，保留已有别名绑定。联系人搜索和观察的原有定位、水位与消息来源继续由各自入口负责。详见[开发计划](../../plans/plan-weixin-cli-remove-ocr.md#phase-3a-发送前标题)。
 
 计费定位复用现有客户端 binding 与 `/api/client/v1/llm/chat`，模型使用现有白名单中的 GLM-5.3-Flash。固定控件的坐标在能验证控件与布局时可以缓存；区分客户端版本、DPI、窗口尺寸、布局和控件角色，缓存相对坐标。搜索结果行、当前联系人、发送结果和消息内容随交互变化，每次读取当前证据。
 

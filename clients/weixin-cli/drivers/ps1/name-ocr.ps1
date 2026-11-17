@@ -3,7 +3,24 @@ $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 . (Join-Path $PSScriptRoot '_common.ps1')
 Add-Type -AssemblyName System.Security
-Add-Type -TypeDefinition @'
+Initialize-WeixinProbeWin32
+Set-WeixinProbeDpiContext
+$work=Join-Path $env:TEMP ('aid-local-ocr-'+[guid]::NewGuid().ToString('N'))
+function Hash([byte[]]$b){$h=[Security.Cryptography.SHA256]::Create();try{return([BitConverter]::ToString($h.ComputeHash($b))).Replace('-','').ToLowerInvariant()}finally{$h.Dispose()}}
+function CropHash($bmp,$r){$c=$bmp.Clone([Drawing.Rectangle]::new($r.x0,$r.y0,($r.x1-$r.x0),($r.y1-$r.y0)),$bmp.PixelFormat);$s=New-Object IO.MemoryStream;try{$c.Save($s,[Drawing.Imaging.ImageFormat]::Png);return Hash $s.ToArray()}finally{$s.Dispose();$c.Dispose()}}
+function SearchCapture {
+    $overlay=Get-WeixinSearchOverlayHwnd
+    if(-not $overlay){Throw-DriverError 'TARGET_NOT_FOUND' 'Search popup unavailable'}
+    [void][IO.Directory]::CreateDirectory($work)
+    $path=Join-Path $work ([guid]::NewGuid().ToString('N')+'.png')
+    $rect=Get-WeixinWindowSnapshot -Hwnd $overlay -Path $path
+    if(-not $rect[4]){Throw-DriverError 'UI_CHANGED' 'Search PrintWindow required'}
+    $bytes=[IO.File]::ReadAllBytes($path)
+    return @{handle=$overlay;rect=$rect;width=$rect[2];height=$rect[3];full_frame=(Hash $bytes);png=[Convert]::ToBase64String($bytes)}
+}
+function Capture {
+    param([switch]$ReadNativeTitle)
+    Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class AidOcrPixels {
@@ -17,26 +34,14 @@ public static class AidOcrPixels {
  }
 }
 '@
-Initialize-WeixinProbeWin32
-Set-WeixinProbeDpiContext
-$work=Join-Path $env:TEMP ('aid-local-ocr-'+[guid]::NewGuid().ToString('N'))
-[void][IO.Directory]::CreateDirectory($work)
-function Hash([byte[]]$b){$h=[Security.Cryptography.SHA256]::Create();try{return([BitConverter]::ToString($h.ComputeHash($b))).Replace('-','').ToLowerInvariant()}finally{$h.Dispose()}}
-function CropHash($bmp,$r){$c=$bmp.Clone([Drawing.Rectangle]::new($r.x0,$r.y0,($r.x1-$r.x0),($r.y1-$r.y0)),$bmp.PixelFormat);$s=New-Object IO.MemoryStream;try{$c.Save($s,[Drawing.Imaging.ImageFormat]::Png);return Hash $s.ToArray()}finally{$s.Dispose();$c.Dispose()}}
-function SearchCapture {
-    $overlay=Get-WeixinSearchOverlayHwnd
-    if(-not $overlay){Throw-DriverError 'TARGET_NOT_FOUND' 'Search popup unavailable'}
+    [void][IO.Directory]::CreateDirectory($work)
     $path=Join-Path $work ([guid]::NewGuid().ToString('N')+'.png')
-    $rect=Get-WeixinWindowSnapshot -Hwnd $overlay -Path $path
-    if(-not $rect[4]){Throw-DriverError 'UI_CHANGED' 'Search PrintWindow required'}
-    $bytes=[IO.File]::ReadAllBytes($path)
-    return @{handle=$overlay;rect=$rect;width=$rect[2];height=$rect[3];full_frame=(Hash $bytes);png=[Convert]::ToBase64String($bytes)}
-}
-function Capture {
-    param([switch]$SendOnly)
-    $path=Join-Path $work ([guid]::NewGuid().ToString('N')+'.png')
+    $beforeTitle = if ($ReadNativeTitle) { Read-ObservedNativeTitle }
     $rect=Get-WeixinWindowSnapshot -Hwnd $script:handle -Path $path
     if(-not $rect[4]){Throw-DriverError 'UI_CHANGED' 'PrintWindow required'}
+    $nativeTitle = if ($beforeTitle -and [string]::Equals($beforeTitle, (Read-ObservedNativeTitle), [StringComparison]::Ordinal)) {
+        $beforeTitle
+    }
     $bmp=[Drawing.Bitmap]::FromFile($path)
     try{
         $w=$bmp.Width;$h=$bmp.Height
@@ -62,9 +67,6 @@ function Capture {
         $title=@{x0=$left;y0=[int]($h*0.03);x1=[int]($w*0.75);y1=[int]($h*0.08)}
         $messages=@{x0=$left;y0=[int]($h*0.08);x1=$w-12;y1=$bestY-3}
         $input=@{x0=$left+30;y0=$bestY+18;x1=$w-35;y1=$h-90}
-        if($SendOnly){
-            return @{handle=$script:handle;rect=@($rect[0],$rect[1],$rect[2],$rect[3]);width=$w;height=$h;title_region=$title;input_region=$input;png=[Convert]::ToBase64String([IO.File]::ReadAllBytes($path))}
-        }
         $watch=@{x0=$left;y0=0;x1=$w;y1=$bestY+4}
         $frame=Hash ([Text.Encoding]::ASCII.GetBytes("$w,$h,$bestY,"+(CropHash $bmp $watch)))
         $full=Hash ([IO.File]::ReadAllBytes($path))
@@ -72,9 +74,69 @@ function Capture {
         try{
             $rgba=[AidOcrPixels]::Rgba($locked.Scan0,$w,$h,$locked.Stride)
         }finally{$bmp.UnlockBits($locked)}
-        return @{path=$path;rect=$rect;frame=$frame;full_frame=$full;title_frame=(CropHash $bmp $title);width=$w;height=$h;title_region=$title;message_region=$messages;input_region=$input;png=[Convert]::ToBase64String([IO.File]::ReadAllBytes($path));rgba=[Convert]::ToBase64String($rgba)}
+        $capture = @{path=$path;rect=$rect;frame=$frame;full_frame=$full;title_frame=(CropHash $bmp $title);width=$w;height=$h;title_region=$title;message_region=$messages;input_region=$input;png=[Convert]::ToBase64String([IO.File]::ReadAllBytes($path));rgba=[Convert]::ToBase64String($rgba)}
+        if ($nativeTitle) { $capture.native_title = $nativeTitle }
+        return $capture
     }finally{$bmp.Dispose()}
 }
+
+function Get-SendUiaElements([int64]$Handle) {
+    $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr]$Handle)
+    $condition = [Windows.Automation.OrCondition]::new(
+        [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ClassNameProperty, 'mmui::XTextView'),
+        [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'chat_input_field')
+    )
+    foreach ($node in $root.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)) {
+        $node.Current
+    }
+}
+
+function Select-WeixinNativeTitle($Elements, [uint32]$ProcessId) {
+    $titles = @($Elements | Where-Object {
+        $_.ProcessId -eq $ProcessId -and -not $_.IsOffscreen -and $_.ClassName -ceq 'mmui::XTextView' -and
+        ([string]$_.AutomationId).EndsWith('.current_chat_name_label', [StringComparison]::Ordinal)
+    })
+    if ($titles.Count -eq 1 -and -not [string]::IsNullOrWhiteSpace($titles[0].Name)) { return [string]$titles[0].Name }
+}
+
+function Read-ObservedNativeTitle {
+    try { Select-WeixinNativeTitle @(Get-SendUiaElements $script:handle) $script:windowProcessId }
+    catch { return $null } # Native title is optional evidence for the existing observation.
+}
+
+function Get-SendCapture([int64]$Handle, [uint32]$ProcessId) {
+    $rect = New-Object WeixinProbeWin32+RECT
+    if (-not [WeixinProbeWin32]::GetWindowRect([IntPtr]$Handle, [ref]$rect)) {
+        Throw-DriverError 'UI_CHANGED' 'Send window moved or resized'
+    }
+    $elements = @(Get-SendUiaElements $Handle)
+    $title = Select-WeixinNativeTitle $elements $ProcessId
+    $composer = @($elements | Where-Object {
+        $_.ProcessId -eq $ProcessId -and -not $_.IsOffscreen -and $_.ClassName -ceq 'mmui::ChatInputField' -and
+        $_.AutomationId -ceq 'chat_input_field' -and $_.IsEnabled
+    })
+    if (-not $title -or $composer.Count -ne 1) {
+        Throw-DriverError 'UI_CHANGED' 'Send UIA controls unavailable'
+    }
+    $bounds = $composer[0].BoundingRectangle
+    $width = $rect.Right - $rect.Left
+    $height = $rect.Bottom - $rect.Top
+    if ($bounds.IsEmpty -or $bounds.Left -lt $rect.Left -or $bounds.Top -lt $rect.Top -or
+        $bounds.Right -gt $rect.Right -or $bounds.Bottom -gt $rect.Bottom) {
+        Throw-DriverError 'UI_CHANGED' 'Composer coordinates invalid'
+    }
+    $input = @{
+        x0 = [int][Math]::Ceiling($bounds.Left - $rect.Left)
+        y0 = [int][Math]::Ceiling($bounds.Top - $rect.Top)
+        x1 = [int][Math]::Floor($bounds.Right - $rect.Left)
+        y1 = [int][Math]::Floor($bounds.Bottom - $rect.Top)
+    }
+    if ($input.x1 -le $input.x0 -or $input.y1 -le $input.y0) {
+        Throw-DriverError 'UI_CHANGED' 'Composer coordinates invalid'
+    }
+    return @{handle=$Handle; rect=@($rect.Left,$rect.Top,$width,$height); title=$title; input_region=$input}
+}
+
 # Receipt acknowledges accepted input events, not message delivery.
 function Send-CheckedComposerClick {
     param([int64]$Hwnd,[int]$ScreenX,[int]$ScreenY)
@@ -95,6 +157,7 @@ try{
     $windows=@(Get-VisibleWindowList|Where-Object{Test-WeixinExecutablePath ([string]$_.ProcessPath)}|ForEach-Object{Get-WindowIdentityByHwnd ([int64]$_.Hwnd)}|Where-Object{$_.Title -ceq $script:WeixinTitle})
     if($windows.Count -ne 1){Throw-DriverError 'WINDOW_AMBIGUOUS' 'Unique main window required'}
     $script:handle=[int64]$windows[0].Hwnd
+    $script:windowProcessId=[uint32]$windows[0].ProcessId
     if($req.action -eq 'search'){
         if(-not (Invoke-WeixinActivation $script:handle)){Throw-DriverError 'FOREGROUND_LOST' 'Search requires foreground'}
         # 2026-09-20 真机：比例坐标点击在高度>~1150px 的窗口上会落在搜索框之外；
@@ -121,15 +184,21 @@ try{
         $timer=[Diagnostics.Stopwatch]::StartNew()
         $text=[string]$req.text
         if(-not $text -or $text.Length -gt 500 -or $text -match '[\x00-\x1f\x7f-\x9f]'){Throw-DriverError 'UI_CHANGED' 'Invalid text'}
-        if([int64]$req.handle -ne $script:handle -or @($req.rect).Count -lt 4){Throw-DriverError 'UI_CHANGED' 'Send window changed'}
+        if([int64]$req.handle -ne $script:handle -or @($req.rect).Count -ne 4){Throw-DriverError 'UI_CHANGED' 'Send window changed'}
         $expected=@($req.rect)
         $r=$req.input_region
         if($null -eq $r -or $r.x0 -lt 0 -or $r.y0 -lt 0 -or $r.x1 -le $r.x0 -or $r.y1 -le $r.y0 -or $r.x1 -gt $expected[2] -or $r.y1 -gt $expected[3]){Throw-DriverError 'UI_CHANGED' 'Composer coordinates invalid'}
         function Assert-SendWindow {
-            if([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -ge [int64]$req.deadline_ms){Throw-DriverError 'UI_CHANGED' 'Action deadline expired'}
             if([WeixinProbeWin32]::GetForegroundWindow().ToInt64() -ne $script:handle){Throw-DriverError 'FOREGROUND_LOST' 'Send focus changed'}
-            $current=New-Object WeixinProbeWin32+RECT
-            if(-not [WeixinProbeWin32]::GetWindowRect([IntPtr]$script:handle,[ref]$current) -or $current.Left -ne $expected[0] -or $current.Top -ne $expected[1] -or ($current.Right-$current.Left) -ne $expected[2] -or ($current.Bottom-$current.Top) -ne $expected[3]){Throw-DriverError 'UI_CHANGED' 'Send window moved or resized'}
+            $current=Get-SendCapture -Handle $script:handle -ProcessId $script:windowProcessId
+            if($current.rect[0] -ne $expected[0] -or $current.rect[1] -ne $expected[1] -or $current.rect[2] -ne $expected[2] -or $current.rect[3] -ne $expected[3]){Throw-DriverError 'UI_CHANGED' 'Send window moved or resized'}
+            if(-not [string]::Equals($current.title, [string]$req.expected_native_title, [StringComparison]::Ordinal)){
+                Throw-DriverError 'TARGET_AMBIGUOUS' 'Send title changed'
+            }
+            $input=$current.input_region
+            if($input.x0 -ne $r.x0 -or $input.y0 -ne $r.y0 -or $input.x1 -ne $r.x1 -or $input.y1 -ne $r.y1){Throw-DriverError 'UI_CHANGED' 'Send composer moved or resized'}
+            if([WeixinProbeWin32]::GetForegroundWindow().ToInt64() -ne $script:handle){Throw-DriverError 'FOREGROUND_LOST' 'Send focus changed'}
+            if([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -ge [int64]$req.deadline_ms){Throw-DriverError 'UI_CHANGED' 'Action deadline expired'}
         }
         Assert-SendWindow
         Send-CheckedComposerClick -Hwnd $script:handle -ScreenX ($expected[0]+[int](($r.x0+$r.x1)/2)) -ScreenY ($expected[1]+[int](($r.y0+$r.y1)/2))
@@ -188,13 +257,13 @@ try{
         Write-DriverJson @{ok=$true;data=@{done=$true}}
     }elseif($req.action -eq 'send_capture'){
         if(-not (Invoke-WeixinActivation $script:handle)){Throw-DriverError 'FOREGROUND_LOST' 'Send capture requires foreground'}
-        $shot=Capture -SendOnly
+        $shot=Get-SendCapture -Handle $script:handle -ProcessId $script:windowProcessId
         Write-DriverJson @{ok=$true;data=$shot}
     }elseif($req.action -eq 'search_capture'){
         $shot=SearchCapture;$shot.Remove('handle');$shot.Remove('rect')
         Write-DriverJson @{ok=$true;data=$shot}
     }elseif($req.action -eq 'capture'){
-        $shot=Capture;$shot.Remove('path');$shot.Remove('rect')
+        $shot=Capture -ReadNativeTitle;$shot.Remove('path');$shot.Remove('rect')
         Write-DriverJson @{ok=$true;data=$shot}
     }else{Throw-DriverError 'UI_CHANGED' 'Unsupported local OCR action'}
 }catch{
@@ -211,9 +280,12 @@ try{
         'Search requires foreground'='search_foreground_unavailable'
         'Search window geometry unavailable'='search_window_geometry_unavailable'
         'Search result changed'='search_result_changed'
+        'Send UIA controls unavailable'='send_uia_controls_unavailable'
+        'Send title changed'='send_title_changed'
+        'Send composer moved or resized'='send_composer_changed'
     }
     $detail=[regex]::Match([string]$_.Exception.Message,'^WXDRIVE\|[A-Z_]+\|(.+)$')
     if($detail.Success -and $knownReasons.ContainsKey($detail.Groups[1].Value)){$reason=$knownReasons[$detail.Groups[1].Value]}
-    Write-DriverJson @{ok=$false;code=$safeCode;message=('Local OCR precondition failed; reason='+$reason+'; line='+$_.InvocationInfo.ScriptLineNumber+'; type='+$_.Exception.GetType().Name)}
+    Write-DriverJson @{ok=$false;code=$safeCode;message=('Local desktop precondition failed; reason='+$reason+'; line='+$_.InvocationInfo.ScriptLineNumber+'; type='+$_.Exception.GetType().Name)}
 }
 finally{if([IO.Directory]::Exists($work)){[IO.Directory]::Delete($work,$true)}}
