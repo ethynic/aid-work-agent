@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 const existingEntry = fileURLToPath(new URL('./helpers/fakeProvider.js', import.meta.url))
 import { deviceCapabilities, resolveProviderEntries, type RuntimeConfig } from '../src/config.js'
-import { manifestDigestFor, manifestDigestOf, TRUSTED_MANIFESTS } from '../src/providers.js'
+import { deriveProviderManifest, manifestDigestFor, manifestDigestOf, TRUSTED_MANIFESTS, type ProviderManifest } from '../src/providers.js'
 
 function makeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return { server: 'http://127.0.0.1:1', device_id: 'dev-1', bossCliEntry: existingEntry, ...overrides }
@@ -86,6 +86,21 @@ test('未配置 wecom entry：capabilities 与 provider_manifests 均不含 weco
   assert.ok(!capabilities.some((c) => c.startsWith('wecom_')), 'wecom 未安装不得上报任何工具能力')
 })
 
+test('契约 2.20 候选「正常结束的事实」：boss Provider 存在才声明 runtime_boss_completion_v1（无 boss 不上报）', () => {
+  const withBoss = deviceCapabilities(makeConfig())
+  assert.ok((withBoss.capabilities as string[]).includes('runtime_boss_completion_v1'))
+  // 仅 weixin（无 boss entry）：能力缺失=零影响（服务端对未声明设备按旧语义消费回执）
+  const withoutBoss = deviceCapabilities(makeConfig({
+    bossCliEntry: undefined, providers: { weixin: { entry: existingEntry } },
+  }))
+  assert.ok(!(withoutBoss.capabilities as string[]).includes('runtime_boss_completion_v1'))
+  // entry 指向不存在的文件 = 未安装，不上报
+  const missingEntry = deviceCapabilities(makeConfig({
+    bossCliEntry: 'C:/missing/boss.js', providers: { weixin: { entry: existingEntry } },
+  }))
+  assert.ok(!(missingEntry.capabilities as string[]).includes('runtime_boss_completion_v1'))
+})
+
 test('配置兼容：旧 config.json 只有 bossCliEntry 时 resolveProviderEntries 正常折算', () => {
   const entries = resolveProviderEntries(makeConfig({ bossCliEntry: 'C:/boss/entry.js' }))
   assert.deepEqual(entries, { 'boss-recruiting': 'C:/boss/entry.js' })
@@ -152,4 +167,66 @@ test('空Host与缺失entry不上报业务能力，避免领取无法执行的�
     assert.equal(caps.provider_id, undefined)
     assert.ok(!(caps.capabilities as string[]).includes('session_task_v1'))
   }
+})
+
+// ----- 契约 2.20：商店插件派生 manifest 与并行声明上报 -----
+
+/** 商店验签清单 fixture（未预知插件：一串行一并行，注解只读） */
+const TEST_TOOL_MANIFEST = {
+  manifest_version: 1, provider_id: 'ai.aidwork.test-tool', provider_version: '1.0.0',
+  entrypoint: ['dist/cli.js', 'mcp', '--stdio'], execution_target: 'local_required',
+  tools: [
+    { name: 'test_tool_status', annotations: { readOnlyHint: true } },
+    { name: 'test_tool_poll', annotations: { readOnlyHint: true } },
+  ],
+  tool_declaration: { version: 1, tools: [{ name: 'test_tool_status' }, { name: 'test_tool_poll', parallel: true }] },
+} as unknown as Parameters<typeof deriveProviderManifest>[0]
+
+test('商店声明上报：派生 manifest 进 provider_manifests，parallel_tools 仅并行工具，declared_tools 为声明全集，legacy 直配不参与', () => {
+  const derived = deriveProviderManifest(TEST_TOOL_MANIFEST)
+  const caps = deviceCapabilities(makeConfig({
+    providers: { 'test-tool': { entry: existingEntry }, 'boss-recruiting': { entry: existingEntry } },
+  }), false, false, false, false, false, {
+    parallelTools: { 'test-tool': ['test_tool_poll'] }, declaredTools: { 'test-tool': ['test_tool_status', 'test_tool_poll'] },
+    hasDeclarations: true, manifests: { 'test-tool': derived },
+  })
+  assert.deepEqual(caps['providers'], ['boss-recruiting', 'test-tool'], 'boss 恒首位键序契约保持')
+  assert.equal(caps['provider_id'], 'ai.aidwork.boss-recruiting')
+  const manifests = caps['provider_manifests'] as Record<string, Record<string, unknown>>
+  assert.equal(manifests['test-tool']!['provider_id'], 'ai.aidwork.test-tool')
+  assert.equal(manifests['test-tool']!['manifest_digest'], manifestDigestOf(derived as ProviderManifest))
+  assert.equal(manifests['test-tool']!['protocol_version'], 1)
+  assert.deepEqual(caps['parallel_tools'], { 'test-tool': ['test_tool_poll'] })
+  assert.deepEqual(caps['declared_tools'], { 'test-tool': ['test_tool_status', 'test_tool_poll'] },
+    'declared_tools = 声明全集（legacy 直配 boss-recruiting 不出现键）')
+  assert.ok((caps['capabilities'] as string[]).includes('tool_declarations_v1'))
+  // 未预知插件不产生工具名能力串（云端投影按既有能力协商，Phase 2 才消费 parallel_tools）
+  assert.ok(!(caps['capabilities'] as string[]).includes('test_tool_status'))
+})
+
+test('declared_tools 与 parallel_tools 同过滤：entry 缺失的声明 provider 不上报，全空省略字段', () => {
+  const derived = deriveProviderManifest(TEST_TOOL_MANIFEST)
+  // 'test-tool' 无 entry：不上报 providers 也不上报 declared_tools；全空则字段省略
+  const caps = deviceCapabilities(makeConfig({
+    providers: { 'boss-recruiting': { entry: existingEntry } },
+  }), false, false, false, false, false, {
+    parallelTools: { 'test-tool': ['test_tool_poll'] }, declaredTools: { 'test-tool': ['test_tool_status'] },
+    hasDeclarations: true, manifests: { 'test-tool': derived },
+  })
+  assert.equal(caps['declared_tools'], undefined, 'provider 不可用（无 entry）时声明键不上报')
+  assert.equal(caps['parallel_tools'], undefined)
+  assert.ok((caps['capabilities'] as string[]).includes('tool_declarations_v1'))
+})
+
+test('商店派生 manifest 优先于 TRUSTED 回退（同 key 摘要随派生结果变化）', () => {
+  const narrowed: ProviderManifest = { ...TRUSTED_MANIFESTS.wecom!, tools: TRUSTED_MANIFESTS.wecom!.tools.filter(name => name !== 'wecom_unread_list') }
+  // 业务就绪布尔全真：wecom 业务条件过滤为恒等，摘要差异完全来自派生 manifest
+  const caps = deviceCapabilities(makeConfig({ providers: { wecom: { entry: existingEntry } } }),
+    true, true, false, true, true, { hasDeclarations: true, declaredTools: { wecom: [...narrowed.tools] }, manifests: { wecom: narrowed } })
+  const manifests = caps['provider_manifests'] as Record<string, Record<string, unknown>>
+  assert.equal(manifests['wecom']!['manifest_digest'], manifestDigestOf(narrowed))
+  assert.notEqual(manifests['wecom']!['manifest_digest'], manifestDigestFor('wecom'), '派生结果优先于 TRUSTED 回退')
+  assert.ok((caps['capabilities'] as string[]).includes('tool_declarations_v1'))
+  assert.equal(caps['parallel_tools'], undefined, '无并行工具时整个字段省略')
+  assert.deepEqual(caps['declared_tools'], { wecom: [...narrowed.tools] })
 })

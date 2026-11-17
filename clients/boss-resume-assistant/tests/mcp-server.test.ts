@@ -20,6 +20,7 @@ const DIST_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const CLI = path.join(DIST_ROOT, 'src', 'cli', 'index.js')
 
 const EXPECTED_TOOLS = [
+  'boss_recovery_probe',
   'boss_filter',
   'boss_clear_filter',
   'boss_goto',
@@ -109,7 +110,7 @@ test('initialize：serverInfo + instructions（含关键前提与写动作上限
   }
 })
 
-test('list_tools：24 个 tool，名称与 annotations 正确', async () => {
+test('list_tools：25 个 tool，名称与 annotations 正确', async () => {
   const client = await startClient([CLI, 'mcp', '--stdio', '--cdp-port', String(await freePort())])
   try {
     const { tools } = await client.listTools()
@@ -117,7 +118,8 @@ test('list_tools：24 个 tool，名称与 annotations 正确', async () => {
     const byName = new Map(tools.map((t) => [t.name, t]))
     // annotations 语义抽查（规格 m02 §6）
     assert.equal(byName.get('boss_goto')!.annotations?.readOnlyHint, true)
-    assert.equal(byName.get('boss_interview_demo')!.annotations?.readOnlyHint, true)
+    // interview_demo 沿用 runtime 受信写集合的历史归类为写（契约 2.20 注解审计对齐）
+    assert.equal(byName.get('boss_interview_demo')!.annotations?.readOnlyHint, false)
     assert.equal(byName.get('boss_greet')!.annotations?.readOnlyHint, false)
     assert.equal(byName.get('boss_greet')!.annotations?.openWorldHint, true)
     assert.equal(byName.get('boss_greet')!.annotations?.idempotentHint, false)
@@ -171,8 +173,15 @@ test('call_tool：参数非法被 schema 拦截（isError），不触达 Chrome'
 })
 
 test('并发单飞：第一个 call 卡住时第二个立即返回 BUSY 结构化结果', async () => {
-  // 悬挂 TCP 服务器：接受连接但永不响应（子进程被杀时连接 reset 属预期，吞掉 socket error）
-  const hang = net.createServer((sock) => sock.on('error', () => {}))
+  // 悬挂 TCP 服务器：接受连接但永不响应（子进程被杀时连接 reset 属预期，吞掉 socket error）。
+  // 追踪 socket：被取消的 CDP connect 会半关闭（对端发 FIN 后本侧停在 CLOSE_WAIT），
+  // 而 net.Server.close 的回调要等全部连接真正结束才触发——不主动 destroy 会挂死整个测试文件。
+  const hangSockets = new Set<net.Socket>()
+  const hang = net.createServer((sock) => {
+    hangSockets.add(sock)
+    sock.on('error', () => {})
+    sock.on('close', () => hangSockets.delete(sock))
+  })
   await new Promise<void>((r) => hang.listen(0, '127.0.0.1', r))
   const hangPort = (hang.address() as net.AddressInfo).port
   const client = await startClient([CLI, 'mcp', '--stdio', '--cdp-port', String(hangPort)])
@@ -206,7 +215,11 @@ test('并发单飞：第一个 call 卡住时第二个立即返回 BUSY 结构�
     assert.ok('timeout' in outcome, `取消后第三个 call 仍快速返回（疑似 BUSY）：${JSON.stringify(outcome).slice(0, 200)}`)
   } finally {
     await client.close().catch(() => {})
-    await new Promise<void>((r) => hang.close(() => r()))
+    await new Promise<void>((r) => {
+      hang.close(() => r())
+      // 清掉仍停在 CLOSE_WAIT 的半开连接，close 回调才能完成（见上方 socket 追踪注释）
+      for (const sock of hangSockets) sock.destroy()
+    })
   }
 })
 

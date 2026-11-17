@@ -4836,18 +4836,25 @@
   remark: "users 增加 dingtalk_userid 列（钉钉任务通知身份绑定，存钉钉用户 userid）：存量库升级补列"
   statements: |
     ALTER TABLE users ADD COLUMN IF NOT EXISTS dingtalk_userid TEXT;
-- datetime: "2026-11-16 15:00:00"
-  remark: "channel_messages 幂等唯一部分索引（web_c 终态/用户消息防并发双写，CR P1-3）：终态消息按 (session_id, runner_id) 且无 kind；用户消息按 (session_id, client_request_id)。存量数据无该形态元数据，建索引安全"
-  statements: |
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_messages_runner_final
-        ON channel_messages (session_id, (metadata->>'runner_id'))
-        WHERE metadata->>'runner_id' IS NOT NULL AND metadata->>'runner_id' <> ''
-          AND COALESCE(metadata->>'kind', '') = '';
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_messages_client_request
-        ON channel_messages (session_id, (metadata->>'client_request_id'))
-        WHERE metadata->>'client_request_id' IS NOT NULL;
 - datetime: "2026-11-17 10:00:00"
   remark: "bs_content_sync_sources 增加 sync_state（模块自管水位/删除 id 集合等运行态，平台层不解读）与 connection_encrypted（外部数据库连接配置 Fernet 整包加密，data_connectors.password_encrypted 同模式）：就业咨询客户数据库同步数据源（lyjy_employment/sccy_policy）所需，与 src/services/content_sync/db.py、deploy/init-postgres.sql 三处同步"
   statements: |
     ALTER TABLE bs_content_sync_sources ADD COLUMN IF NOT EXISTS sync_state JSONB;
     ALTER TABLE bs_content_sync_sources ADD COLUMN IF NOT EXISTS connection_encrypted TEXT;
+# 取代 2026-11-16 15:00:00 批次，使未应用旧索引和已应用旧索引的库走同一次升级。
+- datetime: "2026-11-17 12:20:22"
+  remark: "官网客服消息幂等索引仅覆盖本渠道。终态回复按 runner 去重，请求按角色保留用户消息和直接回复。创建新索引后原子移除旧的全渠道索引"
+  statements: |
+    DO $$
+    BEGIN
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_web_c_messages_runner_final
+            ON channel_messages (session_id, (metadata->>'runner_id'))
+            WHERE starts_with(session_id, tenant_id || '_web_c_') AND role = 'assistant'
+              AND metadata->>'runner_id' <> '' AND COALESCE(metadata->>'kind', '') = '';
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_web_c_messages_client_request
+            ON channel_messages (session_id, role, (metadata->>'client_request_id'))
+            WHERE starts_with(session_id, tenant_id || '_web_c_')
+              AND metadata->>'client_request_id' IS NOT NULL;
+        DROP INDEX IF EXISTS uq_channel_messages_runner_final;
+        DROP INDEX IF EXISTS uq_channel_messages_client_request;
+    END $$;

@@ -36,6 +36,8 @@ const VIA_LABEL: Record<string, string> = {
 
 export function createBossOpenChatOperation(
   sessionFactory: BossSessionFactory = defaultSessionFactory,
+  /** 可注入 sleep（测试提速）：透传给 ChatOpenExecutor，缺省真实 setTimeout（风控节奏不变） */
+  opts?: { sleep?: (ms: number) => Promise<void> },
 ): BossOperation<BossOpenChatArgs> {
   return {
     name: 'boss_open_chat',
@@ -70,6 +72,7 @@ export function createBossOpenChatOperation(
               clearInput: session.clearInput ? (...args) => attempt.input(() => session.clearInput!(...args)) : undefined,
               signal: ctx.signal,
               ordinaryRetry: attempt.retry,
+              sleep: opts?.sleep,
             })
             ctx.progress({ stage: 'execute', message: `打开会话「${contact.trim()}」（优先搜索找人，失败回退会话列表）` })
             const r = await executor.open({ contact })

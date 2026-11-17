@@ -60,14 +60,10 @@ export interface McpServerOptions {
   cdpPort?: number
 }
 
-export async function startMcpServer(opts: McpServerOptions = {}): Promise<void> {
-  const server = new McpServer(
-    { name: 'boss-recruiting', version: providerVersion() },
-    { instructions: INSTRUCTIONS },
-  )
-  /** 进程级单飞锁：写动作与读动作都单飞 */
-  const running: { current: string | null } = { current: null }
-
+/**
+ * 注册全部工具（stdio 服务与协议测试共用同一注册入口，保证测试走实际 SDK 注册路径）。
+ */
+export function registerBossTools(server: McpServer, opts: McpServerOptions, running: { current: string | null }): void {
   for (const def of TOOL_DEFS) {
     server.registerTool(
       def.name,
@@ -116,6 +112,17 @@ export async function startMcpServer(opts: McpServerOptions = {}): Promise<void>
       },
     )
   }
+}
+
+export async function startMcpServer(opts: McpServerOptions = {}): Promise<void> {
+  const server = new McpServer(
+    { name: 'boss-recruiting', version: providerVersion() },
+    { instructions: INSTRUCTIONS },
+  )
+  /** 进程级单飞锁：写动作与读动作都单飞 */
+  const running: { current: string | null } = { current: null }
+
+  registerBossTools(server, opts, running)
 
   const transport = new StdioServerTransport()
   // Host 关闭 stdin（transport close）时退出进程，不留孤儿
