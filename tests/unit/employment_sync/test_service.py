@@ -646,3 +646,49 @@ def test_jobs_catalog_valid_conditions():
     assert not article_catalog_valid("qs_guide", {"audit": 0, "is_display": 1})
     assert article_catalog_valid("qs_notice", {"is_display": 1})  # 无 audit 列
     assert not article_catalog_valid("qs_explain", {"is_display": 0})
+
+
+async def test_summary_populated_and_backfilled_via_skip(harness):
+    """列表摘要：new 写入正文概要；存量空 summary 由 skip 路径零计费回填且幂等。"""
+    plan = _plan(
+        catalogs={"qs_jobs": [_job_row(101)]},
+        increments={"qs_jobs": [_job_row(101)]},
+    )
+    harness["plans"].append(plan)
+    harness["create_source"]()
+    first = await harness["service"].run_now(harness["tenant_id"])
+    assert first["status"] == "success" and first["counts"]["new"] == 1
+
+    doc = harness["query"](
+        "SELECT raw_text, summary, updated_at, created_at FROM documents "
+        "WHERE tenant_id = %s AND external_id = 'job:101'", (harness["tenant_id"],))[0]
+    expected = " ".join((doc["raw_text"] or "").split())[:200]
+    assert doc["summary"] == expected and doc["summary"]
+
+    # 模拟存量旧数据：清空 summary 后走 skip 路径，应零计费回填、不抖 updated_at
+    harness["query"]("UPDATE documents SET summary = NULL, updated_at = created_at "
+                     "WHERE tenant_id = %s AND external_id = 'job:101'", (harness["tenant_id"],))
+    calls_after_first = harness["embedding"].calls
+    harness["plans"].append(_plan(
+        catalogs={"qs_jobs": [_job_row(101)]},
+        increments={"qs_jobs": [_job_row(101)]},
+    ))
+    second = await harness["service"].run_now(harness["tenant_id"])
+    assert second["status"] == "success" and second["counts"]["skip"] == 1, second
+    assert harness["embedding"].calls == calls_after_first  # 回填零重嵌
+    doc2 = harness["query"](
+        "SELECT summary, updated_at, created_at FROM documents "
+        "WHERE tenant_id = %s AND external_id = 'job:101'", (harness["tenant_id"],))[0]
+    assert doc2["summary"] == expected  # 已回填
+    # 回填属于值变化，允许 updated_at 刷新；但 summary 幂等：第三轮不再 UPDATE
+    harness["plans"].append(_plan(
+        catalogs={"qs_jobs": [_job_row(101)]},
+        increments={"qs_jobs": [_job_row(101)]},
+    ))
+    third = await harness["service"].run_now(harness["tenant_id"])
+    assert third["counts"]["skip"] == 1
+    doc3 = harness["query"](
+        "SELECT summary, updated_at FROM documents "
+        "WHERE tenant_id = %s AND external_id = 'job:101'", (harness["tenant_id"],))[0]
+    assert doc3["summary"] == expected
+    assert doc3["updated_at"] == doc2["updated_at"]  # 值相等不再 UPDATE

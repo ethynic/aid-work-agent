@@ -48,6 +48,13 @@ def dump_metadata(metadata: Dict[str, Any]) -> str:
     return json.dumps(metadata, ensure_ascii=False, sort_keys=True)
 
 
+def summarize_for_list(content_md: str, max_len: int = 200) -> str:
+    """知识库列表「摘要」列的正文概要：压平空白后截断（由正文派生的展示缓存，
+    不进 hash、不参与变更判定）。"""
+    flat = " ".join((content_md or "").split())
+    return flat[:max_len]
+
+
 def metadata_equivalent(stored_json: str, rendered_metadata: Dict[str, Any],
                         run: Dict[str, Any]) -> bool:
     """跳过路径「先比对后写」：剔除每轮必变的易变键后逐字节比较。"""
@@ -702,26 +709,31 @@ class KbSyncServiceBase:
 
     def _handle_skip_metadata(self, tenant_id: str, run: Dict[str, Any],
                               record: Dict[str, Any], rendered: RenderedDoc) -> None:
-        """零计费跳过；metadata 值变才一次轻量 UPDATE（顺带刷新 expires_at：
-        deadline 变更不进 hash，走本路径保持文档有效期与源一致）。"""
+        """零计费跳过；metadata/summary 值变才一次轻量 UPDATE（顺带刷新 expires_at：
+        deadline 变更不进 hash，走本路径保持文档有效期与源一致；summary 存量回填
+        同走本路径，值相等后不再 UPDATE、不抖 updated_at）。"""
         doc_id = record.get("doc_id")
         if doc_id:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT metadata FROM documents WHERE id = %s AND tenant_id = %s",
+                    "SELECT metadata, summary FROM documents WHERE id = %s AND tenant_id = %s",
                     (doc_id, tenant_id),
                 )
                 row = cursor.fetchone()
-                if row and not metadata_equivalent(row["metadata"], rendered.metadata, run):
+                summary_text = summarize_for_list(rendered.content_md)
+                metadata_changed = row and not metadata_equivalent(row["metadata"], rendered.metadata, run)
+                summary_changed = row and (row.get("summary") or "") != summary_text
+                if metadata_changed or summary_changed:
                     fresh = dict(rendered.metadata)
                     fresh["pipeline_version"] = PIPELINE_VERSION
                     fresh["sync_run_id"] = run["id"]
                     cursor.execute(
                         "UPDATE documents SET metadata = %s, file_type = 'json', "
-                        "expires_at = %s, updated_at = now() "
+                        "expires_at = %s, summary = %s, updated_at = now() "
                         "WHERE id = %s AND tenant_id = %s",
-                        (dump_metadata(fresh), rendered.expires_at, doc_id, tenant_id),
+                        (dump_metadata(fresh), rendered.expires_at, summary_text,
+                         doc_id, tenant_id),
                     )
                     conn.commit()
         self._finish_item(
@@ -810,7 +822,7 @@ class KbSyncServiceBase:
                             raw_text, metadata, summary, uuid,
                             origin, external_id, status, expires_at
                         ) VALUES (NULL, %s, %s, %s, NULL, 'json', '', %s, %s, %s,
-                                  %s, %s, NULL, %s, %s, %s, 'active', %s)
+                                  %s, %s, %s, %s, %s, %s, 'active', %s)
                         ON CONFLICT (tenant_id, origin, external_id) WHERE external_id IS NOT NULL
                         DO NOTHING
                         RETURNING id
@@ -819,7 +831,8 @@ class KbSyncServiceBase:
                             tenant_id, rendered.title, category_source_type,
                             len(rendered.content_md.encode("utf-8")), len(chunks),
                             "text-embedding-v3", rendered.content_md,
-                            dump_metadata(metadata), f"doc_{uuid.uuid4().hex[:12]}",
+                            dump_metadata(metadata), summarize_for_list(rendered.content_md),
+                            f"doc_{uuid.uuid4().hex[:12]}",
                             self.DOC_ORIGIN, external_id, expires_at,
                         ),
                     )
@@ -846,13 +859,14 @@ class KbSyncServiceBase:
                         SET title = %s, raw_text = %s, metadata = %s,
                             total_chunks = %s, embedding_model = %s, source_type = %s,
                             file_type = 'json', status = 'active', expires_at = %s,
-                            updated_at = now()
+                            summary = %s, updated_at = now()
                         WHERE id = %s AND tenant_id = %s
                         """,
                         (
                             rendered.title, rendered.content_md,
                             dump_metadata(metadata), len(chunks),
                             "text-embedding-v3", category_source_type, expires_at,
+                            summarize_for_list(rendered.content_md),
                             doc_id, tenant_id,
                         ),
                     )
