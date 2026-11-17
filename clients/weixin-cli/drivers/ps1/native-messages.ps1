@@ -57,6 +57,23 @@ function Assert-WeixinNativeSelectedSession($Session) {
     }
 }
 
+function Send-WeixinNativeMessageWheel($Session, $Viewport, [int]$Delta, [int]$Count) {
+    Assert-WeixinNativeSelectedSession $Session
+    if ([WeixinProbeWin32]::GetForegroundWindow().ToInt64() -ne $Session.Handle) {
+        Throw-DriverError 'UI_CHANGED' '微信会话或前台窗口已变化'
+    }
+    $x = [int](($Viewport.left + $Viewport.right) / 2)
+    $y = [int](($Viewport.top + $Viewport.bottom) / 2)
+    $point = [IntPtr](($y -shl 16) -bor ($x -band 0xFFFF))
+    for ($index = 0; $index -lt $Count; $index++) {
+        if (-not [WeixinProbeWin32]::PostMessage([IntPtr]$Session.Handle, 0x020A, [IntPtr]($Delta -shl 16), $point)) {
+            Throw-DriverError 'UI_CHANGED' '无法滚动微信消息列表'
+        }
+        Start-Sleep -Milliseconds 35
+    }
+    Start-Sleep -Milliseconds 500
+}
+
 function Get-WeixinCurrentNativeSession {
     param([string]$TargetName, [string]$ExpectedNativeTitle, [string]$ExpectedSessionIdentity)
     $handle = Resolve-WeixinMainWindowHwnd

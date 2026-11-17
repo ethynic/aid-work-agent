@@ -1,9 +1,6 @@
-/** Name-scoped live desktop primitives. No account identifier or binding lookup.
- * The caller owns the desktop lock and task policy. This module never retries a
- * submitted send; durable request markers survive process restarts.
- */
+/** Name-scoped live reads. The caller owns the desktop lock and task policy. */
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises'
+import { mkdir, writeFile, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -24,18 +21,10 @@ const nativeTitleSchema = z.string().min(1).max(128)
 export const nameWindowSchema = z.object({ unchanged: z.literal(false), title: z.string(), native_title:nativeTitleSchema.optional(), exact_name: z.literal(true), unique_match: z.literal(true), name_match_mode:z.literal('ocr_fuzzy_unique').optional(), evidence_ref: z.string().regex(/^dpapi:[a-zA-Z0-9_-]+$/), complete: z.boolean(), frame: z.string().regex(/^[a-f0-9]{64}$/), objects: z.array(objectSchema).max(256), input_empty: z.boolean() })
 export type NameWindow = z.infer<typeof nameWindowSchema>
 export type NameRead = NameWindow | { unchanged: true; frame: string }
-export type SendDiagnosticStage = 'precheck' | 'type' | 'enter' | 'submitted'
-export type NameDriver = (request: Record<string, unknown>, signal?: AbortSignal, diagnostic?: (stage:SendDiagnosticStage)=>Promise<void>) => Promise<Record<string, unknown>>
+export type NameDriver = (request: Record<string, unknown>, signal?: AbortSignal) => Promise<Record<string, unknown>>
 
 interface CaptureImage { width:number;height:number;png:string;title_region:Bounds;input_region:Bounds }
 interface LocalCapture extends CaptureImage { frame:string;full_frame:string;title_frame:string;rgba:string;message_region:Bounds;native_title?:string }
-export const sendCaptureSchema=z.object({
-  title:nativeTitleSchema,
-  input_region:bounds,
-  handle:z.number().int().positive(),
-  rect:z.tuple([z.number().int(),z.number().int(),z.number().int().positive(),z.number().int().positive()]),
-}).strict()
-export type SendCapture=z.infer<typeof sendCaptureSchema>
 const localOcr=new ResidentOcr()
 const knownNames=new Set<string>()
 const resolvedNameLabels=new Map<string,string>()
@@ -151,36 +140,8 @@ export function objectsFromTextRegions(regions:TextBubbleRegion[],boxes:OcrBox[]
   })
 }
 
-/** Caller holds the desktop lock across native title lookup and input. */
-export async function submitNameWithCapture(request:Record<string,unknown>,signal?:AbortSignal,diagnostic?:Parameters<NameDriver>[2],primitive=localPrimitive):Promise<Record<string,unknown>>{
-    const name=String(request.expected_native_title??request.target_name??'')
-    signal?.throwIfAborted()
-    await diagnostic?.('precheck')
-    const started=performance.now()
-    const raw=await primitive({action:'send_capture'},signal)
-    signal?.throwIfAborted()
-    const capture=sendCaptureSchema.safeParse(raw)
-    if(!capture.success)throw new CodedOperationError('UI_CHANGED','无法核对微信当前会话或输入框')
-    if(capture.data.title!==name)throw new CodedOperationError('TARGET_AMBIGUOUS','当前会话标题与已核验目标不一致')
-    const captureMs=performance.now()-started
-    await diagnostic?.('type')
-    signal?.throwIfAborted()
-    const submitStarted=performance.now()
-    const {handle,rect,input_region}=capture.data
-    const entered=await primitive({...request,action:'submit',expected_native_title:name,handle,rect,input_region},signal)
-    if(entered.done!==true)throw new CodedOperationError('EXECUTION_UNKNOWN','粘贴与回车动作未确认完成')
-    // No payload, recipient, screenshot or request content enters diagnostics.
-    const driverTimings=entered.timings_ms as Record<string,unknown>|undefined
-    const driverMs=Object.fromEntries(['click','clipboard','input','total'].flatMap(key=>typeof driverTimings?.[key]==='number'&&Number.isFinite(driverTimings[key])&&driverTimings[key]>=0?[[key,driverTimings[key]]]:[]))
-    process.stderr.write(JSON.stringify({event:'name_send_timing',capture_ms:Math.round(captureMs),submit_ms:Math.round(performance.now()-submitStarted),total_ms:Math.round(performance.now()-started),driver_ms:driverMs})+'\n')
-    return{submitted:true}
-}
-
 /** Existing PrintWindow + resident RapidOCR; no cloud message transcription. */
-export const defaultNameDriver: NameDriver = async(request,signal,diagnostic)=>{
-  // Sends already carry an authorized observation baseline and check the live native title.
-  // The OCR resolver's local name cache is only a prerequisite for its own read path.
-  if(request.action==='submit')return submitNameWithCapture(request,signal,diagnostic)
+export const defaultNameDriver: NameDriver = async(request,signal)=>{
   const name=String(request.target_name??'')
   if(request.open===true){
     resolvedNameLabels.delete(name)
@@ -258,47 +219,4 @@ export function newNameObjects(before: Pick<NameWindow,'objects'>, after: Pick<N
   if (!old.length) return before.objects.length ? null : current
   const positions = uniqueTailPositions(old.slice(-1), current, sameObject)
   return positions.length === 1 ? current.slice(positions[0]! + 1) : null
-}
-
-export async function sendNameSessionOnce(args: { targetName: string; text: string; requestId: string; baseline: NameWindow; deadlineMs: number }, opts: { stateDir: string; signal?: AbortSignal; driver?: NameDriver }): Promise<{ status: 'submitted' | 'unknown'; evidence_ref?: string }> {
-  if (!/^[a-f0-9-]{36}$/.test(args.requestId) || !args.text.trim() || args.text.length > 500 || /[\x00-\x1f\x7f]/.test(args.text) || !Number.isSafeInteger(args.deadlineMs) || args.deadlineMs <= Date.now()) throw new CodedOperationError('INVALID_ARGUMENT', '单条发送参数非法或已过期')
-  opts={...opts,signal:AbortSignal.any([...(opts.signal?[opts.signal]:[]),AbortSignal.timeout(Math.min(2_147_483_647,Math.max(1,args.deadlineMs-Date.now())))])}
-  const identity = createHash('sha256').update(JSON.stringify([args.targetName, args.text, args.baseline.frame])).digest('hex')
-  await mkdir(opts.stateDir, { recursive: true })
-  const marker = join(opts.stateDir, `${args.requestId}.json`)
-  const { open } = await import('node:fs/promises')
-  const journalStarted=performance.now()
-  let stage:SendDiagnosticStage='precheck'
-  const record=async(next:SendDiagnosticStage,errorCode?:string)=>{
-    stage=next
-    // Separate append-only diagnostic journal. No names, payload, screenshots,
-    // driver request or exception text enter this file.
-    const log=await open(marker+'.stages.jsonl','a')
-    try{await log.writeFile(JSON.stringify({stage,at:new Date().toISOString(),elapsed_ms:Math.round(performance.now()-journalStarted),...(errorCode?{error_code:errorCode}:{})})+'\n');await log.sync()}finally{await log.close()}
-  }
-  const safeError=(error:unknown)=>error instanceof CodedOperationError ? (['pixel_gap','ocr_gap','frame_changed','transient_overlay'].includes(error.message)?'UI_CHANGED_'+error.message.toUpperCase():error.code) : 'INTERNAL_ERROR'
-  try {
-    const prior = JSON.parse(await readFile(marker, 'utf8')) as { digest: string }
-    if (prior.digest !== identity) throw new CodedOperationError('BLOCKED', '重复请求内容不同')
-    return { status: 'unknown' }
-  } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e }
-  const driver = opts.driver ?? defaultNameDriver
-  await record('precheck')
-  // The live driver checks the current title and replaces the composer text. Message/sidebar
-  // changes no longer prevent sending under the user's revised scope.
-  // Exclusive creation is the irreversible local boundary. A crash leaves the
-  // marker intact. Payload/recipient are not persisted in this public marker.
-  const fd = await open(marker, 'wx')
-  try { await fd.writeFile(JSON.stringify({ digest: identity, status: 'may_have_started' })); await fd.sync() } finally { await fd.close() }
-  try {
-    if (opts.signal?.aborted) {await record(stage,'CANCELLED');return { status: 'unknown' }}
-    const acknowledged=await driver({ action: 'submit', target_name: args.targetName, expected_native_title: args.baseline.native_title ?? args.targetName, text: args.text, expected_frame: args.baseline.frame, deadline_ms: args.deadlineMs }, opts.signal,record)
-    opts.signal?.throwIfAborted()
-    if(acknowledged.submitted!==true || Date.now()>=args.deadlineMs)throw new CodedOperationError('EXECUTION_UNKNOWN','发送操作未确认完成')
-    const evidenceRef=`weixin-submission:${args.requestId}:1`
-    await record('submitted')
-    const receipt = await open(marker, 'w')
-    try { await receipt.writeFile(JSON.stringify({ digest: identity, status: 'submitted', evidence_ref: evidenceRef })); await receipt.sync() } finally { await receipt.close() }
-    return { status: 'submitted', evidence_ref: evidenceRef }
-  } catch(error) {try{await record(stage,safeError(error))}catch{/* Original request marker still prevents retries. */}return { status: 'unknown' } }
 }

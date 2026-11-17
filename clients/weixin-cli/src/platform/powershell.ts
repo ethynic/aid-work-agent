@@ -82,7 +82,7 @@ export async function runPowerShellScript(opts: PowerShellScriptOptions): Promis
     const child = spawn('powershell.exe', args, {
       windowsHide: true,
       stdio: [opts.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...proxyEnv, AID_WEIXIN_NODE_EXECUTABLE: process.execPath },
+      env: { ...process.env, ...proxyEnv },
     })
     let stdout = ''
     let stderr = ''

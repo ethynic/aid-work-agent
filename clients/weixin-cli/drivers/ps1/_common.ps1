@@ -5,8 +5,6 @@
 #   - 视觉调用（服务端 GLM-5.3-Flash，429 重试 25s×4，```json 包裹剥离）
 #   - 主窗口解析（ClassName/标题校验 + 兜底枚举，规避 MainWindowHandle 被弹窗抢走）
 #   - 两栏布局校验（单栏模式下搜索框固定坐标失效，必须 fail closed）
-#   - Open-WeixinChat：搜索目标 → 视觉定位 overlay 结果项 → PostMessage 点击 →
-#     截主窗口校验标题/输入框（message-send 与 history_read 的 resolve-open 共用）
 #
 # 约定：业务失败一律 Throw-DriverError（DRIVER_JSON ok=false + 退出码 0）；
 #   只有未预期崩溃才非零退出（TS 侧映射 INTERNAL_ERROR）。
@@ -24,47 +22,6 @@ $script:KimiModel = 'kimi-k3'   # 推理模型：答案在 content，为空则�
 $script:ZhipuApiKey = [string]$env:AID_WEIXIN_ZHIPU_API_KEY
 $script:ZhipuApiBase = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
 $script:ZhipuModel = 'GLM-5.3-Flash'   # 原生多模态；答案直接在 content
-
-function Test-WeixinOcrMatch {
-    param([string]$First, [string]$Second, [ValidateSet('name', 'text')][string]$Mode,
-          [string]$FailureCode = 'UI_CHANGED')
-    # Only the trusted script path enters argv. Private OCR text travels through UTF-8 stdin.
-    $process = $null
-    try {
-        $cli = [IO.Path]::GetFullPath((Join-Path $script:DriverPs1Dir '../../dist/src/platform/ocrMatchCli.js'))
-        $node = $env:AID_WEIXIN_NODE_EXECUTABLE
-        if (-not $node) { $node = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source }
-        $info = New-Object System.Diagnostics.ProcessStartInfo
-        $info.FileName = $node
-        $info.Arguments = '"' + $cli + '"'
-        $info.UseShellExecute = $false
-        $info.CreateNoWindow = $true
-        $info.RedirectStandardInput = $true
-        $info.RedirectStandardOutput = $true
-        $info.RedirectStandardError = $true
-        $info.StandardInputEncoding = New-Object System.Text.UTF8Encoding($false)
-        $process = New-Object System.Diagnostics.Process
-        $process.StartInfo = $info
-        if (-not $process.Start()) { throw 'start_failed' }
-        $stdout = $process.StandardOutput.ReadToEndAsync()
-        $stderr = $process.StandardError.ReadToEndAsync()
-        $payload = @{ mode = $Mode; first = $First; second = $Second } | ConvertTo-Json -Compress
-        $process.StandardInput.Write($payload)
-        $process.StandardInput.Close()
-        if (-not $process.WaitForExit(5000)) { $process.Kill(); throw 'timeout' }
-        if ($process.ExitCode -ne 0) { throw 'matcher_failed' }
-        $result = $stdout.GetAwaiter().GetResult() | ConvertFrom-Json -ErrorAction Stop
-        if ($result.matched -isnot [bool]) { throw 'invalid_result' }
-        return [bool]$result.matched
-    } catch {
-        Throw-DriverError $FailureCode 'Local OCR comparison unavailable; operation stopped'
-    } finally {
-        if ($null -ne $process) {
-            try { if (-not $process.HasExited) { $process.Kill() } } catch {}
-            $process.Dispose()
-        }
-    }
-}
 
 function Write-DriverJson([object]$Payload) {
     # -InputObject 传参：避免管道对单元素数组的解包怪癖
@@ -133,7 +90,7 @@ function Invoke-KimiVision {
     }
     if ($ProxyOnly) {
         if ($null -eq $billingProxy -or [string]::IsNullOrWhiteSpace([string]$billingProxy.Token)) {
-            Throw-DriverError 'CONFIG_MISSING' '添加好友需要启用微信 CLI 服务端计费代理，请配置服务端地址并完成客户端激活'
+            Throw-DriverError 'CONFIG_MISSING' '需要启用微信 CLI 服务端计费代理，请配置服务端地址并完成客户端激活'
         }
         $candidates += $billingProxy
     } elseif ($forced -eq 'glm') {
@@ -291,92 +248,6 @@ function Close-WeixinSearchOverlay([int64]$OverlayHwnd) {
     }
 }
 
-function Open-WeixinChat {
-    # 搜索目标名 → Kimi 定位 overlay 结果项 → PostMessage 点击 → 截主窗口
-    # Kimi 一次调用返回 {title, input_box, input_empty, found} → 校验。
-    # 返回 @{ MainHwnd; WinLeft; WinTop; Title; InputBoxX; InputBoxY }
-    param(
-        [Parameter(Mandatory)][string]$TargetName,
-        [switch]$RequireEmptyInput
-    )
-    $mainHwnd = Resolve-WeixinMainWindowHwnd
-    # 搜索面板必须前台才会打开/保持；Kimi 定位期间用户切走焦点面板会关闭 → 安全中止
-    if (-not (Invoke-WeixinActivation $mainHwnd)) { Throw-DriverError 'FOREGROUND_LOST' '无法将微信主窗口激活到前台（搜索面板必须前台才会打开）' }
-    Start-Sleep -Milliseconds 300
-    Assert-WeixinTwoColumnLayout $mainHwnd
-
-    $rect = New-Object WeixinProbeWin32+RECT
-    [void][WeixinProbeWin32]::GetWindowRect([IntPtr]$mainHwnd, [ref]$rect)
-    # 搜索框在主窗口左栏顶部，两栏布局下位置相对窗口固定；
-    # 点击时微信自动全选残留文本，直接输入即覆盖——绝对不要用退格清空搜索框
-    # （清空瞬间面板自动关闭且再输入不重开）。
-    Send-WeixinPostMessageClick -Hwnd $mainHwnd -ScreenX ($rect.Left + 335) -ScreenY ($rect.Top + 110)
-    Start-Sleep -Milliseconds 800
-    Send-WeixinPostMessageText -Hwnd $mainHwnd -Text $TargetName
-    Start-Sleep -Milliseconds 1500
-
-    $overlayHwnd = Get-WeixinSearchOverlayHwnd
-    if ($overlayHwnd -eq 0) { Throw-DriverError 'UI_CHANGED' '未找到搜索结果面板（前台被切走会关闭面板，或布局已变化）' }
-    $ovlShot = Join-Path $env:TEMP 'weixin-driver-open-overlay.png'
-    $snap = Get-WeixinWindowSnapshot $overlayHwnd $ovlShot
-    $ovlLeft = [int]$snap[0]; $ovlTop = [int]$snap[1]
-
-    $locSys = @'
-You are a coordinate locator for WeChat desktop search.
-Input image: a capture of the WeChat SEARCH RESULT PANEL window (the dropdown list that appears after typing in the search box). The panel content sits in a rounded-corner area; margins may be black (transparent areas).
-Find one uniquely matching full contact label under 功能/联系人/群聊, never web-search suggestions. Allow OCR case, width, whitespace and punctuation differences; labels of at least 5 characters may differ by at most one character and must remain at least 80% similar. Preserve numbers and symbols. If two labels match approximately, return found=false even when one is exact. Never choose a best candidate among ambiguous matches.
-Coordinate origin = top-left corner of the image. Unit = pixel.
-Return ONLY a single JSON object, no markdown, no explanation:
-{"x": <int>, "y": <int>, "label": "<matched item text>", "found": <true|false>}
-If there is no matching item, return:
-{"x": 0, "y": 0, "label": "", "found": false}
-'@
-    $loc = Invoke-KimiVision -ImagePath $ovlShot -SystemPrompt $locSys -UserText ("Query word: $TargetName. Find a unique approximately matching full label; reject multiple plausible labels. Return JSON.") -ArtifactPrefix 'weixin-driver-open-locate'
-    if (-not $loc.found -or ([int]$loc.x -eq 0 -and [int]$loc.y -eq 0)) {
-        Close-WeixinSearchOverlay $overlayHwnd
-        Throw-DriverError 'TARGET_NOT_FOUND' ("搜索结果中未找到与「" + $TargetName + "」匹配的条目")
-    }
-    if (-not (Test-WeixinOcrMatch -First $TargetName -Second ([string]$loc.label) -Mode name)) {
-        Close-WeixinSearchOverlay $overlayHwnd
-        Throw-DriverError 'TARGET_NOT_FOUND' '搜索结果标签与目标不匹配，已中止'
-    }
-    # 结果项点击必须投给 overlay（投主窗口会被当作"点击面板外"关面板）
-    Send-WeixinPostMessageClick -Hwnd $overlayHwnd -ScreenX ($ovlLeft + [int]$loc.x) -ScreenY ($ovlTop + [int]$loc.y)
-    Start-Sleep -Milliseconds 1200
-
-    $mainShot = Join-Path $env:TEMP 'weixin-driver-open-main.png'
-    $snap2 = Get-WeixinWindowSnapshot $mainHwnd $mainShot
-    $winLeft = [int]$snap2[0]; $winTop = [int]$snap2[1]
-    $checkSys = @'
-You are a UI inspector for WeChat desktop 4.x main window.
-Input image: a screenshot of WeChat main window with a chat conversation open.
-Return ONLY a single JSON object, no markdown, no explanation:
-{"title": "<conversation title shown at the top of the chat area>", "input_box": {"x": <int>, "y": <int>}, "input_empty": <true|false>, "found": <true|false>, "title_matches": <true|false>}
-input_box = CENTER of the text input area at the bottom where you type a message.
-input_empty = whether the input box currently contains NO draft text (empty = true).
-found = false if no chat conversation is open or the input box cannot be located.
-title_matches compares the complete title with BOTH the requested name and selected search label, allowing OCR formatting differences and at most one character error for names of 5 or more characters (at least 80% similar). Short names allow formatting differences only. Preserve numbers and symbols; reject ambiguous titles. Never use substring matching.
-Coordinates are INSIDE the image (origin top-left, unit pixel).
-'@
-    $check = Invoke-KimiVision -ImagePath $mainShot -SystemPrompt $checkSys -UserText ("Requested name: $TargetName. Selected label: " + [string]$loc.label + ". Return the title comparison and input box location as JSON.") -ArtifactPrefix 'weixin-driver-open-check'
-    if (-not $check.found) { Throw-DriverError 'UI_CHANGED' '打开会话后无法识别聊天窗口结构（未打开会话或找不到输入框）' }
-    $title = [string]$check.title
-    if ($check.title_matches -ne $true -or
-        -not (Test-WeixinOcrMatch -First $TargetName -Second $title -Mode name) -or
-        -not (Test-WeixinOcrMatch -First ([string]$loc.label) -Second $title -Mode name)) {
-        Throw-DriverError 'UI_CHANGED' ("打开的会话标题「" + $title + "」与目标「" + $TargetName + "」不一致，已中止")
-    }
-    if ($RequireEmptyInput -and $check.input_empty -eq $false) {
-        # 输入框有残留草稿时禁止输入（文本会追加到草稿后面），需人工清空后重试
-        Throw-DriverError 'UI_CHANGED' '输入框存在残留草稿，为避免串消息已中止；请人工清空后重试'
-    }
-    return @{
-        MainHwnd = $mainHwnd; WinLeft = $winLeft; WinTop = $winTop
-        Title = $title
-        InputBoxX = [int]$check.input_box.x; InputBoxY = [int]$check.input_box.y
-    }
-}
-
 function Invoke-DriverMain {
     # 驱动统一入口：命名 mutex 单飞 → Win32/DPI 初始化 → body → DRIVER_JSON 输出。
     # body 返回的 hashtable 作为 data；Throw-DriverError 映射为 ok=false + 稳定 code。
@@ -411,17 +282,4 @@ function Invoke-DriverMain {
         [void]$mutex.ReleaseMutex()
         $mutex.Dispose()
     }
-}
-
-# 只有开发 checkout 允许仓库 venv；签名发行包缺内部解释器须明确失败。
-function Resolve-WeixinOcrPython {
-    $packageRoot = [IO.Path]::GetFullPath((Join-Path $script:DriverPs1Dir '..\..'))
-    $bundled = Join-Path $packageRoot 'ocr-python\python.exe'
-    if (Test-Path -LiteralPath $bundled -PathType Leaf) { return $bundled }
-    if (Test-Path -LiteralPath (Join-Path $packageRoot 'runtime-manifest.json')) {
-        Throw-DriverError 'CONFIG_MISSING' '发行包缺少内部 OCR Python，请重新安装完整插件'
-    }
-    $development = [IO.Path]::GetFullPath((Join-Path $packageRoot '..\..\venv\Scripts\python.exe'))
-    if (Test-Path -LiteralPath $development -PathType Leaf) { return $development }
-    Throw-DriverError 'CONFIG_MISSING' '缺少内部 OCR Python'
 }

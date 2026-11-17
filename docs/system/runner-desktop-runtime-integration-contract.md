@@ -18,6 +18,8 @@
 
 2026-11-17 · 契约 2.22，适用于 `weixin.conversation.v1` 及微信读取工具。微信 CLI 仍在本机 CLI/MCP 提供历史、未读和观察，结果含正文、预览或截图证据的工具不进云端声明。签名清单生产端为 CLI，Runtime 在可信执行及补传处限制正文外发，服务端在派发和结果接纳处识别旧设备的读取请求。Runtime Host 停止启动微信自动回复引擎和上报其会话能力。服务端停发微信会话任务、不再续租或接纳其正文批次，保留已有任务与回执的查阅、停止能力。原协议字段和 BOSS、企微执行能力沿用既有定义。本机旧版本在更新前仍可能尝试外发，停用与升级需要部署。实施与验证见[开发计划 Phase 4](../plans/plan-weixin-cli-remove-ocr.md#phase-4-历史与持续观察)。
 
+2026-11-17 补充，已签名微信插件以自身清单声明 `weixin_message_send`。Runtime 配对和心跳均消费同一声明，旧直配变体仅用于遗留入口。商店版微信子进程取得配对服务地址，用同一地址下的本机客户端激活绑定访问计费视觉定位。Device API、计费接口和旧 V2 提交回执格式沿用既有协议。见[发送入口收敛计划](../plans/plan-weixin-cli-remove-ocr.md#phase-3c-发送入口收敛)。
+
 ### BOSS 筛选容错与本机操作恢复共同检查点
 
 2026-11-12 · 契约 2.20 候选，待实施。适用 BOSS 网页任务。规则见 [筛选输入](../design/recruiting/resume-job-matching-design.md#boss-筛选参数容错)、[恢复交互](agent-application-architecture-design.md#boss-本机操作恢复) 和 [计划](../plans/plan-boss-filter-input-and-local-recovery.md)。

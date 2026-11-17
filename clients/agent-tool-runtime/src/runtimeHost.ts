@@ -39,6 +39,7 @@ import { ProcessSupervision } from './processSupervision.js'
 import { resumeConnectionRecovery, recoverManagementRepairExecution } from './connectionRecoveryStore.js'
 import { connectionFailure } from './connectionDiagnosis.js'
 import { recordFreshConnectionEpoch } from './connectionRecoveryResources.js'
+import { assembleStoreManifests, setManifestOverride, weixinV2Manifest } from './providers.js'
 
 function providerEnvironment(): Record<string, string> {
   const env: Record<string, string> = {}
@@ -200,7 +201,9 @@ export class LegacyExecution implements HostAdapter {
     let result
     try {
       result = await new ApiClient(params.server).pair({ code: params.pairing_code.trim(), name: params.device_name,
-        platform: PLATFORM, runtime_version: RUNTIME_VERSION, capabilities: deviceCapabilities(this.effectiveConfig(config)), machine_fingerprint: machineFingerprint() })
+        platform: PLATFORM, runtime_version: RUNTIME_VERSION,
+        capabilities: deviceCapabilities(this.effectiveConfig(config), false, false, false, false, false, this.storeDeclarations()),
+        machine_fingerprint: machineFingerprint() })
     } catch (error) {
       const failure = connectionFailure(error, true)
       throw new ManagementError(failure.category === 'PAIRING_CODE_INVALID' ? 1 : 11, [failure.summary, ...failure.steps].join('。'))
@@ -223,6 +226,8 @@ export class LegacyExecution implements HostAdapter {
     try { token = await loadDeviceToken() } catch { throw new ManagementError(9, '设备凭证不可用，请核对本机身份') }
     await this.pluginStore?.refresh()
     const entries = Object.fromEntries(Object.entries(this.resolveEntries(config)).filter(([, entry]) => existsSync(entry)))
+    const store = this.storeDeclarations()
+    const { manifests: storeManifests, parallelTools } = store
     const api = new ApiClient(server, token)
     const wecomLegacyEnv: Record<string, string> = {}
     for (const key of ['AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN']) {
@@ -232,25 +237,18 @@ export class LegacyExecution implements HostAdapter {
     const pairedEnv = { AIDWORK_RUNTIME_SERVER: server, AIDWORK_RUNTIME_DEVICE_TOKEN: token }
     const providers = new ProviderSet(entries, { nodeExecutable: this.nodeExecutable, baseEnv: providerEnvironment(),
       ...(this.supervision.enabled ? { prepareLaunch: (entry: string) => this.supervision.prepareLaunch(entry) } : {}),
-      providerEnv: { wecom: { ...wecomLegacyEnv, ...pairedEnv }, 'boss-recruiting': pairedEnv } })
+      providerEnv: { wecom: { ...wecomLegacyEnv, ...pairedEnv }, 'boss-recruiting': pairedEnv,
+        ...(storeManifests.weixin ? { weixin: { AID_WEIXIN_SERVER_URL: server } } : {}) } })
     this.providers = providers
     this.runFailure = null
     this.stopping = false
-    // #6 能力真实性：v2 会话 manifest 变体仅经 config.providers.weixin.v2Send 显式
-    // 协商（隔离测试 / 真实 v2 Provider 交付后）；未协商保持真实 v1 受信形态
-    const { setManifestOverride, weixinV2Manifest, assembleStoreManifests } = await import('./providers.js')
+    // 签名商店声明同时约束运行与能力上报。旧 v2Send 标志只用于仍在运行的遗留直配。
     setManifestOverride('weixin', null)
-    if (config?.providers?.['weixin']?.v2Send === true) {
+    if (!storeManifests.weixin && entries.weixin && config.providers?.['weixin']?.v2Send === true) {
       setManifestOverride('weixin', weixinV2Manifest())
-      logInfo('[runtime] weixin v2 会话能力已显式协商（v2Send=true）：manifest 升级 v2 变体')
+      logInfo('[runtime] weixin 遗留直配显式配置 v2Send=true，采用兼容 manifest')
     }
-    // 契约 2.20：商店插件派生 manifest（已验签、启用且带有效调度声明）优先于 TRUSTED 回退；
-    // runner 门禁与能力上报共用同一份装配。weixin v2Send 显式协商时以
-    // v2 变体覆盖派生结果（协商语义优先）。遗留直配 entry 不产生派生 manifest。
-    const declaredPlugins = this.pluginStore?.declaredPlugins() ?? []
-    const { manifests: storeManifests, parallelTools, declaredTools } = assembleStoreManifests(declaredPlugins)
-    if (config?.providers?.['weixin']?.v2Send === true) storeManifests.weixin = weixinV2Manifest()
-    if (declaredPlugins.length > 0) logInfo(`[runtime] 商店声明插件: ${declaredPlugins.map(plugin => plugin.provider_key).join(', ')}`)
+    if (store.hasDeclarations) logInfo(`[runtime] 商店声明插件: ${Object.keys(storeManifests).join(', ')}`)
     logInfo(`[runtime] providers: ${Object.keys(entries).join(', ')}`)
     // v2 写路径数据目录（journal/ + result-outbox/，跟随 runtime home；启动重投共用同一 outbox 实例）
     const dataDir = runtimeHomeDir()
@@ -268,7 +266,7 @@ export class LegacyExecution implements HostAdapter {
       const value = deviceCapabilities(this.effectiveConfig(config), wecom?.wecomBusinessReady,
         wecom?.wecomDirectoryReady, wecom?.wecomDirectorySearchReady,
         wecom?.wecomConfigDoctorReady, wecom?.wecomConfigCalibrateReady,
-        { parallelTools, declaredTools, hasDeclarations: declaredPlugins.length > 0, manifests: storeManifests })
+        store)
       if (recoveryReady && this.supervision.enabled) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_stop_v1']
       if (wecomRecoveryReady) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_wecom_v1']
       if (recoveryReady) { value.providers = [...(value.providers as string[]), 'runtime-recovery']; value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_observe_v2'] }
@@ -332,6 +330,10 @@ export class LegacyExecution implements HostAdapter {
   private resolveEntries(config: RuntimeConfig | null): Record<string, string> {
     const entries = resolveProviderEntries(config)
     return this.pluginStore?.resolveEntries(entries) ?? entries
+  }
+  private storeDeclarations() {
+    const declared = this.pluginStore?.declaredPlugins() ?? []
+    return { ...assembleStoreManifests(declared), hasDeclarations: declared.length > 0 }
   }
   private effectiveConfig(config: RuntimeConfig | null, entries = this.resolveEntries(config)): RuntimeConfig {
     return { ...(config ?? { server: '', device_id: '' }), bossCliEntry: undefined, providers: Object.fromEntries(Object.entries(entries).map(([key, entry]) => [key, { ...config?.providers?.[key], entry }])) }

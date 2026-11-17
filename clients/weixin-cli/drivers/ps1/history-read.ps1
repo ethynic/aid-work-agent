@@ -5,23 +5,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_common.ps1')
 . (Join-Path $PSScriptRoot 'native-messages.ps1')
 
-function Send-WeixinHistoryWheel($Session, $Viewport, [int]$Delta, [int]$Count) {
-    Assert-WeixinNativeSelectedSession $Session
-    if ([WeixinProbeWin32]::GetForegroundWindow().ToInt64() -ne $Session.Handle) {
-        Throw-DriverError 'UI_CHANGED' '微信会话或前台窗口已变化，请重试历史读取'
-    }
-    $x = [int](($Viewport.left + $Viewport.right) / 2)
-    $y = [int](($Viewport.top + $Viewport.bottom) / 2)
-    $point = [IntPtr](($y -shl 16) -bor ($x -band 0xFFFF))
-    for ($index = 0; $index -lt $Count; $index++) {
-        if (-not [WeixinProbeWin32]::PostMessage([IntPtr]$Session.Handle, 0x020A, [IntPtr]($Delta -shl 16), $point)) {
-            Throw-DriverError 'UI_CHANGED' '无法滚动微信历史'
-        }
-        Start-Sleep -Milliseconds 35
-    }
-    Start-Sleep -Milliseconds 500
-}
-
 function Test-WeixinHistoryCutoff($Rows, [int]$Days) {
     if ($Days -le 0) { return $false }
     $today = (Get-Date).Date
@@ -47,7 +30,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WeixinCli.NativeObserve' -Body 
     }
 
     $viewport = (Get-WeixinNativeRows $session).viewport
-    Send-WeixinHistoryWheel $session $viewport -120 40
+    Send-WeixinNativeMessageWheel $session $viewport -120 40
     $pages = New-Object 'Collections.Generic.List[object]'
     $last = $null
     $notches = [int][Math]::Max(1, [Math]::Min(4, [Math]::Floor(($viewport.bottom - $viewport.top) / 170)))
@@ -66,7 +49,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WeixinCli.NativeObserve' -Body 
             $pages.Add($rows)
             if ($rows.Count -eq 0 -or (Test-WeixinHistoryCutoff $rows $request.since_days) -or $page -eq $request.max_pages) { break }
             $scrolledUp = $true
-            Send-WeixinHistoryWheel $session $capture.viewport 120 $notches
+            Send-WeixinNativeMessageWheel $session $capture.viewport 120 $notches
         }
     } finally {
         # Do not scroll a different conversation when the user switches during capture.
@@ -74,7 +57,7 @@ Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WeixinCli.NativeObserve' -Body 
             $canRestore = $false
             try { Assert-WeixinNativeSelectedSession $session; $canRestore = $true } catch {}
             if ($canRestore -and [WeixinProbeWin32]::GetForegroundWindow().ToInt64() -eq $session.Handle) {
-                Send-WeixinHistoryWheel $session $viewport -120 40
+                Send-WeixinNativeMessageWheel $session $viewport -120 40
             }
         }
     }

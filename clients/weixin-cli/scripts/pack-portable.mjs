@@ -40,7 +40,13 @@ try {
       }
     }
   }
-  for (const directory of ['dist', 'drivers']) cpSync(join(root, directory), join(stage, directory), { recursive: true })
+  const compiled = join(root, 'dist', 'src')
+  cpSync(compiled, join(stage, 'dist', 'src'), { recursive: true, filter: file => {
+    if (lstatSync(file).isDirectory()) return true
+    return existsSync(join(root, 'src', relative(compiled, file).replace(/\.js$/, '.ts')))
+  } })
+  cpSync(join(root, 'drivers'), join(stage, 'drivers'), { recursive: true })
+  cpSync(join(root, 'provider-manifest.json'), join(stage, 'provider-manifest.json'))
   cpSync(source, join(stage, 'ocr-python'), { recursive: true })
   // Validate the COPIED interpreter with repository and PYTHONPATH excluded.
   // RapidOCR construction proves that packaged model assets can be located.
@@ -53,7 +59,7 @@ try {
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   delete pkg.scripts
   delete pkg.devDependencies
-  pkg.files = ['dist/src', 'drivers', 'ocr-python']
+  pkg.files = ['dist/src', 'drivers', 'ocr-python', 'provider-manifest.json']
   writeFileSync(join(stage, 'package.json'), JSON.stringify(pkg, null, 2) + '\n')
   // npm's CLI is located relative to the npm executable installed beside Node.
   const npmCli = process.env.npm_execpath

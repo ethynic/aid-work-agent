@@ -130,7 +130,7 @@ async function buildProvider(name, options, signer) {
   if (!existsSync(join(source, 'dist/src/cli/index.js'))) throw new Error('Build Provider before packaging')
   const stage = mkdtempSync(join(tmpdir(), 'aid-provider-package-'))
   try {
-    if (name === 'wecom') copyCurrentProviderDist(source, join(stage, 'dist/src'))
+    if (name === 'wecom' || name === 'weixin') copyCurrentProviderDist(source, join(stage, 'dist/src'))
     else cpSync(join(source, 'dist/src'), join(stage, 'dist/src'), { recursive: true })
     for (const assets of definition.assets) {
       // BOSS needs approved PowerShell drivers, not developer live probes.

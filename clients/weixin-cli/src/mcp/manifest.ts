@@ -39,7 +39,7 @@ export interface ProviderManifest {
 }
 
 /** 调度声明白名单（契约 2.20）。历史、未读预览和会话观察仅供本机 CLI/MCP 使用。
- * weixin_message_send_v2 经独立许可协议协商；微信全部桌面操作均串行。 */
+ * 微信全部桌面操作均串行。 */
 const DECLARED_TOOLS = new Set([
   'weixin_probe',
   'weixin_chat_search',

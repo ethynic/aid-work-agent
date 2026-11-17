@@ -1,11 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { join } from 'node:path'
 import { runWeixinOperation } from './context.js'
 import { CodedOperationError, type WeixinOperation } from './types.js'
 import { ConversationAligner } from '../platform/aligner.js'
 import { ocrTextMatches } from '../platform/ocrTextMatch.js'
-import { readNameSession, sendNameSessionOnce, type NameDriver, type NameWindow } from '../platform/nameSession.js'
-import { sendContextSchema, verifyBridgeEnvelope } from '../platform/liveBridge.js'
+import { readNameSession, type NameDriver, type NameWindow } from '../platform/nameSession.js'
 import { sessionObserverRequestSchema } from '../platform/sessionObserver.js'
 import { readWeixinNativeObservation } from '../platform/nativeMessages.js'
 import type { RunPowerShellDriverFn } from '../platform/powershell.js'
@@ -19,7 +17,7 @@ interface NameObservationState {
 }
 
 export function createNameOperations(deps: {
-  driver?: NameDriver; nativeDriver?: RunPowerShellDriverFn; stateDir?: string; bridgeKey?: string; observeCurrentOnly?: boolean
+  driver?: NameDriver; nativeDriver?: RunPowerShellDriverFn; observeCurrentOnly?: boolean
 } = {}) {
   const resolved = new Map<string, NameWindow>()
   const states = new Map<string, NameObservationState>()
@@ -93,30 +91,5 @@ export function createNameOperations(deps: {
       })
     },
   }
-  const send: WeixinOperation<unknown> = {
-    name:'weixin_message_send_v2',
-    async execute(args,ctx) {
-      const result=await runWeixinOperation('write',ctx,()=>null,async(_ctx,tracker)=>{
-        const parsed=sendContextSchema.safeParse(verifyBridgeEnvelope(args,Date.now(),deps.bridgeKey))
-        if(!parsed.success)throw new CodedOperationError('INVALID_ARGUMENT','发送上下文非法')
-        const c=parsed.data
-        if(createHash('sha256').update(c.text).digest('hex')!==c.payload_hash)throw new CodedOperationError('BLOCKED','正文摘要不符')
-        const key=JSON.stringify([c.target_name,c.conversation_binding_id,c.binding_version,c.account_identity_version])
-        const window=states.get(key)?.window
-        if(!window || window.frame!==c.expected_frame)throw new CodedOperationError('UI_CHANGED','缺少当前观察基线')
-        const root=deps.stateDir ?? (process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA,'aid-weixin','name-requests') : '')
-        if(!root)throw new CodedOperationError('CONFIG_MISSING','本地执行目录不可用')
-        // Node timeout uses elapsed time; wall-clock rollback cannot extend this lease.
-        const remaining=Math.floor(Math.min(c.expires_at_ms-Date.now(),c.expires_at_ms-c.issued_at_ms))
-        if(remaining<=0)throw new CodedOperationError('BLOCKED','发送许可失效')
-        const leaseSignal=AbortSignal.any([ctx.signal,AbortSignal.timeout(remaining)])
-        const sent=await sendNameSessionOnce({targetName:c.target_name,text:c.text,requestId:c.request_id,baseline:window,deadlineMs:c.expires_at_ms},{stateDir:root,driver:deps.driver,signal:leaseSignal})
-        if(sent.status!=='submitted')throw new CodedOperationError('EXECUTION_UNKNOWN','单条发送结果未知，不会重发')
-        tracker.completed=1
-        return {message:'已执行发送，未核验送达',data:{request_id:c.request_id,permit_id:c.permit_id,evidence_ref:sent.evidence_ref}}
-      })
-      return Object.assign(result,{phase:result.success?'submitted':result.effect==='unknown'?'unknown':'prepared',safe_to_retry:false,evidence_ref:result.data.evidence_ref})
-    },
-  }
-  return {resolve,observe,send}
+  return {resolve,observe}
 }

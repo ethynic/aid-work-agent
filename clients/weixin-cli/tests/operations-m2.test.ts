@@ -167,7 +167,8 @@ test('message_send：成功 → effect=applied，data 含 target', async () => {
   assert.equal(r.success, true)
   assert.equal(r.effect, 'applied')
   assert.equal(r.data.target, '张三')
-  assert.deepEqual(calls[0]!.args, ['-TargetName', '张三', '-Text', '你好'])
+  assert.equal(calls[0]!.args, undefined)
+  assert.deepEqual(JSON.parse(calls[0]!.stdin!), { target_name: '张三', target_type: 'friend', text: '你好' })
 })
 
 test('message_send：驱动 UI_CHANGED（标题不符/残留草稿）→ effect=none', async () => {

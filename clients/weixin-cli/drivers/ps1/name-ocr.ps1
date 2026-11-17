@@ -80,12 +80,9 @@ public static class AidOcrPixels {
     }finally{$bmp.Dispose()}
 }
 
-function Get-SendUiaElements([int64]$Handle) {
+function Get-NativeTitleElements([int64]$Handle) {
     $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr]$Handle)
-    $condition = [Windows.Automation.OrCondition]::new(
-        [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ClassNameProperty, 'mmui::XTextView'),
-        [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'chat_input_field')
-    )
+    $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ClassNameProperty, 'mmui::XTextView')
     foreach ($node in $root.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)) {
         $node.Current
     }
@@ -100,57 +97,10 @@ function Select-WeixinNativeTitle($Elements, [uint32]$ProcessId) {
 }
 
 function Read-ObservedNativeTitle {
-    try { Select-WeixinNativeTitle @(Get-SendUiaElements $script:handle) $script:windowProcessId }
+    try { Select-WeixinNativeTitle @(Get-NativeTitleElements $script:handle) $script:windowProcessId }
     catch { return $null } # Native title is optional evidence for the existing observation.
 }
 
-function Get-SendCapture([int64]$Handle, [uint32]$ProcessId) {
-    $rect = New-Object WeixinProbeWin32+RECT
-    if (-not [WeixinProbeWin32]::GetWindowRect([IntPtr]$Handle, [ref]$rect)) {
-        Throw-DriverError 'UI_CHANGED' 'Send window moved or resized'
-    }
-    $elements = @(Get-SendUiaElements $Handle)
-    $title = Select-WeixinNativeTitle $elements $ProcessId
-    $composer = @($elements | Where-Object {
-        $_.ProcessId -eq $ProcessId -and -not $_.IsOffscreen -and $_.ClassName -ceq 'mmui::ChatInputField' -and
-        $_.AutomationId -ceq 'chat_input_field' -and $_.IsEnabled
-    })
-    if (-not $title -or $composer.Count -ne 1) {
-        Throw-DriverError 'UI_CHANGED' 'Send UIA controls unavailable'
-    }
-    $bounds = $composer[0].BoundingRectangle
-    $width = $rect.Right - $rect.Left
-    $height = $rect.Bottom - $rect.Top
-    if ($bounds.IsEmpty -or $bounds.Left -lt $rect.Left -or $bounds.Top -lt $rect.Top -or
-        $bounds.Right -gt $rect.Right -or $bounds.Bottom -gt $rect.Bottom) {
-        Throw-DriverError 'UI_CHANGED' 'Composer coordinates invalid'
-    }
-    $input = @{
-        x0 = [int][Math]::Ceiling($bounds.Left - $rect.Left)
-        y0 = [int][Math]::Ceiling($bounds.Top - $rect.Top)
-        x1 = [int][Math]::Floor($bounds.Right - $rect.Left)
-        y1 = [int][Math]::Floor($bounds.Bottom - $rect.Top)
-    }
-    if ($input.x1 -le $input.x0 -or $input.y1 -le $input.y0) {
-        Throw-DriverError 'UI_CHANGED' 'Composer coordinates invalid'
-    }
-    return @{handle=$Handle; rect=@($rect.Left,$rect.Top,$width,$height); title=$title; input_region=$input}
-}
-
-# Receipt acknowledges accepted input events, not message delivery.
-function Send-CheckedComposerClick {
-    param([int64]$Hwnd,[int]$ScreenX,[int]$ScreenY)
-    $pt=New-Object WeixinProbeWin32+POINT
-    $pt.X=$ScreenX;$pt.Y=$ScreenY
-    if(-not [WeixinProbeWin32]::ScreenToClient([IntPtr]$Hwnd,[ref]$pt)){Throw-DriverError 'EXECUTION_UNKNOWN' 'Composer coordinates unavailable'}
-    $lp=[IntPtr](($pt.Y -shl 16) -bor ($pt.X -band 0xFFFF))
-    if(-not [WeixinProbeWin32]::PostMessage([IntPtr]$Hwnd,0x0200,[IntPtr]::Zero,$lp)){Throw-DriverError 'EXECUTION_UNKNOWN' 'Composer move rejected'}
-    Start-Sleep -Milliseconds 60
-    if(-not [WeixinProbeWin32]::PostMessage([IntPtr]$Hwnd,0x0201,[IntPtr]1,$lp)){Throw-DriverError 'EXECUTION_UNKNOWN' 'Composer press rejected'}
-    Start-Sleep -Milliseconds 60
-    if(-not [WeixinProbeWin32]::PostMessage([IntPtr]$Hwnd,0x0202,[IntPtr]::Zero,$lp)){Throw-DriverError 'EXECUTION_UNKNOWN' 'Composer release rejected'}
-    Start-Sleep -Milliseconds 150
-}
 try{
     $raw=[Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String([IO.File]::ReadAllText($InputFile)),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)
     $req=([Text.Encoding]::UTF8.GetString($raw))|ConvertFrom-Json
@@ -180,85 +130,6 @@ try{
         Send-WeixinPostMessageClick -Hwnd $shot.handle -ScreenX ($shot.rect[0]+[int]$req.x) -ScreenY ($shot.rect[1]+[int]$req.y)
         Start-Sleep -Milliseconds 500
         Write-DriverJson @{ok=$true;data=@{done=$true}}
-    }elseif($req.action -eq 'submit'){
-        $timer=[Diagnostics.Stopwatch]::StartNew()
-        $text=[string]$req.text
-        if(-not $text -or $text.Length -gt 500 -or $text -match '[\x00-\x1f\x7f-\x9f]'){Throw-DriverError 'UI_CHANGED' 'Invalid text'}
-        if([int64]$req.handle -ne $script:handle -or @($req.rect).Count -ne 4){Throw-DriverError 'UI_CHANGED' 'Send window changed'}
-        $expected=@($req.rect)
-        $r=$req.input_region
-        if($null -eq $r -or $r.x0 -lt 0 -or $r.y0 -lt 0 -or $r.x1 -le $r.x0 -or $r.y1 -le $r.y0 -or $r.x1 -gt $expected[2] -or $r.y1 -gt $expected[3]){Throw-DriverError 'UI_CHANGED' 'Composer coordinates invalid'}
-        function Assert-SendWindow {
-            if([WeixinProbeWin32]::GetForegroundWindow().ToInt64() -ne $script:handle){Throw-DriverError 'FOREGROUND_LOST' 'Send focus changed'}
-            $current=Get-SendCapture -Handle $script:handle -ProcessId $script:windowProcessId
-            if($current.rect[0] -ne $expected[0] -or $current.rect[1] -ne $expected[1] -or $current.rect[2] -ne $expected[2] -or $current.rect[3] -ne $expected[3]){Throw-DriverError 'UI_CHANGED' 'Send window moved or resized'}
-            if(-not [string]::Equals($current.title, [string]$req.expected_native_title, [StringComparison]::Ordinal)){
-                Throw-DriverError 'TARGET_AMBIGUOUS' 'Send title changed'
-            }
-            $input=$current.input_region
-            if($input.x0 -ne $r.x0 -or $input.y0 -ne $r.y0 -or $input.x1 -ne $r.x1 -or $input.y1 -ne $r.y1){Throw-DriverError 'UI_CHANGED' 'Send composer moved or resized'}
-            if([WeixinProbeWin32]::GetForegroundWindow().ToInt64() -ne $script:handle){Throw-DriverError 'FOREGROUND_LOST' 'Send focus changed'}
-            if([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -ge [int64]$req.deadline_ms){Throw-DriverError 'UI_CHANGED' 'Action deadline expired'}
-        }
-        Assert-SendWindow
-        Send-CheckedComposerClick -Hwnd $script:handle -ScreenX ($expected[0]+[int](($r.x0+$r.x1)/2)) -ScreenY ($expected[1]+[int](($r.y0+$r.y1)/2))
-        $clickMs=$timer.ElapsedMilliseconds
-        # Keep the copied text on the clipboard, as an ordinary copy/paste does.
-        # Restoring immediately would race the target application's paste handler.
-        Set-ClipboardTextRetry -Text $text
-        $clipboardMs=$timer.ElapsedMilliseconds-$clickMs
-        Assert-SendWindow
-        # One ordered input batch: select all, paste the whole text, then Enter.
-        # SendInput serializes the events; no per-character delay or screenshot.
-        $events=New-Object 'System.Collections.Generic.List[WeixinProbeWin32+INPUT]'
-        foreach($key in @(@(0x11,0),@(0x41,0),@(0x41,2),@(0x11,2),@(0x11,0),@(0x56,0),@(0x56,2),@(0x11,2),@(0x0D,0),@(0x0D,2))){
-            $event=New-Object WeixinProbeWin32+INPUT
-            $keyboard=New-Object WeixinProbeWin32+KEYBDINPUT
-            $keyboard.wVk=[uint16]$key[0];$keyboard.dwFlags=[uint32]$key[1]
-            $union=New-Object WeixinProbeWin32+INPUTUNION
-            $union.ki=$keyboard
-            $event.type=1;$event.u=$union
-            $events.Add($event)
-        }
-        $sent=[WeixinProbeWin32]::SendInput($events.Count,$events.ToArray(),[Runtime.InteropServices.Marshal]::SizeOf([type][WeixinProbeWin32+INPUT]))
-        if($sent -ne $events.Count){
-            # Release modifiers on partial insertion; never retry paste or Enter.
-            [WeixinProbeWin32]::keybd_event(0x11,0,2,[IntPtr]::Zero)
-            [WeixinProbeWin32]::keybd_event(0x41,0,2,[IntPtr]::Zero)
-            [WeixinProbeWin32]::keybd_event(0x56,0,2,[IntPtr]::Zero)
-            [WeixinProbeWin32]::keybd_event(0x0D,0,2,[IntPtr]::Zero)
-            Throw-DriverError 'EXECUTION_UNKNOWN' 'Input batch incomplete'
-        }
-        Write-DriverJson @{ok=$true;data=@{done=$true;timings_ms=@{click=$clickMs;clipboard=$clipboardMs;input=($timer.ElapsedMilliseconds-$clickMs-$clipboardMs);total=$timer.ElapsedMilliseconds}}}
-    }elseif($req.action -eq 'type' -or $req.action -eq 'enter'){
-        if($req.action -eq 'type' -and -not (Invoke-WeixinActivation $script:handle)){Throw-DriverError 'FOREGROUND_LOST' 'Composer replacement requires foreground'}
-        $shot=Capture
-        if([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -ge [int64]$req.deadline_ms){Throw-DriverError 'UI_CHANGED' 'Action deadline expired'}
-        if($req.action -eq 'type'){
-            $text=[string]$req.text
-            if(-not $text -or $text.Length -gt 500 -or $text -match '[\x00-\x1f\x7f-\x9f]'){Throw-DriverError 'UI_CHANGED' 'Invalid text'}
-            $r=$shot.input_region
-            Send-CheckedComposerClick -Hwnd $script:handle -ScreenX ($shot.rect[0]+[int](($r.x0+$r.x1)/2)) -ScreenY ($shot.rect[1]+[int](($r.y0+$r.y1)/2))
-            Send-WeixinKeyChord -Keys @('CTRL','A') -ForegroundGuard{[WeixinProbeWin32]::GetForegroundWindow().ToInt64() -eq $script:handle}
-            if([WeixinProbeWin32]::GetForegroundWindow().ToInt64() -ne $script:handle){Throw-DriverError 'FOREGROUND_LOST' 'Composer focus changed'}
-            foreach($ch in $text.ToCharArray()){
-                if(-not [WeixinProbeWin32]::PostMessage([IntPtr]$script:handle,0x0102,[IntPtr][int][char]$ch,[IntPtr]1)){Throw-DriverError 'EXECUTION_UNKNOWN' 'Text event rejected'}
-                Start-Sleep -Milliseconds 30
-            }
-        }else{
-            $r=$shot.input_region
-            Send-CheckedComposerClick -Hwnd $script:handle -ScreenX ($shot.rect[0]+[int](($r.x0+$r.x1)/2)) -ScreenY ($shot.rect[1]+[int](($r.y0+$r.y1)/2))
-            $lpDown=[IntPtr](1 -bor (0x1C -shl 16))
-            $lpUp=[IntPtr]((1 -bor (0x1C -shl 16)) -bor 0xC0000000)
-            if(-not [WeixinProbeWin32]::PostMessage([IntPtr]$script:handle,0x0100,[IntPtr]0x0D,$lpDown)){Throw-DriverError 'EXECUTION_UNKNOWN' 'Enter event rejected'}
-            Start-Sleep -Milliseconds 40
-            if(-not [WeixinProbeWin32]::PostMessage([IntPtr]$script:handle,0x0101,[IntPtr]0x0D,$lpUp)){Throw-DriverError 'EXECUTION_UNKNOWN' 'Enter release rejected'}
-        }
-        Write-DriverJson @{ok=$true;data=@{done=$true}}
-    }elseif($req.action -eq 'send_capture'){
-        if(-not (Invoke-WeixinActivation $script:handle)){Throw-DriverError 'FOREGROUND_LOST' 'Send capture requires foreground'}
-        $shot=Get-SendCapture -Handle $script:handle -ProcessId $script:windowProcessId
-        Write-DriverJson @{ok=$true;data=$shot}
     }elseif($req.action -eq 'search_capture'){
         $shot=SearchCapture;$shot.Remove('handle');$shot.Remove('rect')
         Write-DriverJson @{ok=$true;data=$shot}
@@ -280,9 +151,6 @@ try{
         'Search requires foreground'='search_foreground_unavailable'
         'Search window geometry unavailable'='search_window_geometry_unavailable'
         'Search result changed'='search_result_changed'
-        'Send UIA controls unavailable'='send_uia_controls_unavailable'
-        'Send title changed'='send_title_changed'
-        'Send composer moved or resized'='send_composer_changed'
     }
     $detail=[regex]::Match([string]$_.Exception.Message,'^WXDRIVE\|[A-Z_]+\|(.+)$')
     if($detail.Success -and $knownReasons.ContainsKey($detail.Groups[1].Value)){$reason=$knownReasons[$detail.Groups[1].Value]}

@@ -45,7 +45,7 @@ export const TOOL_DEFS: WeixinToolDef[] = [
     description:
       '在微信主窗口全局搜索好友/群（只读，不打开会话、不读历史消息）。' +
       '返回结果列表（label/section），每个结果附带 5 分钟有效的 target_ref，' +
-      '供 weixin_message_send / weixin_history_read 定位目标。',
+      '供 weixin_message_send 定位目标。',
     zodShape: {
       query: z.string().min(1).max(100).describe('搜索词（好友昵称/群名关键字）'),
       type: z.enum(['friend', 'group', 'any']).optional().describe('结果类型过滤：friend 联系人 / group 群聊 / any 全部，默认 any'),
@@ -58,8 +58,8 @@ export const TOOL_DEFS: WeixinToolDef[] = [
     title: '微信发送消息',
     description:
       '向 target_ref 指定的会话发送 1 条文本消息（写动作，单次单目标，1..500 字）。' +
-      'target_ref 必须先经 weixin_chat_search 获取且未过期。发送前校验会话标题与输入框无残留草稿，' +
-      '此旧路径发送后按OCR近似匹配核对最新本人消息；effect=unknown 表示消息可能已发出但无法确认，系统不会自动重试。名称会话v2路径仅记录发送操作完成，不做发送后OCR。',
+      'target_ref 必须先经 weixin_chat_search 获取且未过期。使用服务端视觉定位并核对微信操作。' +
+      'effect=unknown 表示消息可能已发出但无法确认，系统不会自动重试。',
     zodShape: {
       target_ref: z.string().min(1).describe('weixin_chat_search 返回的 target_ref（5 分钟有效）'),
       text: z.string().min(1).max(500).describe('要发送的文本（1..500 字，不支持换行）'),
@@ -114,6 +114,5 @@ export const TOOL_DEFS: WeixinToolDef[] = [
 
 TOOL_DEFS.push(
   { name:'weixin_name_resolve', title:'定位微信名称会话', description:'按名称及OCR近似匹配唯一定位；多个近似联系人拒绝选择。只返回定位证据，不返回历史正文。', zodShape:{target_name:z.string().min(1).max(128)}, annotations:{title:'定位微信名称会话',readOnlyHint:true,destructiveHint:false,idempotentHint:false,openWorldHint:true}},
-  { name:'weixin_message_send_v2', title:'微信许可单条发送', description:'仅接受Runtime签名执行上下文；一条发送，新本人气泡后验，未知不重发。', zodShape:{context:z.string().min(1).max(32768),signature:z.string().regex(/^[a-f0-9]{64}$/)}, annotations:{title:'微信许可单条发送',readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:true}},
 )
 export const TOOL_NAMES = TOOL_DEFS.map((t) => t.name)

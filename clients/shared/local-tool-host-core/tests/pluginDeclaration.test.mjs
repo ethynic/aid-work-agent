@@ -42,12 +42,12 @@ const WECOM_DECLARED = [
   'wecom_unread_list', 'wecom_read_session', 'wecom_session_directory', 'wecom_read_sessions',
   'wecom_group_poll', 'wecom_config_doctor', 'wecom_config_calibrate',
 ]
-// 与 weixin CLI TOOL_DEFS 一致（8 项，含 v2 协商专用 2 项）；写 = message_send + v2 发送
+// 与当前 weixin CLI TOOL_DEFS 一致；保留标准多模态发送。
 const WEIXIN_TOOLS = [
   'weixin_probe', 'weixin_chat_search', 'weixin_message_send', 'weixin_history_read',
-  'weixin_session_observe', 'weixin_unread_list', 'weixin_name_resolve', 'weixin_message_send_v2',
+  'weixin_session_observe', 'weixin_unread_list', 'weixin_name_resolve',
 ]
-const WEIXIN_WRITE = ['weixin_message_send', 'weixin_message_send_v2']
+const WEIXIN_WRITE = ['weixin_message_send']
 // weixin 声明白名单（CLI buildToolDeclaration）：4 个 v1 工具
 const WEIXIN_DECLARED = [
   'weixin_probe', 'weixin_chat_search', 'weixin_message_send', 'weixin_name_resolve',
@@ -146,7 +146,8 @@ test('清单未声明的本机工具不进云端受信面', () => {
 
 test('已安装的旧签名包无法重新启用或上报正文读取工具', () => {
   const pluginId = 'ai.aidwork.weixin'
-  const manifest = pluginManifest(pluginId, WEIXIN_TOOLS, WEIXIN_WRITE, [], WEIXIN_TOOLS.slice(0, -1))
+  const manifest = pluginManifest(pluginId, [...WEIXIN_TOOLS, 'weixin_message_send_v2'],
+    [...WEIXIN_WRITE, 'weixin_message_send_v2'], [], WEIXIN_TOOLS)
   const assembled = assembleStoreManifests([{ plugin_id: pluginId, manifest, declaration: parseToolDeclaration(manifest) }])
   assert.deepEqual(assembled.declaredTools.weixin, WEIXIN_DECLARED)
   assert.deepEqual(assembled.parallelTools, {})

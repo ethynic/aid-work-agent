@@ -31,7 +31,6 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   weixin_unread_list: { operation: createWeixinUnreadListOperation(), cli: { write: false } },
   weixin_session_observe: { operation: nameOperations.observe, cli: { write: false } },
   weixin_name_resolve: { operation: nameOperations.resolve, cli: { write: false } },
-  weixin_message_send_v2: { operation: nameOperations.send, cli: { write: true } },
 }
 
 export const OPERATION_NAMES = Object.keys(OPERATIONS)

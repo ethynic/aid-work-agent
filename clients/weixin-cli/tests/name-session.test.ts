@@ -1,11 +1,6 @@
 import test from 'node:test'
-import { CodedOperationError } from '../src/operations/types.js'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, readFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { readNameSession, sendNameSessionOnce, newNameObjects, splitClippedTop, isNameTimestamp, type NameDriver, type NameWindow } from '../src/platform/nameSession.js'
+import { readNameSession, newNameObjects, splitClippedTop, isNameTimestamp, type NameWindow } from '../src/platform/nameSession.js'
 
 const object = (text: string, sender: 'peer' | 'self' = 'peer', y = 20): NameWindow['objects'][number] => ({ type:'text',sender,text,bounds:{x0:10,y0:y,x1:90,y1:y+15},clipped:false,evidence_hash:'c'.repeat(64) })
 const baseline: NameWindow = { unchanged:false,title:'test-contact',exact_name:true,unique_match:true,complete:true,input_empty:true,evidence_ref:'dpapi:test_evidence',frame:'a'.repeat(64),objects:[object('old')] }
@@ -59,76 +54,6 @@ test('timestamp exemption rejects invalid time/date, multiline and bubble inters
  assert.equal(isNameTimestamp(box,viewport,[{bounds:{x0:1300,y0:500,x1:1400,y1:530}}]),false)
  assert.equal(isNameTimestamp(box,viewport,[{bounds:{x0:1400,y0:480,x1:1500,y1:520}}]),true)
 })
-
-test('输入及Enter确认即submitted，不调用任何发送后读取；重复请求不重发',async()=>{
- const dir=await mkdtemp(join(tmpdir(),'name-submit-'))
- try{for(const objects of [[],[object('old')],[{...object(''),type:'image' as const}],[{...object('partial'),clipped:true}]]){
-  const actions:string[]=[]
-  const driver:NameDriver=async req=>{actions.push(String(req.action));assert.equal(req.action,'submit');return{submitted:true}}
-  const args={targetName:'test-contact',text:'old',requestId:randomUUID(),baseline:{...baseline,input_empty:false,objects},deadlineMs:Date.now()+60000}
-  const result=await sendNameSessionOnce(args,{stateDir:dir,driver})
-  assert.deepEqual(result,{status:'submitted',evidence_ref:`weixin-submission:${args.requestId}:1`})
-  assert.equal(JSON.parse(await readFile(join(dir,args.requestId+'.json'),'utf8')).status,'submitted')
-  const journal=await readFile(join(dir,args.requestId+'.json.stages.jsonl'),'utf8')
-  assert.ok(journal.includes('submitted'));assert.equal(journal.includes('post_read'),false)
-  assert.equal((await sendNameSessionOnce(args,{stateDir:dir,driver})).status,'unknown')
-  await assert.rejects(sendNameSessionOnce({...args,text:'changed'},{stateDir:dir,driver}))
-  assert.deepEqual(actions,['submit'])
- }}finally{await rm(dir,{recursive:true,force:true})}
-})
-
-test('动作ack缺失、false、字符串或异常均unknown且不重发',async()=>{
- const dir=await mkdtemp(join(tmpdir(),'name-ack-'))
- try{for(const ack of [{},{submitted:false},{submitted:'true'},null]){
-  let calls=0
-  const driver:NameDriver=async req=>{calls++;assert.equal(req.action,'submit');if(ack===null)throw new CodedOperationError('UI_CHANGED','title');return ack}
-  const args={targetName:'test-contact',text:'reply',requestId:randomUUID(),baseline,deadlineMs:Date.now()+60000}
-  assert.equal((await sendNameSessionOnce(args,{stateDir:dir,driver})).status,'unknown')
-  assert.equal(JSON.parse(await readFile(join(dir,args.requestId+'.json'),'utf8')).status,'may_have_started')
-  await sendNameSessionOnce(args,{stateDir:dir,driver});assert.equal(calls,1)
- }}finally{await rm(dir,{recursive:true,force:true})}
-})
-
-test('动作期间取消或绝对期限到达后ack成功也不记submitted',async()=>{
- const dir=await mkdtemp(join(tmpdir(),'name-late-ack-'))
- try{for(const mode of ['cancel','deadline','precancel'] as const){
-  const controller=new AbortController();let calls=0
-  const args={targetName:'test-contact',text:'reply',requestId:randomUUID(),baseline,deadlineMs:Date.now()+60000}
-  if(mode==='precancel')controller.abort()
-  const driver:NameDriver=async req=>{calls++;assert.equal(req.action,'submit');if(mode==='cancel')controller.abort();else args.deadlineMs=Date.now()-1;return{submitted:true}}
-  assert.equal((await sendNameSessionOnce(args,{stateDir:dir,driver,signal:controller.signal})).status,'unknown')
-  assert.equal(calls,mode==='precancel'?0:1)
-  assert.equal(JSON.parse(await readFile(join(dir,args.requestId+'.json'),'utf8')).status,'may_have_started')
- }}finally{await rm(dir,{recursive:true,force:true})}
-})
-
-test('过期及非法正文在动作前拒绝',async()=>{
- const dir=await mkdtemp(join(tmpdir(),'name-invalid-'));let calls=0
- try{const args={targetName:'test-contact',text:'reply',requestId:randomUUID(),baseline,deadlineMs:Date.now()+60000}
-  for(const change of [{deadlineMs:0},{text:'a\nb'},{text:' '},{text:'x'.repeat(501)}])await assert.rejects(sendNameSessionOnce({...args,...change},{stateDir:dir,driver:async()=>{calls++;return{submitted:true}}}))
-  assert.equal(calls,0)
- }finally{await rm(dir,{recursive:true,force:true})}
-})
-
-
-test('真实期限取消传入driver，迟到的成功ack保持unknown且不重发',async()=>{
- const dir=await mkdtemp(join(tmpdir(),'name-timed-ack-'))
- try{
-  let calls=0,sawAbort=false
-  const args={targetName:'test-contact',text:'reply',requestId:randomUUID(),baseline,deadlineMs:Date.now()+300}
-  const driver:NameDriver=async(req,signal)=>{
-   calls++;assert.equal(req.action,'submit')
-   await new Promise(resolve=>setTimeout(resolve,350))
-   sawAbort=signal?.aborted===true
-   return{submitted:true}
-  }
-  assert.equal((await sendNameSessionOnce(args,{stateDir:dir,driver})).status,'unknown')
-  assert.equal(sawAbort,true);assert.equal(calls,1)
-  assert.equal(JSON.parse(await readFile(join(dir,args.requestId+'.json'),'utf8')).status,'may_have_started')
-  await sendNameSessionOnce({...args,deadlineMs:Date.now()+10000},{stateDir:dir,driver});assert.equal(calls,1)
- }finally{await rm(dir,{recursive:true,force:true})}
-})
-
 
 test('顶部截断文字行允许40%墨迹抗锯齿，背景圆角及非截断候选仍拒绝',()=>{
  const width=200,viewport={x0:0,y0:10,x1:200,y1:100}

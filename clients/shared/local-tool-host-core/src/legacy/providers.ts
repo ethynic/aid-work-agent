@@ -73,10 +73,8 @@ const BOSS_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'boss_resume_next',
 ])
 
-// 与 weixin CLI 的调度声明保持同步；仅 message_send 为写。受信 manifest
-// 保持真实 v1 形态；v2 会话发送能力经 config.providers.weixin.v2Send=true 显式
-// 协商（隔离测试/未来真实 v2 Provider），由 cli 在启动时调用 setManifestOverride
-// 升级为 V2 变体。能力上报与 v2 门禁同源，缺能力不得通过发布/分配门禁（#6）
+// 遗留直配微信 Provider 的兼容清单；商店插件始终以自己的签名声明为准。
+// 已交付的直配插件可继续使用 v1 发送。v2Send=true 只为遗留直配保留兼容变体。
 const WEIXIN_TOOLS = [
   'weixin_probe',
   'weixin_name_resolve',
