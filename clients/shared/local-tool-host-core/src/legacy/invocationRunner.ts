@@ -12,7 +12,8 @@
  * - v2 终态先落 result outbox 再发 operation-result；仅 2xx ACK 删条目，确定性 4xx
  *   保留并标记 gave_up（R21：停止主动重试、永不删除），断网退避重试
  * - 旧 invocation 完全走 /result：payload 逐键显式构造，与历史字节一致（含计费语义）
- * - 全部 Provider tool call 持桌面资源锁执行（含旧 boss 链路）；等待超时 → DESKTOP_RESOURCE_BUSY
+ * - 全部 Provider tool call 持桌面资源锁执行（含旧 boss 链路）；等待超时 → DESKTOP_RESOURCE_BUSY；
+ *   例外：声明 parallel 的并行作业（契约 2.20）不取锁，与任何作业并发执行
  * - 执行中每 2s 或每个业务进度回传 progress；ack.cancel=true → 协作式中止（AbortController）
  * - 写动作断线：本地继续完成原子动作，恢复后回传终态；无法证明效果 → EXECUTION_UNKNOWN
  * - 两类原结果均持久于 result outbox；v1 独立子目录供旧消费者安全忽略
@@ -64,7 +65,8 @@ export interface RunnerDeps {
   resultOutbox?: ResultOutbox
   /** 本地许可有效期上限 ms（默认 writeAuthorize LOCAL_PERMIT_CAP_MS=90s；测试注入短值） */
   permitLocalCapMs?: number
-  /** 测试注入的 Provider manifest 覆盖（v2 契约样例专用；生产不传，走 TRUSTED_MANIFESTS） */
+  /** 实际生效 Provider manifest：生产为 Runtime 启动装配的商店派生 manifest（契约 2.20），
+   * 测试为 v2 契约样例覆盖；缺失 key 回退 getProviderManifest（override → TRUSTED） */
   manifests?: Record<string, ProviderManifest>
   /** 会话任务专用锁内复核（设计 §7 顺序 4）：写许可申请**之前**在桌面锁内重新
    * 观察目标会话并比对决策水位——有新消息/人工回复/身份漂移/观察失败时抛出
@@ -76,6 +78,10 @@ export interface RunnerDeps {
   /** Runtime-only bridge; called after lock/precheck/permit/journal, never by a model. */
   prepareProviderCall?: (inv: ClaimedInvocation, permit: WritePermit, signal: AbortSignal) => Promise<Record<string, unknown>>
   onEvent?: (message: string) => void
+  /** 契约 2.20：并行作业执行——跳过桌面资源锁（声明 parallel 的工具可与任何作业并发），
+   *  Provider 调用走并行 lane（同 Provider 可与串行调用并发）。v2 门禁、写许可、journal、
+   *  beforeProviderCall、取消/进度/租约/回执/补传通路全部不变；缺省串行（现状）。 */
+  parallel?: boolean
 }
 
 interface FinalResult {
@@ -95,6 +101,10 @@ interface FinalResult {
 
 /** 无业务进展告警默认阈值（Phase 7）：心跳只证明上报通路活跃，超过该时长无语义进展即告警 */
 const NO_PROGRESS_WARN_DEFAULT_MS = 60_000
+
+/** R10 停止前复判尝试上限（1 次首发 + 3 次重试）：/started 以 claim_token 幂等，
+ * 传输中断可安全重发；耗尽仍无明确响应即按 stop-unproven 如实回传，不执行受管停止 */
+const STOP_PRECHECK_ATTEMPTS = 4
 
 /** 进度转发器：业务语义进展与心跳续租分离（Phase 7，2026-10-20 复盘：68 条相同
  * 「设置筛选面板」心跳掩盖卡死）。语义进展（内容有变化）立即发原文；定时续租发
@@ -473,9 +483,13 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
     // 等待超时按未提交处理回 DESKTOP_RESOURCE_BUSY（绝不复用旧 'BUSY' 码，避免误触发云端旧弹层自愈）。
     // v2 写动作的许可/journal 全部移入锁内（R20）：锁等待最长 120s 会耗尽 90s 本地许可有效期，
     // 等待期间不得发起 writeAuthorize；锁内顺序固定为 取消复验 → writeAuthorize → 许可防御检查
-    //（单调时钟）→ journal fsync → 防御复验 → provider 调用，任一失败禁止执行（effect none）
-    settled = await withDesktopLock(
-      lockName,
+    //（单调时钟）→ journal fsync → 防御复验 → provider 调用，任一失败禁止执行（effect none）。
+    // 并行作业（契约 2.20）：声明 parallel 的工具不取桌面锁，锁内前置与 Provider 调用同序直接执行。
+    const enterLock = deps.parallel === true
+      ? (body: () => Promise<Record<string, unknown> | null>) => body()
+      : (body: () => Promise<Record<string, unknown> | null>) =>
+        withDesktopLock(lockName, body, { timeoutMs: deps.desktopLockTimeoutMs, signal: abortController.signal })
+    settled = await enterLock(
       async () => {
         const lockAcquiredMs = Date.now()
         phase.lockWaitMs = lockAcquiredMs - lockEnterMs
@@ -610,6 +624,62 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
           callArgs = await deps.prepareProviderCall(inv, permit, abortController.signal)
           if (!permit.isValid() || abortController.signal.aborted) throw new Error('发送许可或执行已失效')
         }
+        // R9/R10 停止动作前最后复判（契约「停止与接续」）：started 幂等重发会让服务端
+        // 再次执行「scope 原调用已全部可信终态 → 停止无需派发」复判。明确响应分派：
+        // 404/409（服务端判定已可信终态）或 401/403/撤销（执行权失效）→ 不执行受管
+        // 停止（服务端按既有 superseded 路径落终态并接续）；明确放行（2xx）→ 照常
+        // 受管停止。R10：传输失败（响应未送达，执行状态未知）不得当作「继续停止」——
+        // 歧义态下关闭受管资源有真实损害。/started 以 claim_token 幂等可安全重发，
+        // 沿既有传输重试机制（isRetryableTransportError + 退避）有界重试；重试耗尽
+        // 仍无明确响应 → 不执行受管停止（宁可少关不误关），按既有 stop-unproven
+        // 形态如实回传（服务端按现状走核对，不产生假完成）。
+        if (isRecoveryObservation && Number(inv.arguments['version']) === 3) {
+          await forwarder.flush()
+          let precheckSettled: 'skip-stop' | 'confirmed-running' | null = null
+          let backoff = retryBase
+          for (let attempt = 0; attempt < STOP_PRECHECK_ATTEMPTS; attempt++) {
+            try {
+              await deps.api.started(inv.invocation_id, inv.claim_token, deps.shutdownSignal)
+              precheckSettled = 'confirmed-running'
+              break
+            } catch (err) {
+              if (
+                err instanceof DeviceRevokedError ||
+                (err instanceof ApiError && [401, 403, 404, 409].includes(err.status))
+              ) {
+                precheckSettled = 'skip-stop'
+                break
+              }
+              if (!isRetryableTransportError(err) || attempt === STOP_PRECHECK_ATTEMPTS - 1) break
+              const delay = Math.max(backoff, err instanceof ApiError ? err.retryAfterMs ?? 0 : 0)
+              emit(`invocation ${inv.invocation_id} 停止前复判传输未确认，${delay}ms 后重发原请求`)
+              if (!(await backoffSleep(delay, deps.shutdownSignal))) break
+              backoff = Math.min(backoff * 2, retryMax)
+            }
+          }
+          if (precheckSettled === 'skip-stop') {
+            emit(`invocation ${inv.invocation_id} 停止前复判未获接纳：停止已被原调用可信回执取代，不执行受管停止`)
+            lockPreabort = preabortFinal({
+              success: false,
+              code: 'CANCELLED',
+              message: '停止已被原调用可信回执取代（执行已停稳），未执行受管停止',
+              retryable: false,
+              safe_to_retry: false,
+            })
+            return null
+          }
+          if (precheckSettled === null) {
+            emit(`invocation ${inv.invocation_id} 停止前复判传输中断且重试耗尽：执行状态未知，不执行受管停止`)
+            lockPreabort = preabortFinal({
+              success: false,
+              code: 'LOCAL_RECOVERY_STOP_UNPROVED',
+              message: '停止前复判无法确认（传输中断重试耗尽），未执行受管停止；请稍后重新核对',
+              retryable: true,
+              safe_to_retry: true,
+            })
+            return null
+          }
+        }
         await deps.beforeProviderCall?.(inv)
         phase.lockPrepMs = Date.now() - lockAcquiredMs
         const providerCallT0 = Date.now()
@@ -617,6 +687,8 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
           if (abortController.signal.aborted) throw new Error('EXECUTION_AUTHORITY_LOST')
           providerStarted = true
           return await provider.callTool(inv.tool_name, callArgs, {
+            // 并行 lane（契约 2.20）：同 Provider 可与串行调用并发；串行 lane 单飞门不变
+            parallel: deps.parallel === true,
             signal: permit ? AbortSignal.any([abortController.signal, AbortSignal.timeout(Math.max(0, Math.floor(permit.msRemaining())))]) : abortController.signal,
             onProgress: (p) => {
               const stage = extractStage(p.message)
@@ -632,7 +704,6 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
           phase.providerCallMs = Date.now() - providerCallT0
         }
       },
-      { timeoutMs: deps.desktopLockTimeoutMs, signal: abortController.signal },
     )
   } catch (err) {
     if (err instanceof DesktopLockTimeoutError) {
@@ -769,6 +840,15 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
   const r = settled ?? {}
   const data: Record<string, unknown> = { ...(r['data'] as Record<string, unknown> | undefined) }
   if (typeof r['run_id'] === 'string') data['run_id'] = r['run_id']
+  // 契约 2.20 候选「正常结束的事实」：_runtime_completion 是 Runtime Host 保留键——插件
+  // 回执同名字段先剥离（Host 唯一附加，防伪造残留），仅 boss Provider 的纯成功路径重加。
+  // 写入判据 = 原可信 Provider 结构化终态已到达（settled 非空）+ 执行已退出 + 桌面锁已释放
+  //（enterLock 返回的控制流保证）；声明 parallel 的作业不取锁，无法证明锁释放，不写入。
+  // 其余全部路径（lockPreabort / 授权丢失 / 取消 / shutdown / 锁超时 / 调用错误）不得写入。
+  delete data['_runtime_completion']
+  if (providerKey === 'boss-recruiting' && deps.parallel !== true && settled !== null) {
+    data['_runtime_completion'] = { version: 1 }
+  }
   // v1（旧 /result）：Provider 结果缺 effect 时键缺省——与 HEAD 逐字节一致，不注入默认值
   const rawEffect = strField(r['effect'])
   await sendFinalResult({

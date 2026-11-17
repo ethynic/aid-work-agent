@@ -392,6 +392,20 @@ class LocalToolProxyTool(BaseTool):
                 return self._attach_credit_cost(invocation, result)
 
             if durable:
+                if ((invocation or {}).get("state") == "cancel_requested"
+                        and not (invocation or {}).get("result_json")
+                        and self._stop_verified_covered(invocation_id)):
+                    # R10 停稳已核（契约「停止与接续」）：v3 停稳证明已覆盖本原调用
+                    # （受管停止已证明执行停稳），行仍 cancel_requested 且无回执——
+                    # 继续轮询只是等租约过期（生产领取租约 60s，用户多等剩余租约）。
+                    # 立即把「业务效果未知」事实交回原任务（与租约收敛同一
+                    # EXECUTION_UNKNOWN 形态，overlay_flow._known 按同一停稳事实放行），
+                    # 不等 deadline/租约、不重放该调用；已有回执仍走上方既有终态消费。
+                    # 无停稳证明保持原等待（回归锚）。
+                    result = self._map_terminal({**invocation, "state": "unknown",
+                        "effect": "unknown", "result_json": None,
+                        "error_message": "原操作已停稳但业务回执未送达"})
+                    return self._attach_credit_cost(invocation, result)
                 if durable_deadline is not None:
                     if datetime.now(durable_deadline.tzinfo) >= durable_deadline:
                         from src.local_tools.durable_flow import LocalContinuationRequired
@@ -421,6 +435,21 @@ class LocalToolProxyTool(BaseTool):
                 }
 
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
+
+    @staticmethod
+    def _stop_verified_covered(invocation_id: str) -> bool:
+        """R10（契约「停止与接续」）：原调用是否被本 Worker checkpoint
+        verified_local_invocations（v3 受管停稳已核）覆盖。
+
+        判定数据来自 Worker 直接持有的 owner（DurableControl.envelope 随领取载入，
+        与 overlay_flow._known 同一读取方式），不做服务端查询；无 owner 上下文
+        （旧链路）视为未覆盖，语义不变。
+        """
+        from .lifecycle import current_local_operation
+        operation = current_local_operation()
+        envelope = getattr(getattr(getattr(operation, 'owner', None), 'root', None),
+            'envelope', None) or {}
+        return str(invocation_id) in (envelope.get('verified_local_invocations') or [])
 
     # ==================== 设备闸门 ====================
 
@@ -798,21 +827,56 @@ def _filter_probe_covers_request(data: Dict[str, Any], args: Dict[str, Any]) -> 
     return True
 
 
+def _filter_evidence_skips(data: Dict[str, Any]) -> Optional[set]:
+    """回执 data.filter_evidence（version=1）声明的「无效跳过」请求项集合 {(field, path)}。
+
+    CLI 是业务回执唯一生产者：清洗跳过的请求项凭此声明豁免逐行核验（设计「BOSS 筛选参数
+    容错」R5）。版本未知、形状异常或含未登记字段 → 返回 None，按旧回执处理不豁免任何项
+    （已交付旧 CLI 无此字段，行为逐字不变）。
+    """
+    evidence = data.get("filter_evidence")
+    if not isinstance(evidence, dict) or type(evidence.get("version")) is not int or evidence["version"] != 1:
+        return None
+    skipped = evidence.get("skipped")
+    if not isinstance(skipped, list):
+        return None
+    records = set()
+    for item in skipped:
+        if not isinstance(item, dict):
+            return None
+        field, path = item.get("field"), item.get("path")
+        if field not in ("experience", "salary", "educations", "first_degree_only") \
+                or not isinstance(path, str) or item.get("reason") != "invalid_value":
+            return None
+        records.add((field, path))
+    return records
+
+
 def _verify_core_filter_rows(args: Dict[str, Any], data: Dict[str, Any]) -> bool:
-    """高级项跳过时，普通核心条件仍须由真实逐行回执证明生效。"""
+    """高级项跳过时，普通核心条件仍须由真实逐行回执证明生效。
+
+    回执 filter_evidence 声明为「无效跳过」的请求项豁免核验（CLI 已按未填写处理并出具
+    证据）；某维度全部请求项被豁免时不要求该行出现在回执（替换语义下该维度未被设置）。
+    其余请求项照旧逐项核验，核验强度不降。
+    """
     rows = data.get("applied_rows")
     if not isinstance(rows, list):
         return False
     substitutions = data.get("substitutions", [])
     if not isinstance(substitutions, list):
         return False
+    skips = _filter_evidence_skips(data)
     for key, label in (("experience", "经验要求"), ("educations", "学历要求"), ("salary", "薪资待遇")):
         raw = args.get(key)
         if not raw:
             continue
         values = raw if isinstance(raw, list) else [raw]
         expected = []
-        for requested in values:
+        all_skipped = True
+        for index, requested in enumerate(values):
+            if skips is not None and (key, f"{key}[{index}]" if isinstance(raw, list) else key) in skips:
+                continue
+            all_skipped = False
             requested = requested.strip()
             changes = [s for s in substitutions if isinstance(s, dict) and isinstance(s.get("row"), str)
                        and _filter_label(s["row"]) == label and s.get("requested") == requested]
@@ -821,6 +885,8 @@ def _verify_core_filter_rows(args: Dict[str, Any], data: Dict[str, Any]) -> bool
             matched = changes[0]["matched"].strip() if changes else requested
             if matched != "不限":
                 expected.append(matched)
+        if all_skipped:
+            continue
         matches = [r for r in rows if isinstance(r, dict) and isinstance(r.get("label"), str) and _filter_label(r["label"]) == label]
         if len(matches) != 1 or not isinstance(matches[0].get("options"), list):
             return False

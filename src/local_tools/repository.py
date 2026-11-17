@@ -71,10 +71,33 @@ COMPLETED_NONE_RESULT_CODES = (*PREEXECUTION_RESULT_CODES, 'INVALID_ARGUMENT', '
     'WRONG_PAGE', 'JOB_CHANGED', 'BUSY', 'PAYWALL', 'UI_CHANGED', 'TOOL_NOT_FOUND', 'UNKNOWN_TOOL')
 
 
-def result_proves_completion(success, code, effect):
+RUNTIME_COMPLETION_KEY = '_runtime_completion'
+
+
+def runtime_completion_evidence(data):
+    """合法的 _runtime_completion 结束证据（version 1 单字段，bool 不算 version）→ 原样返回。
+
+    形状之外的信任不在此判定：证据只会在 write_result 内核验设备能力串
+    runtime_boss_completion_v1 后原样落库，持久层出现合法形状即写入时的能力核验事实。
+    """
+    if not isinstance(data, dict):
+        return None
+    evidence = data.get(RUNTIME_COMPLETION_KEY)
+    if not isinstance(evidence, dict) or evidence.keys() != {'version'}:
+        return None
+    version = evidence['version']
+    return evidence if type(version) is int and version == 1 else None
+
+
+def result_proves_completion(success, code, effect, data=None):
     # Abort/timeout/ProviderCrash can return while a child is still running.
-    return success is True and effect in {'none', 'applied'} or (
-        success is False and effect == 'none' and code in COMPLETED_NONE_RESULT_CODES)
+    if success is True and effect in {'none', 'applied'} or (
+            success is False and effect == 'none' and code in COMPLETED_NONE_RESULT_CODES):
+        return True
+    # BOSS 正常结束的事实（契约 2.20 候选）：Runtime 在受权结果 data 附加的结束证据
+    # 证明「Provider 结构化终态已到达且执行停稳」，补足业务 effect 无法自证的调用；
+    # 原 state/effect/业务回执按原规则保留，只解除该调用的资源占用。
+    return runtime_completion_evidence(data) is not None
 
 
 def owned_invocation_ids(execution):
@@ -103,7 +126,27 @@ def operation_completion_known(invocation):
     observed = observed_invocation(invocation)
     result = observed.get('result_json') or {}
     return result_proves_completion(result.get('success'),
-        observed.get('error_code') or result.get('code'), observed.get('effect'))
+        observed.get('error_code') or result.get('code'), observed.get('effect'),
+        result.get('data'))
+
+
+def stop_proof_verified(invocation_id, tenant_id):
+    """停稳证明消费（契约「停止与接续」R9）：原调用 ∈ Runner checkpoint
+    verified_local_invocations（v3 受管停稳已核）。
+
+    与自有回执完成证据同权：只放行恢复检查与结果交接、解除占用；不证明业务
+    效果，不改写原 state/effect/回执。非 Runner 业务调用无此证明 → False。
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""SELECT r.checkpoint FROM agent_runners r
+            WHERE r.tenant_id=%s AND r.runner_id=(SELECT i.business_ref->>'runner_id'
+                FROM local_tool_invocations i WHERE i.id=%s AND i.tenant_id=%s
+                AND i.business_kind='agent_runner')""",
+            (tenant_id, str(invocation_id), tenant_id))
+        row = cursor.fetchone()
+    checkpoint = (row or {}).get('checkpoint') or {}
+    return str(invocation_id) in (checkpoint.get('verified_local_invocations') or [])
 
 
 def lock_operation_admission(cursor, tenant_id):
@@ -112,18 +155,21 @@ def lock_operation_admission(cursor, tenant_id):
         ('local-operation-admission:' + tenant_id,))
 
 
-def assert_device_stop_available(cursor, tenant_id, device_id, *, exclude=None, stop_only=False):
+def assert_device_stop_available(cursor, tenant_id, device_id, *, exclude=None, stop_only=False,
+                                 exclude_ids=None):
     """Short admission fence; queued recovery blocks new business, actual live work blocks stop."""
+    excluded = sorted(exclude_ids) if exclude_ids else None
     cursor.execute("""SELECT i.id FROM local_tool_invocations i
         JOIN local_tool_devices original ON original.id=i.device_id
         JOIN local_tool_devices target ON target.id=%s AND target.tenant_id=i.tenant_id AND target.user_id=i.user_id
         WHERE i.tenant_id=%s AND (%s IS NULL OR i.id::text<>%s)
+          AND (%s::text[] IS NULL OR NOT (i.id::text = ANY(%s)))
           AND (i.device_id=target.id OR original.machine_fingerprint_hash IS NOT NULL
             AND original.machine_fingerprint_hash<>'' AND target.machine_fingerprint_hash=original.machine_fingerprint_hash)
           AND ((i.business_kind='agent_runner_recovery' AND i.business_ref->>'version'='3'
                 AND i.state IN ('queued','claimed','running') AND i.deadline_at>NOW())
             OR (NOT %s AND i.state IN ('claimed','running','cancel_requested')))
-        LIMIT 1""", (device_id, tenant_id, exclude, exclude, stop_only))
+        LIMIT 1""", (device_id, tenant_id, exclude, exclude, excluded, excluded, stop_only))
     if cursor.fetchone():
         raise DeviceOperationUnresolved('LOCAL_RECOVERY_BUSY')
 
@@ -131,7 +177,10 @@ def assert_device_stop_available(cursor, tenant_id, device_id, *, exclude=None, 
 def assert_device_operations_settled(cursor, tenant_id, device_id, *, observation=None, send_status=None):
     if observation is not None:
         if observation.get('version') == 3:
-            assert_device_stop_available(cursor, tenant_id, device_id, exclude=observation.get('invocation_id'))
+            # The stop scope's own originals (cooperatively cancel_requested) are
+            # the stop target; every other task's live work still fences.
+            assert_device_stop_available(cursor, tenant_id, device_id, exclude=observation.get('invocation_id'),
+                exclude_ids=observation.get('original_invocation_ids'))
         # Only observation_scope has validated this server-created Host request.
         # Its strict producer only reads CDP; it never grants a write or
         # claims the original unknown operation stopped.
@@ -179,7 +228,8 @@ def observed_invocation(invocation):
     late = (invocation.get('result_json') or {}).get('_late_result')
     if invocation.get('state') != 'unknown' or not isinstance(late, dict):
         return invocation
-    if not result_proves_completion(late.get('success'), late.get('code'), late.get('effect')):
+    if not result_proves_completion(late.get('success'), late.get('code'), late.get('effect'),
+            late.get('data')):
         return invocation
     return {**invocation, 'state': 'succeeded' if late['success'] else
         'unknown' if late.get('code') == 'EXECUTION_UNKNOWN' else 'failed',
@@ -1029,6 +1079,8 @@ def claim_next(
     provider_keys: Optional[List[str]] = None,
     execution_lane: Optional[str] = "standard",
     expected_invocation_id: Optional[str] = None,
+    parallel_only: bool = False,
+    parallel_tools: Optional[Dict[str, List[str]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """领取下一条 queued invocation（事务 + FOR UPDATE SKIP LOCKED 防重复领取）。
 
@@ -1040,6 +1092,13 @@ def claim_next(
     SQL 层排除 session_task 道会话任务 invocation（老客户端不抢新道）；'session_task'
     需配合 expected_invocation_id 定向领取该行（不领取任意 invocation）。COALESCE 兼容
     迁移前 NULL 旧行（视作 standard）。
+
+    parallel_only（契约 2.20）：True 时仅选取「并行可领」的作业——provider_key 非 NULL
+    且 tool_name 属于该设备心跳上报 parallel_tools[provider_key]（jsonb 过滤，映射取自
+    设备 capabilities_json，api 层归一后传入）。为 True 但映射缺省/为空时匹配不到任何行。
+    缺省 False 时 SQL 与现状逐字节一致，既有调用方（session_tasks 定向领取等）零影响。
+    其余行为（advisory 锁、FOR UPDATE SKIP LOCKED、recovery 优先、created_at FIFO、
+    租约、事务）完全不变。
     """
     lane_filter = ""
     params: List[Any] = [device_id, tenant_id]
@@ -1053,6 +1112,14 @@ def claim_next(
     if provider_keys is not None:
         provider_filter = " AND (provider_key IS NULL OR provider_key = ANY(%s))"
         params.append(list(provider_keys))
+    parallel_filter = ""
+    if parallel_only:
+        parallel_filter = (
+            " AND provider_key IS NOT NULL"
+            " AND local_tool_invocations.tool_name = ANY (SELECT jsonb_array_elements_text("
+            "COALESCE(%s::jsonb -> local_tool_invocations.provider_key, '[]'::jsonb)))"
+        )
+        params.append(json.dumps(parallel_tools or {}))
     with get_db_connection() as conn:
         cursor = conn.cursor()
         lock_operation_admission(cursor, tenant_id)
@@ -1062,7 +1129,7 @@ def claim_next(
             f"""
             SELECT * FROM local_tool_invocations
             WHERE state = 'queued' AND device_id = %s AND tenant_id = %s
-              {lane_filter}{provider_filter}
+              {lane_filter}{provider_filter}{parallel_filter}
               AND (business_kind IS DISTINCT FROM 'agent_runner_recovery' OR business_ref->>'version' IS DISTINCT FROM '3'
                 OR (deadline_at>NOW() AND EXISTS (SELECT 1 FROM agent_runners r
                   WHERE r.runner_id=local_tool_invocations.business_ref->>'runner_id' AND r.tenant_id=local_tool_invocations.tenant_id
@@ -1077,7 +1144,7 @@ def claim_next(
         if not row:
             conn.commit()
             return None
-        from .recovery_observation import observation_scope
+        from .recovery_observation import observation_scope, stop_superseded_by_completion, supersede_completed_stop
         try:
             send_status = _send_status_scope(cursor, row, dispatch=True)
         except DeviceOperationUnresolved as error:
@@ -1086,8 +1153,15 @@ def claim_next(
             _reject_undispatched_send_status(cursor, row, 'queued')
             conn.commit()
             return None
+        observation = observation_scope(cursor, row, dispatch=True)
+        if (observation is not None and observation.get('version') == 3
+                and stop_superseded_by_completion(cursor, row, observation)):
+            # R8 晚回执竞态：原调用已全部可信终态——停止核验无需派发，本轮不领取。
+            conn.commit()
+            supersede_completed_stop(row['id'], tenant_id)
+            return None
         assert_device_operations_settled(cursor, tenant_id, device_id,
-            observation=observation_scope(cursor, row, dispatch=True), send_status=send_status)
+            observation=observation, send_status=send_status)
         cursor.execute(
             """
             UPDATE local_tool_invocations
@@ -1118,7 +1192,8 @@ def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str) -> O
         owner = cursor.fetchone()
         if not owner or not lock_active_device(cursor, tenant_id, str(owner['device_id'])):
             return None
-        from .recovery_observation import observation_scope
+        from .recovery_observation import (observation_scope, stop_superseded_by_completion,
+            supersede_completed_stop)
         observation = observation_scope(cursor, owner, dispatch=True)
         try:
             send_status = _send_status_scope(cursor, owner, dispatch=True)
@@ -1130,8 +1205,14 @@ def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str) -> O
             conn.commit()
             return None  # Never acknowledge /started after rejecting its read scope.
         if (owner.get('business_kind') == 'agent_runner_recovery'
-                and (owner.get('business_ref') or {}).get('version') == 3 and observation is None):
-            return None
+                and (owner.get('business_ref') or {}).get('version') == 3):
+            if observation is None:
+                return None
+            if stop_superseded_by_completion(cursor, owner, owner.get('business_ref') or {}):
+                # R8 晚回执竞态：原调用已全部可信终态——started 前拒发并落终态。
+                conn.commit()
+                supersede_completed_stop(owner['id'], tenant_id)
+                return None
         assert_device_operations_settled(cursor, tenant_id, str(owner['device_id']), observation=observation, send_status=send_status)
         cursor.execute(
             """
@@ -1232,6 +1313,14 @@ def write_runtime_result(invocation_id, tenant_id, claim_token_hash, success, co
         message, effect, data, retryable, device_id=device_id)
 
 
+def _device_capabilities_json(cursor, row):
+    """同一事务内读发起设备的心跳能力（行缺失返回 None=无能力；异常形态由门禁函数判定）。"""
+    cursor.execute('SELECT capabilities_json FROM local_tool_devices WHERE id = %s AND tenant_id = %s',
+        (row.get('device_id'), row.get('tenant_id')))
+    device = cursor.fetchone()
+    return device.get('capabilities_json') if device else None
+
+
 def write_result(
     invocation_id: str,
     tenant_id: str,
@@ -1277,6 +1366,18 @@ def write_result(
             # 幂等：已终态重复写返回原状态，不报错
             conn.commit()
             return dict(row)
+
+        # 契约 2.20 候选「正常结束的事实」：核验四要素——原设备+领取凭据（上方 FOR UPDATE
+        # 行核验已过）+ 原调用（本行）+ 设备能力串与证据版本（此处同事务读设备心跳能力）。
+        # 齐备 → 证据原样留在 data 落库（持久证据，完成判定据此只解除该调用资源占用）；
+        # 形状/版本不合法或设备未声明能力 → 剥离该键（防伪造残留）走原逻辑（旧语义）。
+        # 证据不改 state/effect/计费/原始回执语义，Host 合成错误/取消路径无 data 无证据。
+        if isinstance(data, dict) and RUNTIME_COMPLETION_KEY in data:
+            from .catalog import declares_boss_completion
+            if not (declares_boss_completion(_device_capabilities_json(cursor, row))
+                    and runtime_completion_evidence(data)):
+                data = {key: value for key, value in data.items()
+                    if key != RUNTIME_COMPLETION_KEY} or None
 
         if success:
             new_state = "succeeded"
@@ -1354,7 +1455,7 @@ def write_result(
             # The original lease-loss fact stays unknown. A final device receipt
             # proves this invocation stopped, not that a new execution is allowed.
             result_json = {'_late_result': {**result_json, 'effect': effect,
-                'stopped': result_proves_completion(success, code, effect)}}
+                'stopped': result_proves_completion(success, code, effect, data)}}
             new_state, effect, code, message = row['state'], row['effect'], row.get('error_code'), row.get('error_message')
         sql = """
             UPDATE local_tool_invocations

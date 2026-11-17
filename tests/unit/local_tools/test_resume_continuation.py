@@ -66,8 +66,35 @@ async def test_late_completed_parent_retains_original_cursor_and_device(monkeypa
 ])
 async def test_invalid_origin_never_dispatches(monkeypatch, change):
     monkeypatch.setattr(repository, 'get_invocation', lambda *a: parent(**change))
+    monkeypatch.setattr(repository, 'stop_proof_verified', lambda *a: False)
     result, failure = await continuation.prepare_next(kwargs())
     assert result is None and failure['code'] == 'INVALID_CONTINUATION'
+
+
+@pytest.mark.asyncio
+async def test_r8_proven_steady_parent_with_unknown_effect_stays_blocked_for_verification(monkeypatch):
+    """R8 依赖步骤先核对：父行停稳已证明但效果未知 → 续筛单独卡核对，文案明确。"""
+    steady = parent(state='unknown', effect='unknown', result_json={'_late_result': {
+        **parent()['result_json'], 'effect': 'unknown', 'stopped': True,
+        'data': {**parent()['result_json']['data'], '_runtime_completion': {'version': 1}}}})
+    monkeypatch.setattr(repository, 'get_invocation', lambda *a: steady)
+    result, failure = await continuation.prepare_next(kwargs())
+    assert result is None and failure['code'] == 'INVALID_CONTINUATION'
+    assert '结果未知' in failure['message'] and '核对' in failure['message']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('covered', [True, False])
+async def test_r9_stop_proof_parent_without_receipt_stays_blocked(monkeypatch, covered):
+    """R9 依赖步骤先核对：父行仅有停稳证明（v3 停稳已核）而无业务回执 → 续筛仍
+    单独卡核对不自动执行；停稳证明同权给出「结果未知需核对」文案，无证明保持
+    原兼容文案（语义不变）。"""
+    steady = parent(state='unknown', effect='unknown', result_json=None)
+    monkeypatch.setattr(repository, 'get_invocation', lambda *a: steady)
+    monkeypatch.setattr(repository, 'stop_proof_verified', lambda *a: covered)
+    result, failure = await continuation.prepare_next(kwargs())
+    assert result is None and failure['code'] == 'INVALID_CONTINUATION'
+    assert ('结果未知' in failure['message']) is covered
 
 
 @pytest.mark.asyncio

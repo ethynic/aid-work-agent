@@ -3,6 +3,14 @@
 MVP 静态内置 boss-recruiting。Runtime 上报的 capabilities_json 含 provider_id，
 claim 时校验 invocation.tool_name 在该 Provider 批准的 tools 内。
 schema_digest 强校验留 M0.5 接 LLM schema 时实现。
+
+契约 2.20 修订（声明即调度授权）：对已上报 `tool_declarations_v1` 能力串且
+`declared_tools` 非空的设备，claim 行级放行与设备就绪闸门以设备声明的
+`declared_tools` 为准（见 declared_tools_for_device / is_tool_allowed_for_device）；
+本表 `tools` 的派发放行角色对声明设备已被声明接管——保留本表用于：
+1) 未上报声明的旧设备回退（行为不变）；2) 未被声明覆盖的 provider
+（runtime-recovery/skill-runner 等非商店来源）与 NULL provider 行的目录判定；
+3) agent_tools/别名/计价等模型可见面（不随声明变化）。
 """
 
 from typing import Any, Dict, List, Optional
@@ -162,6 +170,9 @@ def get_provider_keys_for_device(capabilities: Optional[Dict[str, Any]]) -> List
        provider_key 字符串，如 'boss-recruiting'/'weixin'）；
     2. capabilities.provider_manifests 各 value 的 provider_id 映射回 key；
     3. 旧 capabilities.provider_id 字段映射（旧 Runtime 兼容，boss-only 现状）。
+    契约 2.20 修订：设备上报调度声明时，declared_tools 的 provider_key 并入（声明驱动
+    可领列表——目录外新插件 provider 领取其声明作业的唯一通路；行级放行仍由
+    is_tool_allowed_for_device 按声明判定）。无声明/解析异常时跳过——旧设备行为不变。
     去重后返回。行 provider_key 非 NULL 的 invocation 只派给覆盖该 key 的设备。
     """
     keys: List[str] = []
@@ -193,6 +204,12 @@ def get_provider_keys_for_device(capabilities: Optional[Dict[str, Any]]) -> List
         for key, provider in TRUSTED_PROVIDERS.items():
             if provider["provider_id"] == pid:
                 _add(key)
+    # (4) 声明驱动（契约 2.20 修订）：declared_tools 的 provider_key 并入
+    declared = declared_tools_for_device(capabilities)
+    if declared:
+        for key in declared:
+            if key not in keys:
+                keys.append(key)
     return keys
 
 
@@ -206,6 +223,66 @@ def is_tool_allowed(provider_key: Optional[str], tool_name: str) -> bool:
     if not provider_key:
         return False
     return tool_name in allowed_tools(provider_key)
+
+
+def declared_tools_for_device(capabilities: Optional[Dict[str, Any]]) -> Optional[Dict[str, List[str]]]:
+    """设备心跳上报的调度声明全集（契约 2.20 声明即调度授权）。
+
+    仅当 capabilities 含能力串 `tool_declarations_v1` 且 `declared_tools` 为非空合法映射
+    时返回 {provider_key: [tool,...]}（键为字符串、值为字符串列表；非字符串项剔除，
+    键序保持上报原序）；否则返回 None——调用方完整回退静态目录，旧设备行为不变。
+    只做最小形态归一（防止异常上报形态抛 500），不做名单校验（设备上报什么按什么放行）。
+    """
+    if not isinstance(capabilities, dict):
+        return None
+    capability_list = capabilities.get("capabilities")
+    if not (isinstance(capability_list, list) and "tool_declarations_v1" in capability_list):
+        return None
+    raw = capabilities.get("declared_tools")
+    if not isinstance(raw, dict) or not raw:
+        return None
+    tools_map: Dict[str, List[str]] = {}
+    for key, tools in raw.items():
+        if isinstance(key, str) and isinstance(tools, list):
+            names = [tool for tool in tools if isinstance(tool, str)]
+            if names:
+                tools_map[key] = names
+    return tools_map or None
+
+
+BOSS_COMPLETION_CAPABILITY = "runtime_boss_completion_v1"
+
+
+def declares_boss_completion(capabilities: Optional[Dict[str, Any]]) -> bool:
+    """设备心跳能力串含 runtime_boss_completion_v1（契约 2.20 候选：BOSS 正常结束的事实）。
+
+    形态门禁与 declared_tools_for_device 同款：仅认 dict.capabilities 字符串数组；
+    未上报（旧 Runtime / 无 boss Provider）一律 False——能力缺失=零影响（旧语义）。
+    """
+    if not isinstance(capabilities, dict):
+        return False
+    capability_list = capabilities.get("capabilities")
+    return isinstance(capability_list, list) and BOSS_COMPLETION_CAPABILITY in capability_list
+
+
+def is_tool_allowed_for_device(capabilities: Optional[Dict[str, Any]], provider_key: Optional[str],
+                               tool_name: str, default_provider_key: Optional[str] = None) -> bool:
+    """claim 行级放行（声明分流）：provider_key 为 invocation 行的原 provider_key。
+
+    - 声明设备（declared_tools 非空）且行 provider_key 被声明覆盖：以 declared_tools
+      为准（未声明工具拒绝，含清单有但声明排除的内部命令）；
+    - 未被声明覆盖的 provider（runtime-recovery/skill-runner 等非商店来源）与
+      provider_key NULL 行（旧聊天链路）：回退静态目录判定，行为不变；
+    - 无声明/旧设备/解析异常：完整回退 is_tool_allowed（default_provider_key 沿用
+      旧行为兜底 NULL 行），逐字节一致。
+    """
+    declared = declared_tools_for_device(capabilities)
+    if declared and provider_key:
+        allowed = declared.get(provider_key)
+        if allowed is not None:
+            return tool_name in allowed
+        # provider 未被声明覆盖（legacy 直配/云端原语 provider）：回退目录
+    return is_tool_allowed(provider_key or default_provider_key, tool_name)
 
 
 def agent_tools(provider_key: str) -> List[str]:

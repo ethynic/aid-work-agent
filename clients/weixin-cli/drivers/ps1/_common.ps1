@@ -115,10 +115,12 @@ function Invoke-KimiVision {
     # 多通道：默认 GLM-5.3-Flash 优先、Moonshot（直调或代理）备份，GLM 失败自动降级；
     # 402/401 属计费/凭据业务性失败，不降级直接报 INSUFFICIENT_CREDIT/CONFIG_MISSING。
     param(
-        [Parameter(Mandatory)][string]$ImagePath,
+        [Parameter(Mandatory, ParameterSetName = 'Path')][string]$ImagePath,
+        [Parameter(Mandatory, ParameterSetName = 'Bytes')][byte[]]$ImageBytes,
         [Parameter(Mandatory)][string]$SystemPrompt,
         [Parameter(Mandatory)][string]$UserText,
-        [string]$ArtifactPrefix = 'weixin-driver-vision'
+        [string]$ArtifactPrefix = 'weixin-driver-vision',
+        [switch]$ProxyOnly
     )
     # TS 层激活/绑定了服务端但拿不到 token 时，通过 AID_WEIXIN_PROXY_ERROR 传入原因
     if (-not [string]::IsNullOrWhiteSpace($env:AID_WEIXIN_PROXY_ERROR)) {
@@ -135,7 +137,12 @@ function Invoke-KimiVision {
     if (-not [string]::IsNullOrWhiteSpace($serverUrl)) {
         $moonProxy = @{ ApiUrl = ($serverUrl + '/api/client/v1/llm/chat'); Token = [string]$env:AID_WEIXIN_ACCESS_TOKEN; Model = $script:KimiModel; Mode = 'proxy'; Tag = 'moonshot-proxy' }
     }
-    if ($forced -eq 'glm') {
+    if ($ProxyOnly) {
+        if ($null -eq $moonProxy -or [string]::IsNullOrWhiteSpace([string]$moonProxy.Token)) {
+            Throw-DriverError 'CONFIG_MISSING' '添加好友需要启用微信 CLI 服务端计费代理，请配置服务端地址并完成客户端激活'
+        }
+        $candidates += $moonProxy
+    } elseif ($forced -eq 'glm') {
         if (-not [string]::IsNullOrWhiteSpace($script:ZhipuApiKey)) { $candidates += $glmDirect }
     } elseif ($forced -eq 'moonshot') {
         if (-not [string]::IsNullOrWhiteSpace($script:KimiApiKey)) { $candidates += $moonDirect }
@@ -153,7 +160,8 @@ function Invoke-KimiVision {
         Throw-DriverError 'CONFIG_MISSING' '已配置 AID_WEIXIN_SERVER_URL 但缺少 AID_WEIXIN_ACCESS_TOKEN（应由 CLI 自动注入；直接运行 ps1 时请改用 AID_WEIXIN_ZHIPU_API_KEY / AID_WEIXIN_KIMI_API_KEY 降级模式）'
     }
 
-    $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($ImagePath))
+    if ($PSCmdlet.ParameterSetName -eq 'Path') { $ImageBytes = [IO.File]::ReadAllBytes($ImagePath) }
+    $b64 = [Convert]::ToBase64String($ImageBytes)
     $dataUrl = 'data:image/png;base64,' + $b64
     $utf8NoBom = New-Object Text.UTF8Encoding($false)
     $lastErr = $null
@@ -172,21 +180,39 @@ function Invoke-KimiVision {
         }
         if ($cand.Mode -eq 'proxy') { $payloadObj.purpose = 'weixin-vision-' + $ArtifactPrefix }
         $payload = $payloadObj | ConvertTo-Json -Depth 8
-        $reqPath = Join-Path $env:TEMP ($ArtifactPrefix + '-req.json')
-        [IO.File]::WriteAllText($reqPath, $payload, $utf8NoBom)
-        $respPath = Join-Path $env:TEMP ($ArtifactPrefix + '-resp.json')
-        $curlArgs = @('-s', '-X', 'POST', [string]$cand.ApiUrl,
-            '-H', "Authorization: Bearer $($cand.Token)",
-            '-H', 'Content-Type: application/json',
-            '--data-binary', "@$reqPath",
-            '-o', $respPath, '-w', '%{http_code}', '--max-time', '180')
+        if (-not $ProxyOnly) {
+            $reqPath = Join-Path $env:TEMP ($ArtifactPrefix + '-req.json')
+            [IO.File]::WriteAllText($reqPath, $payload, $utf8NoBom)
+            $respPath = Join-Path $env:TEMP ($ArtifactPrefix + '-resp.json')
+            $curlArgs = @('-s', '-X', 'POST', [string]$cand.ApiUrl,
+                '-H', "Authorization: Bearer $($cand.Token)",
+                '-H', 'Content-Type: application/json',
+                '--data-binary', "@$reqPath",
+                '-o', $respPath, '-w', '%{http_code}', '--max-time', '180')
+        }
         $http = $null
         $fatal = $null
         for ($attempt = 1; $attempt -le 4; $attempt++) {
-            $http = & curl.exe @curlArgs
-            if ($LASTEXITCODE -ne 0) { $fatal = "curl exit=$LASTEXITCODE"; break }
+            $errBody = ''
+            if ($ProxyOnly) {
+                # Keep the token, private screenshot and model response in this process.
+                try {
+                    $response = Invoke-WebRequest -UseBasicParsing -Uri $cand.ApiUrl -Method Post `
+                        -Headers @{ Authorization = "Bearer $($cand.Token)" } -ContentType 'application/json; charset=utf-8' `
+                        -Body $utf8NoBom.GetBytes($payload) -MaximumRedirection 0 -TimeoutSec 180 -ErrorAction Stop
+                    $http = [string][int]$response.StatusCode
+                } catch {
+                    if ($null -eq $_.Exception.Response) { $fatal = '服务端视觉请求失败'; break }
+                    $http = [string][int]$_.Exception.Response.StatusCode
+                }
+            } else {
+                $http = & curl.exe @curlArgs
+                if ($LASTEXITCODE -ne 0) { $fatal = "curl exit=$LASTEXITCODE"; break }
+                if ($http -ne '200' -and (Test-Path $respPath)) {
+                    $errBody = Get-Content $respPath -Raw -Encoding UTF8
+                }
+            }
             if ($http -eq '200') { $fatal = $null; break }
-            $errBody = if (Test-Path $respPath) { Get-Content $respPath -Raw -Encoding UTF8 } else { '<no body>' }
             # 服务端代理计费的业务性拒绝：402 余额不足 / 401 凭据失效，重试和降级都无意义
             if ($http -eq '402') { Throw-DriverError 'INSUFFICIENT_CREDIT' '积分余额不足，请充值后重试（视觉调用走服务端代理计费）' }
             if ($http -eq '401') { Throw-DriverError 'CONFIG_MISSING' '服务端 access_token 无效或已吊销：请删除 %APPDATA%\aid-weixin\binding.json 并重新设置 AID_WEIXIN_ACTIVATION_CODE 激活' }
@@ -203,7 +229,12 @@ function Invoke-KimiVision {
             $lastErr = $fatal
             continue
         }
-        $resp = (Get-Content $respPath -Raw -Encoding UTF8) | ConvertFrom-Json
+        if ($ProxyOnly) {
+            try { $resp = ConvertFrom-Json -InputObject $response.Content }
+            catch { Throw-DriverError 'UI_CHANGED' '服务端视觉响应格式无效' }
+        } else {
+            $resp = (Get-Content $respPath -Raw -Encoding UTF8) | ConvertFrom-Json
+        }
         if ($cand.Mode -eq 'proxy') {
             # 代理端点已剥离 choices 包装，直接返回 content（服务端 provider 已做 reasoning_content 兜底）
             $content = [string]$resp.content
@@ -215,11 +246,19 @@ function Invoke-KimiVision {
         $m = [regex]::Match($stripped, '(?s)\{[\s\S]*\}')
         if (-not $m.Success) {
             Write-Host ("[vision] 通道 {0} 响应无 JSON，尝试下一通道" -f $cand.Tag)
-            $lastErr = '响应无 JSON：' + $content.Substring(0, [Math]::Min(200, $content.Length))
+            $lastErr = if ($ProxyOnly) { '响应无 JSON' } else {
+                '响应无 JSON：' + $content.Substring(0, [Math]::Min(200, $content.Length))
+            }
             continue
         }
-        [IO.File]::WriteAllText((Join-Path $env:TEMP ($ArtifactPrefix + '-raw.json')), $content, [Text.Encoding]::UTF8)
+        if (-not $ProxyOnly) {
+            [IO.File]::WriteAllText((Join-Path $env:TEMP ($ArtifactPrefix + '-raw.json')), $content, [Text.Encoding]::UTF8)
+        }
         Write-Host ("[vision] 通道 {0} 成功（model={1}）" -f $cand.Tag, $cand.Model)
+        if ($ProxyOnly) {
+            try { return (ConvertFrom-Json -InputObject $m.Value) }
+            catch { Throw-DriverError 'UI_CHANGED' '服务端视觉响应格式无效' }
+        }
         return ($m.Value | ConvertFrom-Json)
     }
     Throw-DriverError 'INTERNAL_ERROR' ('视觉调用全部通道失败，最后错误：' + $lastErr)

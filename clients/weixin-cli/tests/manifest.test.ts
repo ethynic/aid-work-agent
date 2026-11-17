@@ -98,6 +98,46 @@ test('toolDefs ↔ registry 一致性守卫：每个 toolDef 可取到 operation
   assert.throws(() => getOperationEntry('weixin_nonexistent'), /漂移/)
 })
 
+test('注解派生写集合与 runtime 受信写集合一致（v1 写=message_send；v2 发送仅显式协商变体，契约 2.20）', () => {
+  const derived = manifestTools().filter((t) => t.annotations.readOnlyHint !== true).map((t) => t.name).sort()
+  assert.deepEqual(derived, ['weixin_message_send', 'weixin_message_send_v2'].sort(),
+    'runtime v1 受信写集合 = {weixin_message_send}；message_send_v2 仅进入显式协商的 v2 变体写集合')
+})
+
+test('tool_declaration：version 1、声明恰为 6 个 v1 工具（写死防漂移）；微信全部串行无 parallel', () => {
+  const m = buildManifest()
+  assert.equal(m.tool_declaration.version, 1)
+  // 声明即调度授权（契约 2.20 修订）：写死预期名单，防声明面漂移（与 runtime
+  // TRUSTED_MANIFESTS weixin v1 受信面同一集合；新增云端工具必须显式更新此断言）
+  assert.deepEqual(m.tool_declaration.tools.map((t) => t.name), [
+    'weixin_probe',
+    'weixin_chat_search',
+    'weixin_message_send',
+    'weixin_history_read',
+    'weixin_unread_list',
+    'weixin_name_resolve',
+  ])
+  assert.equal(new Set(m.tool_declaration.tools.map((t) => t.name)).size, m.tool_declaration.tools.length, '声明名不重复')
+  for (const declared of m.tool_declaration.tools) {
+    assert.ok(TOOL_NAMES.includes(declared.name), `${declared.name} 必须出现在清单 tools 内`)
+    assert.equal(declared.parallel, undefined, '微信全部桌面操作，整插件串行')
+  }
+  // 调度声明不计入 schema_digest（digest 沿用旧规则只覆盖 tools 数组）
+  assert.equal(m.schema_digest, computeSchemaDigest())
+})
+
+test('tool_declaration：weixin_session_observe 不声明（v2 显式协商变体专用，不经云端常规派发）', () => {
+  const m = buildManifest()
+  const declared = new Set(m.tool_declaration.tools.map((t) => t.name))
+  assert.ok(!declared.has('weixin_session_observe'), 'session_observe 为 v2 协商变体专用，不进调度声明')
+  assert.ok(!declared.has('weixin_message_send_v2'), 'v2 发送经显式协商升级，不受声明驱动')
+  assert.ok(TOOL_NAMES.includes('weixin_session_observe'), 'session_observe 仍是 CLI 真实 MCP 工具（清单 tools 不动）')
+  // 清单 tools 数组本身不动：仍是全部 8 个工具，schema_digest 不变
+  assert.equal(TOOL_NAMES.length, 8)
+  assert.equal(m.tools.length, 8)
+  assert.equal(m.schema_digest, computeSchemaDigest())
+})
+
 test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => {
   const cli = path.join(ROOT, 'dist', 'src', 'cli', 'index.js')
   const out = execFileSync(process.execPath, [cli, 'version', '--json'], { encoding: 'utf8' })
@@ -114,4 +154,5 @@ test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => 
     'weixin_name_resolve',
     'weixin_message_send_v2',
   ])
+  assert.deepEqual(parsed.tool_declaration, buildManifest().tool_declaration)
 })

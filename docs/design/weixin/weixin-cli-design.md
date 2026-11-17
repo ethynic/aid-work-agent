@@ -20,9 +20,9 @@ Local Tool Runtime / 桌面客户端、Codex 等标准 MCP Host 复用"操作微
 ## 2. 工程形态与命令面
 
 - Node.js ≥22 + TypeScript（ESM）；运行时依赖仅 `@modelcontextprotocol/sdk` 与 `zod`。
-- 动词子命令：`probe / search / send / read / mcp / doctor / version`（对象一律作
-  `--domain` 参数值，不设按对象命名的子命令）；`--domain` 声明
-  `souyisou|article|chat|chat-history|unread`，当前仅 chat 族接线。
+- 动词子命令：`probe / search / send / add / read / mcp / doctor / version`（对象一律作
+  `--domain` 参数值）。聊天操作使用 `chat|chat-history|unread`，本机加好友使用
+  `add --domain friend`。
 - MCP 仅 stdio（`aid-weixin mcp --stdio`）；`doctor` 严格只读。
 - 代码量级：src 40 文件约 3.9k 行、drivers（ps1+py）约 1.5k 行、tests 约 3.9k 行。
 - C5 便携打包产出自包含 `aid-weixin.exe`（不要求用户安装 Node/Python）。
@@ -80,7 +80,7 @@ v2 路径额外要求 Runtime 签名许可（云端不可凭名字驱动发送�
   `use_failover=False`（模型绑定型调用禁止跨 provider 降级）；`/api/client/v1/llm/chat`
   增加 `model` 字段 + `CLIENT_MODEL_PROVIDER_MAP` 白名单（首期 `kimi-k3 → moonshot`）+
   定价 fail closed（无非零单价 → `MODEL_NOT_PRICED`）；`deploy/db_update.sql` 已写
-  kimi-k3 价目行（用户确认单价：输入 20 元/M、输出 100 元/M；**注释态待部署执行**）。
+  kimi-k3 价目 SQL（用户确认单价：输入 20 元/M、输出 100 元/M），实际服务可用性取决于目标环境的价目配置。
 - **客户端**：`AID_WEIXIN_SERVER_URL` + `AID_WEIXIN_ACTIVATION_CODE` 惰性激活
   `POST /api/client/v1/activate` 换 access_token，DPAPI 加密存
   `%APPDATA%\aid-weixin\binding.json`；token 经 env 注入驱动子进程（不进命令行）；
@@ -139,9 +139,19 @@ get_url、official_account_follow）未产品化——实际方向转向会话�
 
 ## 11. 遗留与已知问题
 
-- kimi-k3 价目行处于注释态，**待部署执行**后代理视觉链路才实际可用（防免单设计）；
+- 服务端代理视觉链路要求部署环境配置非零的 kimi-k3 价目；
 - 服务端 + 真实 Moonshot key 端到端联调与真机回归（搜索→发送走代理）待单价落库后执行；
 - git 历史泄漏 Kimi key 待人工轮换（§5）；
 - `provider-manifest.json` 静态快照列 6 个 tools，落后于实际 8 个（name_resolve/send_v2
   未入快照），与 `src/mcp/manifest.ts` "digest 不入文件避免漂移"的注释不一致，待对齐；
 - `package.json` description 仍写 "M1 骨架"，未随里程碑更新（ cosmetic）。
+
+## 12. 本机添加好友
+
+`aid-weixin add --domain friend --identifier <手机号或微信号> [--verify-message <验证语>] [--json]` 每次处理一个明确的标识。省略验证语时保留微信预填内容。操作复用 CLI renderer、统一 `OperationResult`、桌面互斥及 PowerShell Win32 驱动，要求当前微信已登录且窗口可交互。
+
+操作顺序为主窗口「+」→「添加朋友」→输入修剪后的标识并回车→核定当前搜索结果。弹窗按微信进程与准确标题识别。坐标从当前窗口的截图获取，点击前检查坐标范围及窗口身份。在模型等待期间，用户可能在同一窗口换搜目标，因此模型返回后还需本地重拍并核对搜索窗口内容。初始结果已是好友或明确显示已发送申请时返回 `effect=none`，查无结果返回 `TARGET_NOT_FOUND`。
+
+点击「添加到通讯录」后，如果出现申请窗口则填写验证语并点击一次「确定」。当前标识的搜索状态明确显示申请已发送时返回 `request_sent`，微信确认直接添加为好友时返回 `friend_added`，两者均为 `effect=applied`。写入步骤后未能确认时返回 `effect=unknown`，调用方不得自动重试。
+
+视觉定位强制使用当前微信 CLI 激活绑定及 `POST /api/client/v1/llm/chat` 的现有模型和用量计费路径。新入口不写 Workbuddy 的坐标缓存或联系人日志。微信 CLI 负责产生本机回执，当前阶段可由本机终端调用。MCP 工具公开及 Runtime 调度按第 7 节在沙箱写验收后单独登记。

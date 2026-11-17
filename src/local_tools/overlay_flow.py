@@ -85,6 +85,23 @@ def _known(result, proxy=None):
         from .boss_visual_recovery import is_visual_failure
         if proxy is not None and is_visual_failure(proxy, result):
             return result
+        # R8 接续语义（契约「停止与接续」）：_runtime_completion 结束证据（Phase 3
+        # write_result 能力核验后原样落库）证明执行已停稳——未知业务效果作为事实交回
+        # 原任务，依赖步骤保持先核对；无证据的 unknown 语义不动（效果未知不重放）。
+        from .repository import runtime_completion_evidence
+        if result.get('invocation_id') and runtime_completion_evidence(result.get('data')) is not None:
+            return result
+        # R9 停稳证明同权：v3 停稳已核（invocation ∈ Runner checkpoint
+        # verified_local_invocations，随领取经 DurableControl.envelope 载入本 attempt）
+        # 覆盖原业务回执已丢的场景——未知效果保留为事实交回原任务，不产生新派发
+        #（未知发送仍不得重发，unknown 语义不动）；无 owner 上下文（旧链路/测试）跳过。
+        if result.get('invocation_id'):
+            from .lifecycle import current_local_operation
+            operation = current_local_operation()
+            envelope = getattr(getattr(getattr(operation, 'owner', None), 'root', None),
+                'envelope', None) or {}
+            if str(result['invocation_id']) in (envelope.get('verified_local_invocations') or []):
+                return result
         raise LocalContinuationRequired('LOCAL_EFFECT_VERIFICATION_REQUIRED',result.get('invocation_id'))
     return result
 

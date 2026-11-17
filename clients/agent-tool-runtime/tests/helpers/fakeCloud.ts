@@ -15,6 +15,8 @@ interface FakeDevice {
   device_id: string
   token: string
   heartbeats: number[]
+  /** 心跳请求体捕获（契约 2.20：断言 capabilities_json.parallel_tools 等能力上报用） */
+  heartbeatBodies: Array<Record<string, unknown>>
 }
 
 export interface FakeInvocation {
@@ -28,10 +30,18 @@ export interface FakeInvocation {
   result: Record<string, unknown> | null
   /** invocation 级 provider_key：undefined → claim 回包带 'boss-recruiting'（现状）；null → 回包省略该字段（旧服务端） */
   provider?: string | null
+  /** 契约 2.20：并行可领作业（服务端按设备上报声明判定后的镜像标记） */
+  parallel?: boolean
   /** v2 write-authorize 已签发的许可（同 invocation 重复申请 → 409，对齐服务端一次性语义） */
   permit?: { permit_id: string; permit_token: string; deadline_at: string; state?: 'issued' | 'expired' }
   /** 迟到回执接纳时许可已过期（R21 服务端 audit permit_expired_late 的镜像标记，断言用） */
   permit_expired_late?: boolean
+}
+
+/** claim 长轮询请求记录（契约 2.20：断言 parallel_only 参数跟随串行占用状态） */
+export interface FakeClaimRequest {
+  parallel_only: boolean
+  at: number
 }
 
 export interface CallLogEntry {
@@ -66,6 +76,18 @@ export class FakeCloud {
   writeAuthorizeDeadlineAt: string | null = null
   /** v2 operation-result 逐次拦截：'destroy'=断连、数字=返回该状态、undefined=正常处理 */
   operationResultInterceptor?: (body: Record<string, unknown>) => 'destroy' | number | undefined
+  /** 契约 2.20 支持协商：true → 心跳响应携带 parallel_claim=true 且 claim 接受 parallel_only 过滤 */
+  parallelClaimSupported = false
+  /** claim 长轮询请求记录（按到达顺序） */
+  readonly claimLog: FakeClaimRequest[] = []
+  /** 契约 2.20 R3：parallel_only 领取失败注入——非 null 时返回该 HTTP 状态（不进长轮询，
+   *  不影响空参数领取与心跳）；仅影响 lane 的并行领取通道，串行领取/心跳照常 */
+  parallelOnlyFailStatus: number | null = null
+  /** 失败注入剩余次数（null = 无限，直到测试清零；数字递减到 0 后停止注入） */
+  parallelOnlyFailuresLeft: number | null = null
+  /** parallel_only 当前在途请求数与历史峰值（断言任一时刻至多 1 个在途并行领取） */
+  private parallelOnlyActive = 0
+  maxConcurrentParallelOnly = 0
 
   get baseUrl(): string {
     const addr = this.server!.address() as AddressInfo
@@ -98,12 +120,12 @@ export class FakeCloud {
 
   /** 直接造一个已配对设备（跳过 HTTP pair，非 pair 测试用） */
   createDeviceDirectly(): { device_id: string; token: string } {
-    const device: FakeDevice = { device_id: randomUUID(), token: randomUUID().replace(/-/g, ''), heartbeats: [] }
+    const device: FakeDevice = { device_id: randomUUID(), token: randomUUID().replace(/-/g, ''), heartbeats: [], heartbeatBodies: [] }
     this.devices.set(device.token, device)
     return { device_id: device.device_id, token: device.token }
   }
 
-  enqueueInvocation(toolName: string, args: Record<string, unknown> = {}, opts: { provider?: string | null } = {}): string {
+  enqueueInvocation(toolName: string, args: Record<string, unknown> = {}, opts: { provider?: string | null; parallel?: boolean } = {}): string {
     const inv: FakeInvocation = {
       invocation_id: randomUUID(),
       tool_name: toolName,
@@ -114,9 +136,20 @@ export class FakeCloud {
       cancel_requested: false,
       result: null,
       provider: opts.provider,
+      parallel: opts.parallel,
     }
     this.invocations.set(inv.invocation_id, inv)
     return inv.invocation_id
+  }
+
+  /** 最近一次 claim 长轮询请求（parallel_only 参数断言用；无请求返回 undefined） */
+  lastClaim(): FakeClaimRequest | undefined {
+    return this.claimLog[this.claimLog.length - 1]
+  }
+
+  /** 当前在途 parallel_only 长轮询请求数（堆积回落断言用） */
+  parallelOnlyInFlight(): number {
+    return this.parallelOnlyActive
   }
 
   cancelInvocation(id: string): void {
@@ -143,6 +176,12 @@ export class FakeCloud {
 
   heartbeatCount(token: string): number {
     return this.devices.get(token)?.heartbeats.length ?? 0
+  }
+
+  /** 最近一次心跳请求体（能力上报断言用；无心跳返回 undefined） */
+  lastHeartbeatBody(token: string): Record<string, unknown> | undefined {
+    const bodies = this.devices.get(token)?.heartbeatBodies ?? []
+    return bodies[bodies.length - 1]
   }
 
   /** 等待条件满足（轮询），超时抛错 */
@@ -213,36 +252,60 @@ export class FakeCloud {
 
     if (path === '/api/local-tools/runtime/heartbeat' && req.method === 'POST') {
       device.heartbeats.push(Date.now())
-      this.sendJson(res, 200, { success: true, selected: true, server_time: new Date().toISOString() })
+      device.heartbeatBodies.push(await this.readBody(req))
+      this.sendJson(res, 200, {
+        success: true,
+        selected: true,
+        server_time: new Date().toISOString(),
+        ...(this.parallelClaimSupported ? { parallel_claim: true } : {}),
+      })
       return
     }
 
     if (path === '/api/local-tools/runtime/claim' && req.method === 'POST') {
       const wait = Math.min(Number(url.searchParams.get('wait') ?? '20'), 30)
-      const deadline = Date.now() + wait * 1000
-      for (;;) {
-        for (const inv of this.invocations.values()) {
-          if (inv.state === 'queued') {
-            inv.state = 'claimed'
-            inv.claim_token = randomUUID().replace(/-/g, '')
-            const response: Record<string, unknown> = {
-              success: true,
-              invocation_id: inv.invocation_id,
-              tool_name: inv.tool_name,
-              arguments: inv.arguments,
-              claim_token: inv.claim_token,
-              lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
-            }
-            if (inv.provider !== null) response['provider'] = inv.provider ?? 'boss-recruiting'
-            this.sendJson(res, 200, response)
-            return
-          }
-        }
-        if (Date.now() >= deadline) {
-          this.sendJson(res, 200, { success: true, invocation: null })
+      // 契约 2.20：parallel_only=true 仅选取并行可领作业（同一队列同一 FIFO 顺序内过滤）
+      const parallelOnly = url.searchParams.get('parallel_only') === 'true'
+      this.claimLog.push({ parallel_only: parallelOnly, at: Date.now() })
+      if (parallelOnly) {
+        this.parallelOnlyActive++
+        this.maxConcurrentParallelOnly = Math.max(this.maxConcurrentParallelOnly, this.parallelOnlyActive)
+      }
+      try {
+        // R3 失败注入：只打击 parallel_only 领取（lane 退避/串行时效测试），其余端点照常
+        if (parallelOnly && this.parallelOnlyFailStatus !== null
+          && (this.parallelOnlyFailuresLeft === null || this.parallelOnlyFailuresLeft > 0)) {
+          if (this.parallelOnlyFailuresLeft !== null) this.parallelOnlyFailuresLeft--
+          this.sendJson(res, this.parallelOnlyFailStatus, { detail: { error: 'injected parallel-only claim failure' } })
           return
         }
-        await new Promise((r) => setTimeout(r, this.claimTickMs))
+        const deadline = Date.now() + wait * 1000
+        for (;;) {
+          for (const inv of this.invocations.values()) {
+            if (inv.state === 'queued' && (!parallelOnly || inv.parallel === true)) {
+              inv.state = 'claimed'
+              inv.claim_token = randomUUID().replace(/-/g, '')
+              const response: Record<string, unknown> = {
+                success: true,
+                invocation_id: inv.invocation_id,
+                tool_name: inv.tool_name,
+                arguments: inv.arguments,
+                claim_token: inv.claim_token,
+                lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
+              }
+              if (inv.provider !== null) response['provider'] = inv.provider ?? 'boss-recruiting'
+              this.sendJson(res, 200, response)
+              return
+            }
+          }
+          if (Date.now() >= deadline) {
+            this.sendJson(res, 200, { success: true, invocation: null })
+            return
+          }
+          await new Promise((r) => setTimeout(r, this.claimTickMs))
+        }
+      } finally {
+        if (parallelOnly) this.parallelOnlyActive--
       }
     }
 

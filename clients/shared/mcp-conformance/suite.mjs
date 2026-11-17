@@ -195,8 +195,15 @@ export async function runConformance(options) {
   // ---------- 检查 7/8：并发 BUSY + 取消后锁释放（需要 busyProbe） ----------
   if (options.busyProbe) {
     // 悬挂 TCP 服务器：接受连接但永不响应，让第一个 call 卡在 Chrome connect 阶段。
-    // 被测进程被杀掉时连接被 reset，socket error 属预期，静默吞掉避免 uncaughtException
-    const hangServer = net.createServer((sock) => sock.on('error', () => {}))
+    // 被测进程被杀掉时连接被 reset，socket error 属预期，静默吞掉避免 uncaughtException。
+    // 追踪 socket：被取消的 CDP connect 会半关闭（对端发 FIN 后本侧停在 CLOSE_WAIT），
+    // 而 net.Server.close 的回调要等全部连接真正结束才触发——不主动 destroy 会让套件永久挂死。
+    const hangSockets = new Set()
+    const hangServer = net.createServer((sock) => {
+      hangSockets.add(sock)
+      sock.on('error', () => {})
+      sock.on('close', () => hangSockets.delete(sock))
+    })
     await new Promise((resolve) => hangServer.listen(0, '127.0.0.1', resolve))
     const hangPort = hangServer.address().port
     const busySpawn = options.busyProbe.makeSpawn(hangPort)
@@ -255,7 +262,11 @@ export async function runConformance(options) {
         await client.close().catch(() => {})
       }
     }
-    await new Promise((resolve) => hangServer.close(resolve))
+    await new Promise((resolve) => {
+      hangServer.close(resolve)
+      // 清掉仍停在 CLOSE_WAIT 的半开连接，close 回调才能完成（见上方 socket 追踪注释）
+      for (const sock of hangSockets) sock.destroy()
+    })
   }
 
   const passed = results.filter((r) => r.ok).length
