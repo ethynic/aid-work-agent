@@ -25,7 +25,11 @@ services:
         condition: service_healthy
     working_dir: /app
     volumes:
-      - .:/app
+      - type: bind
+        source: ${AID_LOCAL_SOURCE_DIR:-.}
+        target: /app
+        bind:
+          create_host_path: false
     environment:
       DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
       REDIS_ENABLED: "false"

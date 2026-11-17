@@ -10,6 +10,7 @@
 | CR | 独立审查并修复到通过 | ✅ 完成（2026-10-26） | 创建资格时点P2已红绿闭环，最终无未解决P0/P1/P2 |
 | 本地常驻测试 PG | Compose 一键运行真实 SQL 测试，明确本地业务库联调边界 | ✅ 完成（2026-11-17） | WSL2 真实 SQL 17 项通过，独立验证冷启动、复用、工作区挂载及失败清理 |
 | 本地开发环境复用 | 首次建库、Python 自测、前端依赖缓存和智能体入口 | ✅ 完成（2026-11-17） | WSL2 验证 API 和 Runner 启动、三类自测、Web 构建和依赖复用 |
+| 指定工作区挂载 | 从目标 worktree 自测或在原 Compose 项目切换应用源码 | ✅ 完成（2026-11-17） | WSL2 三类自测、API / Runner 切换及恢复通过，PG / Redis 未重建 |
 
 设计：[测试数据库隔离](../design/devtools/test-database-isolation-design.md)。工作树C:/repos/aid-work-agent-wecom，分支feature/ask-user-question-card，基线349a10ab。原clients/wecom-cli/package-lock.json三peer生成改动保留。用户仅授权第1项修复，无提交、部署、客户端安装或恢复监听授权。
 
@@ -58,3 +59,9 @@ Shell独立4场景通过：LF/CRLF一致接受、代码内容变化拒绝且无p
 在基于 `origin/master` 的独立工作树中，用已有应用镜像启动本地数据覆盖。PostgreSQL 的 vector 扩展、Redis PING、API `/health` 和 Runner API、worker 容器健康检查通过。手册记录默认视频供应商的启动配置，可用非凭据的占位值核验本地启动。
 
 在 WSL2 按手册执行 Compose 命令，Python 11 项、真实 PostgreSQL 17 项和 Web 8 项通过，Web build 及产物检查通过。前端首次安装依赖，后续测试、构建和独立 Vite 检查命中同一卷，未重复安装。独立验收 Vite HTTP 200、源码挂载与旧 Compose 兼容。另运行的 `routes.test.ts` 有 1 项既有快照差异，当前改动与基线的前端源码相同。Docker Desktop 和原生 Linux 未实机验证。
+
+## 指定工作区挂载验收（2026-11-17）
+
+在 WSL2 用 `AID_LOCAL_SOURCE_DIR` 指向未含新 Compose 入口的 `6bc4aebf` worktree。Python 11 项、真实 SQL 队列测试 1 项和 Web 8 项通过。独立验证一次性容器中的测试文件哈希与目标工作区一致，并确认 Runner 的配置和 Skills 路径随目标切换。
+
+同一验证项目里按手册切换并恢复 API、Runner API、worker 和 monitor。两次实际容器挂载均匹配预期，使用原环境 `.env`，四个服务健康。PostgreSQL 与 Redis 容器 ID 全程一致。Docker Desktop 及 API、Runner 分属不同项目时的实际切换未实机验证。
