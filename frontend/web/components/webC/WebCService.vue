@@ -43,6 +43,13 @@
             />
             <BaseButton size="sm" @click="handleSearch">搜索</BaseButton>
           </div>
+          <div v-if="channelList.length > 1" class="mt-2 flex items-center gap-2">
+            <span class="text-xs text-muted shrink-0">渠道</span>
+            <BaseSelect v-model="channelFilter" size="sm" class="flex-1" @change="handleChannelFilterChange">
+              <option value="">全部渠道</option>
+              <option v-for="c in channelList" :key="c.config_id" :value="c.config_id">{{ c.name }}</option>
+            </BaseSelect>
+          </div>
         </div>
 
         <div class="flex-1 overflow-y-auto">
@@ -79,6 +86,7 @@
                     </span>
                   </div>
                   <div class="text-xs text-muted mt-1">{{ formatSessionDateRange(user) }}</div>
+                  <div v-if="user.channel_name" class="text-xs text-muted mt-0.5 truncate">渠道：{{ user.channel_name }}</div>
                 </div>
               </div>
             </div>
@@ -107,6 +115,7 @@
             <div class="min-w-0">
               <div class="font-medium text-default truncate">{{ selectedUser.display_name || selectedUser.nickname || selectedUser.username || '官网访客' }}</div>
               <div class="text-xs text-muted font-mono break-all whitespace-normal">{{ selectedUser.channel_user_id || selectedUser.user_id }}</div>
+              <div v-if="selectedUser.channel_name" class="text-xs text-muted">渠道：{{ selectedUser.channel_name }}</div>
             </div>
             <BaseSelect v-if="sessionList.length > 1" v-model="selectedSessionId" size="sm" class="ml-auto w-56" @change="loadSessionMessages">
               <option v-for="s in sessionList" :key="s.session_id" :value="s.session_id">
@@ -392,7 +401,8 @@ import AttachmentCard from '@/components/saas/AttachmentCard.vue'
 import {
   listWebCCustomers, listWebCCustomerSessions, listWebCSessionMessages,
   getWebCStats, getWebCLeadStats, listWebCLeads, getWebCLeadDetail, updateWebCLeadStage,
-  type WebCCustomer, type WebCSession, type WebCLead
+  listWebCChannels,
+  type WebCCustomer, type WebCSession, type WebCLead, type WebCChannel
 } from '@/api/webCCustomers'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { inlineFileUrl } from '@/utils/file'
@@ -436,6 +446,8 @@ function switchTab(key: 'chat' | 'stats' | 'leads') {
 
 // ============== Tab1 对话记录 ==============
 const searchUsername = ref('')
+const channelList = ref<WebCChannel[]>([])
+const channelFilter = ref('')
 const userList = ref<WebCCustomer[]>([])
 const userTotal = ref(0)
 const userPage = ref(1)
@@ -451,10 +463,25 @@ const messagePage = ref(1)
 const messagePageSize = ref(50)
 const loadingMessages = ref(false)
 
+async function loadChannels() {
+  try {
+    const result = await listWebCChannels()
+    channelList.value = result.channels || []
+  } catch (e) {
+    console.error('前端日志：官网渠道列表加载失败', e)
+  }
+}
+
+function handleChannelFilterChange() {
+  userPage.value = 1
+  selectedUser.value = null
+  void loadUsers()
+}
+
 async function loadUsers() {
   loadingUsers.value = true
   try {
-    const result = await listWebCCustomers({ username: searchUsername.value || undefined, page: userPage.value, page_size: userPageSize.value })
+    const result = await listWebCCustomers({ username: searchUsername.value || undefined, config_id: channelFilter.value || undefined, page: userPage.value, page_size: userPageSize.value })
     userList.value = result.users || []
     userTotal.value = result.total || 0
   } catch (e) {
@@ -480,7 +507,7 @@ async function selectUser(user: WebCCustomer) {
   messageTotal.value = 0
   messagePage.value = 1
   try {
-    const result = await listWebCCustomerSessions({ user_id: user.user_id, page: 1, page_size: 50 })
+    const result = await listWebCCustomerSessions({ user_id: user.user_id, config_id: channelFilter.value || undefined, page: 1, page_size: 50 })
     sessionList.value = result.sessions || []
     if (sessionList.value.length) {
       selectedSessionId.value = sessionList.value[0].session_id
@@ -503,9 +530,9 @@ async function loadSessionMessages() {
       page: messagePage.value,
       page_size: messagePageSize.value
     })
-    // 倒序分页 -> 正序渲染
-    const messages = (result.messages || []).slice().reverse()
-    messageList.value = messages
+    // 后端按 id DESC 分页（第 1 页为最新消息）；接待页按时间倒序展示，最新在顶部
+    // （官网客户聊天页为时间升序，两处口径不同）
+    messageList.value = result.messages || []
     messageTotal.value = result.total || 0
   } catch (e) {
     console.error('前端日志：官网会话消息加载失败', e)
@@ -785,6 +812,7 @@ async function saveLeadStage() {
 }
 
 onMounted(() => {
+  void loadChannels()
   void loadUsers()
 })
 </script>

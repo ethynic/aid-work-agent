@@ -9,6 +9,7 @@ channel_type='web_c' 的渠道会话（EXISTS join，零 DDL）。
 （session_id 归属校验同口径，不重复建端点）。
 """
 
+import json
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -34,19 +35,91 @@ def _require_tenant(request: Request) -> str:
     return tenant_id
 
 
+def _web_c_configs(tenant_id: str) -> list:
+    """租户 web_c 渠道配置（按创建时间正序；最早创建的为存量无归属会话的兜底渠道）。"""
+    from src.saas.db.channel_config_db import ChannelConfigDB
+
+    configs = ChannelConfigDB.list_by_tenant(tenant_id, channel_type=_CHANNEL_TYPE)
+    rows = [
+        {
+            "config_id": c.get("config_id"),
+            "name": c.get("name") or "未命名渠道",
+            "created_at": str(c.get("created_at") or ""),
+        }
+        for c in configs
+        if c.get("config_id")
+    ]
+    rows.reverse()  # list_by_tenant 按 id DESC 返回，反转为创建先后正序
+    return rows
+
+
+@router.get("/channels")
+async def list_channels(request: Request):
+    """租户的 web_c 渠道配置列表（官网接待页渠道下拉筛选 + 渠道名称展示用）。"""
+    tenant_id = _require_tenant(request)
+    return {"success": True, "channels": _web_c_configs(tenant_id)}
+
+
+def _user_channel_map(tenant_id: str, user_ids: list, fallback_config_id: Optional[str]) -> dict:
+    """user_id -> 生效渠道 config_id。
+
+    优先取该用户最近一条有归属的 web_c 会话（metadata.channel_config_id）；
+    全部会话均无归属（渠道归属功能上线前的存量数据）时回退兜底渠道
+    （租户最早创建的 web_c 配置——存量会话产生时不晚于其后创建的配置）。
+    """
+    result = {uid: (fallback_config_id or "") for uid in user_ids if uid}
+    if not result:
+        return result
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT DISTINCT ON (user_id) user_id, metadata->>'channel_config_id' AS config_id
+            FROM channel_sessions
+            WHERE tenant_id = %s AND channel_type = %s AND user_id = ANY(%s)
+              AND metadata->>'channel_config_id' IS NOT NULL
+            ORDER BY user_id, updated_at DESC NULLS LAST
+            """,
+            (tenant_id, _CHANNEL_TYPE, list(result.keys())),
+        )
+        for row in cursor.fetchall():
+            result[row["user_id"]] = row["config_id"] or (fallback_config_id or "")
+    return result
+
+
+def _session_config_id(session: dict, fallback_config_id: Optional[str]) -> str:
+    """会话的生效渠道 config_id（归属缺失时回退兜底渠道）。"""
+    metadata = session.get("metadata")
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except Exception:
+            metadata = None
+    if isinstance(metadata, dict) and metadata.get("channel_config_id"):
+        return str(metadata["channel_config_id"])
+    return fallback_config_id or ""
+
+
 @router.get("/users")
 async def list_users(request: Request, username: Optional[str] = None,
+                     config_id: Optional[str] = None,
                      page: int = Query(default=1, ge=1), page_size: int = Query(default=20, ge=1, le=200)):
     """官网客服客户列表（users × web_c 渠道会话组合，最近活跃倒序）。
 
     行字段：uid 徽标（channel_user_id，ext_*/anon_* 前缀区分身份模式）、
-    名称（签名 name / 官网访客xxxx）、会话日期区间。
+    名称（签名 name / 官网访客xxxx）、会话日期区间、归属渠道
+    （channel_config_id / channel_name，存量无归属会话回退最早渠道）。
+    config_id：渠道下拉筛选（可选）。
     """
     tenant_id = _require_tenant(request)
+    configs = _web_c_configs(tenant_id)
+    fallback_id = configs[0]["config_id"] if configs else None
     result = UserDB.list_external_users(
         tenant_id=tenant_id,
         username=username,
         channel_type=_CHANNEL_TYPE,
+        channel_config_id=config_id or None,
+        channel_config_fallback_id=fallback_id,
         page=page,
         page_size=page_size,
     )
@@ -55,6 +128,8 @@ async def list_users(request: Request, username: Optional[str] = None,
     if users:
         user_ids = [u.get("user_id") for u in users if u.get("user_id")]
         uid_map, name_map = _lookup_channel_users(tenant_id, user_ids)
+        ch_map = _user_channel_map(tenant_id, user_ids, fallback_id)
+        name_by_id = {c["config_id"]: c["name"] for c in configs}
         for u in users:
             u["channel_user_id"] = uid_map.get(u.get("user_id"), "")
             nickname = u.get("nickname") or ""
@@ -62,6 +137,9 @@ async def list_users(request: Request, username: Optional[str] = None,
                 u["display_name"] = nickname
             else:
                 u["display_name"] = name_map.get(u.get("user_id")) or u.get("username") or "官网访客"
+            cid = ch_map.get(u.get("user_id"), "")
+            u["channel_config_id"] = cid
+            u["channel_name"] = name_by_id.get(cid, "")
     return {"success": True, **result}
 
 
@@ -93,8 +171,9 @@ async def get_user_sessions(request: Request, user_id: str,
                             start_date: Optional[str] = None,
                             end_date: Optional[str] = None,
                             subagent_id: Optional[str] = None,
+                            config_id: Optional[str] = None,
                             page: int = Query(default=1, ge=1), page_size: int = Query(default=20, ge=1, le=200)):
-    """指定客户的 web_c 会话列表（日期段/子智能体筛选，updated_at DESC）。"""
+    """指定客户的 web_c 会话列表（日期段/子智能体/渠道筛选，updated_at DESC）。"""
     tenant_id = _require_tenant(request)
     user = UserDB.get_by_id(user_id)
     if not user or user.get("tenant_id") != tenant_id:
@@ -114,6 +193,10 @@ async def get_user_sessions(request: Request, user_id: str,
     if end_date:
         # end_date 含当日：< 次日零点语义，字符串比较 + 'z' 后缀兜底
         sessions = [s for s in sessions if (s.get("updated_at") or "") < _next_day(end_date)]
+    if config_id:
+        # 渠道筛选与列表页口径一致：归属缺失的存量会话回退最早渠道
+        fallback_id = next(iter(_web_c_configs(tenant_id)), {}).get("config_id")
+        sessions = [s for s in sessions if _session_config_id(s, fallback_id) == config_id]
     sessions.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
     total = len(sessions)
     start = (page - 1) * page_size

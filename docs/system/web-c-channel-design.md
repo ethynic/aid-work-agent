@@ -208,6 +208,14 @@ C 端流程：
 - Tab3 留资线索：复用 wecom_kf 留资口径——统计卡片（总留资数 + 按联系方式类型）+ 线索列表（序号/客户姓名/联系方式/联系方式类型/意向度/阶段/留资时间/操作）+ 线索详情与阶段编辑弹框（简化版，无客服账号/归属员工/servicer 维度）；web_c 线索过滤 = 后端 join `channel_sessions`（`session_id` + `channel_type='web_c'`），复用 `/lead-stats`、`/leads`、PATCH `/leads/{lead_id}` 端点加渠道过滤参数，零 DDL。
 - 路由 `/t/:tenant_id/web-c-customers`（`agentRoutes.ts` 注册，模式同 `tenant-web-sessions`）；菜单入口 `MenuSidebar.vue`「官网接待客户」，管理员可见（web-sessions 模式 :708-723）。
 
+### 5.3 渠道归属展示/筛选与消息倒序（2026-11-18 微调）
+
+同租户可能有 2 个及以上 web_c 渠道配置，接待页需按渠道区分：
+
+- **归属记录**：C 端创建会话（默认 + 「新会话」）写入 `channel_sessions.metadata.channel_config_id`；存量无归属会话由本渠道访客下次到达时幂等补记（`web_c.py` `_backfill_session_channel_config`，jsonb 合并）。匿名 uid 按渠道配置隔离（`web_c_anon_{config_id}`），补记安全；ext userid 跨官网复用时理论上可能误归（按官网 userid 唯一约定，风险可忽略）。
+- **展示/筛选**：接待页客户行显示渠道名；渠道数 >1 时搜索区出现渠道下拉（`GET /channels` 新端点）。筛选口径：用户在指定渠道有归属会话，或（存量无归属 + 兜底渠道 = 租户最早创建的 web_c 配置）。`list_external_users` 增加 `channel_config_id` / `channel_config_fallback_id` 参数；`GET /users/{user_id}/sessions` 同口径过滤。
+- **消息倒序**：接待页消息按时间倒序展示（最新在顶部，分页第 1 页 = 最新 50 条）；官网客户聊天页（`WebCChat.vue`）保持时间升序，两处口径不同。
+
 ## 6. 开放问题裁决记录（2026-11-16）
 
 | # | 问题 | 裁决 |

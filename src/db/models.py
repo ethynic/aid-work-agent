@@ -494,6 +494,8 @@ class UserDB:
         referral_end_date: str = None,
         keyword: str = None,
         group_by_subagent: bool = False,
+        channel_config_id: str = None,
+        channel_config_fallback_id: str = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
@@ -516,6 +518,10 @@ class UserDB:
             keyword: 组合搜索词（可选，办公软件会话页用）：用户名/昵称 OR 智能体名称/ID
             group_by_subagent: 按用户 × 渠道 × 智能体拆分组合（可选，办公软件会话页用），
                 返回行带 subagent_id 字段
+            channel_config_id: 渠道配置归属筛选（可选，官网接待页 web_c 渠道下拉）：
+                只返回在该渠道有归属会话（channel_sessions.metadata.channel_config_id）的用户
+            channel_config_fallback_id: 存量无归属会话的兜底渠道 config_id（可选，通常传租户
+                最早创建的该渠道配置）；与 channel_config_id 相等时，无归属会话的用户也视为该渠道用户
             referrer_user_id: 引流员工筛选（可选，命中则只返回该员工引流的客户）
             referral_start_date: 引流起始日期（可选，含当日，格式 YYYY-MM-DD），过滤基准 = customer_referrals.created_at，
                 与引流统计 Tab 同口径（引流统计下钻时传入）
@@ -613,6 +619,28 @@ class UserDB:
             if channel_chat_id:
                 conditions.append("cs.channel_chat_id = %s")
                 params.append(channel_chat_id)
+
+            if channel_config_id and channel_type:
+                # 官网接待页按渠道筛选：用户在指定渠道有归属会话（metadata.channel_config_id），
+                # 或（存量会话无归属 + 兜底渠道命中）视为该渠道用户
+                has_attr = (
+                    "EXISTS (SELECT 1 FROM channel_sessions cf"
+                    " WHERE cf.user_id = u.user_id AND cf.tenant_id = %s"
+                    " AND cf.channel_type = %s AND cf.metadata->>'channel_config_id' = %s)"
+                )
+                if channel_config_fallback_id and channel_config_fallback_id == channel_config_id:
+                    conditions.append(
+                        f"({has_attr} OR NOT EXISTS ("
+                        "SELECT 1 FROM channel_sessions cf2"
+                        " WHERE cf2.user_id = u.user_id AND cf2.tenant_id = %s"
+                        " AND cf2.channel_type = %s"
+                        " AND cf2.metadata->>'channel_config_id' IS NOT NULL))"
+                    )
+                    params.extend([tenant_id, channel_type, channel_config_id,
+                                   tenant_id, channel_type])
+                else:
+                    conditions.append(has_attr)
+                    params.extend([tenant_id, channel_type, channel_config_id])
 
             if referrer_user_id:
                 conditions.append("cr.referrer_user_id = %s")
