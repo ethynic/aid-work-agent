@@ -154,26 +154,26 @@ it('loads relative doc images via authed fetch and swaps to blob urls', async ()
 it('category folders toggle collapse and reopen when opening a doc inside', async () => {
   const w = await render()
   const header = w.findAll('aside button').filter(b => b.text() === '部署与运维')[0]
-  const docButton = () => w.findAll('aside button').find(b => b.text() === '备份与灾难恢复')
+  const deploymentUl = () => w.findAll('aside')[0].findAll('ul')[0]
 
   // 默认展开
   expect(header.attributes('aria-expanded')).toBe('true')
-  expect(docButton()!.isVisible()).toBe(true)
+  expect(deploymentUl().attributes('style') ?? '').not.toContain('display: none')
 
   // 点击折叠
   await header.trigger('click')
   expect(header.attributes('aria-expanded')).toBe('false')
-  expect(docButton()!.isVisible()).toBe(false)
+  expect(deploymentUl().attributes('style')).toContain('display: none')
 
   // 打开其他分类的文档不影响已折叠的「部署与运维」
   const mcp = w.findAll('aside button').filter(b => b.text() === 'MCP Server 使用文档')[0]
   await mcp.trigger('click')
   expect(push).toHaveBeenLastCalledWith('/portal/guides/development/mcp_server.md')
-  expect(docButton()!.isVisible()).toBe(false)
+  expect(deploymentUl().attributes('style')).toContain('display: none')
 
   // 再点折叠分类的头部重新展开
   await header.trigger('click')
-  expect(docButton()!.isVisible()).toBe(true)
+  expect(deploymentUl().attributes('style') ?? '').not.toContain('display: none')
 })
 
 it('shows load error message when doc fetch fails', async () => {
