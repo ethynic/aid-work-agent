@@ -143,7 +143,7 @@ async def test_input_schema_has_data_field():
     # 标量契约写进入参描述，Agent 首次调用即知道 totals 不得嵌套
     desc = schema["properties"]["data"].get("description", "")
     assert "标量" in desc
-    assert "合计总价_40人" in desc
+    assert "合计_档位A" in desc
 
 
 @pytest.mark.asyncio
