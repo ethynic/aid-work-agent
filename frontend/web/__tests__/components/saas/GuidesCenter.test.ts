@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { reactive, ref } from 'vue'
 import GuidesCenter from '@/components/saas/GuidesCenter.vue'
-import { getGuideDoc, getGuidesCatalog } from '@/api/guides'
+import { fetchGuideImage, getGuideDoc, getGuidesCatalog } from '@/api/guides'
 
 const push = vi.fn()
 const routeParams = reactive<{ doc_path?: string }>({})
@@ -17,6 +17,7 @@ vi.mock('@/composables/useTenantAuth', () => ({
 vi.mock('@/api/guides', () => ({
   getGuidesCatalog: vi.fn(),
   getGuideDoc: vi.fn(),
+  fetchGuideImage: vi.fn(),
 }))
 
 const CATALOG = {
@@ -51,6 +52,8 @@ const DOC_CONTENT = [
   '正文。',
   '',
   '相关文档：[部署总览](./DEPLOYMENT.md#4-备份策略)',
+  '',
+  '![同步设置页](images/employment-sync/tenant-sync-settings-running.png)',
 ].join('\n')
 
 let wrapper: ReturnType<typeof mount> | undefined
@@ -131,6 +134,21 @@ it('route change reloads the doc and clears stale TOC on failure', async () => {
   // 旧文档的 TOC 不残留
   expect(w.findAll('aside button').filter(b => b.text() === '备份策略')).toHaveLength(0)
   expect(w.text()).toContain('本文档无二级及以下标题')
+})
+
+it('loads relative doc images via authed fetch and swaps to blob urls', async () => {
+  const createObjectURL = vi.fn(() => 'blob:mock-url')
+  vi.stubGlobal('URL', Object.assign(globalThis.URL, { createObjectURL, revokeObjectURL: vi.fn() }))
+  vi.mocked(fetchGuideImage).mockResolvedValue(new Blob(['png-bytes']))
+
+  const w = await render()
+  const img = w.find('.markdown-body img')
+  expect(img.exists()).toBe(true)
+  await flushPromises()
+  // 相对路径按当前文档目录解析后请求鉴权图片，src 换成 blob url
+  expect(fetchGuideImage).toHaveBeenCalledWith('deployment/images/employment-sync/tenant-sync-settings-running.png')
+  expect(w.find('.markdown-body img').attributes('src')).toBe('blob:mock-url')
+  vi.unstubAllGlobals()
 })
 
 it('shows load error message when doc fetch fails', async () => {

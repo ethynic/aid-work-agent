@@ -58,3 +58,16 @@ export async function getGuidesCatalog(): Promise<GuideCatalog> {
 export async function getGuideDoc(path: string): Promise<GuideDoc> {
   return guidesFetch(`${API_BASE}/api/guides/doc?path=${encodeURIComponent(path)}`)
 }
+
+/**
+ * 获取文档内相对图片（带鉴权，返回 blob 供 objectURL 渲染）
+ */
+export async function fetchGuideImage(path: string): Promise<Blob> {
+  const response = await fetch(`${API_BASE}/api/guides/image?path=${encodeURIComponent(path)}`, {
+    headers: { ...getAuthHeader() },
+  })
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+  }
+  return response.blob()
+}

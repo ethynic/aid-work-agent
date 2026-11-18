@@ -119,7 +119,7 @@ import AppHeader from '@/components/AppHeader.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import MarkdownPreview from '@/components/ui/MarkdownPreview.vue'
-import { getGuideDoc, getGuidesCatalog } from '@/api/guides'
+import { getGuideDoc, getGuidesCatalog, fetchGuideImage } from '@/api/guides'
 import type { GuideCatalog, GuideDoc } from '@/api/guides'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
@@ -155,6 +155,12 @@ async function loadCatalog() {
 }
 
 let loadSeq = 0
+let objectUrls: string[] = []
+
+function revokeObjectUrls() {
+  for (const url of objectUrls) URL.revokeObjectURL(url)
+  objectUrls = []
+}
 
 async function loadDoc(path: string) {
   if (!path) {
@@ -164,6 +170,7 @@ async function loadDoc(path: string) {
   const seq = ++loadSeq
   docLoading.value = true
   docError.value = ''
+  revokeObjectUrls()
   try {
     const doc = await getGuideDoc(path)
     if (seq !== loadSeq) return // 已有更新的加载请求，丢弃过期响应
@@ -171,6 +178,7 @@ async function loadDoc(path: string) {
     narrowSelected.value = path
     await nextTick()
     buildToc()
+    await loadDocImages(seq)
   } catch (e) {
     if (seq !== loadSeq) return
     currentDoc.value = null
@@ -180,6 +188,42 @@ async function loadDoc(path: string) {
     docError.value = e instanceof Error ? `加载失败：${e.message}` : `加载失败：${String(e)}`
   } finally {
     if (seq === loadSeq) docLoading.value = false
+  }
+}
+
+// ============== 文档内相对图片（带鉴权 blob 加载）==============
+
+function resolveDocRelative(docPath: string, rel: string): string {
+  const base = docPath.split('/')
+  base.pop()
+  for (const part of rel.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') base.pop()
+    else base.push(part)
+  }
+  return base.join('/')
+}
+
+async function loadDocImages(seq: number) {
+  const body = markdownBodyEl()
+  if (!body) return
+  const docPath = currentDoc.value?.path
+  if (!docPath) return
+  const imgs = Array.from(body.querySelectorAll('img'))
+  for (const img of imgs) {
+    const src = img.getAttribute('src') || ''
+    if (!src || /^(https?:|data:|blob:|file_id:)/i.test(src)) continue
+    const resolved = resolveDocRelative(docPath, src)
+    if (!resolved) continue
+    try {
+      const blob = await fetchGuideImage(resolved)
+      if (seq !== loadSeq) return
+      const url = URL.createObjectURL(blob)
+      objectUrls.push(url)
+      img.src = url
+    } catch {
+      // 单张图片加载失败不阻断文档渲染，保留原始占位
+    }
   }
 }
 
@@ -301,5 +345,8 @@ onMounted(async () => {
     openDefaultDoc()
   }
 })
-onBeforeUnmount(detachScroll)
+onBeforeUnmount(() => {
+  detachScroll()
+  revokeObjectUrls()
+})
 </script>

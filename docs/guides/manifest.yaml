@@ -11,3 +11,5 @@ categories:
     name: 客户端安装与使用
   - dir: development
     name: 开发环境与工具
+  - dir: operations
+    name: 管理操作

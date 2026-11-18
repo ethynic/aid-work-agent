@@ -21,6 +21,7 @@
 | `channels/` | 渠道接入 |
 | `clients/` | 客户端安装与使用 |
 | `development/` | 开发环境与工具 |
+| `operations/` | 管理操作（portal/租户管理员操作教程） |
 
 分类的显示名与排序定义在 [manifest.yaml](manifest.yaml)，由后端文档中心 API 读取；新增分类需同步登记。
 

@@ -80,12 +80,13 @@ def test_catalog_lists_categories_and_docs():
     data = resp.json()
     cats = {c["dir"]: c for c in data["categories"]}
 
-    # manifest.yaml 定义的四个分类齐全且显示名正确
-    assert set(cats.keys()) == {"deployment", "channels", "clients", "development"}
+    # manifest.yaml 定义的五个分类齐全且显示名正确
+    assert set(cats.keys()) == {"deployment", "channels", "clients", "development", "operations"}
     assert cats["deployment"]["name"] == "部署与运维"
     assert cats["channels"]["name"] == "渠道接入"
     assert cats["clients"]["name"] == "客户端安装与使用"
     assert cats["development"]["name"] == "开发环境与工具"
+    assert cats["operations"]["name"] == "管理操作"
 
     # 真实迁移文档在列，标题取自首个一级标题
     all_paths = {d["path"]: d for c in data["categories"] for d in c["docs"]}
@@ -93,11 +94,15 @@ def test_catalog_lists_categories_and_docs():
     assert "channels/onboarding_guide.md" in all_paths
     assert "clients/安装手册.md" in all_paths
     assert "development/mcp_server.md" in all_paths
+    assert "operations/employment-sync-admin-guide.md" in all_paths
 
     doc = all_paths["development/mcp_server.md"]
     assert doc["title"].startswith("MCP Server")
     assert doc["size_bytes"] > 0
     assert len(doc["updated_at"]) >= 10
+
+    guide = all_paths["operations/employment-sync-admin-guide.md"]
+    assert guide["title"].startswith("就业/创业数据源同步使用教程")
 
 
 # ============== doc 正常读取 ==============
@@ -148,3 +153,52 @@ def test_doc_missing_path_param():
     with p1, p2:
         resp = client.get("/api/guides/doc")
     assert resp.status_code == 422
+
+
+# ============== image：文档内相对图片 ==============
+
+def _first_guide_png() -> str:
+    from src.api.guides import GUIDES_ROOT
+    png = sorted((GUIDES_ROOT / "operations" / "images").rglob("*.png"))[0]
+    return png.relative_to(GUIDES_ROOT).as_posix()
+
+
+def test_image_requires_login():
+    with patch("src.api.guides.get_current_user", return_value=None):
+        resp = client.get("/api/guides/image", params={"path": _first_guide_png()})
+    assert resp.status_code == 401
+
+
+def test_image_rejects_non_platform_admin():
+    with (
+        patch(
+            "src.api.guides.get_current_user",
+            return_value={"user_id": "tenant_user", "role": "tenant_admin", "tenant_id": "t1"},
+        ),
+        patch("src.api.guides.is_platform_admin", return_value=False),
+    ):
+        resp = client.get("/api/guides/image", params={"path": _first_guide_png()})
+    assert resp.status_code == 403
+
+
+def test_image_serves_png_with_content_type():
+    p1, p2 = _patch_platform_admin()
+    with p1, p2:
+        resp = client.get("/api/guides/image", params={"path": _first_guide_png()})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("image/png")
+    assert len(resp.content) > 0
+
+
+@pytest.mark.parametrize("bad_path", [
+    "development/mcp_server.md",     # 文档不在图片端点服务范围
+    "../../AGENTS.md",               # 穿越
+    "operations/not-exist.png",
+    "\x00",
+    "manifest.yaml",
+])
+def test_image_rejects_invalid_paths(bad_path):
+    p1, p2 = _patch_platform_admin()
+    with p1, p2:
+        resp = client.get("/api/guides/image", params={"path": bad_path})
+    assert resp.status_code == 404

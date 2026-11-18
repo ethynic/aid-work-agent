@@ -15,6 +15,7 @@ from typing import Optional
 
 import yaml
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from loguru import logger
 from pydantic import BaseModel
 
@@ -26,6 +27,17 @@ router = APIRouter(prefix="/api/guides", tags=["使用教程"])
 # 与 settings.py 解析 configs/config.yaml 同款的仓库根定位方式
 GUIDES_ROOT = Path(__file__).resolve().parent.parent.parent / "docs" / "guides"
 MANIFEST_PATH = GUIDES_ROOT / "manifest.yaml"
+
+# 文档内相对图片支持的扩展名 → 响应 Content-Type
+IMAGE_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".svg": "image/svg+xml",
+}
 
 
 # ============== 响应模型 ==============
@@ -104,8 +116,8 @@ def _datetime_from_ts(ts: float) -> str:
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
 
 
-def _resolve_doc_path(rel_path: str) -> Path:
-    """校验相对路径落在 guides 根内且为 .md，返回绝对路径；否则 404。"""
+def _resolve_guides_file(rel_path: str, allowed_suffix: str) -> Path:
+    """校验相对路径落在 guides 根内且为指定后缀，返回绝对路径；否则 404。"""
     if not rel_path or rel_path.startswith(("/", "\\")) or "\\" in rel_path:
         raise HTTPException(status_code=404, detail="文档不存在")
     try:
@@ -114,9 +126,14 @@ def _resolve_doc_path(rel_path: str) -> Path:
     except (ValueError, OSError):
         # ValueError：空字节等非法路径；OSError：非法路径字符；统一按不存在处理
         raise HTTPException(status_code=404, detail="文档不存在")
-    if candidate.suffix != ".md" or not candidate.is_file():
+    if candidate.suffix != allowed_suffix or not candidate.is_file():
         raise HTTPException(status_code=404, detail="文档不存在")
     return candidate
+
+
+def _resolve_doc_path(rel_path: str) -> Path:
+    """校验相对路径落在 guides 根内且为 .md，返回绝对路径；否则 404。"""
+    return _resolve_guides_file(rel_path, ".md")
 
 
 # ============== API 端点 ==============
@@ -171,3 +188,24 @@ async def get_guide_doc(request: Request, path: str = Query(..., description="�
         content=text,
         updated_at=_datetime_from_ts(file_path.stat().st_mtime),
     )
+
+
+@router.get("/image")
+async def get_guide_image(request: Request, path: str = Query(..., description="相对 docs/guides 的图片路径")):
+    """读取文档内引用的相对图片（仅限图片扩展名，路径白名单同 doc）。"""
+    _require_platform_admin(request)
+
+    try:
+        candidate = (GUIDES_ROOT / path).resolve()
+        candidate.relative_to(GUIDES_ROOT.resolve())
+    except (ValueError, OSError):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    media_type = IMAGE_MEDIA_TYPES.get(candidate.suffix.lower())
+    if media_type is None or not candidate.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    headers = {"Cache-Control": "private, max-age=600"}
+    if candidate.suffix.lower() == ".svg":
+        # svg 可携带脚本，与分享下载点同款 sandbox 防护
+        headers["Content-Security-Policy"] = "sandbox"
+    return FileResponse(candidate, media_type=media_type, headers=headers)
