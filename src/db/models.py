@@ -476,6 +476,11 @@ class UserDB:
                 """)
             return [dict(row) for row in cursor.fetchall()]
 
+    # 微信接待客户页（list_external_users 不传 channel_type）可见的「接待类」渠道白名单。
+    # fail-closed：新增渠道默认不进本页（办公软件渠道走办公会话页、web_c 走官网客服独立页），
+    # 新接待类渠道上线时在此显式加入
+    RECEPTION_CHANNEL_TYPES = ("wecom_kf",)
+
     @staticmethod
     def list_external_users(
         tenant_id: str,
@@ -497,8 +502,9 @@ class UserDB:
         返回组合粒度：每个「用户 × 渠道会话（客服账号）」一行。
         仅 wecom_kf 渠道按 channel_chat_id（open_kfid，客服账号）拆分，
         其它渠道折叠为单个组合（channel_chat_id 为空）。
-        不传 channel_type 时排除办公软件渠道（wecom/dingtalk/feishu）会话组合，
-        避免内部员工混入微信接待客户页；传 channel_type（办公软件会话页）不过滤。
+        不传 channel_type 时只显示接待类渠道白名单（RECEPTION_CHANNEL_TYPES，当前 wecom_kf）
+        的会话组合，fail-closed 防止办公软件渠道内部员工、官网客服访客及未来新渠道混入
+        微信接待客户页；传 channel_type（办公软件/官网会话页）按指定渠道过滤。
 
         Args:
             tenant_id: 租户ID
@@ -557,15 +563,16 @@ class UserDB:
             # 传 channel_type 时按渠道会话聚合定位用户，放宽 source 非空硬条件
             # （存量办公软件渠道用户 source 可能未回填，有会话即应可见）
             conditions = ["u.tenant_id = %s"]
+            params = [tenant_id]
             if not channel_type:
-                # 微信接待客户页口径：只显示接待类会话组合（wecom_kf 等）。
-                # 办公软件渠道（wecom/dingtalk/feishu）用户注册时也写 source（2edf4007 起），
-                # 仅凭 source IS NOT NULL 会把内部员工的企微办公会话混入本页，按组合行排除
+                # 微信接待客户页口径：只显示接待类渠道白名单（RECEPTION_CHANNEL_TYPES）内的会话组合。
+                # 白名单 fail-closed：办公软件渠道（wecom/dingtalk/feishu）与官网客服（web_c）
+                # 均不进本页，新渠道默认也被挡住，无需逐一追加排除
                 conditions.append(
                     "(u.source IS NOT NULL AND "
-                    "(cs.channel_type IS NULL OR cs.channel_type NOT IN ('wecom', 'dingtalk', 'feishu')))"
+                    "(cs.channel_type IS NULL OR cs.channel_type = ANY(%s)))"
                 )
-            params = [tenant_id]
+                params.append(list(UserDB.RECEPTION_CHANNEL_TYPES))
 
             if username:
                 conditions.append("(u.username ILIKE %s OR u.nickname ILIKE %s)")
