@@ -582,38 +582,11 @@ TENANTS_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 def _check_tenant_credit_blocked(tenant_id: Optional[str]) -> Optional[JSONResponse]:
     """租户积分余额硬阻断检查（#37 Phase 4）
 
-    在 /api/chat 与 /api/chat/stream 入口处调用：
-    - 私有云部署：放行（客户自购 key，无积分概念，余额恒 0 不得阻断）
-    - tenant_id 为空（platform_admin 全局视图/后台调用）：放行
-    - 租户余额 > 0：放行
-    - 租户余额 ≤ 0：返回 403 JSONResponse，阻断对话
-
-    返回 None 表示放行，返回 JSONResponse 表示阻断（直接 return 给前端）。
+    实现已抽为公共函数 `src.saas.services.credit_gate.check_tenant_credit_blocked`
+    （web_c 渠道 C 端入口共用同一口径），此处保留薄委托避免改动既有调用点。
     """
-    if settings.deployment.private_cloud:
-        return None
-    if not tenant_id:
-        return None
-    try:
-        from src.saas.db.tenant_db import TenantDB
-        tenant = TenantDB.get_by_id(tenant_id)
-        if not tenant:
-            # 租户不存在：交给后续流程处理（最终会 404），此处放行
-            return None
-        credit_balance = float(tenant.get("credit_balance") or 0)
-        if credit_balance <= 0:
-            logger.warning(f"租户 {tenant_id} 积分余额耗尽（balance={credit_balance}），阻断对话")
-            return JSONResponse({
-                "success": False,
-                "error": "积分余额已耗尽",
-                "details": "积分余额已耗尽，无法继续对话，请联系管理员充值",
-                "code": "NO_CREDIT",
-            }, status_code=403)
-    except Exception as e:
-        logger.error(f"租户积分余额检查失败 tenant_id={tenant_id}: {e}")
-        # 检查异常时不阻断，避免误伤正常用户
-        return None
-    return None
+    from src.saas.services.credit_gate import check_tenant_credit_blocked
+    return check_tenant_credit_blocked(tenant_id)
 
 
 def _get_tenant_upload_dir() -> Path:
@@ -1931,6 +1904,8 @@ app.include_router(work_outcomes.router)
 # SaaS 多租户 API（始终注册，未启用时返回友好提示）
 from src.saas.api import tenant_auth, tenant_mgmt, subscriptions
 from src.saas.api import channel_config, tenant_skills, channel_routes
+from src.saas.api import web_c
+from src.saas.api import web_c_customers
 from src.saas.api import tenant_users, usage_reports, permissions, reply_styles, external_customers
 from src.saas.api import web_sessions
 from src.saas.api import context_compression_routes
@@ -1944,6 +1919,8 @@ app.include_router(subscriptions.router)
 app.include_router(channel_config.router)
 app.include_router(tenant_skills.router)
 app.include_router(channel_routes.router)
+app.include_router(web_c.router)
+app.include_router(web_c_customers.router)
 app.include_router(tenant_users.router)
 app.include_router(usage_reports.router)
 app.include_router(usage_reports.public_router)
@@ -2021,6 +1998,8 @@ app.include_router(external_systems.router)
 # 见 docs/design/wecom/wecom-conversation-operations-design.md）
 from src.wecom_conversation import api as wecom_conversation_api  # noqa: E402
 app.include_router(wecom_conversation_api.router)
+from src.wecom_conversation import scheduled_api as wecom_scheduled_api  # noqa: E402
+app.include_router(wecom_scheduled_api.router)
 
 # 企微代理任务（契约 §2/§4：创建检查/启动/停止/编辑/软删除；监控循环 P5、Runner P6，
 # 见 docs/design/wecom/wecom-proxy-task-contract.md）

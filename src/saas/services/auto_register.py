@@ -17,6 +17,7 @@ CHANNEL_TYPE_NAME = {
     "wecom": "企业微信",
     "dingtalk": "钉钉",
     "feishu": "飞书",
+    "web_c": "官网客服",
 }
 
 
@@ -137,6 +138,8 @@ def _find_user_by_channel_id(
                    为 None 时（非 SaaS 模式）不加租户过滤，保持向后兼容。
     """
     channel_name = CHANNEL_TYPE_NAME.get(channel_type, channel_type)
+    # 查找模式与 _build_username 同源（web_c 为全量 uid 精确匹配，其余渠道尾 4 位）
+    username_pattern = _build_username(channel_type, channel_user_id)
     with get_db_connection() as conn:
         cursor = conn.cursor()
         if tenant_id:
@@ -144,13 +147,13 @@ def _find_user_by_channel_id(
                 SELECT user_id FROM users
                 WHERE username LIKE %s AND tenant_id = %s
                 LIMIT 1
-            """, (f"{channel_name}用户{channel_user_id[-4:]}", tenant_id))
+            """, (username_pattern, tenant_id))
         else:
             cursor.execute("""
                 SELECT user_id FROM users
                 WHERE username LIKE %s
                 LIMIT 1
-            """, (f"{channel_name}用户{channel_user_id[-4:]}",))
+            """, (username_pattern,))
         row = cursor.fetchone()
         if row:
             return row["user_id"]
@@ -165,13 +168,20 @@ def _save_channel_user_mapping(channel_type: str, channel_user_id: str, user_id:
         cursor.execute("""
             UPDATE users SET username = %s
             WHERE user_id = %s
-        """, (f"{channel_name}用户{channel_user_id[-4:]}", user_id))
+        """, (_build_username(channel_type, channel_user_id), user_id))
         conn.commit()
 
 
 def _build_username(channel_type: str, channel_user_id: str) -> str:
-    """构建用户名，使用中文渠道名称"""
+    """构建用户名，使用中文渠道名称。
+
+    web_c（官网客服）例外：携带全量 channel_user_id——匿名 uid 是随机 uuid，
+    尾 4 位在同租户数百访客量级必然碰撞（tail-4 LIKE 精确匹配会串号到他人
+    users 行，CR P2-5）；web_c 渠道无既有尾 4 位存量数据，切换无迁移负担。
+    """
     channel_name = CHANNEL_TYPE_NAME.get(channel_type, channel_type)
+    if channel_type == "web_c":
+        return f"{channel_name}用户{channel_user_id}"
     return f"{channel_name}用户{channel_user_id[-4:]}"
 
 

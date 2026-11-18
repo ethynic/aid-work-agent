@@ -165,3 +165,21 @@ test('resolveDriverProxyEnv：ok → 注入 SERVER_URL+TOKEN；error → 注入 
     rmSync(stateDir, { recursive: true, force: true })
   }
 })
+
+test('Runtime 提供另一个服务地址时不向该地址使用现有微信绑定凭据', async () => {
+  const stateDir = makeTmpDir()
+  try {
+    await activateAndStore('https://binding.example.com', 'AC-FIXTURE', makeDeps(stateDir, {
+      fetchFn: async () => ({ status: 200, json: async () => ({ access_token: 'fixture-bound-token' }) }),
+    }))
+    const env = await resolveDriverProxyEnv(makeDeps(stateDir, {
+      env: { AID_WEIXIN_SERVER_URL: 'https://paired.example.com' },
+      fetchFn: async () => assert.fail('Runtime does not inject activation credentials'),
+    }))
+    assert.equal(env.AID_WEIXIN_SERVER_URL, 'https://paired.example.com')
+    assert.equal(env.AID_WEIXIN_ACCESS_TOKEN, undefined)
+    assert.match(env.AID_WEIXIN_PROXY_ERROR ?? '', /AID_WEIXIN_ACTIVATION_CODE/)
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})

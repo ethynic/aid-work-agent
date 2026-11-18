@@ -32,65 +32,15 @@ AID Work Agent 是一个**面向企业客户**的员工智能代理系统，基�
 
 ## 常用命令
 
-### 安装依赖
-```bash
-pip install -r requirements.txt
-```
-
-### 启动后端服务（Web 模式）
-```bash
-python -m src.main
-# 服务运行在 http://localhost:8000
-```
-
-### 启动后端服务（CLI 聊天模式）
-```bash
-CLI_MODE=true python -m src.main
-```
-
-### 启动 Gradio UI（快速调试）
-```bash
-python gradio_app.py
-```
-
-### 运行测试
-```bash
-# 运行全部测试
-pytest tests/
-
-# 运行单个测试文件
-pytest tests/test_agent.py -v
-
-# 运行包含异步的测试
-pytest tests/ --asyncio-mode=auto
-
-# 运行综合集成测试
-python final_comprehensive_test_all.py
-```
-
-### 前端开发
-```bash
-cd frontend
-npm install
-npm run dev       # 开发模式
-npm run build     # 构建生产版本
-```
+本地依赖、后端与前端启动、工作区切换、测试及健康检查统一见[开发环境手册](docs/guides/development/local-dev-environments.md)。
 
 ### Docker 部署
 ```bash
-# 开发环境
-docker-compose up -d
-
 # 生产环境
 docker-compose -f docker-compose.prod.yml up -d --build
 
 # 检查部署状态
 ./deploy/check_deployment.sh
-```
-
-### API 健康检查
-```bash
-curl http://localhost:8000/health
 ```
 
 ---
@@ -102,7 +52,7 @@ curl http://localhost:8000/health
 ```
 用户/渠道入口
     ↓
-FastAPI / Gradio UI (src/main.py, gradio_app.py)
+FastAPI / CLI (src/main.py)
     ↓
 Master Agent (src/core/agent.py)
     ↓
@@ -116,7 +66,6 @@ SubAgents (subagents/)  /  Skills (src/skills/)
 ### 核心入口
 
 - **`src/main.py`**：FastAPI 应用入口。定义所有 HTTP 路由，包括 `/api/chat`（同步）、`/api/chat/stream`（SSE 流式）、文件上传，以及企业微信/钉钉/飞书回调路由（通过 `src/channels/` 注册）。应用启动时根据 `configs/config.yaml` 初始化渠道适配器和数据库。
-- **`gradio_app.py`**：独立的 Gradio 界面，绕过 FastAPI，直接调用 `master_agent`，用于本地快速调试。
 
 ### Agent 核心（`src/core/agent.py`）
 

@@ -463,6 +463,7 @@ class ChatRecordSourceType(str, Enum):
     VIDEO_PROMPT = "video_prompt"
     KNOWLEDGE_EMBEDDING = "knowledge_embedding"
     BACKGROUND_LLM = "background_llm"
+    WEB_C = "web_c"
 
     @classmethod
     def all_values(cls) -> list[str]:
@@ -492,6 +493,7 @@ class ChatRecordSourceType(str, Enum):
             self.WECOM_KF: "企微客服",
             self.DINGTALK: "钉钉",
             self.FEISHU: "飞书",
+            self.WEB_C: "官网客服",
             self.REPORT_PERSONAL: "个人日报",
             self.REPORT_TEAM: "团队日报",
             self.REPORT_PERSONAL_WEEKLY: "个人周报",

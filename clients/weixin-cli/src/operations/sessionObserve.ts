@@ -1,16 +1,14 @@
 /**
  * weixin_session_observe operation（C2，设计 §6 session_observer_v1 契约）。
  *
- * 完整链路（评审 P1-4）：captureFn 截图 → 常驻 OCR → 拆行/分区 → 对齐器 →
- * 冻结契约观察结果。真机 captureFn 未注入时显式 unavailable（C0 BLOCKED，
- * 不冒充无人回复）。每绑定维护独立对齐器实例（状态跨请求稳定 ID）。
+ * 旧绑定只有 opaque ID，缺少受信会话定位时显式 unavailable。
+ * 注入可信原生采集器时每绑定维护独立对齐器及跨请求稳定 ID。
  * 只读（effect=none）；不落明文日志。
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { runWeixinOperation } from './context.js'
 import type { OperationResult, OpContext, WeixinOperation } from './types.js'
-import { ConversationAligner, boxesToBubbles, type AlignBox } from '../platform/aligner.js'
-import { ResidentOcr, OcrServerUnavailable } from '../platform/ocrResident.js'
+import { ConversationAligner, type Bubble } from '../platform/aligner.js'
 import { sessionObserverRequestSchema } from '../platform/sessionObserver.js'
 
 export interface SessionObserveArgs {
@@ -20,10 +18,9 @@ export interface SessionObserveArgs {
   watermark?: { last_local_message_id: string | null; window_fingerprint: string } | null
 }
 
-/** 截图注入点：返回 PNG 路径 + 消息区配置（真机 BLOCKED；测试合成截图） */
+/** 输入必须来自受信采集器的原生会话和逐条方向证据。 */
 export type CaptureFn = (bindingId: string) => Promise<{
-  image: string
-  region: { minX: number; maxX: number; selfStartX: number; crop?: [number, number, number, number] }
+  bubbles: Bubble[]
   /** 来自受信采集器的实际核验结果，不能复制请求的期望版本。 */
   identity: { conversation_binding_id: string; binding_version: number; account_identity_version: number }
   /** 已持久化的受控截图引用；不得使用占位引用或明文路径。 */
@@ -31,7 +28,7 @@ export type CaptureFn = (bindingId: string) => Promise<{
 }>
 
 
-function observerUnavailable(
+export function observerUnavailable(
   args: SessionObserveArgs,
   reason: string,
   message: string,
@@ -54,10 +51,7 @@ function observerUnavailable(
 
 export function createWeixinSessionObserveOperation(deps: {
   captureFn?: CaptureFn
-  recognizeFn?: (image: string, crop?: [number, number, number, number]) => Promise<AlignBox[]>
 } = {}): WeixinOperation<SessionObserveArgs> {
-  const ocr = new ResidentOcr()
-  const recognize = deps.recognizeFn ?? ((image, crop) => ocr.recognize(image, crop))
   // LRU按绑定与身份版本隔离；淘汰后旧水位必须报gap。
   const states = new Map<string, { aligner: ConversationAligner; fingerprints: Set<string> }>()
   return {
@@ -72,10 +66,9 @@ export function createWeixinSessionObserveOperation(deps: {
         async () => {
           const captureFn = deps.captureFn
           if (!captureFn) {
-            return observerUnavailable(args, 'viewport_unreachable', '观察不可用：真机截图接线未开放（C0 BLOCKED）')
+            return observerUnavailable(args, 'viewport_unreachable', '观察不可用：旧绑定缺少已确认的会话定位')
           }
           const bindingId = args.conversation_binding_id as string
-          // 1) 截图（区域裁剪在 OCR 侧执行）
           let captured: Awaited<ReturnType<CaptureFn>>
           try {
             captured = await captureFn(bindingId)
@@ -108,23 +101,10 @@ export function createWeixinSessionObserveOperation(deps: {
               data: { ...observerUnavailable(args, 'alignment_broken', '').data, coverage: 'gap' },
             }
           }
-          // 2) 常驻 OCR（崩溃自动重启一次；不可用显式 unavailable）
-          let boxes: Array<{ text: string; x0: number; y0: number; x1: number; y1: number }>
-          try {
-            const ocrBoxes = await recognize(captured.image, captured.region.crop)
-            boxes = ocrBoxes.map((b) => ({ text: b.text, x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 }))
-          } catch (err) {
-            if (err instanceof OcrServerUnavailable) {
-              return observerUnavailable(args, 'engine_unavailable', `观察不可用：${err.message}`)
-            }
-            return observerUnavailable(args, 'ocr_failed', '观察不可用：OCR 失败')
-          }
-          // 3) 拆行/分区 → 气泡（sender unknown 的框由对齐器整体降级 gap）
-          const bubbles = boxesToBubbles(boxes as AlignBox[], captured.region)
-          // 4) 对齐（水位锚定/稳定 ID/gap 判定）
+          // 对齐（水位锚定/稳定 ID/gap 判定）
           const aligner = state.aligner
           const anchor = args.watermark?.last_local_message_id ?? null
-          const aligned = aligner.align(bubbles, anchor, args.watermark != null && anchor === null)
+          const aligned = aligner.align(captured.bubbles, anchor, args.watermark != null && anchor === null)
           if (aligned.kind === 'gap') {
             return {
               message: `观察完成：coverage=gap（${aligned.reason}），阻断该会话自动回复`,
@@ -141,7 +121,7 @@ export function createWeixinSessionObserveOperation(deps: {
               },
             }
           }
-          const fingerprint = `fp_${createHash('sha256').update(JSON.stringify([actual, captured.region, aligned.messages])).digest('hex')}`
+          const fingerprint = `fp_${createHash('sha256').update(JSON.stringify([actual, aligned.messages])).digest('hex')}`
           knownFingerprints.add(fingerprint)
           // 已退休窗口无须无限保留；过旧水位显式 gap。
           if (knownFingerprints.size > 256) knownFingerprints.delete(knownFingerprints.values().next().value!)

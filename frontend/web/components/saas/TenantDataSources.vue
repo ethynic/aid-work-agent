@@ -59,6 +59,22 @@
           最近错误：{{ state.source.last_error }}
         </div>
       </div>
+
+      <!-- 就业咨询数据源（客户数据库同步；开通需填写连接配置，加密存储） -->
+      <DbSyncSourceCard
+        :tenant-id="tenantId"
+        module-path="lyjy-employment"
+        entry-label="就业数据同步"
+        title="就业数据同步（聊易就业）"
+        description="聊易就业平台岗位/就业指导/政策资讯/通知公告/办事指南定时同步至本租户知识库五分类（按嵌入计费）。"
+      />
+      <DbSyncSourceCard
+        :tenant-id="tenantId"
+        module-path="sccy-policy"
+        entry-label="创业政策同步"
+        title="创业政策同步（水城创业网）"
+        description="水城创业网政策文章每日全量同步至本租户知识库「创业政策」分类（按嵌入计费）。"
+      />
     </template>
   </div>
 </template>
@@ -68,6 +84,7 @@ import { ref, watch } from 'vue'
 import { useToast } from 'vue-toastification'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
+import DbSyncSourceCard from '@/components/saas/DbSyncSourceCard.vue'
 import { getAdminSource, grantSource, revokeSource, type AdminSourceState } from '@/api/hongtaoShop'
 
 const props = defineProps<{ tenantId: string }>()

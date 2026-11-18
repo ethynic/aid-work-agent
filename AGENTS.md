@@ -38,10 +38,14 @@
 
 **代码评审准则**：CR 以 [代码评审准则](docs/reviews/code-review-principles-draft.md) 为准绳（证据链、防御与门禁按实际风险设置、测试验证意图、命名格式不作阻断项）。
 
-**本机执行环境**：
-- Python 测试统一 `./scripts/dev_test.sh <相关测试> -p no:cacheprovider -q`：脚本检测 `aid-agent-api` 容器并在容器内执行 pytest，否则用宿主机 `python`；隔离数据库用法见 [testing.md](.claude/rules/testing.md)。容器必须运行本次工作区代码，不得用旧镜像结果代替当前改动。
-- `python -c` 类检查使用相同环境：容器内加 `docker exec aid-agent-api` 前缀。不打印配置凭据。
-- 前端源码修改运行 `cd frontend && npm run build`；交互变化验证相关行为，布局变化查看受影响页面及窄屏状态，不能查看页面时明确视觉验证缺口。
+## 开发环境与验证
+
+开始需要运行项目或自测的任务时，先读[开发环境手册](docs/guides/development/local-dev-environments.md)。该手册是环境选择、启动、本地 Python、SQL 和 Web 验证的唯一执行入口。优先复用当前工作区的本地依赖。修改启动、依赖或自测入口时同步更新手册。
+
+- SQL 自动化测试使用专用测试 PG。应用联调使用本地业务 PG，按 ID 清理本轮写入的数据。[测试规范](.claude/rules/testing.md#数据库安全入口)
+- 验证开发分支或其他 worktree 时，从目标工作区运行自测；需要复用现有本地 API / Runner 时按[指定工作区验证](docs/guides/development/local-dev-environments.md#4-指定工作区验证)切换 `AID_LOCAL_SOURCE_DIR`。核对容器的 `/app` 来源，并在委派任务时交接 Docker 环境和工作区路径。
+- 前端源码修改执行 Web 构建。交互变化验证相关行为，布局变化查看受影响页面及窄屏状态，无法查看时明确验证缺口。桌面原生打包、签名和系统交互按各客户端要求使用目标系统。
+- 本地容器无法满足验证时，将 **agent3** 作为在线开发测试环境。验证当前改动前核对实际运行版本。涉及部署时遵守 [真机部署授权](#真机部署授权)。测试脚本的宿主机兼容路径不作为默认后备。不打印配置凭据。
 - 配置字段变更同步检查 `src/config/settings.py` 与 `configs/config.yaml`。
 
 **结果复用**：同一最终代码状态、依赖、配置和执行环境下的有效验证结果可复用，须有可核验的命令与退出状态；修复、合并或环境变化使结果失效时重跑，不无限重复验证。环境阻塞或原有失败不得称为"全绿"。

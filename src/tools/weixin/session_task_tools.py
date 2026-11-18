@@ -104,7 +104,7 @@ class SessionTaskPrepareTool(BaseTool):
     name = "session_task_prepare"
     display_name = "准备会话任务"
     category = "weixin"
-    description = "创建或修改会话任务草稿，不执行。名称任务先调用 weixin_name_resolve，使用返回的 device_id 和 resolution_invocation_id，无需微信号或账号绑定。返回工作台授权表单入口；更新需 task_id 与 expected_version。"
+    description = "创建或修改会话任务草稿。返回工作台授权表单入口；更新需 task_id 与 expected_version。微信云端自动回复已停用。"
     InputModel = SessionTaskPrepareInput
 
     async def execute(self, **kwargs) -> Dict[str, Any]:

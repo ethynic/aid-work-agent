@@ -20,8 +20,8 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from qc_common import (  # noqa: E402
-    GREEN_FILL, GREEN_FONT, RED_FILL, RED_FONT, dump_json, dump_text,
-    load_json, to_float,
+    DOC_FONT, GREEN_FILL, GREEN_FONT, RED_FILL, RED_FONT, apply_workbook_font,
+    dump_json, dump_text, load_json, to_float,
 )
 
 
@@ -73,9 +73,10 @@ def mark_xlsx(src, dst, marks, colors):
             continue
         fill, font_color = colors[fl]
         cell.fill = PatternFill("solid", fgColor=fill)
-        cell.font = Font(color=font_color, bold=True)
+        cell.font = Font(name=DOC_FONT, color=font_color, bold=True)
         cell.comment = Comment(m.get("comment", ""), "比价助手")
         ok += 1
+    # 源单副本只改被标注价格单元格的字体，其余保持原件样式（不整表改字体）
     wb.save(dst)
     return ok, failed
 
@@ -111,9 +112,10 @@ def mark_csv(src, dst_xlsx, marks, colors):
             continue
         fill, font_color = colors[m["flag"]]
         cell.fill = PatternFill("solid", fgColor=fill)
-        cell.font = Font(color=font_color, bold=True)
+        cell.font = Font(name=DOC_FONT, color=font_color, bold=True)
         cell.comment = Comment(m.get("comment", ""), "比价助手")
         ok += 1
+    apply_workbook_font(wb)
     wb.save(dst_xlsx)
     return ok, failed
 

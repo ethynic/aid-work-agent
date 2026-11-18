@@ -126,6 +126,28 @@ class TestExecute:
         assert body["success"] is True
         assert body["result"] == {"success": True, "value": 1}
 
+    def test_dispatch_thread_sees_tool_context(self, rest_client, monkeypatch):
+        # run_in_executor 不传播 ContextVar；server 必须用 copy_context().run
+        # 恢复，否则远程段拿不到租户身份、产物兜底落 _anonymous
+        # （2026-11-16 tr_runner_93506544 事故根因）
+        from src.tools.context import current_tool_execution_context
+
+        def _probe(tool, handler, params, cancel_event=None):
+            ctx = current_tool_execution_context()
+            return {"success": True,
+                    "tenant_id": ctx.tenant_id if ctx else None,
+                    "user_id": ctx.user_id if ctx else None}
+
+        monkeypatch.setattr(handlers, "dispatch", _probe)
+        response = _post_execute(rest_client, {
+            "tool": "excel_process", "handler": "read", "params": {},
+            "context": {"tenant_id": "tenant_e9b2fab93a2f",
+                        "user_id": "user_x"}})
+        body = response.json()
+        assert body["success"] is True
+        assert body["result"]["tenant_id"] == "tenant_e9b2fab93a2f"
+        assert body["result"]["user_id"] == "user_x"
+
 
 class TestBusy:
     def test_busy_when_semaphore_full(self, monkeypatch):

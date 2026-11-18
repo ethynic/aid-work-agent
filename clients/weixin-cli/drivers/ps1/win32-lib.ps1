@@ -20,6 +20,7 @@ public static class WeixinProbeWin32 {
  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr p);
  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h,System.Text.StringBuilder b,int n);
@@ -73,17 +74,24 @@ function Test-WeixinExecutablePath {
 }
 
 function Get-VisibleWindowList {
+    param([switch]$IncludeHidden, [uint32[]]$ProcessIds = @())
     $list = New-Object Collections.Generic.List[object]
+    $processes = @{}
     [WeixinProbeWin32]::EnumWindows({
         param($h, $unused)
-        if ([WeixinProbeWin32]::IsWindowVisible($h)) {
+        $visible = [WeixinProbeWin32]::IsWindowVisible($h)
+        if ($visible -or $IncludeHidden) {
             $windowProcessId = [uint32]0
             [void][WeixinProbeWin32]::GetWindowThreadProcessId($h, [ref]$windowProcessId)
+            if ($ProcessIds.Count -gt 0 -and $ProcessIds -notcontains $windowProcessId) { return $true }
             try {
-                $p = Get-Process -Id $windowProcessId -ErrorAction Stop
+                if (-not $processes.ContainsKey($windowProcessId)) {
+                    $processes[$windowProcessId] = Get-Process -Id $windowProcessId -ErrorAction Stop
+                }
+                $p = $processes[$windowProcessId]
                 $list.Add([pscustomobject]@{
                     Hwnd = $h.ToInt64(); MainWindowHwnd = $p.MainWindowHandle.ToInt64()
-                    Visible = $true; ProcessPath = $p.Path
+                    Visible = $visible; ProcessPath = $p.Path
                 })
             } catch {}
         }
@@ -130,8 +138,10 @@ function Test-WeixinMainIdentity {
 }
 
 function Invoke-WeixinActivation {
-    param([int64]$Hwnd)
-    [void][WeixinProbeWin32]::ShowWindow([IntPtr]$Hwnd, 9)
+    param([int64]$Hwnd, [switch]$PreservePlacement)
+    if (-not $PreservePlacement -or [WeixinProbeWin32]::IsIconic([IntPtr]$Hwnd)) {
+        [void][WeixinProbeWin32]::ShowWindow([IntPtr]$Hwnd, 9)
+    }
     for ($attempt = 0; $attempt -lt 3; $attempt++) {
         $attached = @()
         $current = [uint32][WeixinProbeWin32]::GetCurrentThreadId()
@@ -265,7 +275,11 @@ function Get-WeixinWindowSnapshot {
     # 失败或产出全黑（部分 GPU 渲染窗口的已知问题）时回退 CopyFromScreen（要求可见）。
     # 图像与窗口 rect 同尺寸同原点，坐标换算与 CopyFromScreen 一致。
     # 返回 @(left, top, width, height, usedPrintWindow)。
-    param([Parameter(Mandatory)][int64]$Hwnd, [Parameter(Mandatory)][string]$Path)
+    param(
+        [Parameter(Mandatory)][int64]$Hwnd,
+        [string]$Path,
+        [Drawing.Rectangle]$Crop = [Drawing.Rectangle]::Empty
+    )
     $rect = New-Object WeixinProbeWin32+RECT
     if (-not [WeixinProbeWin32]::GetWindowRect([IntPtr]$Hwnd, [ref]$rect)) { throw 'WINDOW_RECT_FAILED' }
     $w = $rect.Right - $rect.Left; $h = $rect.Bottom - $rect.Top
@@ -273,27 +287,49 @@ function Get-WeixinWindowSnapshot {
     $g = [Drawing.Graphics]::FromImage($bmp)
     $printed = $false
     try {
-        $hdc = $g.GetHdc()
-        try { $printed = [WeixinProbeWin32]::PrintWindow([IntPtr]$Hwnd, $hdc, 2) }
-        finally { $g.ReleaseHdc($hdc) }
-        if ($printed) {
-            $black = 0; $total = 0
-            foreach ($py in @([int]($h * 0.3), [int]($h * 0.5), [int]($h * 0.7))) {
-                foreach ($px in @([int]($w * 0.3), [int]($w * 0.5), [int]($w * 0.7))) {
-                    $total++
-                    $c = $bmp.GetPixel($px, $py)
-                    if ($c.R -lt 10 -and $c.G -lt 10 -and $c.B -lt 10) { $black++ }
+        try {
+            $hdc = $g.GetHdc()
+            try { $printed = [WeixinProbeWin32]::PrintWindow([IntPtr]$Hwnd, $hdc, 2) }
+            finally { $g.ReleaseHdc($hdc) }
+            if ($printed) {
+                $black = 0; $total = 0
+                foreach ($py in @([int]($h * 0.3), [int]($h * 0.5), [int]($h * 0.7))) {
+                    foreach ($px in @([int]($w * 0.3), [int]($w * 0.5), [int]($w * 0.7))) {
+                        $total++
+                        $c = $bmp.GetPixel($px, $py)
+                        if ($c.R -lt 10 -and $c.G -lt 10 -and $c.B -lt 10) { $black++ }
+                    }
                 }
+                if ($black -eq $total) { $printed = $false }
             }
-            if ($black -eq $total) { $printed = $false }
+        } catch { $printed = $false }
+        if ($Path) {
+            if (-not $printed) {
+                $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, (New-Object Drawing.Size $w, $h))
+            }
+            $bmp.Save($Path, [Drawing.Imaging.ImageFormat]::Png)
+            return @($rect.Left, $rect.Top, $w, $h, $printed)
         }
-    } catch { $printed = $false }
-    if (-not $printed) {
-        $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, (New-Object Drawing.Size $w, $h))
+        # In-memory capture never copies surrounding desktop pixels into a model request.
+        if (-not $printed) { throw 'WINDOW_CAPTURE_FAILED' }
+        $bounds = New-Object Drawing.Rectangle 0, 0, $w, $h
+        if (-not $Crop.IsEmpty) { $bounds = [Drawing.Rectangle]::Intersect($bounds, $Crop) }
+        if ($bounds.Width -le 0 -or $bounds.Height -le 0) { throw 'WINDOW_CAPTURE_EMPTY' }
+        $image = $bmp.Clone($bounds, $bmp.PixelFormat)
+        $stream = New-Object IO.MemoryStream
+        try {
+            $image.Save($stream, [Drawing.Imaging.ImageFormat]::Png)
+            return [pscustomobject]@{
+                Image = $stream.ToArray(); Bounds = $bounds; WindowRect = $rect
+            }
+        } finally {
+            $stream.Dispose()
+            $image.Dispose()
+        }
+    } finally {
+        $g.Dispose()
+        $bmp.Dispose()
     }
-    $bmp.Save($Path, [Drawing.Imaging.ImageFormat]::Png)
-    $g.Dispose(); $bmp.Dispose()
-    return @($rect.Left, $rect.Top, $w, $h, $printed)
 }
 
 function Get-WeixinSearchOverlayHwnd {

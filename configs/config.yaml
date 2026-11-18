@@ -17,7 +17,7 @@ chat:
 # 租户定制模块按需加载清单（src/core/optional_modules.py 消费）：
 # 列出的 src/tenant_custom/<name>/ 模块被加载（api.router 挂载 + scheduler 启动）；
 # 移除条目即关闭该模块（平台入口零租户专名，无需改代码）。
-tenant_custom_modules: ["hongtao_shop"]
+tenant_custom_modules: ["hongtao_shop", "lyjy_employment", "sccy_policy"]
 
 # 智能体全局配置
 agent:
@@ -71,6 +71,7 @@ llm:
     deepseek-flash: 393216
     deepseek-v4-pro: 393216
     deepseek-v4-flash: 393216   # deepseek-flash 改名后的新模型码，缺失会回退默认 16384 截断长输出
+    deepseek-v4.1-flash: 393216 # 千问百炼平台仍叫这个名字
     GLM-5.3-Flash: 131072
   qwen:
     api_keys: ${QWEN_API_KEYS:-}
@@ -501,10 +502,10 @@ session_tasks:
   execution_reserve_units: 0.0    # 单次发送执行预留积分（weixin v2 发送现无按次积分价；>0 才预留，不虚构按轮收费）
   opening_enabled: true           # 开场白决策开关（false 拒绝 opening 创建）
 
-# 微信会话场景（weixin.conversation.v1；场景能力开关，业务绑定骨架 C1 已建）
+# 微信云端自动回复已停用。微信聊天正文通过本机 CLI 读取。
 weixin_conversation:
-  enabled: true
-  tenant_allowlist: ["tenant_1dc997a1806b"]  # Demo 租户
+  enabled: false
+  tenant_allowlist: []
 
 # BOSS 会话场景（boss.chat_reply.v1；B1.3 注册骨架默认关闭，完整场景包 B2 交付。
 # 热读门控同微信范式：enabled=false（或文件缺失/损坏）时零注册零授权，fail-closed；
@@ -528,7 +529,7 @@ agent_runner:
     web:
       # scheduled：Web 网关以 web 服务身份转发用户 token 只读/取消 scheduled
       # runner（任务视图，设计 §5.2 操作范围矩阵）；提交仍仅 scheduler 服务身份。
-      sources: ["chat", "wecom_kf", "feishu", "dingtalk", "wecom", "scheduled"]
+      sources: ["chat", "wecom_kf", "feishu", "dingtalk", "wecom", "scheduled", "web_c"]
     # 调度侧服务身份（background_runner dispatch 循环提交 scheduled 执行）；
     # token 复用同一 .env 的 AGENT_RUNNER_WEB_SERVICE_TOKEN，无新增 env。
     scheduler:

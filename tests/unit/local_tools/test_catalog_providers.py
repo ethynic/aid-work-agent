@@ -38,9 +38,8 @@ class TestWeixinProviderRegistration:
 
     def test_weixin_tools_read_set_plus_v2_write_name(self):
         tools = set(catalog.allowed_tools("weixin"))
-        # 只读集合（与 Runtime manifest 5 工具中的 4 只读对齐）
-        assert {"weixin_probe", "weixin_chat_search",
-                "weixin_history_read", "weixin_unread_list"} <= tools
+        assert {"weixin_probe", "weixin_chat_search", "weixin_name_resolve"} <= tools
+        assert not tools.intersection(catalog.LOCAL_ONLY_WEIXIN_TOOLS)
         # v2 统一操作名（底座写链路）
         assert "weixin_message_send_v2" in tools
         # v1 写不经底座——不得进入受信清单

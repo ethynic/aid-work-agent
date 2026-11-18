@@ -34,6 +34,22 @@ export interface ProviderManifest {
   schema_digest: string
   execution_target: 'local_required'
   min_mcp_protocol_version: string
+  /** 调度声明（契约 2.20）：工具名单 + 并行标记；不计入 schema_digest（digest 沿用旧规则只覆盖 tools） */
+  tool_declaration: { version: 1; tools: Array<{ name: string; parallel?: true }> }
+}
+
+/** 调度声明白名单（契约 2.20）。历史、未读预览和会话观察仅供本机 CLI/MCP 使用。
+ * 微信全部桌面操作均串行。 */
+const DECLARED_TOOLS = new Set([
+  'weixin_probe',
+  'weixin_chat_search',
+  'weixin_message_send',
+  'weixin_chat_latest',
+])
+
+/** 调度声明：白名单工具按清单顺序一项 {name} */
+export function buildToolDeclaration(): ProviderManifest['tool_declaration'] {
+  return { version: 1, tools: TOOL_DEFS.filter((def) => DECLARED_TOOLS.has(def.name)).map((def) => ({ name: def.name })) }
 }
 
 /** 包根 provider-manifest.json 的静态身份字段（digest/tools/version 不入文件，避免漂移） */
@@ -103,5 +119,6 @@ export function buildManifest(): ProviderManifest {
     provider_version: providerVersion(),
     tools: manifestTools(),
     schema_digest: computeSchemaDigest(),
+    tool_declaration: buildToolDeclaration(),
   }
 }

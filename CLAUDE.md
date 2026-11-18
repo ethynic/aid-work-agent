@@ -33,6 +33,10 @@
 **不要复述问题**：直接回答，不要重复用户的问题
 **避免长输出**：一次性输出 32000 个 token，会触发"output token maximum"错误
 
+## 开发环境与验证
+
+开始需要运行项目或自测的开发任务时，遵循 [AGENTS.md 开发环境与验证](AGENTS.md#开发环境与验证)。Windows 优先在 WSL2 内运行 Docker，其次使用 Docker Desktop。macOS 使用 Docker Desktop，Linux 使用 Docker Engine。本地容器无法满足验证时使用 agent3，并遵守 [真机部署授权](AGENTS.md#真机部署授权)。具体命令见 [开发环境手册](docs/guides/development/local-dev-environments.md)。
+
 ## Git 提交规范
 **Git 提交与推送以 [AGENTS.md Git 提交规范](AGENTS.md#git-提交规范) 为准：master 禁止直接提交，合并须用户明确确认；其他分支可以按所用开发流程提交并推送。**
 1. 提交前执行 `git fetch` 拉取远程最新代码

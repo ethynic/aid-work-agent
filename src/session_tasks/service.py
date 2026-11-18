@@ -19,6 +19,8 @@ from uuid import UUID, uuid4
 
 from loguru import logger
 
+from src.weixin_conversation.constants import SCENARIO_KEY as WEIXIN_CONVERSATION
+
 from . import confirmations as confirmations_mod
 from .config import get_session_tasks_config, tenant_allowed
 from .constants import (
@@ -520,6 +522,13 @@ def _ensure_scenario_enabled(tenant_id: str, scenario_key) -> None:
     if checker is None or not checker(tenant_id):
         raise SessionTaskError(f"场景未启用: {scenario_key}", ERR_FEATURE_DISABLED, 403)
 
+def ensure_weixin_cloud_reply_enabled(tenant_id: str, scenario_key: str) -> None:
+    if scenario_key == WEIXIN_CONVERSATION:
+        from src.weixin_conversation.config import scenario_enabled
+
+        if not scenario_enabled(tenant_id):
+            raise SessionTaskError("微信聊天正文仅限本机，云端自动回复已停用", ERR_FEATURE_DISABLED, 403)
+
 
 def _task_scenario_key(tenant_id: str, task_id) -> Optional[str]:  # noqa: ANN001
     """任务场景归属普通预读（scenario_key 创建后不可变，仅用于分派 spec 校验器）。"""
@@ -783,7 +792,7 @@ def renew_assignment(tenant_id: str, device_id: UUID, assignment_id: UUID, fence
         cursor.execute(
             """
             SELECT a.fence, a.lease_expires_at,
-                   t.status, t.control_epoch, t.server_control_seq, t.completion_reason, t.blocked_reason
+                   t.status, t.control_epoch, t.server_control_seq, t.completion_reason, t.blocked_reason, t.scenario_key
             FROM session_task_assignments a JOIN session_tasks t ON t.tenant_id=a.tenant_id AND t.id=a.task_id
             WHERE a.tenant_id=%s AND a.id=%s AND a.device_id=%s AND a.is_current=TRUE FOR UPDATE OF a
             """,
@@ -792,6 +801,7 @@ def renew_assignment(tenant_id: str, device_id: UUID, assignment_id: UUID, fence
         row = cursor.fetchone()
         if row is None or row["fence"] != fence or row["control_epoch"] != control_epoch:
             raise SessionTaskError("assignment 已过时（STALE_ASSIGNMENT）", ERR_STALE_ASSIGNMENT, 409)
+        ensure_weixin_cloud_reply_enabled(tenant_id, row["scenario_key"])
         if _tz(row["lease_expires_at"]) <= _now():
             raise SessionTaskError("租约已过期，需重新 claim", ERR_LEASE_EXPIRED, 409)
         cursor = conn.cursor()
@@ -824,6 +834,7 @@ def ingest_events(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: i
         raise SessionTaskError("records 不能为空", ERR_VALIDATION_FAILED)
     if len(records) > cfg.events_max_records:
         raise SessionTaskError(f"每批最多 {cfg.events_max_records} 条", ERR_VALIDATION_FAILED)
+    has_message_batch = any(str(record.get("type", "")).strip() == "batch" for record in records)
     # 与客户端 Buffer.byteLength 口径对齐（无分隔空格，UTF-8 字节数——
     # 非 Unicode 字符数：中文 1 字符 = 3 字节，两端按同一 256KiB 判定）
     batch_bytes = sum(len(json.dumps(r, ensure_ascii=False, default=str, separators=(",", ":")).encode("utf-8")) for r in records)
@@ -867,7 +878,11 @@ def ingest_events(tenant_id: str, device_id: UUID, assignment_id: UUID, fence: i
                 raise SessionTaskError("assignment 不存在或不属于本设备", ERR_STALE_ASSIGNMENT, 409)
             if hist["fence"] != fence:
                 raise SessionTaskError("历史补交 fence 不匹配", ERR_STALE_ASSIGNMENT, 409)
+            if has_message_batch:
+                ensure_weixin_cloud_reply_enabled(tenant_id, hist["scenario_key"])
             return _ingest_historical_facts(conn, tenant_id, assignment_id, hist, records)
+        if has_message_batch:
+            ensure_weixin_cloud_reply_enabled(tenant_id, a["scenario_key"])
         try:
             expected_seq = a["acked_local_seq"]
             for record in records:

@@ -11,6 +11,8 @@ import time
 import uuid
 from typing import AsyncIterator
 
+from loguru import logger
+
 from src.core.agent_events import (
     _truncate_tool_content, make_event, make_image_event, mask_tool_args,
 )
@@ -36,7 +38,18 @@ def normalize_calls(raw_calls: list, namespace=None) -> list[ToolCall]:
             try:
                 arguments = json.loads(arguments or "{}")
             except (ValueError, TypeError) as error:
-                raise ValueError("INVALID_TOOL_ARGUMENTS") from error
+                # 模型偶发在完整 JSON 对象后拼接多余内容（JSONDecodeError
+                # "Extra data"，DeepSeek 长文本参数场景实测），raw_decode
+                # 截取首个完整 JSON 对象恢复，避免一次输出瑕疵中止整个执行。
+                try:
+                    recovered, _ = json.JSONDecoder().raw_decode(arguments)
+                except (ValueError, TypeError):
+                    raise ValueError("INVALID_TOOL_ARGUMENTS") from error
+                if not isinstance(recovered, dict):
+                    raise ValueError("INVALID_TOOL_ARGUMENTS") from error
+                logger.warning('引擎日志：工具调用参数 JSON 存在尾部多余内容，'
+                               '已截取首个 JSON 对象恢复 name={}', name)
+                arguments = recovered
         if not isinstance(arguments, dict):
             raise ValueError("INVALID_TOOL_ARGUMENTS")
         call_id = str(raw.get("id") or f"call_{uuid.uuid4().hex}")
@@ -286,7 +299,40 @@ class AgentEngine:
                     identity_version = response_fact.get("tool_identity_version") if response_fact else None
                     namespace = (f"{state.execution_id}:{response_fact['call_id']}"
                         if type(identity_version) is int and identity_version == 1 else None)
-                    calls = normalize_calls(response.get("tool_calls", []),namespace)
+                    try:
+                        calls = normalize_calls(response.get("tool_calls", []),namespace)
+                    except ValueError as error:
+                        if not error.args or error.args[0] != "INVALID_TOOL_ARGUMENTS":
+                            raise
+                        # 恢复仍失败（参数整体不可解析或非对象）：不中止执行，
+                        # 丢弃本轮 tool_calls 并把解析错误回传给模型自纠后重试；
+                        # 连续两次仍失败才判定失败（与 MODEL_OUTPUT_INCOMPLETE
+                        # 同款恢复模式）。保证带垃圾参数的工具永不分派。
+                        for model_fact in state.model_calls:
+                            if owned_model_fact(model_fact) and model_fact.get('iteration')==state.iteration and model_fact.get('phase')=='completed':
+                                model_fact['applied'] = True
+                        attempts = state.resources.get("invalid_tool_arguments_responses", 0) + 1
+                        state.resources["invalid_tool_arguments_responses"] = attempts
+                        if attempts >= 2:
+                            state.outcome = Outcome.FAILED
+                            state.error_code = "INVALID_TOOL_ARGUMENTS"
+                            text = "模型连续返回无法解析的工具调用参数，任务未能继续；已保存的阶段成果保留。"
+                            state.output += text
+                            await control.save(state, "invalid_tool_arguments")
+                            yield await observed(make_event("error", data=text, error_code=state.error_code))
+                            yield await observed(make_event("response", data=text))
+                            return
+                        message = {"role": "assistant", "content": response.get("content") or ""}
+                        if isinstance(response.get("reasoning_content"), str):
+                            message["reasoning_content"] = response["reasoning_content"]
+                        state.messages.append(message)
+                        state.messages.append({"role": "user", "content":
+                            "[系统提示] 上一轮工具调用的 arguments 不是合法 JSON，该工具未执行。"
+                            "请重新发起该工具调用，arguments 必须是单个完整 JSON 对象，不要在 JSON 之外附加任何文字。"})
+                        await control.save(state, "invalid_tool_arguments_retry")
+                        yield await observed(make_event("progress", data="工具调用参数异常，正在自动重试"))
+                        continue
+                    state.resources.pop("invalid_tool_arguments_responses", None)
                     state.resources['round_tool_ids'] = [call.id for call in calls]
                     if namespace is not None:
                         orders = state.resources.setdefault('tool_cursor_orders',{})

@@ -24,6 +24,9 @@ class VerifyLocalRequest(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     client_request_id: str = Field(min_length=1, max_length=128)
     stop_resources: bool = False
+    # 契约「停止与接续」：受管停止停稳后由服务端编排自动接续。缺省 False，
+    # 旧请求（无该字段）逐字节兼容；网关按“未提供即不含键”条件转发。
+    continue_after_stop: bool = False
 
 
 class EventOperationMiddleware(BaseHTTPMiddleware):
@@ -158,7 +161,9 @@ def create_app(*, config=None, manager=None):
     @app.post('/v1/runners/{runner_id}/verify-local')
     async def verify_local(runner_id: str, body: VerifyLocalRequest, request: Request):
         enabled()
-        return {'success': True, 'runner': await asyncio.to_thread(manager.verify_local, runner_id, body.client_request_id, credentials(request), stop_resources=body.stop_resources)}
+        return {'success': True, 'runner': await asyncio.to_thread(manager.verify_local, runner_id,
+            body.client_request_id, credentials(request), stop_resources=body.stop_resources,
+            continue_after_stop=body.continue_after_stop)}
 
     @app.post('/v1/runners/{runner_id}/end-waiting')
     async def end_waiting(runner_id: str, body: EndWaitingRequest, request: Request):
@@ -173,7 +178,7 @@ def create_app(*, config=None, manager=None):
     @app.get("/v1/sessions/{kind}/{session_id}/runners")
     async def list_session(kind: Literal["web", "channel"],
                            session_id: Annotated[str, Path(min_length=1, max_length=256)], request: Request,
-                           source: Literal["chat", "wecom_kf", "feishu", "dingtalk", "wecom", "scheduled"] = "chat",
+                           source: Literal["chat", "wecom_kf", "feishu", "dingtalk", "wecom", "scheduled", "web_c"] = "chat",
                            profile_id: str = Query(default="main", min_length=1, max_length=128),
                            channel_user_id: str | None = Query(default=None, max_length=256),
                            channel_chat_id: str | None = Query(default=None, max_length=256),

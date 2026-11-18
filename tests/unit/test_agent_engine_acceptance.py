@@ -478,3 +478,65 @@ def test_legacy_mixed_child_model_fact_without_its_authoritative_checkpoint_requ
                             "response": completion("must-not-use-or-invent-child-state")}]
     with pytest.raises(ValueError, match="CHECKPOINT_MODEL_OWNER_VERIFICATION_REQUIRED"):
         ExecutionState.restore(json.loads(json.dumps(current.checkpoint())))
+
+
+def raw_call(call_id="call-1", name="read", arguments="{}"):
+    return {"id": call_id, "type": "function", "function": {
+        "name": name, "arguments": arguments}}
+
+
+@pytest.mark.asyncio
+async def test_extra_data_tool_arguments_recover_first_json_object():
+    """模型在完整 JSON 对象后拼接多余内容（"Extra data"）时，
+    normalize_calls 用 raw_decode 截取首个 JSON 对象恢复，工具正常分派。"""
+    current = state()
+    model = Model(completion("", [raw_call(arguments='{"k": "v"} trailing garbage')]),
+                  completion("final answer"))
+    events, tools, _, _ = await run(current, model)
+    assert current.outcome == Outcome.COMPLETED
+    assert current.output == "final answer"
+    assert len(tools.dispatched) == 1
+    assert tools.dispatched[0][1].arguments == {"k": "v"}
+
+
+@pytest.mark.asyncio
+async def test_unrecoverable_tool_arguments_degrade_to_model_self_correction_then_complete():
+    """整体不可解析的参数不中止执行：丢弃本轮 tool_calls、回传纠正提示，
+    模型下次返回合法调用后正常分派并完成；降级轮的 assistant 消息不带
+    tool_calls（避免无配对结果的协议违规）。"""
+    current = state()
+    model = Model(completion("part", [raw_call(arguments="{invalid")]),
+                  completion("", [call()]), completion("final answer"))
+    events, tools, _, observer = await run(current, model)
+    assert current.outcome == Outcome.COMPLETED
+    assert current.output == "final answer"
+    assert len(tools.dispatched) == 1
+    corrections = [m for m in current.messages
+                   if m["role"] == "user" and "arguments 不是合法 JSON" in str(m.get("content"))]
+    assert len(corrections) == 1
+    degraded_assistant = [m for m in current.messages if m.get("content") == "part"]
+    assert degraded_assistant and "tool_calls" not in degraded_assistant[0]
+    retry_request_messages = model.requests[1][0]["messages"]
+    assert any(m["role"] == "user" and "arguments 不是合法 JSON" in str(m.get("content"))
+               for m in retry_request_messages)
+    assert any(event.get("type") == "progress" for event in events)
+    assert len(observer.usage) == 3
+
+
+@pytest.mark.asyncio
+async def test_persistent_invalid_tool_arguments_fail_after_two_attempts():
+    """连续两次仍返回不可解析参数才判定失败：终态 FAILED、
+    error_code=INVALID_TOOL_ARGUMENTS、全程零工具分派。"""
+    current = state()
+    model = Model(completion("", [raw_call(arguments="{invalid")]),
+                  completion("", [raw_call(arguments="{invalid")]),
+                  completion("must not run"))
+    events, tools, _, _ = await run(current, model)
+    assert current.outcome == Outcome.FAILED
+    assert current.error_code == "INVALID_TOOL_ARGUMENTS"
+    assert tools.dispatched == []
+    assert len(model.requests) == 2
+    assert "已保存的阶段成果保留" in current.output
+    error_events = [event for event in events if event.get("type") == "error"]
+    assert len(error_events) == 1
+    assert error_events[0].get("error_code") == "INVALID_TOOL_ARGUMENTS"

@@ -2,6 +2,8 @@
 
 日期：2026-09-15。适用场景仅 `weixin.conversation.v1`。当前 **禁止灰度**（C5 隔离 fake 综合验证通过但真机灰度门禁未开，结论与记录见 [设计文档文末实现与验证记录](../../design/desktop-automation/edge-session-task-design.md)）。本文件是后续操作规程，不代表已执行发布。
 
+2026-11-17 决议：微信云端自动回复停用，旧版开启步骤作为历史记录保留。当前采集与监控入口见[原生读取与本地轮询](../../plans/plan-weixin-cli-remove-ocr.md#phase-4-历史与持续观察)。
+
 ## 放行前置条件
 
 1. C0 真机授权记录完整：设备、微信版本、账号、单聊/群聊绑定、对端配合方式、时段、内容范围、发送上限。单聊/群聊分别验收，未验证类型不开。
@@ -12,9 +14,7 @@
 
 ## 灰度配置与操作
 
-安装准备命令：`npm --prefix clients/weixin-cli run pack:portable -- <embedded-OCR绝对目录> <已存在的输出绝对目录>`。源目录必须为预装RapidOCR/onnxruntime/Pillow及模型的embedded Python，普通venv、符号链接依赖及跳出包根的 `_pth` 均拒绝。脚本在临时副本中清除PYTHONPATH/PYTHONHOME并以 `-I` 构造OCR引擎后组装npm归档，不修改BOSS环境。当前没有准备好的embedded源，实际产物仍未生成。
-
-这是需 `npm install <tgz>` 安装依赖的Provider归档，不含Node或node_modules，也没有新增bin入口；在安装目录通过 `node node_modules/aid-weixin/dist/src/cli/index.js mcp --stdio` 启动。目标需满足现有Node≥22。发布前还须在干净用户下安装归档、检查模型确实进入包、运行常驻OCR合成图测试及重启恢复；打包前自检不能替代该步骤。
+当前本机微信 CLI 归档命令见[微信 CLI 手册](../../../clients/weixin-cli/README.md#常用命令)。下方为旧云端自动回复的历史灰度记录。
 
 当前 `configs/config.yaml` 两项均保持 false。将来门禁通过后，先为 **同一个明确租户** 设置 `session_tasks.tenant_allowlist` 与 `weixin_conversation.tenant_allowlist`，再开启对应 enabled。空 allowlist 在现有实现中表示不限租户，不能用于灰度。
 

@@ -59,6 +59,104 @@ def valid_uuid(value):
         return False
 
 
+def stop_superseded_by_completion(cursor, invocation, binding):
+    """R8 晚回执竞态：scope 原调用已全部终态且完成判定成立 → 停止无需派发。
+
+    Phase 3 语义：原调用终态回执（含 _runtime_completion 结束证据）本身就是
+    「Provider 结构化终态到达且执行停稳」的可信证明，直接采信；无回执的租约
+    过期 unknown 不构成完成判定（真未知），仍需真实受管停止。
+    """
+    ids = binding.get('original_invocation_ids')
+    if not isinstance(ids, list) or not ids:
+        return False
+    cursor.execute('SELECT * FROM local_tool_invocations WHERE tenant_id=%s AND id=ANY(%s::uuid[])',
+        (invocation.get('tenant_id'), sorted({str(value) for value in ids})))
+    originals = [dict(item) for item in cursor.fetchall()]
+    if {str(item['id']) for item in originals} != {str(value) for value in ids}:
+        return False
+    return all(item['state'] in repository.TERMINAL_STATES
+               and repository.operation_completion_known(item) for item in originals)
+
+
+def supersede_completed_stop(invocation_id, tenant_id):
+    """派发前复判命中：核验行按「无需派发」落终态；verified 合并与接续编排照常。
+
+    R9：running 行同样适用——Runtime 在停止动作前以 started 幂等重发复判，
+    scope 原调用已全部可信终态时不执行受管停止（服务端在本事务落终态并接续）。
+    独立事务并沿用仓库既有锁序（先 Runner 行锁、后操作准入锁，与 write_result
+    一致），避免与领取路径已持有的准入锁交叉等待。复判条件在领取路径每次重复
+    出现，本事务任一步不满足即整体放弃，下一轮领取重新复判（自愈，无需重试器）。
+    """
+    from psycopg2.extras import Json
+    from src.services.agent_runner.persistence_limits import capped_checkpoint_dumps
+    from src.services.agent_runner.event_repository import EventRepository
+    with repository.get_db_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute('SELECT * FROM local_tool_invocations WHERE id=%s AND tenant_id=%s FOR UPDATE',
+            (invocation_id, tenant_id))
+        row = cursor.fetchone()
+        if not row:
+            connection.commit()
+            return False
+        row = dict(row)
+        binding = row.get('business_ref') or {}
+        if (row.get('tool_name') != 'runtime_recovery_observe' or binding.get('version') != 3
+                or row['state'] not in ('queued', 'claimed', 'running')):
+            connection.commit()
+            return False
+        cursor.execute('SELECT * FROM agent_runners WHERE runner_id=%s AND tenant_id=%s FOR UPDATE',
+            (binding.get('runner_id'), tenant_id))
+        runner = cursor.fetchone()
+        repository.lock_operation_admission(cursor, tenant_id)
+        if not runner or not observation_scope(cursor, row, dispatch=True):
+            connection.commit()
+            return False
+        if not stop_superseded_by_completion(cursor, row, binding):
+            connection.commit()
+            return False
+        message = '原调用已可信结束（回执与结束事实证明执行已停稳），停止无需派发，接续照常进行。'
+        result = {'success': False, 'code': 'LOCAL_RECOVERY_STOP_SUPERSEDED', 'message': message,
+            'data': None, 'retryable': False, '_stop_superseded': {'version': 1,
+                'invocation_id': str(row['id']), 'scope_id': binding.get('scope_id'),
+                'original_invocation_ids': binding.get('original_invocation_ids')}}
+        cursor.execute("""UPDATE local_tool_invocations SET state='failed',effect='none',
+            error_code='LOCAL_RECOVERY_STOP_SUPERSEDED',error_message=%s,result_json=%s,
+            finished_at=COALESCE(finished_at,NOW()),lease_expires_at=NULL,credit_cost=0
+            WHERE id=%s AND tenant_id=%s AND tool_name='runtime_recovery_observe'
+              AND state IN ('queued','claimed','running') RETURNING id""",
+            (message, Json(result), row['id'], tenant_id))
+        if cursor.fetchone() is None:
+            connection.commit()
+            return False
+        checkpoint = dict(runner['checkpoint'] or {})
+        current = checkpoint.get('local_verification') or {}
+        if current.get('invocation_id') == str(row['id']) and all(current.get(key) == binding.get(key)
+                for key in ('runner_id', 'version', 'scope_id', 'request_id', 'device_id', 'original_invocation_ids')):
+            # 停稳已由原回执+结束证据证明：核验投影按停稳成功处理，verified 合并照常。
+            checkpoint['local_verification'] = {**current, 'state': 'succeeded', 'resource_stopped': True,
+                'page_observed': False, 'stop_error_code': None, 'page_summary': None,
+                'target_relation': None, 'error_code': None}
+            checkpoint['verified_local_invocations'] = sorted(
+                set(checkpoint.get('verified_local_invocations', [])) | set(binding['original_invocation_ids']))
+            cursor.execute('UPDATE agent_runners SET checkpoint=%s::jsonb,view_revision=view_revision+1,updated_at=clock_timestamp() WHERE runner_id=%s',
+                (capped_checkpoint_dumps(checkpoint), binding['runner_id']))
+            EventRepository.notify_in_tx(cursor, dict(runner))
+            if (checkpoint.get('local_verification') or {}).get('continue_after_stop') is True:
+                # 与停稳回执同一事务语义：编排失败只跳过，不影响拒发落终态。
+                cursor.execute('SAVEPOINT continue_after_stop')
+                try:
+                    from src.services.agent_runner.stop_continue import dispatch_continue_resume_in_tx
+                    dispatch_continue_resume_in_tx(cursor, dict(runner), checkpoint)
+                    cursor.execute('RELEASE SAVEPOINT continue_after_stop')
+                except Exception as error:  # noqa: BLE001
+                    cursor.execute('ROLLBACK TO SAVEPOINT continue_after_stop')
+                    from loguru import logger
+                    logger.opt(exception=True).warning(
+                        'AgentRunner continue-after-stop orchestration skipped: {!r}', error)
+        connection.commit()
+        return True
+
+
 def write_result(invocation_id, tenant_id, claim_token_hash, success, code, message, effect, data, retryable, device_id):
     """Lock Runner -> admission -> receipt, atomically apply only the current exact scope."""
     from src.services.agent_runner.persistence_limits import capped_checkpoint_dumps
@@ -158,6 +256,19 @@ def write_result(invocation_id, tenant_id, claim_token_hash, success, code, mess
                 (capped_checkpoint_dumps(checkpoint), binding['runner_id']))
             from src.services.agent_runner.event_repository import EventRepository
             EventRepository.notify_in_tx(cursor, dict(runner))
+            if stop_valid and (checkpoint.get('local_verification') or {}).get('continue_after_stop') is True:
+                # 契约「停止与接续」：停稳事实落定后由服务端在同一事务追加自动
+                # 接续编排；保存点保证编排半途失败不随回执提交，回执与占用解除不受影响。
+                cursor.execute('SAVEPOINT continue_after_stop')
+                try:
+                    from src.services.agent_runner.stop_continue import dispatch_continue_resume_in_tx
+                    dispatch_continue_resume_in_tx(cursor, dict(runner), checkpoint)
+                    cursor.execute('RELEASE SAVEPOINT continue_after_stop')
+                except Exception as error:  # noqa: BLE001 - 编排失败只跳过，不影响停稳回执
+                    cursor.execute('ROLLBACK TO SAVEPOINT continue_after_stop')
+                    from loguru import logger
+                    logger.opt(exception=True).warning(
+                        'AgentRunner continue-after-stop orchestration skipped: {!r}', error)
         result = {'success': bool(valid), 'code': code, 'message': message, 'data': data, 'retryable': retryable}
         cursor.execute('UPDATE local_tool_invocations SET state=%s,effect=\'none\',result_json=%s,error_code=%s,finished_at=NOW(),lease_expires_at=NULL,credit_cost=0 WHERE id=%s RETURNING *',
             ('succeeded' if valid else 'failed', Json(result), None if valid else code or 'LOCAL_VERIFICATION_FAILED', invocation_id))

@@ -138,18 +138,23 @@ async function migratePlugins(options: RuntimeInstallationOptions, source: strin
     const stat = lstatSync(inventory)
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024 || !same(realpathSync(inventory), inventory)) return
     const value = JSON.parse(readFileSync(inventory, 'utf8'))
-    if (value.version !== 1 || !Array.isArray(value.records) || value.records.length > 3) return
+    // 条数不设上限（契约 2.20 R3）：安全由逐条验签保证——每条 archive 必过 verifyOfflinePackage
+    if (value.version !== 1 || !Array.isArray(value.records)) return
     records = value.records
   } catch { return }
   const base = path.join(path.dirname(options.hostEntry), 'node_modules/@aid/local-tool-host-core/dist/plugins')
   const { PluginStore } = await import(pathToFileURL(path.join(base, 'store.js')).href)
-  const { verifyOfflinePackage, PACKAGE_LIMITS, FIRST_PARTY_PROVIDERS } = await import(pathToFileURL(path.join(base, 'package.js')).href)
+  const { verifyOfflinePackage, PACKAGE_LIMITS } = await import(pathToFileURL(path.join(base, 'package.js')).href)
+  // 可安装身份沿用安装信任配置派生（同包 productTrust.js，与 hostEntry 同目录分发）；
+  // 未在任一 trust 条目 providers 里的身份验签必失败，无需另设名单
+  const { providerIdsOfTrust } = await import(pathToFileURL(path.join(path.dirname(options.hostEntry), 'productTrust.js')).href)
   const trust = JSON.parse(safeRead(path.resolve(path.dirname(options.hostEntry), '../trust-roots.json'))).roots
+  const providers: readonly string[] = providerIdsOfTrust(trust)
   const nodeFacts = await new Promise<string>((resolve, reject) => execFile(options.node,
     ['-p', 'JSON.stringify({platform:process.platform,arch:process.arch,node_version:process.versions.node,node_abi:process.versions.modules})'],
     { encoding: 'utf8', windowsHide: true, timeout: 10000, env: { ...process.env, NODE_OPTIONS: '', NODE_PATH: '' } }, (error, stdout) => error ? reject(new Error('新版Node环境检查失败')) : resolve(stdout)))
   const platform = { ...JSON.parse(nodeFacts), runtime_version: JSON.parse(safeRead(path.join(path.dirname(options.hostEntry), 'package.json'))).version }
-  const storeOptions = { home: target, trust, platform, probe: async () => ({ ready: false, reason: '正在检查新版插件环境' }) }
+  const storeOptions = { home: target, trust, platform, providers, probe: async () => ({ ready: false, reason: '正在检查新版插件环境' }) }
   let store = new PluginStore(storeOptions)
   try { await store.initialize() }
   catch {
@@ -159,14 +164,14 @@ async function migratePlugins(options: RuntimeInstallationOptions, source: strin
   }
   for (const record of records) {
     if (!record || record.uninstalled !== false || typeof record.enabled !== 'boolean' || typeof record.directory !== 'string'
-        || !uuid.test(record.directory) || !FIRST_PARTY_PROVIDERS.includes(record.plugin_id)) continue
+        || !uuid.test(record.directory)) continue
     let bytes: Buffer
     try {
       const archive = path.join(source, 'plugins/releases', record.directory, 'archive.zip')
       const stat = lstatSync(archive)
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > PACKAGE_LIMITS.archive || !same(realpathSync(archive), archive)) continue
       bytes = readFileSync(archive)
-      const pkg = await verifyOfflinePackage(bytes, trust, platform)
+      const pkg = await verifyOfflinePackage(bytes, trust, platform, providers)
       if (pkg.envelope.provider_id !== record.plugin_id) continue
     } catch {
       console.warn(`[runtime-installation] 插件迁移未完成，请重新安装兼容离线包：${record.plugin_id}`)

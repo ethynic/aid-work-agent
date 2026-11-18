@@ -253,6 +253,22 @@ async function deliverOriginalOutboxEntry(
   entry: OutboxEntry,
   opts: DeliverOptions = {},
 ): Promise<OutboxOutcome> {
+  // Older entries have no tool name. Recognize the three original WeChat read result
+  // envelopes before replaying them, without changing the outbox format or sending the body.
+  const data = entry.payload.data
+  const message = entry.payload.message ?? ''
+  const unread: unknown[] = Array.isArray(data?.unread) ? data.unread : []
+  if ((/^已读取(?:微信|与「[\s\S]*」的)聊天记录 /.test(message)
+      && typeof data?.target === 'string' && typeof data.total === 'number' && Array.isArray(data.messages))
+    || (message.startsWith('未读会话') && unread.some(item => item !== null && typeof item === 'object'
+      && 'preview' in item && typeof item.preview === 'string'
+      && 'unread_count' in item && typeof item.unread_count === 'number'))
+    || (typeof data?.observation_id === 'string' && typeof data.conversation_binding_id === 'string'
+      && Array.isArray(data.ordered_messages))) {
+    outbox.markGaveUp(entry.invocation_id, 'WEIXIN_READ_LOCAL_ONLY')
+    logError(`invocation ${entry.invocation_id} 微信本机读取回执已停止上传`)
+    return 'gave-up'
+  }
   const base = opts.retryBaseMs ?? 1_000
   const max = opts.retryMaxMs ?? 30_000
   const maxAttempts = opts.maxAttempts ?? Number.POSITIVE_INFINITY
@@ -261,11 +277,18 @@ async function deliverOriginalOutboxEntry(
   let attempt = 0
   for (;;) {
     attempt += 1
+    // 终态回传本体不受已中止的关闭信号影响：shutdown 协作式中止产生 CANCELLED 终态时，
+    // 信号在 flush 之前就已 abort——若带着它发请求，首个尝试必然被 AbortLoopError 打断，
+    // backoffSleep 立即放弃，终态永远无法在本次运行送达（只能等下次启动重投），
+    // 与「stop() 等待终态回传完成后才退出」的契约冲突。已中止场景改用无信号尝试
+    // （ApiClient 自身 15s 超时兜底，stop 仍有界）；信号未中止时维持原语义（可中断在途等待），
+    // 且信号继续用于中断退避重试（见下方 backoffSleep）。
+    const attemptSignal = opts.shutdownSignal?.aborted ? undefined : opts.shutdownSignal
     try {
       if (entry.endpoint === 'result') {
-        await api.result(entry.invocation_id, entry.payload, opts.shutdownSignal)
+        await api.result(entry.invocation_id, entry.payload, attemptSignal)
       } else if (entry.endpoint === 'operation-result') {
-        const ack = await api.operationResult(entry.invocation_id, entry.payload, opts.shutdownSignal)
+        const ack = await api.operationResult(entry.invocation_id, entry.payload, attemptSignal)
         // Persist original ACK evidence before deleting the only pending receipt.
         recordOperationAck(path.dirname(outbox.dir), entry.invocation_id, entry.payload, ack)
       } else {

@@ -26,11 +26,20 @@ export function loadPackagedTrust(entryDirectory: string): PublisherTrust[] | un
       if (!root || Object.keys(root).sort().join(',') !== 'key_id,providers,public_key,test_only' || typeof root.key_id !== 'string' || !root.key_id
         || keys.has(root.key_id) || typeof root.public_key !== 'string' || typeof root.test_only !== 'boolean'
         || !Array.isArray(root.providers) || !root.providers.length
-        || root.providers.some(provider => !['ai.aidwork.boss-recruiting', 'ai.aidwork.weixin', 'ai.aidwork.wecom'].includes(provider))
+        // 契约 2.20 修订：provider 身份由信任配置数据驱动（第一方 ai.aidwork. 命名空间），
+        // 往 trust-roots.json 加新身份即可安装接入，不随源码写死名单扩张
+        || root.providers.some(provider => typeof provider !== 'string' || !provider.startsWith('ai.aidwork.') || provider.length === 'ai.aidwork.'.length)
         || publisherPublicKey(root.public_key).asymmetricKeyType !== 'ed25519'
         || (product.profile === 'production' && root.test_only)) throw new Error()
       keys.add(root.key_id)
     }
     return trust.roots as PublisherTrust[]
   } catch { throw new ManagementError(9, 'Runtime产品或发布信任配置无效') }
+}
+
+/** 安装白名单（契约 2.20 修订）：产品信任配置 trust roots 覆盖的 provider_id 并集
+ *  （去重、保持首现序）。无信任配置的 CLI/A1 资产不传 providers，PluginStore 维持
+ *  FIRST_PARTY_PROVIDERS 默认。 */
+export function providerIdsOfTrust(trust: readonly PublisherTrust[]): string[] {
+  return [...new Set(trust.flatMap(root => root.providers))]
 }

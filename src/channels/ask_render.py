@@ -34,6 +34,8 @@ _SOURCE_SEGMENT_LIMITS = {
     'dingtalk': 4000,
     'feishu': 4000,
     'wecom_kf': 2048,
+    # web_c（官网客服）：我方自营页面无渠道消息条数限制，提问整条渲染
+    'web_c': 8192,
 }
 
 
@@ -44,7 +46,7 @@ def source_segment_limit(source: str) -> int:
 
 # 按条数计费/限制回复条数的渠道：AskForm 整体渲染为一条消息发送（评审修正 §7.2），
 # 不按题拆段、不为多段维护续传/额度管理。
-SINGLE_MESSAGE_SOURCES = frozenset({'wecom_kf'})
+SINGLE_MESSAGE_SOURCES = frozenset({'wecom_kf', 'web_c'})
 
 
 def _blen(text: str) -> int:

@@ -20,9 +20,9 @@ Local Tool Runtime / 桌面客户端、Codex 等标准 MCP Host 复用"操作微
 ## 2. 工程形态与命令面
 
 - Node.js ≥22 + TypeScript（ESM）；运行时依赖仅 `@modelcontextprotocol/sdk` 与 `zod`。
-- 动词子命令：`probe / search / send / read / mcp / doctor / version`（对象一律作
-  `--domain` 参数值，不设按对象命名的子命令）；`--domain` 声明
-  `souyisou|article|chat|chat-history|unread`，当前仅 chat 族接线。
+- 动词子命令：`probe / search / send / add / read / mcp / doctor / version`（对象一律作
+  `--domain` 参数值）。聊天操作使用 `chat|chat-history|unread`，本机加好友使用
+  `add --domain friend`。
 - MCP 仅 stdio（`aid-weixin mcp --stdio`）；`doctor` 严格只读。
 - 代码量级：src 40 文件约 3.9k 行、drivers（ps1+py）约 1.5k 行、tests 约 3.9k 行。
 - C5 便携打包产出自包含 `aid-weixin.exe`（不要求用户安装 Node/Python）。
@@ -34,10 +34,10 @@ human CLI adapter ─┐
                    ├─> operations（注册表，CLI 与 MCP 共用同一实现）
 MCP stdio adapter ─┘        │
                             ▼
-              platform（powershell 驱动执行器 / targetRef / liveBridge / ocrResident / serverProxy）
+              platform（PowerShell 驱动执行器 / targetRef / nativeMessages / serverProxy）
                             │  spawn powershell -File <script>
                             ▼
-              drivers/ps1（Win32 P/Invoke + UIA）+ drivers/py（常驻 RapidOCR）
+              drivers/ps1（Win32 P/Invoke + UIA）
 ```
 
 - **驱动协议**：TS spawn PowerShell 脚本，stdout 末行 `DRIVER_JSON: {...}` 单行 JSON；
@@ -46,41 +46,32 @@ MCP stdio adapter ─┘        │
 - **操作契约**：operation 永不 reject，统一 `OperationResult`（success/code/message/
   effect ∈ none|applied|partial|unknown/data/retryable/run_id）；toolDefs↔registry
   启动期一致性校验 fail-loud。
-- **微信交互机制**（drivers/ps1/win32-lib.ps1）：PostMessage 点击 + WM_CHAR 逐字输入 +
-  回车（不占光标/剪贴板，RDP 可用）；PrintWindow 遮挡截图；UIA 枚举与标题校验；
-  视觉模型坐标定位（Kimi kimi-k3 / GLM-5.3-Flash，429 重试 25s×4）；常驻 RapidOCR
-  （drivers/py/ocr_server.py，stdin/stdout JSON 行协议，可重启）；名称会话路径用
-  剪贴板粘贴输入（name-ocr.ps1）。
+- **微信交互机制**（drivers/ps1/win32-lib.ps1）：Win32 点击、输入和回车，UIA 枚举与标题校验。原生搜索使用剪贴板输入查询。PrintWindow 在本机采集图像用于气泡方向校对或视觉模型定位。发送入口的模型请求仅含空白输入框裁剪。
 - **稳定性**：进程内单飞 + 跨进程命名管道互斥 `\\.\pipe\AidWorkAgent.AidWeixin.<scope>`
   （占用返回 `BUSY`）；写动作零重试；`ConversationAligner` 会话对齐/水位指纹；
   stderr 日志脱敏；DPAPI CurrentUser 加密 token。
 
-## 4. MCP Tool 全集（8 个）
+## 4. MCP Tool 全集（7 个）
 
 | tool | 作用 | 要点 |
 |------|------|------|
-| `weixin_probe` | 只读环境探测 | win32/交互会话/PowerShell/Weixin.exe 进程 |
+| `weixin_probe` | 只读运行诊断 | 桌面、PowerShell、进程、窗口与登录就绪 |
 | `weixin_chat_search` | 主窗口搜索好友/群 | 返回 5 分钟有效 `target_ref`（HMAC 签名，TTL 300s） |
-| `weixin_name_resolve` | 按名称 OCR 近似匹配唯一定位会话 | 多匹配即拒绝（名称会话 v2 路径） |
-| `weixin_message_send` | 向 target_ref 发 1 条文本（≤500 字） | 写动作，发送后 OCR 核验，unknown 不重试 |
-| `weixin_message_send_v2` | 仅接受 Runtime HMAC 签名许可 | `context`+`signature`（AIDWORK_WEIXIN_BRIDGE_KEY，90s 租约），本人气泡后验 |
-| `weixin_history_read` | 读聊天记录 | 翻页 ≤10、内联 ≤200 条、超出落文件 |
-| `weixin_unread_list` | 未读会话列表 | 只读不清角标 |
-| `weixin_session_observe` | 截图→常驻 OCR→拆行→对齐→水位 | 返回 `session_observer_v1` 冻结契约；无真机截图返回 `coverage=unavailable` |
+| `weixin_chat_latest` | 同步当前已打开会话的最新消息 | 本机加密副本，MCP 仅返回同步元数据 |
+| `weixin_message_send` | 向 target_ref 对应会话发送一条文本 | 多模态定位，目标和正文在本机核对，未知结果不重发 |
+| `weixin_history_read` | 本机 UIA 读聊天历史 | 翻页 ≤10、内联 ≤200 条、超出落本机文件 |
+| `weixin_unread_list` | 本机未读会话列表 | 只读不清角标 |
+| `weixin_session_observe` | 本机 UIA 消息与气泡方向对齐 | 返回 `session_observer_v1` 结果；断层保留原水位 |
 
-写动作硬约束：MCP 不接受裸显示名，必须先经只读 tool 获取未过期 target_ref；
-v2 路径额外要求 Runtime 签名许可（云端不可凭名字驱动发送）。
+发送要求当前有效的本机 `target_ref`。插件核对会话标题、目标和输入框状态，并用本机消息证据确认发送结果。
 
 ## 5. 计费与密钥治理（服务端代理模式）
 
 落地"方案 A：走服务端 LLM 网关代理"（原计费关联设计，已并入本节）：
 
-- **服务端**：`src/llm/providers/moonshot.py` MoonshotProvider（OpenAI 兼容；kimi 系模型
-  省略 temperature；reasoning_content 兜底）；`gateway.py` 注册 moonshot +
-  `use_failover=False`（模型绑定型调用禁止跨 provider 降级）；`/api/client/v1/llm/chat`
-  增加 `model` 字段 + `CLIENT_MODEL_PROVIDER_MAP` 白名单（首期 `kimi-k3 → moonshot`）+
-  定价 fail closed（无非零单价 → `MODEL_NOT_PRICED`）；`deploy/db_update.sql` 已写
-  kimi-k3 价目行（用户确认单价：输入 20 元/M、输出 100 元/M；**注释态待部署执行**）。
+- **服务端**：`/api/client/v1/llm/chat` 按 `CLIENT_MODEL_PROVIDER_MAP` 白名单将
+  `GLM-5.3-Flash` 路由到智谱专用网关。沿用模型定价校验与原客户端用量计费。
+  历史 `kimi-k3` 路由已于 2026-11-05 停用。
 - **客户端**：`AID_WEIXIN_SERVER_URL` + `AID_WEIXIN_ACTIVATION_CODE` 惰性激活
   `POST /api/client/v1/activate` 换 access_token，DPAPI 加密存
   `%APPDATA%\aid-weixin\binding.json`；token 经 env 注入驱动子进程（不进命令行）；
@@ -139,9 +130,59 @@ get_url、official_account_follow）未产品化——实际方向转向会话�
 
 ## 11. 遗留与已知问题
 
-- kimi-k3 价目行处于注释态，**待部署执行**后代理视觉链路才实际可用（防免单设计）；
-- 服务端 + 真实 Moonshot key 端到端联调与真机回归（搜索→发送走代理）待单价落库后执行；
+- 服务端代理视觉链路要求部署环境配置非零的 GLM-5.3-Flash 价目；
+- GLM 服务端真实计费及微信搜索、发送、添加好友的真机联调待验证；
 - git 历史泄漏 Kimi key 待人工轮换（§5）；
 - `provider-manifest.json` 静态快照列 6 个 tools，落后于实际 8 个（name_resolve/send_v2
   未入快照），与 `src/mcp/manifest.ts` "digest 不入文件避免漂移"的注释不一致，待对齐；
 - `package.json` description 仍写 "M1 骨架"，未随里程碑更新（ cosmetic）。
+
+## 12. 本机添加好友
+
+`aid-weixin add --domain friend --identifier <手机号或微信号> [--verify-message <验证语>] [--json]` 每次处理一个明确的标识。省略验证语时保留微信预填内容。操作复用 CLI renderer、统一 `OperationResult`、桌面互斥及 PowerShell Win32 驱动，要求当前微信已登录且窗口可交互。
+
+操作顺序为主窗口「+」→「添加朋友」→输入修剪后的标识并回车→核定当前搜索结果。弹窗按微信进程与准确标题识别。坐标从当前窗口的截图获取，点击前检查坐标范围及窗口身份。在模型等待期间，用户可能在同一窗口换搜目标，因此模型返回后还需本地重拍并核对搜索窗口内容。初始结果已是好友或明确显示已发送申请时返回 `effect=none`，查无结果返回 `TARGET_NOT_FOUND`。
+
+点击「添加到通讯录」后，如果出现申请窗口则填写验证语并点击一次「确定」。当前标识的搜索状态明确显示申请已发送时返回 `request_sent`，微信确认直接添加为好友时返回 `friend_added`，两者均为 `effect=applied`。写入步骤后未能确认时返回 `effect=unknown`，调用方不得自动重试。
+
+视觉定位强制使用当前微信 CLI 激活绑定及 `POST /api/client/v1/llm/chat` 的现有模型和用量计费路径。新入口不写 Workbuddy 的坐标缓存或联系人日志。微信 CLI 负责产生本机回执，当前阶段可由本机终端调用。MCP 工具公开及 Runtime 调度按第 7 节在沙箱写验收后单独登记。
+
+## 13. 移除本地 OCR
+
+迁移前有五个工具直接依赖 RapidOCR。名称定位用它识别搜索结果和会话标题，许可发送用它核对当前标题，历史读取和未读列表各有一个 Python 驱动，持续观察用它提取消息正文、时间、输入框状态并参与水位对齐。旧发送走多模态读取标题和回执文本，再使用按 OCR 误差设计的本地匹配。环境探测、旧聊天搜索和本机添加好友均不调用 RapidOCR。
+
+未读列表现已读取同进程 UIA 会话行的原生名称、预览和数字角标，候选项在本机用对应位置的红色像素复核。读取不会打开会话。同版真机验证覆盖三个带数字的角标，只有红点而无原生计数的行不推测数字。
+
+许可发送的目标核对可以独立迁移。该步骤读取当前微信窗口同一进程的唯一 UIA 标题和输入框边界。预检与提交前精确核对已确认观察记录的原生标题，保留已有别名绑定。联系人搜索和观察的原有定位、水位与消息来源继续由各自入口负责。详见[开发计划](../../plans/plan-weixin-cli-remove-ocr.md#phase-3a-发送前标题)。
+
+发送入口收敛为 `weixin_message_send`。多模态通过计费代理定位不含聊天正文的界面控件，UIA 在本机核对会话和消息原文。签名插件声明由 CLI 生产，Runtime 优先消费实际安装包的声明。服务端继续接纳旧版本已经提交的 V2 回执。详见[发送入口收敛计划](../../plans/plan-weixin-cli-remove-ocr.md#phase-3c-发送入口收敛)。
+
+名称定位复用发送的 UIA 搜索。以完整名称、「联系人」分区和当前选中项确认目标。同名的「最常使用」项在点击前返回歧义，微信 UIA 未公开这类候选的类型。本机加密保存定位证据，工具返回原有证据引用。名称定位和观察交接使用原生会话身份。多模态仍只在发送入口定位空白输入框的点击位置。见[名称定位计划](../../plans/plan-weixin-cli-remove-ocr.md#phase-3b-名称定位复用原生搜索)。
+
+计费定位复用现有客户端 binding 与 `/api/client/v1/llm/chat`，模型使用现有白名单中的 GLM-5.3-Flash。固定控件的坐标在能验证控件与布局时可以缓存；区分客户端版本、DPI、窗口尺寸、布局和控件角色，缓存相对坐标。搜索结果行、当前联系人、发送结果和消息内容随交互变化，每次读取当前证据。
+
+原生读取优先使用 Windows UI Automation。2026-11-17 在本机微信 4.1.15.13 只读核对到会话列表、消息列表、具名文本消息项和可读取的输入框。历史分页、消息发送方、重名联系人匹配和未读数仍需分别核定，不以控件枚举证明这些业务语义。端侧持续观察沿既有约定在本机读取，保留既有消息水位、发送许可与回执外层。无原生证据时报告对应失败或缺口。
+
+本机探查中有唯一的 `current_chat_name_label`、`session_list`、`chat_message_list` 和 `chat_input_field`。消息行的原生边界横跨聊天列，不能从整行边界判断方向。可把原生文本行和现有本地气泡边界配对验证，文字始终来自原生节点。会话行名称中发现 `[n条]` 原生提示，须区分未读元数据行与相同格式的消息预览。其他 UIA 实现的原生读取和方向识别代码可作对照。 [会话列表参考](https://github.com/AngeCoo/wxauto-4.0/blob/main/wxauto4/ui/sessionbox.py) · [消息方向参考](https://github.com/FreeWisdom/wxauto-4.0/blob/main/wxauto4/msgs/msg.py)
+
+### 历史读取和持续观察的本机原生消息
+
+原生 UIA 提供正文、时间标签和文件等媒体描述。本机同帧画面提供气泡方向证据，并限定群聊昵称的匹配区域。群成员没有独立可核验节点时以未确认表示。正文、时间与昵称读取全链路无 OCR。
+
+历史读和持续观察保留原结果协议，限本机 CLI/MCP 读取。先手动打开目标会话，由驱动核对精确标题并绑定该窗口进程的 UIA 选中会话行。旧 `target_ref` 只有显示名，历史读取要求改用当前会话的 `target_name`。观察水位只随有连续证据且方向已确认的消息前移。MCP 截图证据只保存本机，独立 `watch` 在内存中处理画面。
+
+微信后台轮询沿用企微 CLI watch 的单轮串行模式。运行 `aid-weixin watch --target-name "<已打开会话全名>"` 启动一个本机轮询进程，默认间隔 10 秒。第一轮建立进程内水位，后续只输出新增条数。会话切换或视口无法连续对齐时保留水位。云端自动回复和 Runtime 消息批次上报已停用。实现和验收见[开发计划 Phase 4](../../plans/plan-weixin-cli-remove-ocr.md#phase-4-历史与持续观察)。
+
+## 14. 单会话最新消息与本机副本
+
+`aid-weixin read --domain chat-latest --target-name "<当前会话全名>" --json` 通过 UIA 读取已打开的单聊或群聊。从会话末尾向上读，首次建立最多十页的副本。后续最多扫描一百页，核对副本末尾的连续消息后立即停止翻页，只加入锚点之后的消息。锚点未找到或重叠有歧义时保留原副本并返回断层。确实没有新增时返回零条。
+
+副本在当前 Windows 用户的本机应用数据目录以 DPAPI 加密并原子替换。时间线按从旧到新保存，复用企微的 `side`、`kind`、`text`、`time` 和可选 `sender_name` 结构。展示时间保留 UIA 标签精度。锚点同时核对连续正文、最近可验证的本地时间标签以及该标签后的消息顺序。同文消息按上下文区分，缺少可信时间和完整前缀时报告断层。副本绑定到微信进程启动时间及 UIA 选中会话身份。微信重启或确认不同会话身份后建立新副本，保留旧文件。聊天截图在本机用于判定气泡方向。
+
+签名声明中的 `weixin_chat_latest` 返回同步状态、扫描页数和新增条数。本机 CLI 可读取新增正文。旧云端自动回复已停用，新版插件移除 `weixin_name_resolve`。已交付设备沿用原有服务端契约。发送继续复用 UIA 搜索和目标核对。见[开发计划](../../plans/plan-weixin-cli-latest-chat.md)。
+
+## 15. 环境诊断与窗口恢复
+
+`doctor` 与 `weixin_probe` 共用环境和窗口检查。保留 `weixin_probe` 调度名称、原参数与环境字段，补充主窗口状态、可核验的登录状态、运行就绪度和处理提示。窗口检查按当前交互会话枚举微信顶层窗口，可区分前台、后台、最小化、隐藏、进程存在但无已核对主窗口和窗口歧义。仅在 UIA 核实微信会话列表时报告在线。普通诊断不激活窗口，不取登录二维码、聊天内容或截图。
+
+本机 `doctor --restore-window` 显式恢复窗口。已显示或最小化的唯一主窗口走现有 Win32 激活路径。点击 × 后留在托盘的会话通过 Windows Explorer 通知区 UIA 图标恢复，包括图标在隐藏面板的情况。恢复成功以可见前台和原生会话列表复核。进程存在但未识别到可恢复图标或主窗口、候选有歧义、桌面不可交互时报告具体状态。只操作已核对微信窗口或唯一通知图标，禁止启动新的微信实例来恢复。见[开发计划](../../plans/plan-weixin-cli-window-doctor.md)。

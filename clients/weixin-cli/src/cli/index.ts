@@ -3,8 +3,8 @@
  *
  * M1 实现：probe / mcp / doctor / version。
  * M2 实现：search --domain chat、send --domain chat、read --domain chat-history|unread。
- * 动词子命令集合固定为 mcp / doctor / version / probe / search / collect / read /
- * get-url / send / follow / lab；操作对象（搜一搜/文章/聊天/公众号）只能作为
+ * 动词子命令集合固定为 mcp / doctor / version / probe / search / collect / read / watch /
+ * get-url / send / add / follow / lab；操作对象（搜一搜/文章/聊天/公众号）只能作为
  * --domain 等参数值，永远不会有按对象命名的子命令——`aid-weixin souyisou` 之类
  * 一律落入 default 报「未知子命令」。
  *
@@ -12,8 +12,10 @@
  *   node dist/src/cli/index.js probe [--verbose]
  *   node dist/src/cli/index.js search --domain chat --query <词> [--type friend|group|any] [--limit N]
  *   node dist/src/cli/index.js send --domain chat --target-ref <ref> --text <文本>
- *   node dist/src/cli/index.js read --domain chat-history --target-ref <ref> [--since-days N] [--max-pages N]
+ *   node dist/src/cli/index.js add --domain friend --identifier <手机号或微信号> [--verify-message <验证语>]
+ *   node dist/src/cli/index.js read --domain chat-history --target-name <当前会话全名> [--since-days N] [--max-pages N]
  *   node dist/src/cli/index.js read --domain unread [--name <名>]
+ *   node dist/src/cli/index.js watch --target-name <当前会话全名> [--interval <秒>]
  *   node dist/src/cli/index.js mcp --stdio
  *   node dist/src/cli/index.js doctor [--json]
  *   node dist/src/cli/index.js version [--json]
@@ -23,19 +25,27 @@ import { flagString, parseArgs, parseDomainFlag, hasFlag } from './args.js'
 const USAGE = `aid-weixin — 微信操作 CLI / MCP Provider（M2）
 
 操作命令：
-  probe [--verbose]         只读环境探测：平台 / 交互会话 / PowerShell / Weixin.exe 进程（不激活窗口、不发送输入、不改剪贴板）
+  probe [--verbose]         微信运行诊断：平台、交互桌面、进程、主窗口及可核实登录态
   search --domain chat --query <词> [--type friend|group|any] [--limit N]
                             微信全局搜索好友/群（只读，返回带 target_ref 的结果列表）
   send --domain chat --target-ref <ref> --text <文本>
                             向目标发送 1 条文本消息（写动作，发送后校验，失败不自动重试）
-  read --domain chat-history --target-ref <ref> [--since-days N] [--max-pages N]
-                            读取与目标的聊天记录（会打开会话、清除未读角标）
+  add --domain friend --identifier <手机号或微信号> [--verify-message <验证语>] [--json]
+                            提交一条微信好友申请，视觉定位使用服务端计费代理
+  read --domain chat-history --target-name <当前会话全名> [--since-days N] [--max-pages N]
+                            在本机读取已打开会话的聊天记录
+  read --domain chat-latest --target-name <当前会话全名> [--json]
+                            同步本机加密副本，默认以 JSON 返回有序新增消息
   read --domain unread [--name <名>]
                             未读会话列表（只读，不开会话不清未读）
+  watch --target-name <当前会话全名> [--interval <秒>]
+                            在本机监控已打开的会话，每 10 秒轮询，仅输出新增消息条数
 
 Provider 命令：
   mcp --stdio               启动标准本地 MCP server（stdout 只承载协议，供 Codex/WorkBuddy 等 Host 使用）
-  doctor [--json]           只读环境检查（平台 / 交互会话 / PowerShell / artifact 目录），任一失败退出码 1
+  doctor [--json]           微信运行诊断及安装检查，返回就绪状态与处理指引
+  doctor --restore-window [--json]
+                            在本机恢复已核对的微信主窗口，支持最小化与通知区隐藏
   version [--json]          版本信息；--json 输出机器可读 manifest（含 schema_digest）
 
 命名约定：所有命令以动词开头；搜一搜/文章/聊天/公众号等操作对象只能作为参数值
@@ -70,24 +80,37 @@ async function main(): Promise<number> {
         json: hasFlag(args, 'json'),
       })
     }
+    case 'add': {
+      const { addCommand } = await import('./commands/add.js')
+      return addCommand(args)
+    }
     case 'read': {
       const { readCommand } = await import('./commands/read.js')
       return readCommand({
         domain: parseDomainFlag(args),
         targetRef: flagString(args, 'target-ref'),
+        targetName: flagString(args, 'target-name'),
         sinceDays: flagString(args, 'since-days'),
         maxPages: flagString(args, 'max-pages'),
         name: flagString(args, 'name'),
         json: hasFlag(args, 'json'),
       })
     }
+    case 'watch': {
+      const { watchCommand } = await import('./commands/watch.js')
+      return watchCommand(args)
+    }
     case 'mcp': {
       const { mcpCommand } = await import('./commands/mcp.js')
       return mcpCommand({ stdio: hasFlag(args, 'stdio') })
     }
     case 'doctor': {
+      if (hasFlag(args, 'restore-window') && (args.flags.get('restore-window') !== true || args.duplicateFlags.has('restore-window'))) {
+        console.error('--restore-window 只接受一次无值开关')
+        return 2
+      }
       const { doctorCommand } = await import('./commands/doctor.js')
-      return doctorCommand({ json: hasFlag(args, 'json') })
+      return doctorCommand({ json: hasFlag(args, 'json'), restoreWindow: hasFlag(args, 'restore-window') })
     }
     case 'version': {
       const { versionCommand } = await import('./commands/version.js')
