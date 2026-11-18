@@ -64,7 +64,7 @@
 
 ## Desktop / Runtime 共同契约
 
-Runtime 安装器和 BOSS、WeCom 离线插件统一走 [打包手册](docs/ops/runtime-boss-release-guide.md)。从仓库根运行 `clients/agent-desktop/scripts/release-batch.ps1`，三件一起用 `-Component All`，单件用 `Runtime`、`Boss` 或 `Wecom`。先带 `-Plan` 核对，成品默认在 Windows「下载」的 `AID-Work-Releases` 中。
+Runtime 安装器和 BOSS、WeCom 离线插件统一走 [打包手册](docs/guides/deployment/runtime-boss-release-guide.md)。从仓库根运行 `clients/agent-desktop/scripts/release-batch.ps1`，三件一起用 `-Component All`，单件用 `Runtime`、`Boss` 或 `Wecom`。先带 `-Plan` 核对，成品默认在 Windows「下载」的 `AID-Work-Releases` 中。
 
 涉及桌面客户端重设计、Runtime、插件或任务级设备/workspace 授权时，先读取并遵守 [Runner / Desktop / Runtime 集成契约](docs/system/runner-desktop-runtime-integration-contract.md)，再读各自设计与计划。页面与产品壳可独立调整；共用 Runtime core、Device API、binding、授权和 wire schema 不得各自实现或单方面改义。修改共同接口先登记版本、唯一写入者与兼容方案，实施前完成契约中的共同检查点；旧 D1/本地 Coordinator 不作为新开发基线。已有代码事实与计划扩展须明确区分。
 

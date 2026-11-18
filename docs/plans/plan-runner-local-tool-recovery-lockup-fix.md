@@ -347,7 +347,7 @@ Python测试使用现有API容器的 `/opt/venv/bin/python` 和当前挂载源�
 
 `browserTargetBinding`沿Runtime既有内核句柄互斥模式：Windows使用由规范本机目录及小写ref派生的命名管道，Linux开发环境使用Node20.8+的abstract UNIX socket；不把Core依赖引入CLI。成功listen后才进入短更新临界区，争用直接返回BUSY；异常与正常退出关闭句柄，崩溃由操作系统释放。不读取、删除或按TTL抢占旧.lock文件；旧未发布文件成为惰性残留，不再参与新版仲裁。旧调用release固定，Host原桌面互斥保持，不支持对在途旧进程热替换锁实现。不为此新增PID账本、恢复守卫、通用锁服务或业务重试器。
 
-必须以真实子进程证明：活进程即使暂停/持续持锁也不被抢；杀死本测试创建的持锁进程后，同ref可更新；多竞争者不能同时提交；回调异常后可重获；UUID大小写不能分裂锁；旧.lock存在不阻断新版更新。只清测试自己创建的UUID文件，不操作真实浏览器/进程。独立测试、CodeReview后按[构建手册](../ops/runtime-boss-release-guide.md)准备新版本acceptance测试包，保留完整公开根集合与原回执，不覆盖既有交付物，不把测试包称正式签名发行。
+必须以真实子进程证明：活进程即使暂停/持续持锁也不被抢；杀死本测试创建的持锁进程后，同ref可更新；多竞争者不能同时提交；回调异常后可重获；UUID大小写不能分裂锁；旧.lock存在不阻断新版更新。只清测试自己创建的UUID文件，不操作真实浏览器/进程。独立测试、CodeReview后按[构建手册](../guides/deployment/runtime-boss-release-guide.md)准备新版本acceptance测试包，保留完整公开根集合与原回执，不覆盖既有交付物，不把测试包称正式签名发行。
 
 ### 10.2 验证与交付记录
 

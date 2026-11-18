@@ -3,7 +3,7 @@
 >
 > 本文档是**可执行的开发规范**，既是新工具开发的 checklist，也是旧工具重构的判定依据。后续所有工具改造和新工具开发**必须遵循**。
 >
-> 公共能力实现见 [`src/tools/_helpers.py`](../../src/tools/_helpers.py)（`truncate_text` / `sanitize_error`）与 [`src/tools/_spill.py`](../../src/tools/_spill.py)（`spill_large_content`）。
+> 公共能力实现见 [`src/tools/_helpers.py`](../../../src/tools/_helpers.py)（`truncate_text` / `sanitize_error`）与 [`src/tools/_spill.py`](../../../src/tools/_spill.py)（`spill_large_content`）。
 >
 > **2026-10 修订**：对齐 commit `026ca30b`（提示词压缩重构）后的实际架构——工具说明统一走 tools 参数 `description` 通道，`usage_guide` 停用；原「description ≤ 80 字符 + 教程迁 usage_guide」条款废除。同时并入大内容落盘闭环契约（原落盘计划 Phase D 遗留项）。
 
@@ -22,7 +22,7 @@ LLM 每轮对话都消耗两类工具 token：① **工具 schema**（`descripti
 | 依赖 | 用途 | Linux/Docker | Windows（venv） | macOS |
 |------|------|------|------|------|
 | **ripgrep (`rg`)** | `grep` 工具（文件内搜索，grep_tool.py 调系统 rg 二进制） | `apt-get install -y ripgrep`（Dockerfile 已内置） | `winget install BurntSushi.ripgrep.MSVC` 或 `scoop install ripgrep` | `brew install ripgrep` |
-| **pandoc** | `word_process` 的 md_to_word 操作 | `apt-get install -y pandoc`（Dockerfile 已内置，详见 [pandoc 安装指南](md-to-word/pandoc-install-guide.md)） | `winget install JohnMacFarlane.Pandoc` | `brew install pandoc` |
+| **pandoc** | `word_process` 的 md_to_word 操作 | `apt-get install -y pandoc`（Dockerfile 已内置，详见 [pandoc 安装指南](pandoc-install-guide.md)） | `winget install JohnMacFarlane.Pandoc` | `brew install pandoc` |
 
 **验证**：`rg --version`、`pandoc --version` 能输出版本号即可。
 

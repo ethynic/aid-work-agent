@@ -530,7 +530,7 @@ async def _register_channel_adapters():
 
 **文件**：
 
-- `docs/channel/dingtalk/integration_guide.md`（已完成）
+- `docs/guides/channels/integration_guide.md`（已完成）
 - `docs/channel/dingtalk/implementation_plan.md`（本文档）
 - `docs/ideas.md`（登记钉钉接入进度）
 

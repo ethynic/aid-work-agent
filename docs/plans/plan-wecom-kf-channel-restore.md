@@ -54,7 +54,7 @@
 
 ## 发布流程与环境验收
 
-具体步骤以 [部署检查清单](../../deploy/agent-runner-deploy-checklist.md) 为准，发布前必须完成：
+具体步骤以 [部署检查清单](../guides/deployment/agent-runner-deploy-checklist.md) 为准，发布前必须完成：
 
 1. 在旧制品冻结 KF 新流量，核对全部已拉取消息（含未 accepted）及实际送达结论；排空或明确取消旧任务，副作用不确定时人工核对。
 2. 全部消息有处理结论后，将最终 cursor 交接给原 `CursorManager` 的环境隔离 Redis 键；不能提前推进跳过未处理消息，也不能留空重放已处理消息。

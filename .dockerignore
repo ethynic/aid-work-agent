@@ -148,3 +148,8 @@ __pycache__/
 playwright-report/
 test-results/
 .playwright/
+
+# 教程文档中心内容源（Portal「使用教程」页）：上方 docs/ 与 *.md 的白名单例外
+# 注意：.dockerignore 按"最后匹配生效"，白名单必须放在所有排除规则之后
+!docs/guides
+!docs/guides/**

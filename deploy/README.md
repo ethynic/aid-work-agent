@@ -25,7 +25,7 @@
 
 | 文件名 | 用途 |
 |--------|------|
-| `DEPLOYMENT.md` | 完整部署文档 |
+| [`../docs/guides/deployment/DEPLOYMENT.md`](../docs/guides/deployment/DEPLOYMENT.md) | 完整部署文档 |
 | `README.md` | 本文件 |
 
 ## 🚀 快速开始
@@ -318,7 +318,7 @@ keepalive_timeout 65;
 - **2026-03-23**: 初始版本，包含完整部署脚本和文档
 
 如遇问题，请查看：
-1. 完整部署文档：`DEPLOYMENT.md`
+1. 完整部署文档：`../docs/guides/deployment/DEPLOYMENT.md`
 2. 项目文档：`/var/www/agent/docs/`
 3. 日志文件：`/var/www/agent/log/`
 

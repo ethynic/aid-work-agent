@@ -42,7 +42,7 @@ def _find_pandoc() -> str:
 
     raise FileNotFoundError(
         "未检测到 Pandoc。word_process 工具的 Markdown 转 Word 功能依赖 Pandoc 命令行工具，"
-        "请参照《Pandoc 安装与部署指南》(docs/tools/md-to-word/pandoc-install-guide.md) "
+        "请参照《Pandoc 安装与部署指南》(docs/guides/development/pandoc-install-guide.md) "
         "安装后重试。"
     )
 

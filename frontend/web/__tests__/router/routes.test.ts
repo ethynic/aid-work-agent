@@ -39,6 +39,8 @@ describe('entry route responsibilities', () => {
     expect(childPaths(portalRoutes, '/portal')).toMatchInlineSnapshot(`
       [
         "",
+        "system-health",
+        "dashboard",
         "tenants",
         "recharge",
         "subagents",
@@ -49,11 +51,13 @@ describe('entry route responsibilities', () => {
         "behavior-logs",
         "reply-styles",
         "monitoring",
+        "runner-alerts",
         "monitoring/:session_id",
         "monitoring/trace/:trace_id",
         "context-compression",
         "wechat-mp",
         "redis-cache",
+        "guides/:doc_path(.*)?",
       ]
     `)
     expect(childPaths(agentRoutes, '/t/:tenant_id')).toMatchInlineSnapshot(`

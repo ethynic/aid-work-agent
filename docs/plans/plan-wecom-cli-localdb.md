@@ -22,7 +22,7 @@
 
 - 六种 `-Component` 的 `-Plan` 验证通过，默认定位 Windows「下载」的 `AID-Work-Releases`。现有 Runtime 0.0.41、Runtime 0.0.40＋WeCom 0.2.14 和 BOSS 0.3.29 三个交付 ZIP 与摘要已复制到新目录并核对 SHA-256。
 - `All` 在 `ea0313b384c49a094c7808a996d39430c851053c` 上以独立 `-qa.20261110145333` 版本及 Temp 输出实跑，退出 0。一个安装器、两个 `.aidplugin.zip` 及逐包验签和目标 Runtime 核验报告齐全，最终 ZIP SHA-256 为 `54b952f193b7ac2d980d38d2c966fbedc17f559f7a011756c42e12431194ab31`。
-- 定向独测 23 项与代码审查通过，QA 出包内另执行 Runtime 打包测试 20 项。用同批 Core、Node、公开根和真实只读探针，在独立 Temp home 导入两包，重新打开插件清单后两者均存在并启用。未执行 NSIS 安装、客户机升级或业务调用。操作入口见[统一打包手册](../ops/runtime-boss-release-guide.md)。
+- 定向独测 23 项与代码审查通过，QA 出包内另执行 Runtime 打包测试 20 项。用同批 Core、Node、公开根和真实只读探针，在独立 Temp home 导入两包，重新打开插件清单后两者均存在并启用。未执行 NSIS 安装、客户机升级或业务调用。操作入口见[统一打包手册](../guides/deployment/runtime-boss-release-guide.md)。
 
 | 阶段 | 内容与完成标准 | 状态 |
 |------|----------------|------|

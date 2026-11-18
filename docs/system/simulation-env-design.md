@@ -230,7 +230,7 @@
 ## 关联文档
 
 - [服务器部署现状](../../deploy/服务器部署现状.md) -- 243/254 现有布局（实施后补充「仿真环境」章节）
-- [postgres.md](../../deploy/postgres.md) -- 数据库实例与账号管理
-- [fail2ban.md](../../deploy/fail2ban.md) -- 办公 IP 白名单依据
+- [postgres.md](../guides/deployment/postgres.md) -- 数据库实例与账号管理
+- [fail2ban.md](../guides/deployment/fail2ban.md) -- 办公 IP 白名单依据
 - [file_usage.md](file_usage.md) -- 附件新旧双轨路径与兼容口径
 - [cache_usage.md](cache_usage.md) -- Redis 键模式与 prefix 机制

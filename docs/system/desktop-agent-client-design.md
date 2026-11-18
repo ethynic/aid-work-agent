@@ -10,7 +10,7 @@
 
 > 跨会话共同约束：[Runner / Desktop / Runtime 集成契约 v2.0](runner-desktop-runtime-integration-contract.md)、[Runtime插件宿主设计](runtime-plugin-host-architecture-design.md)。本方案接入同一Runtime管理port和执行core，不重复实现插件宿主；公共Electron壳与任务binding由桌面工作流主导共同接线。
 >
-> 关联：[构建手册](desktop-agent-client-build-manual.md)、[本地与服务端执行调研](../research/desktop-agent-local-vs-server-tool-execution-research.md)
+> 关联：[构建手册](../guides/clients/desktop-agent-client-build-manual.md)、[本地与服务端执行调研](../research/desktop-agent-local-vs-server-tool-execution-research.md)
 
 > 开源依据：[Codex、DeepSeek Harness、Hermes 源码调研](../research/desktop-agent-harness-architecture-research.md)；共用执行侧能力：[Runtime 插件宿主设计](runtime-plugin-host-architecture-design.md)。
 
@@ -402,6 +402,6 @@ Desktop精确写入范围：`clients/agent-desktop/electron/{main.ts,preload.cts
 
 30秒drain值是stop接单后的轮询观察deadline，每次operations.get回复后检查；单次管理RPC仍采用上述120秒预算，不能把30秒宣传为整个退出耗时上限。实际进程exit另有15秒观察，超时保留进程与未确认事实，不加kill。
 
-实际交接资产、独立验证与人工验收进度见[计划9.7](../plans/plan-desktop-agent-client.md#97-第一部分h3实施登记2026-10-09)，Windows验收命令见[构建手册12](desktop-agent-client-build-manual.md#12-独立runtime首期验收包)。后者仅在最终资产摘要与Windows产品检查登记后用于交付，不以候选文件名中的final或-dev推定发行状态或版本。
+实际交接资产、独立验证与人工验收进度见[计划9.7](../plans/plan-desktop-agent-client.md#97-第一部分h3实施登记2026-10-09)，Windows验收命令见[构建手册12](../guides/clients/desktop-agent-client-build-manual.md#12-独立runtime首期验收包)。后者仅在最终资产摘要与Windows产品检查登记后用于交付，不以候选文件名中的final或-dev推定发行状态或版本。
 
 2026-10-09 H3第一部分开发交付完成：f52b最终验收Host与三包/root固定后，标准NSIS打包/验包、独立测试/CR、真实三包安装恢复和包内EXE启动/退出均通过，产物摘要登记于上述计划和手册。这是独立Runtime执行节点公共壳的验收包，未完成真实NSIS安装、原生dialog人工交互、业务软件登录及服务配对/执行验收，也不等于完整Desktop、共同wire冻结或production发行。原Desktop默认路径启动兼容已核对，验收产品使用独立目录。

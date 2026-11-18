@@ -137,4 +137,4 @@ https://dns.alidns.com/resolve?name=tulin.cn&type=MX
 
 ---
 
-**关联文档**：AI 获客智能体设计 [subagent/ai-lead-gen/ai-lead-gen-agent-design.md](../subagent/ai-lead-gen/ai-lead-gen-agent-design.md)（租户邮箱 SMTP/IMAP 配置入口为其 P1 交付的企业设置页「租户邮箱」分区）
+**关联文档**：AI 获客智能体设计 [subagent/ai-lead-gen/ai-lead-gen-agent-design.md](../../subagent/ai-lead-gen/ai-lead-gen-agent-design.md)（租户邮箱 SMTP/IMAP 配置入口为其 P1 交付的企业设置页「租户邮箱」分区）

@@ -1,7 +1,7 @@
 # 企业微信消息加解密与故障排查
 
 > 本文档从 wecom-integration.md（已删除，2026-10-12 审计）摘取仍有效的技术章节，回调路由已按现行代码修正。
-> 配置操作步骤见 [wecom_setup_verification.md](./wecom_setup_verification.md)。
+> 配置操作步骤见 [wecom_setup_verification.md](../../guides/channels/wecom_setup_verification.md)。
 
 ## 回调路由（现行）
 

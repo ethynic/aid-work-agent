@@ -348,7 +348,7 @@ async def _processor(cancel_check, user_input_override=None):
 ## 11. 相关文档
 
 - [wecom_kf 设计文档](./wecom_kf_design.md)
-- [wecom_kf 部署指南](./wecom_kf_deployment_guide.md)
+- [wecom_kf 部署指南](../../guides/channels/wecom_kf_deployment_guide.md)
 - [上下文重建陷阱](../../incidents/context-reconstruction-pitfalls.md)
 
 ## 12. 撤回事件处理（与合并机制的交互）

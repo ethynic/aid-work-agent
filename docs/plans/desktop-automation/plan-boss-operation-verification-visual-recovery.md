@@ -911,7 +911,7 @@ Supervisor仅2个env透传修正独立17/17、0跳过及CR通过，真实spawn�
 
 ## 25. 中文窗口修复验收包交付（2026-10-22）
 
-用户要求打包BOSS安装包，由其在Runtime中更新。按[统一打包手册](../../ops/runtime-boss-release-guide.md)复用现有验收链，不新增签署或安装设计：`--test`私钥只在单次进程内生成且不保存，已有私钥不可复用，故BOSS0.3.16需新公钥；当前Runtime0.0.17不含该根，配套发行Runtime UI0.0.18保留旧身份及完整历史根，再显式导入BOSS新插件。Host0.2.21/Core0.2.19/native0.1.0没有本次功能改动，不机械升版，不修改已安装信任根、不重新配对。
+用户要求打包BOSS安装包，由其在Runtime中更新。按[统一打包手册](../../guides/deployment/runtime-boss-release-guide.md)复用现有验收链，不新增签署或安装设计：`--test`私钥只在单次进程内生成且不保存，已有私钥不可复用，故BOSS0.3.16需新公钥；当前Runtime0.0.17不含该根，配套发行Runtime UI0.0.18保留旧身份及完整历史根，再显式导入BOSS新插件。Host0.2.21/Core0.2.19/native0.1.0没有本次功能改动，不机械升版，不修改已安装信任根、不重新配对。
 
 本批目录`clients/release/AID-Work-Runtime-0.0.18-BOSS-0.3.16-20261022-114501/`，同名组合ZIP及SHA256置于`clients/release/`。源码基线`ecdfe153c7b3832a845c79028c37b86d5c3b6502`且dirty=true，明确包括未提交的窗口JSON UTF-8修复、版本及公开根；不是全部内容等于该HEAD。CLI已提交的403拒绝摘要也进入新payload；后台403修复仍需另行部署agent2，安装本包不部署服务器。
 

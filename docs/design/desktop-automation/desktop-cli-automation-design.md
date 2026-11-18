@@ -4,7 +4,7 @@
 
 版本 V1.2 · 2026-10-11 · ✅ 已实现并真机验收（P0–P5 交付；2026-10-11 确认真机验证通过）。原实施计划已注销，协议与算法细节自本版起并入本文；表族归属已物化为 [database_system_table.md §11.7](../../system/database_system_table.md) 登记。
 
-关联：[微信营销场景设计](../weixin/weixin-marketing-automation-design.md) · [BOSS 端侧接入设计](boss-edge-session-design.md) · [灰度发布与回滚手册](../../ops/weixin-marketing-rollout.md)。
+关联：[微信营销场景设计](../weixin/weixin-marketing-automation-design.md) · [BOSS 端侧接入设计](boss-edge-session-design.md) · [灰度发布与回滚手册](../../guides/deployment/weixin-marketing-rollout.md)。
 
 ## 1. 分层与消费方
 

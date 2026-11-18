@@ -3,7 +3,7 @@
 #   docker compose -f docker-compose.local.yml -f docker-compose.local.hostnet.yml up -d --build
 #
 # 适用环境：
-#   - WSL2（docker-ce inside WSL，配合 .wslconfig networkingMode=mirrored）——见 docs/infrastructure/local-dev-environments.md 方式二
+#   - WSL2（docker-ce inside WSL，配合 .wslconfig networkingMode=mirrored）——见 docs/guides/development/local-dev-environments.md 方式二
 #   - macOS Docker Desktop 4.34+（Settings -> Resources -> Network -> Enable host networking）——方式三可选
 #
 # host 网络模式的效果：容器内 localhost 即宿主机 loopback，

@@ -1,6 +1,6 @@
 # Runtime UI 与 BOSS CLI 老用户试用组合包
 
-> **重新构建请使用[当前打包手册](../ops/runtime-boss-release-guide.md)。** 本计划的批次命令、版本及摘要是历史记录，不拼接成新出包流程。最终交付统一位于 `clients/release/`。
+> **重新构建请使用[当前打包手册](../guides/deployment/runtime-boss-release-guide.md)。** 本计划的批次命令、版本及摘要是历史记录，不拼接成新出包流程。最终交付统一位于 `clients/release/`。
 
 > 2026-10-15：UI0.0.12/BOSS0.3.10组合包已完成，交付名称不带trial。源码50a0ba35、3b2001f4已推送；完整保留r15四根并固化五根发布快照，实际旧0.3.9升级和最终Runtime原生启动检查通过。ZIP及摘要见Phase17；Windows安装器仍未签名，未部署服务器或在客户机安装。
 

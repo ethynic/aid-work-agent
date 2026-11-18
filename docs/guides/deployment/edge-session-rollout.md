@@ -1,6 +1,6 @@
 # 端侧会话任务 C5 发布与回滚
 
-日期：2026-09-15。适用场景仅 `weixin.conversation.v1`。当前 **禁止灰度**（C5 隔离 fake 综合验证通过但真机灰度门禁未开，结论与记录见 [设计文档文末实现与验证记录](../design/desktop-automation/edge-session-task-design.md)）。本文件是后续操作规程，不代表已执行发布。
+日期：2026-09-15。适用场景仅 `weixin.conversation.v1`。当前 **禁止灰度**（C5 隔离 fake 综合验证通过但真机灰度门禁未开，结论与记录见 [设计文档文末实现与验证记录](../../design/desktop-automation/edge-session-task-design.md)）。本文件是后续操作规程，不代表已执行发布。
 
 ## 放行前置条件
 

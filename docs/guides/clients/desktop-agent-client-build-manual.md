@@ -1,8 +1,8 @@
 # Windows 桌面客户端编译与打包手册
 
-> 独立 Runtime 安装器与 BOSS、WeCom 插件见[统一打包手册](../ops/runtime-boss-release-guide.md)。本页用于完整桌面客户端 Shell。
+> 独立 Runtime 安装器与 BOSS、WeCom 插件见[统一打包手册](../deployment/runtime-boss-release-guide.md)。本页用于完整桌面客户端 Shell。
 
-> 新版产品设计与后续实施见[桌面客户端 v3](desktop-agent-client-design.md)和[开发计划](../plans/plan-desktop-agent-client.md)。本手册描述现有 Shell 的构建链路；构建成功不表示 Runner 对话或本地工具已接入。
+> 新版产品设计与后续实施见[桌面客户端 v3](../../system/desktop-agent-client-design.md)和[开发计划](../../plans/plan-desktop-agent-client.md)。本手册描述现有 Shell 的构建链路；构建成功不表示 Runner 对话或本地工具已接入。
 
 本文适用于提交 `60ed0d7adb1e8cd4708c07292efef1d5164c2ca1` 引入的 Electron 桌面客户端，也适用于当前 `master` 中相同的构建链路。第 3～10 节的逐步命令可用于该提交；第 11 节的一键脚本是后续新增能力，仅在包含 `scripts/build-win-dev.ps1` 的当前代码中可用。客户端仅支持 Windows x64；开发包未签名，只能用于内部验证，不能作为正式发行包。
 
@@ -320,10 +320,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 ## 12. 独立Runtime首期验收包
 
-现行流程见[统一打包手册](../ops/runtime-boss-release-guide.md)。首期签名摘要、测试和交付记录见[Runtime 计划](../plans/plan-runtime-plugin-host.md#10-最终交付与验证记录)及[组合包历史计划](../plans/plan-runtime-ui-boss-trial-bundle.md)。
+现行流程见[统一打包手册](../deployment/runtime-boss-release-guide.md)。首期签名摘要、测试和交付记录见[Runtime 计划](../../plans/plan-runtime-plugin-host.md#10-最终交付与验证记录)及[组合包历史计划](../../plans/plan-runtime-ui-boss-trial-bundle.md)。
 
 ### 12.1 BOSS完整人工验收：构建到招聘智能体调用
 
-收件人步骤见[统一打包手册的安装和升级说明](../ops/runtime-boss-release-guide.md#8-安装和升级说明)。
+收件人步骤见[统一打包手册的安装和升级说明](../deployment/runtime-boss-release-guide.md#8-安装和升级说明)。
 
 人工验收仍区分实际 NSIS 安装、Runtime 管理启动/退出、插件导入及版本升级、同租户同用户设备配对/选定，以及真实 BOSS 业务。验包不自动执行业务或部署服务器；真实外发先确认具体候选人和动作。以本批 `build-info.json` 和原始报告记录实际完成项，未执行不标为通过。视觉恢复使用 Runtime 配对身份及后台设备 API，按后台 20 倍规则计费，不要求用户另配 API token。

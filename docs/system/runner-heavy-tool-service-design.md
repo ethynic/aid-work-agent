@@ -190,7 +190,7 @@ GET  /internal/heavy-tools/health
 | 角色 | `AGENT_RUNNER_ROLE`（`worker.py:293`、`supervisor.py:371`）、`slot_capacity.py` `effective_slot_concurrency`（general 强制 1） | 删除；并发统一走 config `slot_concurrency`（`--slot-concurrency` 显式覆盖保留） |
 | 配置 | `config.yaml` `agent_runner.heavy_skills` 清单 | 删除（判型退役后无消费方；interior-render 的重负载随 image_render 观察结论走 §3） |
 | 配置 | `config.yaml` `agent_runner.heavy_tools` 清单 | **保留但语义切换**：从判型信号变为「远程派发白名单」——RemoteHeavyTool 代理注册依据（§4.2），名字不变避免配置漂移 |
-| 部署 | `AGENT_RUNNER_LIGHT_SLOTS` / `AGENT_RUNNER_GENERAL_SLOTS` / `AGENT_RUNNER_ROLE` 环境变量；compose overlay `runner-worker-light` + `runner-worker-general` 双服务 | 合并为单一 `runner-worker` 服务（副本数 = 容器数）；`agent2_update.sh` 注释与 [agent-runner-deploy-checklist.md](../../deploy/agent-runner-deploy-checklist.md) 部署步骤同步 |
+| 部署 | `AGENT_RUNNER_LIGHT_SLOTS` / `AGENT_RUNNER_GENERAL_SLOTS` / `AGENT_RUNNER_ROLE` 环境变量；compose overlay `runner-worker-light` + `runner-worker-general` 双服务 | 合并为单一 `runner-worker` 服务（副本数 = 容器数）；`agent2_update.sh` 注释与 [agent-runner-deploy-checklist.md](../guides/deployment/agent-runner-deploy-checklist.md) 部署步骤同步 |
 | 观测 | `system_health/collector.py:203-208` light/general slots 指标 | 改为 worker_slots + 重工具服务指标（副本/并发/busy/排队） |
 | 观测 | `notifications/events.py:330` 池名映射（轻专用池/通用池）、`runner_alerts.py` `load_class` 字段 | 口径调整（不再区分池归属） |
 | DB | `agent_runner` 表 `load_class` 列 | **保留不删**（避免 DB 变更、历史行可读） |
