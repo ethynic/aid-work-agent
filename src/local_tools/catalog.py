@@ -251,17 +251,30 @@ def declared_tools_for_device(capabilities: Optional[Dict[str, Any]]) -> Optiona
 
 BOSS_COMPLETION_CAPABILITY = "runtime_boss_completion_v1"
 
+EXECUTION_RECEIPT_CAPABILITY = "runtime_execution_receipt_v1_1"
+EXECUTION_RECEIPT_VERSION = "1.1"
 
-def declares_boss_completion(capabilities: Optional[Dict[str, Any]]) -> bool:
-    """设备心跳能力串含 runtime_boss_completion_v1（契约 2.20 候选：BOSS 正常结束的事实）。
 
-    形态门禁与 declared_tools_for_device 同款：仅认 dict.capabilities 字符串数组；
-    未上报（旧 Runtime / 无 boss Provider）一律 False——能力缺失=零影响（旧语义）。
-    """
+def _declares_capability(capabilities: Optional[Dict[str, Any]], capability: str) -> bool:
     if not isinstance(capabilities, dict):
         return False
     capability_list = capabilities.get("capabilities")
-    return isinstance(capability_list, list) and BOSS_COMPLETION_CAPABILITY in capability_list
+    return isinstance(capability_list, list) and capability in capability_list
+
+
+def declares_boss_completion(capabilities: Optional[Dict[str, Any]]) -> bool:
+    """原设备支持 BOSS 正常结束证明。"""
+    return _declares_capability(capabilities, BOSS_COMPLETION_CAPABILITY)
+
+
+def execution_receipt_version(capabilities, invocation) -> Optional[str]:
+    """1.1 uses standard /result. The existing v2 operation-result lane stays separate."""
+    if ((invocation.get("arguments_json") or {}).get("protocol_version") == 2
+            or invocation["tool_name"].endswith("_v2")):
+        return None
+    if _declares_capability(capabilities, EXECUTION_RECEIPT_CAPABILITY):
+        return EXECUTION_RECEIPT_VERSION
+    return None
 
 
 def is_tool_allowed_for_device(capabilities: Optional[Dict[str, Any]], provider_key: Optional[str],

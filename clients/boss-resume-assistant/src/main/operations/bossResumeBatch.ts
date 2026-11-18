@@ -23,6 +23,7 @@ import { JobSwitcher, FILTER_BUTTON_PATTERN } from '../boss/JobSwitcher.js'
 import { viewportOf } from '../boss/FilterSetter.js'
 import { buildResumePayload, wheelCenter, sameViewAt, stitchParts } from './bossResumeDetail.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
+import type { ReceiptPartialItem } from './receipt.js'
 import {
   defaultSessionFactory,
   runBossOperation,
@@ -77,6 +78,18 @@ export function createBossResumeBatchOperation(
         if (!payload) { payload = buildResumePayload(resume.name, job, resume.readResult, 'dom'); payloads.set(resume, payload) }
         return payload
       }
+      const partialResults = (): ReceiptPartialItem[] => {
+        const items = new Map<string, ReceiptPartialItem>()
+        for (const failure of checkpoint.failures ?? []) {
+          if (failure.itemRef) items.set(failure.itemRef, { item_ref: failure.itemRef, status: 'failed',
+            known_effect: 'none', reason: { code: 'RESUME_READ_FAILED', message: failure.error } })
+        }
+        for (const resume of checkpoint.resumes ?? []) {
+          if (resume.itemRef) items.set(resume.itemRef, { item_ref: resume.itemRef, status: 'completed', known_effect: 'none' })
+        }
+        return [...items.values()]
+      }
+      const failuresForResult = () => (checkpoint.failures ?? []).map(({ itemRef, ...failure }) => failure)
       let originalJob: string | null | undefined
       let originalAccount: string | undefined
       const runSession = (ctx: OpContext): Promise<OperationResult> => runBossOperation(
@@ -162,7 +175,7 @@ export function createBossResumeBatchOperation(
             })
             const result = await reader.readBatch({ limit, saveDir: saveDir || undefined,
               excludeNames: args.exclude_names?.map((n) => n.trim()), scanMore: continuation })
-            const failures = result.failures.map(({ execution, ...failure }) => ({
+            const failures = result.failures.map(({ execution, itemRef, ...failure }) => ({
               ...failure,
               ...(execution ? { operation_recovery: {
                 ...operationRecoveryFacts({ name: operationName, operationClass: 'readonly', target: failure.name ?? undefined,
@@ -218,6 +231,11 @@ export function createBossResumeBatchOperation(
                 continuation: buildResumeContinuation(result.processed_names, args.exclude_names ?? [], jobName, result.stop_reason),
               },
               effect: 'none',
+              ...(result.failures.length || result.recovery ? { receipt: {
+                step: 'postcheck',
+                reason: { code: result.recovery?.code ?? 'RESUME_BATCH_INCOMPLETE', message },
+                partialResults: partialResults(),
+              } } : {}),
             }
           } catch (error) {
             if (error instanceof CodedOperationError && error.data?.operation_recovery) throw error
@@ -225,7 +243,7 @@ export function createBossResumeBatchOperation(
               const mapped = mapExecutorError(error)
               throw new CodedOperationError(mapped.code, mapped.message, {
                 resumes: checkpoint.resumes.map(r => payloadFor(r, originalJob ?? null)),
-                failures: checkpoint.failures ?? [], attempted: checkpoint.attempted ?? 0,
+                failures: failuresForResult(), attempted: checkpoint.attempted ?? 0,
                 processed_names: [...checkpoint.processedNames ?? []], job_name: originalJob,
               })
             }
@@ -246,15 +264,18 @@ export function createBossResumeBatchOperation(
             attemptsUsed: 1, ordinaryRetriesUsed: 0, stage: 'prepared', inputStatus: 'not_started',
             verification: { status: 'inconclusive', evidence: ['恢复连接尚未完成，保留已读取成果'] } })
         facts.error = { code: result.code, source: 'prepared', summary: result.message.slice(0, 1000) }
-        return okResult(result.run_id, `已读取 ${checkpoint.resumes.length} 份；剩余工作尚未完成：${result.message}`, 'none', {
+        const partial = okResult(result.run_id, `已读取 ${checkpoint.resumes.length} 份；剩余工作尚未完成：${result.message}`, 'none', {
           ...result.data, operation_recovery: facts,
           resumes: checkpoint.resumes.map(item => payloadFor(item, originalJob ?? null)),
-          failures: checkpoint.failures ?? [], processed_names: [...checkpoint.processedNames ?? []],
+          failures: failuresForResult(), processed_names: [...checkpoint.processedNames ?? []],
           attempted: checkpoint.attempted ?? 0, job_name: originalJob,
           stop_reason: current.signal.aborted || result.code === 'CANCELLED' ? 'cancelled' : 'page_operation_failed',
           cleanup_error: { code: result.code, message: result.message },
           cleanup_warning: `剩余工作需要恢复（${result.code}）：${result.message}`,
         })
+        if (current.executionReceipt !== '1.1' || result.data.receipt_version !== '1.1') return partial
+        // Failure has already captured any authorized screenshot before the session was closed.
+        return { ...partial, data: { ...partial.data, partial_results: partialResults() } }
       }
       if (ctx.recoveryContinuation) ctx.recoveryContinuation.resume = run
       return run(ctx)

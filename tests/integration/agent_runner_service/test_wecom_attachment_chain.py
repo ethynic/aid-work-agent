@@ -84,7 +84,7 @@ async def test_attachment_bytes_reach_model_and_text_stays_paged(tmp_path, monke
 
     # Production ImageRegistry/tenant storage; replace only Redis and SQL IO.
     import src.core.storage as storage
-    import src.local_tools.wecom_attachments as bridge
+    import src.local_tools.result_images as bridge
     import src.services.files.asset_store as asset_store
     tenant_root = tmp_path / 'storage' / 'tenants'
     monkeypatch.setattr(storage, '_TENANTS_ROOT', str(tenant_root))

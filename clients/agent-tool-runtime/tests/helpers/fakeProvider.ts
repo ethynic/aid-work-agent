@@ -33,6 +33,7 @@ const TOOL_NAMES = [
   'weixin_message_send_v2',
   'wecom_probe',
   'wecom_message_send',
+  'resume_parse',
   'wecom_read_session',
   'wecom_read_sessions',
   'wecom_session_directory',
@@ -100,6 +101,10 @@ export async function startFakeProvider(): Promise<void> {
           // 契约 2.20 候选「正常结束的事实」测试注入：模拟插件在 data 塞 Runtime 保留
           // 同名字段（真实 CLI 不会）——Host 侧必须剥离后重加（防伪造残留）
           completion_echo: z.boolean().optional(),
+          // 执行回执标准 1.1 测试注入：回显请求级 _meta（协议透传断言）与完整 1.1 回执
+          receipt_echo: z.boolean().optional(),
+          receipt_data: z.boolean().optional(),
+          receipt_bad: z.boolean().optional(),
         },
         ...(name === 'wecom_session_directory' ? { annotations: { readOnlyHint: true } } : {}),
       },
@@ -136,9 +141,22 @@ export async function startFakeProvider(): Promise<void> {
         }
 
         if (args.fail === true) {
+          // 执行回执 1.1 夹具：receipt_data=true 回合法协商回执；receipt_bad=true 回形状坏回执
+          let receiptData: Record<string, unknown> | null = null
+          if (args.receipt_data === true) {
+            receiptData = {
+              receipt_version: '1.1', step: 'input',
+              reason: { code: 'FAKE_FAIL', message: 'fake 指示失败' },
+              known_effect: 'none',
+              partial_results: [{ item_ref: 'attempt:1', status: 'completed', known_effect: 'applied' }],
+              screenshot: { type: 'image', mimeType: 'image/png', data: Buffer.from('fake-png').toString('base64') },
+            }
+          } else if (args.receipt_bad === true) {
+            receiptData = { receipt_version: '9.9', known_effect: 'bogus' as unknown as string, step: '' }
+          }
           const result = isV2
-            ? { success: false, code: 'FAKE_FAIL', message: 'fake 指示失败', effect: 'none', phase: 'prepared', safe_to_retry: true, data: null, run_id: runId }
-            : { success: false, code: 'FAKE_FAIL', message: 'fake 指示失败', effect: 'none', data: null, retryable: false, run_id: runId }
+            ? { success: false, code: 'FAKE_FAIL', message: 'fake 指示失败', effect: 'none', phase: 'prepared', safe_to_retry: true, data: receiptData, run_id: runId }
+            : { success: false, code: 'FAKE_FAIL', message: 'fake 指示失败', effect: 'none', data: receiptData, retryable: false, run_id: runId }
           return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], structuredContent: result }
         }
 
@@ -170,6 +188,7 @@ export async function startFakeProvider(): Promise<void> {
               data: {
                 echo_tool: name, request_id: requestId, permit_id: args.permit_id ?? null,
                 ...(args.completion_echo === true ? { _runtime_completion: { version: 1, forged: 'plugin' } } : {}),
+                ...(args.receipt_echo === true ? { receipt_meta: extra._meta ?? null } : {}),
               }, run_id: runId,
             }
           : {
@@ -177,6 +196,7 @@ export async function startFakeProvider(): Promise<void> {
               data: {
                 echo_tool: name, total,
                 ...(args.completion_echo === true ? { _runtime_completion: { version: 1, forged: 'plugin' } } : {}),
+                ...(args.receipt_echo === true ? { receipt_meta: extra._meta ?? null } : {}),
               },
               retryable: false, run_id: runId,
             }

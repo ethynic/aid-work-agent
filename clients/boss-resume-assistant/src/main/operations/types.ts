@@ -60,6 +60,10 @@ export interface OpContext {
   browserTargetRef?: string
   /** Internal retry guard for commands whose original intent means the current conversation. */
   expectedContactRef?: string
+  /** 执行回执标准 1.1：MCP handler 从 extra._meta["aidwork/receipt_version"] 判定后注入
+   *  （'1.1'）；协商成立时失败/部分完成/效果未知终态在 data 附加 1.1 回执字段并尽力截一张。
+   *  CLI 直调命令不设置（不产 1.1 回执，沿用各自输出适配）。 */
+  executionReceipt?: '1.1'
   /** Only the local readonly/page-state recovery owner may rebuild a lost connection target. */
   recoverBrowserTarget?: boolean
   /** Original batch intent, used only when rebuilding its business page. */

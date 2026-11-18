@@ -194,6 +194,9 @@ async def run_base(proxy, operation, kwargs):
         session_id=session_id,progress_queue=progress,
         expected_device_id=kwargs.get('_resume_expected_device_id'))
     from .boss_visual_recovery import cli_owns_recovery, is_visual_failure, recover_operation, recovery_arguments
+    from .execution_receipts import has_receipt_effect_conflict
+    if has_receipt_effect_conflict(original):
+        return original
     if cli_owns_recovery(original):
         return original
     if is_visual_failure(proxy, original):

@@ -21,7 +21,7 @@ from src.tools._helpers import sanitize_error
 
 
 class ImageReadInputModel(BaseModel):
-    image: str = Field(..., description="待判读图片：file_id（file_xxx）/ 本地绝对路径 / http(s) URL")
+    image: str = Field(..., description="待判读图片：本次执行回执的 image_ref / file_id（file_xxx）/ 本地绝对路径 / http(s) URL")
     question: str = Field(..., description="判读问题，要求结构化输出（如：数清深色墙围合的房间数与方位；给出产品主体色的 HEX 值）")
     model: Optional[str] = Field(None, description="判读模型，provider/model 语法（如 qwen/qwen3-vl-plus）；缺省用平台默认，显式指定须在白名单内")
 
@@ -53,7 +53,7 @@ class ImageReadTool(BaseTool):
             return {"success": False, "error": "判读问题（question）不能为空"}
 
         try:
-            local_path, b64 = await self._resolve_image(image_input, tenant_id, user_id)
+            local_path, b64, receipt_image = await self._resolve_image(image_input, tenant_id, user_id)
         except ValueError as e:
             # 自抛的参数校验消息（绝对路径/file_id 未找到），安全可透传
             return {"success": False, "error": str(e)}
@@ -82,14 +82,22 @@ class ImageReadTool(BaseTool):
             "success": True,
             "answer": answer,
             "model": f"{provider_name}/{model}",
-            "file_path": str(local_path),
+            **({} if receipt_image else {"file_path": str(local_path)}),
         }
 
     # ---------------- 图片解析 ----------------
 
     async def _resolve_image(self, image_input: str, tenant_id: str,
                              user_id: Optional[str]):
-        """把 file_id / 本地路径 / URL 统一解析为 (本地路径, base64)。"""
+        """解析图片。执行回执图片只读取 Runner 交付的当前资源。"""
+        from src.local_tools.execution_receipts import RECEIPT_IMAGE_REF_PREFIX, read_receipt_image
+        if image_input.startswith(RECEIPT_IMAGE_REF_PREFIX):
+            from src.tools.context import current_tool_execution_context
+            ctx = current_tool_execution_context()
+            mime, content = await read_receipt_image(image_input, ctx)
+            encoded = base64.b64encode(content).decode("ascii")
+            return None, f"data:{mime};base64,{encoded}", True
+
         from src.core.image_asset import get_image_registry
 
         registry = get_image_registry()
@@ -114,7 +122,7 @@ class ImageReadTool(BaseTool):
         mime = mime or "image/png"
         data = await asyncio.to_thread(local_path.read_bytes)
         b64 = base64.b64encode(data).decode("ascii")
-        return local_path, f"data:{mime};base64,{b64}"
+        return local_path, f"data:{mime};base64,{b64}", False
 
     # ---------------- 模型解析与 VL 调用 ----------------
 

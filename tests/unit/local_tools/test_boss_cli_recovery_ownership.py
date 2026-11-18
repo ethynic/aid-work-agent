@@ -36,6 +36,30 @@ async def test_direct_proxy_returns_local_receipt_without_second_dispatch(monkey
     legacy.assert_not_awaited()
 
 
+@pytest.mark.parametrize('effect,known', [('none', 'applied'), ('unknown', 'applied')])
+async def test_receipt_effect_conflict_keeps_original_without_legacy_replay(monkeypatch, effect, known):
+    original = {'success': False, 'code': 'UI_CHANGED', 'effect': effect,
+                'invocation_id': 'original-id', 'data': {'receipt_version': '1.1', 'known_effect': known}}
+    dispatch = AsyncMock(return_value=original)
+    legacy = AsyncMock(side_effect=AssertionError('Inconsistent evidence cannot authorize a replay'))
+    monkeypatch.setattr(LocalToolProxyTool, '_find_ready_device', AsyncMock(return_value=({'id': 'device'}, None)))
+    monkeypatch.setattr(LocalToolProxyTool, '_tool_credit_price', lambda _: 0)
+    monkeypatch.setattr(LocalToolProxyTool, '_dispatch_and_wait', dispatch)
+    monkeypatch.setattr(LocalToolProxyTool, '_heal_overlay', legacy)
+    result = await BossFilterTool().execute(experience='5-10年', _trusted_tenant_id='tenant', _trusted_user_id='user')
+    assert result is original
+    dispatch.assert_awaited_once()
+    legacy.assert_not_awaited()
+
+    poll = AsyncMock(return_value=original)
+    monkeypatch.setattr('src.local_tools.overlay_flow.poll_operation', poll)
+    owner = SimpleNamespace(saved_phase=AsyncMock(side_effect=AssertionError('No healing phase may be created')))
+    assert await run_base(BossFilterTool(), LocalOperationScope(owner, 'main', 0),
+                          {'experience': '5-10年', '_trusted_tenant_id': 'tenant', '_trusted_user_id': 'user'}) is original
+    poll.assert_awaited_once()
+    owner.saved_phase.assert_not_awaited()
+
+
 async def test_durable_flow_preserves_unknown_local_result_without_new_recovery_phase(monkeypatch):
     original = local_result('page_restored_business_unconfirmed')
     poll = AsyncMock(return_value=original)

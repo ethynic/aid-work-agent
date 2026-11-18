@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { FilterSetter, FilterSetError, FilterPostconditionError, FILTER_SNAPSHOT_OPTIONS, type FilterSpec, type FilterPostcondition } from '../boss/FilterSetter.js'
 import { WinClickError } from '../input/WinMouseClicker.js'
 import { CancelledError, failResult } from './types.js'
+import { attachReceipt1_1 } from './receipt.js'
 import { pageFacts, pageFailure, type PageExecution } from './pageOperation.js'
 import {
   defaultSessionFactory,
@@ -207,7 +208,14 @@ export function createBossFilterOperation(
       // 插件独立容错：MCP 严格校验与页面动作之前清洗可选筛选值（与 z.preprocess / CLI 命令同规则），
       // 被跳过的请求项出具 filter_evidence（R5：云端核对豁免依据）
       const sanitized = sanitizeBossFilterInput(args)
-      if (!sanitized.hasAnyCondition) return Promise.resolve(zeroInputResult(sanitized))
+      if (!sanitized.hasAnyCondition) {
+        const result = zeroInputResult(sanitized)
+        // 零输入结构化回执保持既有形态；协商 1.1 时补 step/reason/known_effect
+        //（INVALID_ARGUMENT/none 语义不变；未连接页面无截图，与 1.1 字段共存）
+        return ctx.executionReceipt === '1.1'
+          ? attachReceipt1_1(result, { step: 'validate_input' })
+          : Promise.resolve(result)
+      }
       const cleaned = sanitized.input as BossFilterArgs
       let retainedSetter: FilterSetter | undefined
       let retainedExecution: PageExecution | undefined

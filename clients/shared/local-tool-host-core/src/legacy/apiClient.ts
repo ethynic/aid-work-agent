@@ -87,6 +87,8 @@ export interface ClaimedInvocation {
   claim_token: string
   lease_expires_at?: string
   provider?: string
+  /** 执行回执标准 1.1（2026-11-18）：服务端在标准结果通道按宿主能力附加；缺省=未协商走既有回执 */
+  receipt_version?: string
 }
 
 export interface ProgressAck {
@@ -360,6 +362,8 @@ export class ApiClient {
       claim_token: String(res['claim_token'] ?? ''),
       lease_expires_at: res['lease_expires_at'] as string | undefined,
       provider: res['provider'] as string | undefined,
+      // 旧服务端缺键 → undefined（未协商）；非字符串形态同样视为未协商
+      receipt_version: typeof res['receipt_version'] === 'string' ? res['receipt_version'] : undefined,
     }
   }
 

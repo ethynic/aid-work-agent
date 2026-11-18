@@ -125,7 +125,7 @@ def users_devices(client, users):
     })
     new_plugin = _pair_device(client, user, "新插件声明设备", {
         "providers": ["resume-tool"],
-        "capabilities": ["local_v2", "tool_declarations_v1"],
+        "capabilities": ["local_v2", "tool_declarations_v1", "runtime_execution_receipt_v1_1"],
         "declared_tools": {"resume-tool": ["resume_parse"]},
     })
     legacy = _pair_device(client, user, "旧设备", {
@@ -229,6 +229,115 @@ class TestDeclarationClaimEndToEnd:
         body = resp.json()
         assert body["invocation_id"] == inv, "声明驱动的目录外 provider 作业可领取"
         assert body["provider"] == "resume-tool"
+        assert body["receipt_version"] == "1.1"
+
+        headers = {"Authorization": f"Bearer {device['device_token']}"}
+        data = {"receipt_version": "1.1", "step": "validate_document", "known_effect": "none",
+                "reason": {"code": "UNREADABLE", "message": "无法读取文件"}, "business": "keep"}
+        result = client.post(f"/api/local-tools/runtime/invocations/{inv}/result",
+            headers=headers, json={"claim_token": body["claim_token"], "success": False,
+                                  "code": "UNREADABLE", "effect": "none", "data": data})
+        assert result.status_code == 200, result.text
+        from src.local_tools.repository import get_invocation
+        persisted = get_invocation(inv, user["tenant_id"])
+        assert persisted["state"] == "failed" and persisted["result_json"]["data"] == data
+
+    def test_declared_plugin_screenshot_stays_in_its_original_execution(self, client, users_devices, tmp_path, monkeypatch):
+        import asyncio
+        import base64
+        import json
+        from io import BytesIO
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from PIL import Image
+
+        from src.core.storage import resolve_delivery_file_info
+        from src.local_tools import repository, result_images
+        from src.services.agent_runner.runtime.local_tools import LocalToolAdapter
+        from src.tools.context import ToolExecutionContext, tool_execution_scope
+        from src.tools.image.image_read_tool import ImageReadTool
+
+        user, device = users_devices["user"], users_devices["new_plugin"]
+        tenant, user_id = user["tenant_id"], user["user_id"]
+        session, execution, call = ("receipt-session", "receipt-execution", "receipt-call")
+        inv = repository.create_invocation(tenant, user_id, device["device_id"], "resume_parse", {},
+            session_id=session, provider_key="resume-tool", business_kind="agent_runner",
+            business_ref={"runner_id": execution, "execution_id": execution, "tool_call_id": call,
+                          "branch": "base", "ordinal": 0}, dedupe_key="receipt-media-test")
+        headers = {"Authorization": f"Bearer {device['device_token']}"}
+        claim = client.post("/api/local-tools/runtime/claim?wait=0", headers=headers).json()
+        assert claim["invocation_id"] == inv and claim["receipt_version"] == "1.1"
+
+        content = BytesIO()
+        Image.new("RGB", (2, 2), color="white").save(content, format="PNG")
+        encoded = base64.b64encode(content.getvalue()).decode("ascii")
+        data = {"receipt_version": "1.1", "known_effect": "none", "business": "keep",
+                "screenshot": {"type": "image", "mimeType": "image/png", "data": encoded}}
+        answer = client.post(f"/api/local-tools/runtime/invocations/{inv}/result",
+            headers=headers, json={"claim_token": claim["claim_token"], "success": False,
+                                  "code": "UNREADABLE", "effect": "none", "data": data})
+        assert answer.status_code == 200, answer.text
+        stored = repository.get_invocation(inv, tenant)["result_json"]
+        # A domain adapter may retain only its business summary.
+        result = {"data": {"business": "keep"}, "success": False, "effect": "none", "invocation_id": inv}
+
+        monkeypatch.setattr("src.core.storage.configured_storage_root", lambda: tmp_path)
+        registry = AsyncMock(side_effect=AssertionError("receipt image must not be registered"))
+        stage = AsyncMock(side_effect=AssertionError("receipt image must not be staged as a file"))
+        monkeypatch.setattr(result_images, "get_image_registry", registry)
+        monkeypatch.setattr(result_images, "stage_result_image", stage)
+        monkeypatch.setattr("src.core.image_asset.get_image_registry", registry)
+
+        context = ToolExecutionContext(tenant_id=tenant, user_id=user_id, session_id=session,
+            agent_execution_id=execution, tool_call_id=call)
+
+        async def project(context):
+            executor = SimpleNamespace(registry=SimpleNamespace(get_tool=lambda name: None),
+                execute=AsyncMock(return_value=result))
+            adapter = LocalToolAdapter(session_id=session, execution_id=context.agent_execution_id,
+                subagent_config=None, llm=None, tool_executor=executor)
+            return [payload async for kind, payload in adapter._run_local_required_tool(
+                "resume_parse", {}, tenant, context.user_id, context=context) if kind == "result"][0]
+
+        public = asyncio.run(project(context))
+        ref = public["data"]["screenshot"]["image_ref"]
+        assert public["data"]["business"] == "keep" and public["data"]["known_effect"] == "none"
+        assert encoded not in json.dumps(public) and "images" not in public
+        assert public["data"]["screenshot"] == {"image_ref": ref}
+        assert repository.get_invocation(inv, tenant)["result_json"] == stored
+
+        assert resolve_delivery_file_info(ref) is None
+        with tool_execution_scope(context):
+            assert resolve_delivery_file_info(ref) is None
+        for suffix in ("", "/download"):
+            assert client.get(f"/api/files/{ref}{suffix}").status_code == 404
+            assert client.get(f"/api/files/{ref}{suffix}",
+                headers={"Authorization": f"Bearer {user['token']}"}).status_code == 404
+
+        other = context.derive(agent_execution_id="other-execution")
+        assert "screenshot" not in asyncio.run(project(other))["data"]
+        assert "screenshot" not in asyncio.run(project(context.derive(user_id="another-user")))["data"]
+
+        reader = ImageReadTool()
+        monkeypatch.setattr(reader, "_resolve_model", lambda _: ("fixture", "visual"))
+        vision = AsyncMock(return_value="fixture page")
+        monkeypatch.setattr(reader, "_call_vl", vision)
+
+        async def read(context):
+            with tool_execution_scope(context.derive(tool_call_id="new-image-read-call")):
+                return await reader.execute(image=ref, question="fixture screenshot")
+
+        for foreign in (other, context.derive(user_id="another-user"),
+                        context.derive(session_id="another-session"), context.derive(tenant_id="another-tenant")):
+            assert asyncio.run(read(foreign))["success"] is False
+        vision.assert_not_awaited()
+        evidence = asyncio.run(read(context))
+        assert evidence["answer"] == "fixture page" and "file_path" not in evidence
+        assert vision.await_args.args[-1] == "data:image/png;base64," + encoded
+        registry.assert_not_called()
+        stage.assert_not_called()
+        assert list(tmp_path.iterdir()) == []
 
     def test_legacy_device_falls_back_to_catalog(self, client, users_devices):
         """旧设备（无声明上报）：声明内工具照常领取；目录外工具照常拒绝——行为不变"""
@@ -238,7 +347,7 @@ class TestDeclarationClaimEndToEnd:
         resp = client.post("/api/local-tools/runtime/claim?wait=1",
                            headers={"Authorization": f"Bearer {device['device_token']}"})
         assert resp.status_code == 200
-        assert resp.json()["invocation_id"] == inv
+        assert resp.json()["invocation_id"] == inv and "receipt_version" not in resp.json()
 
         inv2 = _create(user, device["device_id"], "wecom_chat_search")
         resp = client.post("/api/local-tools/runtime/claim?wait=1",

@@ -124,6 +124,8 @@ class LocalToolAdapter:
                     result = await materialize_attachment(result, tool_args, tenant_id=tenant_id,
                         user_id=user_id, tool_call_id=context.tool_call_id,
                         state=self.state, assembler=self.attachments)
+                from src.local_tools.execution_receipts import project_execution_receipt
+                result = await project_execution_receipt(result, tool_name=tool_name, context=context)
                 yield ("result", result)
             except LocalContinuationRequired as error:
                 yield ("verification", {"kind":"verification", "error_code":error.code,

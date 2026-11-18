@@ -15,7 +15,8 @@ from pydantic import ValidationError
 from src.core.agent_engine.contracts import AgentMode, ExecutionState, Identity
 from src.core.image_asset import ImageRef
 from src.local_tools.wecom_business import ReadInput
-from src.local_tools.wecom_attachments import MAX_IMAGE_BYTES, materialize_attachment
+from src.local_tools.result_images import MAX_IMAGE_BYTES
+from src.local_tools.wecom_attachments import materialize_attachment
 from src.services.agent_runner.resource_paths import workspace_directory
 from src.services.agent_runner.runtime.attachments import AttachmentAssembler
 from src.services.agent_runner.runtime.executor import ModelAdapter
@@ -49,7 +50,7 @@ def state():
 @pytest.fixture
 def assets(tmp_path, monkeypatch):
     """Only storage/registry external boundaries are fake; image files are real."""
-    import src.local_tools.wecom_attachments as bridge
+    import src.local_tools.result_images as bridge
     temp = tmp_path / 'temp'
     store = tmp_path / 'registered'
     store.mkdir()

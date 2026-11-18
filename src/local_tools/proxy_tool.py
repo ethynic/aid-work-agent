@@ -283,6 +283,9 @@ class LocalToolProxyTool(BaseTool):
         result = await self._dispatch_and_wait(tenant_id, user_id, session_id, device, args, progress_queue)
 
         from .boss_visual_recovery import cli_owns_recovery, is_visual_failure, recover_operation, recovery_arguments
+        from .execution_receipts import has_receipt_effect_conflict
+        if has_receipt_effect_conflict(result):
+            return result
         if cli_owns_recovery(result):
             return result
         if is_visual_failure(self, result):

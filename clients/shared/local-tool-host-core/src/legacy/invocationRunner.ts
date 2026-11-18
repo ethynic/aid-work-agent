@@ -29,6 +29,7 @@ import { backoffSleep, deliverOutboxEntry, type OutboxEntry, ResultOutbox, resul
 import { runtimeHomeDir } from './config.js'
 import { logError, logInfo } from './log.js'
 import { acquireWritePermit, PermitAcquireError, type WritePermit } from './writeAuthorize.js'
+import { RECEIPT_DATA_KEYS, receiptEffectContradiction, validateExecutionReceipt } from './executionReceipt.js'
 
 /** 会话任务锁内复核未通过：不申请许可、不执行（effect none，决策作废走 supersede） */
 export class SessionPrecheckError extends Error {
@@ -620,6 +621,10 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
         let callArgs: Record<string, unknown> = permit
           ? { ...inv.arguments, permit_id: permit.permitId, permit_token: permit.permitToken }
           : inv.arguments
+        // 只向标准结果通道的已协商调用发送 MCP 元数据。
+        const requestMeta: Record<string, unknown> | undefined = !isV2Invocation && inv.receipt_version === '1.1'
+          ? { 'aidwork/receipt_version': inv.receipt_version }
+          : undefined
         if (permit && deps.prepareProviderCall) {
           callArgs = await deps.prepareProviderCall(inv, permit, abortController.signal)
           if (!permit.isValid() || abortController.signal.aborted) throw new Error('发送许可或执行已失效')
@@ -690,6 +695,7 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
             // 并行 lane（契约 2.20）：同 Provider 可与串行调用并发；串行 lane 单飞门不变
             parallel: deps.parallel === true,
             signal: permit ? AbortSignal.any([abortController.signal, AbortSignal.timeout(Math.max(0, Math.floor(permit.msRemaining())))]) : abortController.signal,
+            ...(requestMeta ? { requestMeta } : {}),
             onProgress: (p) => {
               const stage = extractStage(p.message)
               forwarder.push({
@@ -848,6 +854,21 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
   delete data['_runtime_completion']
   if (providerKey === 'boss-recruiting' && deps.parallel !== true && settled !== null) {
     data['_runtime_completion'] = { version: 1 }
+  }
+  // 执行回执标准 1.1（2026-11-18）：仅协商调用（领取响应附加 receipt_version）接受扩展。
+  // 验证失败（未知版本/形状坏）→ 整块扩展按旧回执语义剥离 + 脱敏诊断；未协商携带 →
+  // 剥离（防伪造，同 _runtime_completion 保留键先例）。已协商且两个合法效果值矛盾 →
+  // 保留原结果原扩展 + 脱敏诊断（自动恢复按 unknown 判断是 Runner/服务端职责，Runtime
+  // 不改写不据此重试）。1.1 回执与 _runtime_completion 共存同一 data，用途不同互不冲突；
+  // 1.1 回执、图片与 known_effect 都不替代停稳证明。
+  const receiptValidation = validateExecutionReceipt(data, !isV2Invocation && inv.receipt_version === '1.1')
+  for (const diagnostic of receiptValidation.diagnostics) {
+    logError(`invocation ${inv.invocation_id} 执行回执扩展验证: ${diagnostic}`)
+  }
+  if (receiptValidation.strip) {
+    for (const key of RECEIPT_DATA_KEYS) delete data[key]
+  } else if (data['receipt_version'] === '1.1' && receiptEffectContradiction(r['effect'], data['known_effect'])) {
+    logError(`invocation ${inv.invocation_id} 执行回执效果矛盾: known_effect 与外层 effect 不一致，保留原结果原扩展（自动恢复按 unknown 判断，禁止据此重试写动作）`)
   }
   // v1（旧 /result）：Provider 结果缺 effect 时键缺省——与 HEAD 逐字节一致，不注入默认值
   const rawEffect = strField(r['effect'])
