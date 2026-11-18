@@ -11,7 +11,7 @@
 | 约束 | 依据 |
 |------|------|
 | 仅支持 Windows x64 | `agent-tool-runtime/src/config.ts` PLATFORM='win32-x64'，依赖 DPAPI / Win32 user32 / PowerShell / 任务计划程序 |
-| Node ≥ 20 + 本机 Chrome | `clients/release/安装手册.md`；专用调试 profile `C:\chrome-debug`，端口 9222 |
+| Node ≥ 20 + 本机 Chrome | `docs/guides/clients/安装手册.md`；专用调试 profile `C:\chrome-debug`，端口 9222 |
 | **必须有可交互桌面会话且未锁屏** | `src/desktopCheck.ts` 执行前用 Win32 `OpenInputDesktop` 检查锁屏，锁屏即拒绝执行 |
 | **点击占用真实鼠标光标**（约 1 秒/次），执行期间不能有人动鼠标 | `scripts/win-click.ps1`（SetCursorPos / mouse_event / SendInput 真实事件，防 BOSS 风控检测合成事件） |
 | Chrome 窗口不能被遮挡 | `WindowFromPoint` 落点守卫 |
@@ -43,7 +43,7 @@ VM 配置（每账号一台）：
 - Windows 10/11 x64，2 vCPU / 4GB 内存（Chrome + OCR 场景不建议低于 4GB），60GB 动态磁盘
 - 网络用默认 NAT 即可（只需出方向 443）
 - VM 内电源策略：永不睡眠、永不关屏、永不锁屏；设置 Windows 自动登录
-- 装 Node 20+、Chrome，然后按 `clients/release/安装手册.md` 正常安装配对
+- 装 Node 20+、Chrome，然后按 `docs/guides/clients/安装手册.md` 正常安装配对
 
 运维项：
 - Hyper-V 设置 VM 自动启动（宿主机重启后自动拉起）；VM 内自动登录 + 任务计划自启 aid-runtime（现有脚本直接复用）
@@ -115,7 +115,7 @@ VM 配置（每账号一台）：
 
 ## 5. 参考资料
 
-- 本项目机制依据：`clients/boss-resume-assistant/AGENTS.md`、`clients/agent-tool-runtime/src/`（config.ts / desktopCheck.ts / pollLoop.ts）、`clients/release/安装手册.md`
+- 本项目机制依据：`clients/boss-resume-assistant/AGENTS.md`、`clients/agent-tool-runtime/src/`（config.ts / desktopCheck.ts / pollLoop.ts）、`docs/guides/clients/安装手册.md`
 - [无影云电脑断连定时策略（断连默认继续运行）](https://help.aliyun.com/zh/edsp/user-guide/set-scheduled-task-upon-disconnection)
 - [无影云电脑价格介绍（知乎专栏）](https://zhuanlan.zhihu.com/p/1958547367360964500)、[无影个人版计费](https://help.aliyun.com/zh/edsp/product-overview/personal-edition-billing)
 - [华为云 Flexus 云桌面（69.9 元/月起）](https://www.huaweicloud.com/product/flexus-workspace.html)、[华为云桌面定价](https://www.huaweicloud.com/product/workspace/pricing.html)

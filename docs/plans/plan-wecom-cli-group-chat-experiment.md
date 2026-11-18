@@ -307,7 +307,7 @@ Docker Hub/既有加速源在WSL daemon拉取时TLS超时，但Windows官方regi
 | W11.3 | 隔离验包、库存和NSIS升级 | ✅ 完成（2026-10-28） | 最终真实NSIS30→31、身份/库存及WeCom20→21通过；332字符实际安装路径默认DB/MCP/PS OCR与EXE SMOKE通过 |
 | W11.4 | 独立审查、摘要与交付 | ✅ 完成（2026-10-28） | 最终源码/固定产物/安装说明CR通过，无遗留P0/P1/P2；交付目录含报告、SHA256与组合ZIP |
 
-沿用[当前打包手册](../ops/runtime-boss-release-guide.md)和[插件格式/资产规范](../../clients/runtime-plugin-packaging/README.md)，只将Provider换为wecom，不执行BOSS一键脚本或重打BOSS。本轮acceptance安装器仍是Windows NotSigned，插件有Ed25519发布者签名，不冒充production签名。最终UI0.0.31/WeCom0.2.1包含下述真实安装修复；Host0.2.24/Core0.2.21仅发行版本更新。`build-info.json`同时记录源码基线与本轮未提交的修复、版本和公开根变化。
+沿用[当前打包手册](../guides/deployment/runtime-boss-release-guide.md)和[插件格式/资产规范](../../clients/runtime-plugin-packaging/README.md)，只将Provider换为wecom，不执行BOSS一键脚本或重打BOSS。本轮acceptance安装器仍是Windows NotSigned，插件有Ed25519发布者签名，不冒充production签名。最终UI0.0.31/WeCom0.2.1包含下述真实安装修复；Host0.2.24/Core0.2.21仅发行版本更新。`build-info.json`同时记录源码基线与本轮未提交的修复、版本和公开根变化。
 
 主控唯一处理修复、版本、构建、公开根登记与文档；独立TEST验证实际产物，独立CR只读检查源码/包与证据。初始ignored Python bytecode移入任务Temp，后改为复制阶段排除开发缓存；仅修改发行依赖和启动适配，不改聊天业务。原wecom lock的三处peer标记保留。
 

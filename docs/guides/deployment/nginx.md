@@ -8,7 +8,7 @@
 
 | 域名 | 配置文件 | 后端端口 |
 |------|---------|---------|
-| `agent.aidingyi.cn`（生产主域名） | `agent.aidingyi.cn.conf`（仓库源文件 [agent.aidingyi.cn.conf](agent.aidingyi.cn.conf)） | `localhost:8000` |
+| `agent.aidingyi.cn`（生产主域名） | `agent.aidingyi.cn.conf`（仓库源文件 [agent.aidingyi.cn.conf](../../../deploy/agent.aidingyi.cn.conf)） | `localhost:8000` |
 
 > `agent1.aidingyi.cn` 为迁移验证期临时域名，2026-09-15 已删除其 nginx 配置（备份于新机 `/tmp/agent1.aidingyi.cn.conf.bak_20260915`）；DNS A 记录需在腾讯云控制台另行删除，删除前该域名请求会落到 nginx 默认 server（即生产站点）。
 
@@ -25,9 +25,9 @@
 
 | 域名 | 配置文件 | 后端端口 | 状态 |
 |------|---------|---------|------|
-| `agent2.aidingyi.cn`（测试） | [agent2.aidingyi.cn.conf](agent2.aidingyi.cn.conf) | `localhost:8001` | 正常服务 |
-| `agent3.aidingyi.cn`（在线开发） | [agent3.aidingyi.cn.conf](agent3.aidingyi.cn.conf) | `localhost:8004` | 正常服务 |
-| `agent.aidingyi.cn` | [agent.aidingyi.cn.conf](agent.aidingyi.cn.conf) | `localhost:8000` | **已失效**（DNS 指向新机；conf 保留供回滚） |
+| `agent2.aidingyi.cn`（测试） | [agent2.aidingyi.cn.conf](../../../deploy/agent2.aidingyi.cn.conf) | `localhost:8001` | 正常服务 |
+| `agent3.aidingyi.cn`（在线开发） | [agent3.aidingyi.cn.conf](../../../deploy/agent3.aidingyi.cn.conf) | `localhost:8004` | 正常服务 |
+| `agent.aidingyi.cn` | [agent.aidingyi.cn.conf](../../../deploy/agent.aidingyi.cn.conf) | `localhost:8000` | **已失效**（DNS 指向新机；conf 保留供回滚） |
 
 ## 3. 访问日志与安全分析
 

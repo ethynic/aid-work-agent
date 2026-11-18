@@ -3,7 +3,7 @@
 >
 > 本文档是**可执行的开发规范**，既是新工具开发的 checklist，也是旧工具重构的判定依据。后续所有工具改造和新工具开发**必须遵循**。
 >
-> 公共能力实现见 [`src/tools/_helpers.py`](../../src/tools/_helpers.py)（`truncate_text` / `sanitize_error`）与 [`src/tools/_spill.py`](../../src/tools/_spill.py)（`spill_large_content`）。
+> 公共能力实现见 [`src/tools/_helpers.py`](../../../src/tools/_helpers.py)（`truncate_text` / `sanitize_error`）与 [`src/tools/_spill.py`](../../../src/tools/_spill.py)（`spill_large_content`）。
 >
 > **2026-10 修订**：对齐 commit `026ca30b`（提示词压缩重构）后的实际架构——工具说明统一走 tools 参数 `description` 通道，`usage_guide` 停用；原「description ≤ 80 字符 + 教程迁 usage_guide」条款废除。同时并入大内容落盘闭环契约（原落盘计划 Phase D 遗留项）。
 
@@ -17,12 +17,12 @@ LLM 每轮对话都消耗两类工具 token：① **工具 schema**（`descripti
 
 ## 本地开发依赖
 
-本项目常规开发和验证使用仓库镜像内的系统工具。启动与依赖检查见[开发环境手册](../infrastructure/local-dev-environments.md#首次初始化)。
+本项目常规开发和验证使用仓库镜像内的系统工具。启动与依赖检查见[开发环境手册](local-dev-environments.md#首次初始化)。
 
 | 依赖 | 用途 |
 |------|------|
 | **ripgrep (`rg`)** | `grep` 工具的文件内搜索 |
-| **pandoc** | `word_process` 的 `md_to_word` 操作，独立安装的细节见 [Pandoc 安装指南](md-to-word/pandoc-install-guide.md) |
+| **pandoc** | `word_process` 的 `md_to_word` 操作，独立安装的细节见 [Pandoc 安装指南](pandoc-install-guide.md) |
 
 > 说明：这些是**系统级 CLI**，与 Python 虚拟环境无关，venv 内无需 pip 安装。缺失时工具会优雅降级（grep 返回「ripgrep 未安装」，word 转 PDF 等功能不可用），不会导致服务启动失败。
 

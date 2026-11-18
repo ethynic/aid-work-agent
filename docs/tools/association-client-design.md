@@ -2,7 +2,7 @@
 
 > **权威设计**。本文档是客户端、命令行工具、服务端三端开发的唯一依据。开发时严格按照本文档的接口契约、数据结构、协议格式实现，不得猜测。
 >
-> **状态**：✅ 已交付客户（2026-08-10，NSIS 安装包，交付清单与部署规程见 [部署手册](association-client-deployment.md)）。2026-10-09 归档整合：开发计划与前身内部工具（enrichment-cli/ui）的过时文档已删除，交付与实现记录见文末；核心采集引擎的设计演进保留在 [协会官网优先资料补全设计](association-profile-enrichment-design.md)。
+> **状态**：✅ 已交付客户（2026-08-10，NSIS 安装包，交付清单与部署规程见 [部署手册](../guides/clients/association-client-deployment.md)）。2026-10-09 归档整合：开发计划与前身内部工具（enrichment-cli/ui）的过时文档已删除，交付与实现记录见文末；核心采集引擎的设计演进保留在 [协会官网优先资料补全设计](association-profile-enrichment-design.md)。
 
 ---
 

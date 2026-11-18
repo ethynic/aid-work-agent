@@ -46,7 +46,7 @@
 | BOSS CLI 沟通发消息能力（send-to / send-current） | [原生 CDP 设计 §10.6](design/recruiting/boss-resume-assistant-native-cdp-design.md) | 🔧 部分完成（2026-08-13）：把已真机验证的「搜索找人 + 输入 + 发送」链路封装为两个 CLI 子命令与同名 MCP tool——`send-to <姓名> --message <消息>… |
 | BOSS CLI 职位切换能力（list-jobs / select-job） | [原生 CDP 设计 §10.7](design/recruiting/boss-resume-assistant-native-cdp-design.md) | ✅ 已完成开发（2026-08-13 封装 + 真机验收 + 增强，待提交）：封装为 `list-jobs`（只读 `boss_list_jobs`）… |
 | 招聘「职位管理/简历库」UI 重构（列表/详情路由化 + job_id 强关联 + 删 demo 预置） | — | ✅ 已完成开发（2026-09-01 全部子项完成，含④期/A组/回写；开发过程：后端招聘模块 169 集成测试绿（真实 PG）+ 前端 typecheck/build/23 单测绿；未提交）：… |
-| 招聘客户端部署封装（npm install 一键装机） | [设计](design/recruiting/recruiting-client-deployment-design.md) / [部署手册 clients/README.md](../clients/README.md) / [同事装机手册](../clients/release/安装手册.md) | 🔧 部分完成（2026-08-24 分发包 v0.2.3，send-to 沟通搜索链路全面通用化重写）：**send-to 通用化**（另一台机器分辨率不同点错搜索按钮暴露：… |
+| 招聘客户端部署封装（npm install 一键装机） | [设计](design/recruiting/recruiting-client-deployment-design.md) / [部署手册 clients/README.md](../clients/README.md) / [同事装机手册](guides/clients/安装手册.md) | 🔧 部分完成（2026-08-24 分发包 v0.2.3，send-to 沟通搜索链路全面通用化重写）：**send-to 通用化**（另一台机器分辨率不同点错搜索按钮暴露：… |
 | 招聘面试邀约企微通知（两点式） | [设计](design/recruiting/recruiting-interview-notify-design.md) | 🔧 部分完成（Phase 1 核心闭环已开发，2026-08-19 三智能体全过——测试修 2 真 bug + CR 修 1 个 P1（executor 强转 Pydantic 模型实例致生产路径通知… |
 | 浏览器 RPA（纯键鼠路线）深度调查报告 | [browser-rpa-vs-anti-bot-deep-research.md](research/browser-rpa-vs-anti-bot-deep-research.md) | BOSS 简历筛选助手、微信搜一搜 RPA、通用 RPA 底座。 |
 | 上传文件存储合规审计 | [审计报告](plans/upload-storage-compliance-audit.md) | ✅ 已修复并发生产、已验证（2026-08-14 审计 + 当日修复 + 当日发生产验证）：主体合规（Phase 1~8 改造有效，持久化入口均走 storage.py 工具函数）。 |

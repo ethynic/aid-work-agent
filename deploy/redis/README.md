@@ -1,6 +1,6 @@
 # Redis 配置
 
-项目本地业务 Redis 的启动、连接和排查见[开发环境手册](../../docs/infrastructure/local-dev-environments.md#2-复用或启动本地服务)。独立 Redis 的声明保存在 [Compose 文件](docker-compose.yml)。
+项目本地业务 Redis 的启动、连接和排查见[开发环境手册](../../docs/guides/development/local-dev-environments.md#2-复用或启动本地服务)。独立 Redis 的声明保存在 [Compose 文件](docker-compose.yml)。
 
 ## 生产环境
 

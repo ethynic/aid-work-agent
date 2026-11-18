@@ -48,7 +48,7 @@ aid-work-agent/
 
 ## 快速开始
 
-本地启动、Python / SQL / Web 自测和命令行调试统一见[开发环境手册](docs/infrastructure/local-dev-environments.md)。验证开发分支或未提交改动时，见[指定工作区验证](docs/infrastructure/local-dev-environments.md#4-指定工作区验证)。
+本地启动、Python / SQL / Web 自测和命令行调试统一见[开发环境手册](docs/guides/development/local-dev-environments.md)。验证开发分支或未提交改动时，见[指定工作区验证](docs/guides/development/local-dev-environments.md#4-指定工作区验证)。
 
 ### 访问 API
 

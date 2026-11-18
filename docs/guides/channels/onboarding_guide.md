@@ -346,5 +346,5 @@ DingTalkAdapter(
 | 前端配置页 | `frontend/web/components/saas/ChannelConfig.vue` |
 | 单元测试 | `tests/unit/channels/test_dingtalk_*.py` |
 | 集成测试 | `tests/integration/test_dingtalk_routes.py` |
-| 接入手册 | `docs/channel/dingtalk/onboarding_guide.md`（即本文档） |
+| 接入手册 | `docs/guides/channels/onboarding_guide.md`（即本文档） |
 | 实施计划 | `docs/channel/dingtalk/implementation_plan.md` |

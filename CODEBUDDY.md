@@ -32,7 +32,7 @@ AID Work Agent 是一个**面向企业客户**的员工智能代理系统，基�
 
 ## 常用命令
 
-本地依赖、后端与前端启动、工作区切换、测试及健康检查统一见[开发环境手册](docs/infrastructure/local-dev-environments.md)。
+本地依赖、后端与前端启动、工作区切换、测试及健康检查统一见[开发环境手册](docs/guides/development/local-dev-environments.md)。
 
 ### Docker 部署
 ```bash

@@ -182,7 +182,7 @@ agent2 双池发布当日（c9be70c1）实测：11:20 后 7 个任务中 4 个�
 
 - `.env` 重配：`runner-worker-light` replicas 1（`AGENT_RUNNER_SLOT_CONCURRENCY=4`、cgroup 2g、`DB_POOL_MAX=6`）+ `runner-worker-general` replicas 3；compose up -d 重建（注意 [[agent2 env 重载陷阱]]：改 .env 必须 rebuild，docker restart 不重读 env）。
 - 连接预算：DB_POOL_MAX 全局共用，通用池随升至 6 → 1×6 + 3×6 = 24 + 监督 ~6 + 非 Runner ~20 ≈ 50 ≤ 80，无需扩 PG（原估 41 按 3×3 计，实现取全局变量语义修正）。
-- ✅ 仓库侧配置完成（2026-11-12）：`docker-compose.agent-runner.yml` 轻池 mem_limit 变量化（`AGENT_RUNNER_LIGHT_MEMORY`，默认 1g 不影响其他环境）+ 显式注入 `AGENT_RUNNER_SLOT_CONCURRENCY`；1 轻/3 通用/2g 经服务器 .env 配置（2026-11-12 起 `deploy/agent2_update.sh` 移除全部 export，插值变量一律以服务器 .env 为唯一来源）；compose 插值校验通过。**真机部署待用户当场授权**（按 deploy/agent-runner-deploy-checklist.md 执行）。
+- ✅ 仓库侧配置完成（2026-11-12）：`docker-compose.agent-runner.yml` 轻池 mem_limit 变量化（`AGENT_RUNNER_LIGHT_MEMORY`，默认 1g 不影响其他环境）+ 显式注入 `AGENT_RUNNER_SLOT_CONCURRENCY`；1 轻/3 通用/2g 经服务器 .env 配置（2026-11-12 起 `deploy/agent2_update.sh` 移除全部 export，插值变量一律以服务器 .env 为唯一来源）；compose 插值校验通过。**真机部署待用户当场授权**（按 docs/guides/deployment/agent-runner-deploy-checklist.md 执行）。
 - ✅ DB 池上限去配置化（2026-11-12）：删除 `AGENT_RUNNER_DB_POOL_MAX`（用户裁决：配置项过多，池大小应由并发派生）；worker 启动按 `slot_concurrency+2` 显式初始化主库池（并发数是快速失败池的地板，+2 覆盖事件/计费/trace 等共享写路径余量；监督进程独立进程自带 (1,2) 小池不受影响）。agent2 派生值 轻池 6（与原手调一致）/通用池 3（原 6 高估），预算 1×(6+2)+3×(3+2)=23 + 非 Runner ~20 ≈ 45 ≤ 80。服务器 .env 中残留的 `AGENT_RUNNER_DB_POOL_MAX=6` 已成死键，下次登机顺手删除。
 - 验收：4 个轻任务同时领取并行跑完；看门狗自愈注入测试；轻容器内存水位（2g cgroup 下 4 并发忙时 ~1.16GiB）；DB 连接峰值实测；旧客户端 wire/恢复/计费回归。
 - 试跑一周观测项：看门狗误杀率、4 并发下任务耗时是否互相拖长（GIL/CPU 争用）、连接数水位。

@@ -40,10 +40,10 @@
 
 ## 开发环境与验证
 
-开始需要运行项目或自测的任务时，先读[开发环境手册](docs/infrastructure/local-dev-environments.md)。该手册是环境选择、启动、本地 Python、SQL 和 Web 验证的唯一执行入口。优先复用当前工作区的本地依赖。修改启动、依赖或自测入口时同步更新手册。
+开始需要运行项目或自测的任务时，先读[开发环境手册](docs/guides/development/local-dev-environments.md)。该手册是环境选择、启动、本地 Python、SQL 和 Web 验证的唯一执行入口。优先复用当前工作区的本地依赖。修改启动、依赖或自测入口时同步更新手册。
 
 - SQL 自动化测试使用专用测试 PG。应用联调使用本地业务 PG，按 ID 清理本轮写入的数据。[测试规范](.claude/rules/testing.md#数据库安全入口)
-- 验证开发分支或其他 worktree 时，从目标工作区运行自测；需要复用现有本地 API / Runner 时按[指定工作区验证](docs/infrastructure/local-dev-environments.md#4-指定工作区验证)切换 `AID_LOCAL_SOURCE_DIR`。核对容器的 `/app` 来源，并在委派任务时交接 Docker 环境和工作区路径。
+- 验证开发分支或其他 worktree 时，从目标工作区运行自测；需要复用现有本地 API / Runner 时按[指定工作区验证](docs/guides/development/local-dev-environments.md#4-指定工作区验证)切换 `AID_LOCAL_SOURCE_DIR`。核对容器的 `/app` 来源，并在委派任务时交接 Docker 环境和工作区路径。
 - 前端源码修改执行 Web 构建。交互变化验证相关行为，布局变化查看受影响页面及窄屏状态，无法查看时明确验证缺口。桌面原生打包、签名和系统交互按各客户端要求使用目标系统。
 - 本地容器无法满足验证时，将 **agent3** 作为在线开发测试环境。验证当前改动前核对实际运行版本。涉及部署时遵守 [真机部署授权](#真机部署授权)。测试脚本的宿主机兼容路径不作为默认后备。不打印配置凭据。
 - 配置字段变更同步检查 `src/config/settings.py` 与 `configs/config.yaml`。
@@ -68,7 +68,7 @@
 
 ## Desktop / Runtime 共同契约
 
-Runtime 安装器和 BOSS、WeCom 离线插件统一走 [打包手册](docs/ops/runtime-boss-release-guide.md)。从仓库根运行 `clients/agent-desktop/scripts/release-batch.ps1`，三件一起用 `-Component All`，单件用 `Runtime`、`Boss` 或 `Wecom`。先带 `-Plan` 核对，成品默认在 Windows「下载」的 `AID-Work-Releases` 中。
+Runtime 安装器和 BOSS、WeCom 离线插件统一走 [打包手册](docs/guides/deployment/runtime-boss-release-guide.md)。从仓库根运行 `clients/agent-desktop/scripts/release-batch.ps1`，三件一起用 `-Component All`，单件用 `Runtime`、`Boss` 或 `Wecom`。先带 `-Plan` 核对，成品默认在 Windows「下载」的 `AID-Work-Releases` 中。
 
 涉及桌面客户端重设计、Runtime、插件或任务级设备/workspace 授权时，先读取并遵守 [Runner / Desktop / Runtime 集成契约](docs/system/runner-desktop-runtime-integration-contract.md)，再读各自设计与计划。页面与产品壳可独立调整；共用 Runtime core、Device API、binding、授权和 wire schema 不得各自实现或单方面改义。修改共同接口先登记版本、唯一写入者与兼容方案，实施前完成契约中的共同检查点；旧 D1/本地 Coordinator 不作为新开发基线。已有代码事实与计划扩展须明确区分。
 

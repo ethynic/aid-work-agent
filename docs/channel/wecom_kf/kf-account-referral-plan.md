@@ -1,7 +1,7 @@
 # 微信客服账号 API 管理 + 引流统计方案
 
 > 版本: v1.3 | 创建: 2026-08-18 | 状态: 已确认（v1.2 定案 4+4 项；v1.3 经 PM 审查修订 5 项，见 9.3 节）
-> 关联文档: [微信客服发送消息接口官网说明.txt](微信客服发送消息接口官网说明.txt) / [wecom_kf_design.md](wecom_kf_design.md) / [wecom_kf_deployment_guide.md](wecom_kf_deployment_guide.md)
+> 关联文档: [微信客服发送消息接口官网说明.txt](微信客服发送消息接口官网说明.txt) / [wecom_kf_design.md](wecom_kf_design.md) / [wecom_kf_deployment_guide.md](../../guides/channels/wecom_kf_deployment_guide.md)
 
 ---
 

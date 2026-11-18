@@ -1,7 +1,7 @@
 # 企业微信自建应用配置与验证手册
 
 > 本文档面向运维人员，聚焦「从零配置到验证通过」的最短路径。
-> 详细技术说明见 [wecom-crypto-troubleshooting.md](./wecom-crypto-troubleshooting.md)。
+> 详细技术说明见 [wecom-crypto-troubleshooting.md](../../channel/wecom/wecom-crypto-troubleshooting.md)。
 
 ---
 

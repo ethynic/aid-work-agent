@@ -4,7 +4,7 @@
 
 版本：V1.2 · 2026-10-11 · 状态：✅ 已实现并真机验收（P0–P5 交付，2026-10-11 确认真机验证通过）。原实施计划与调研文档已注销。
 
-关联：[底座设计](../desktop-automation/desktop-cli-automation-design.md) · [灰度发布与回滚手册](../../ops/weixin-marketing-rollout.md)。
+关联：[底座设计](../desktop-automation/desktop-cli-automation-design.md) · [灰度发布与回滚手册](../../guides/deployment/weixin-marketing-rollout.md)。
 
 ## 1. 产品定位与范围
 

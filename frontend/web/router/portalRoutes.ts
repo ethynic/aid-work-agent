@@ -27,6 +27,7 @@ export const portalRoutes: RouteRecordRaw[] = [
       { path: 'context-compression', name: 'portal-context-compression', component: () => import('@/components/saas/ContextCompressionManager.vue') },
       { path: 'wechat-mp', name: 'portal-wechat-mp', component: () => import('@/components/saas/WechatMpPortal.vue') },
       { path: 'redis-cache', name: 'portal-redis-cache', component: () => import('@/components/saas/RedisCacheManager.vue') },
+      { path: 'guides/:doc_path(.*)?', name: 'portal-guides', component: () => import('@/components/saas/GuidesCenter.vue') },
     ]
   }
 ]

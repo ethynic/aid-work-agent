@@ -1,7 +1,7 @@
 # 协会客户端（协会信息收集助手）部署手册
 
 > 适用版本：`AssociationClient-1.0.0-win-x64.exe`
-> 关联设计文档：[association-client-design.md](../../docs/tools/association-client-design.md)
+> 关联设计文档：[association-client-design.md](../../tools/association-client-design.md)
 > 目标读者：负责给客户上门部署的运营/实施人员。
 > 生产服务端地址：`https://agent.aidingyi.cn`（注意：`agent2.aidingyi.cn` 是测试环境，**不要给客户用**）
 

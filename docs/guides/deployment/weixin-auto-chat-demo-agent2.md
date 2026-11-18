@@ -467,13 +467,13 @@ Select-String -LiteralPath $latestLog.FullName -Pattern 'name_send_timing' | Sel
 
 ## 12. 依据与关联文档
 
-- [端侧会话任务设计（含实现与验证记录）](../design/desktop-automation/edge-session-task-design.md)
-- [Runtime CLI与配对实现](../../clients/agent-tool-runtime/src/cli.ts)
-- [Runtime配置与Provider入口](../../clients/agent-tool-runtime/src/config.ts)
-- [OCR解释器路径](../../clients/weixin-cli/src/platform/ocrResident.ts)
-- [名称定位工具](../../src/tools/weixin/name_resolve_tool.py)
-- [草稿契约](../../src/session_tasks/models.py)
-- [名称上下文有效期](../../src/weixin_conversation/name_contexts.py)
-- [agent2容器定义](../../docker-compose.test.yml)
+- [端侧会话任务设计（含实现与验证记录）](../../design/desktop-automation/edge-session-task-design.md)
+- [Runtime CLI与配对实现](../../../clients/agent-tool-runtime/src/cli.ts)
+- [Runtime配置与Provider入口](../../../clients/agent-tool-runtime/src/config.ts)
+- [OCR解释器路径](../../../clients/weixin-cli/src/platform/ocrResident.ts)
+- [名称定位工具](../../../src/tools/weixin/name_resolve_tool.py)
+- [草稿契约](../../../src/session_tasks/models.py)
+- [名称上下文有效期](../../../src/weixin_conversation/name_contexts.py)
+- [agent2容器定义](../../../docker-compose.test.yml)
 
 本文不直接照搬旧 `clients/README.md` 中“仅v1”、旧视觉模型激活方式等描述；以上步骤以当前名称会话链路实现为准。

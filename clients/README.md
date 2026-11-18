@@ -2,8 +2,8 @@
 
 ## 构建入口
 
-- Runtime 安装器、BOSS 和 WeCom 离线插件见[统一打包手册](../docs/ops/runtime-boss-release-guide.md)。安装使用本批 ZIP 中的“先读我.md”。
-- 完整桌面对话客户端见[桌面客户端构建手册](../docs/system/desktop-agent-client-build-manual.md)。
+- Runtime 安装器、BOSS 和 WeCom 离线插件见[统一打包手册](../docs/guides/deployment/runtime-boss-release-guide.md)。安装使用本批 ZIP 中的“先读我.md”。
+- 完整桌面对话客户端见[桌面客户端构建手册](../docs/guides/clients/desktop-agent-client-build-manual.md)。
 - 插件容器格式和其他 Provider 资产见[插件打包说明](runtime-plugin-packaging/README.md)。
 
 ## 九、客户端计费接入规范（三模式，新客户端必读）

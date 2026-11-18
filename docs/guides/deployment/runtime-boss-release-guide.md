@@ -1,6 +1,6 @@
 # Runtime、BOSS 与 WeCom 统一打包手册
 
-从仓库根目录使用 [release-batch.ps1](../../clients/agent-desktop/scripts/release-batch.ps1)。三件一起出包用 `-Component All`，只更新一个组件用 `Runtime`、`Boss` 或 `Wecom`。先带 `-Plan` 核对组件、源码引用和交付位置，确认后去掉 `-Plan` 执行。
+从仓库根目录使用 [release-batch.ps1](../../../clients/agent-desktop/scripts/release-batch.ps1)。三件一起出包用 `-Component All`，只更新一个组件用 `Runtime`、`Boss` 或 `Wecom`。先带 `-Plan` 核对组件、源码引用和交付位置，确认后去掉 `-Plan` 执行。
 
 ## 1. 选组件与交付格式
 
@@ -66,7 +66,7 @@ Write-Output "可用签名配置：$signer"
 
 两个位置都不可访问时，先找原构建会话或由管理员恢复既有签名者。确认确实无法恢复时再安排发布者轮换与 Runtime 配套验证。第 6 节的随机测试根只用于隔离试验，现有客户 Runtime 需要信任发布者才能导入。
 
-验收公开根默认用仓库的 `clients/runtime-plugin-packaging/trust/acceptance-roots.json`。普通补丁复用稳定发布者和现有公开根。新增或轮换发布者按[公开根登记工具](../../clients/runtime-plugin-packaging/register-publisher-trust.mjs)单独处理。历史公钥、范围和已交付兼容性需要保留。
+验收公开根默认用仓库的 `clients/runtime-plugin-packaging/trust/acceptance-roots.json`。普通补丁复用稳定发布者和现有公开根。新增或轮换发布者按[公开根登记工具](../../../clients/runtime-plugin-packaging/register-publisher-trust.mjs)单独处理。历史公钥、范围和已交付兼容性需要保留。
 
 `-ReleaseId` 缺省前缀分别为 `boss-<版本>`、`wecom-<版本>`，封装会追加对应 Provider 后缀。显式提供时作为本批所选插件的公共前缀，后缀仍分别绑定各自 Provider。
 
@@ -99,7 +99,7 @@ powershell.exe -NoProfile -File $release -Component Wecom -SourceRef HEAD -Targe
 
 - **BOSS 独立 npm CLI**供 `npm install -g` 和外部 MCP Host 使用。先在 Windows x64 构建机执行 `npm --prefix clients/shared ci --ignore-scripts` 和 `npm --prefix clients/boss-resume-assistant ci --ignore-scripts`，再从仓库根用 Git Bash 执行 `bash clients/boss-resume-assistant/scripts/pack-release.sh`。该入口输出 `clients/boss-resume-assistant/boss-resume-assistant-<版本>.tgz`。它会随包带上共享 Win32 模块及 koffi 原生依赖。直接运行 `npm pack` 会留下客户机无法解析的仓库相对依赖。独立包交付前在空目录安装，验证 `createKoffiApi()` 可实例化，不能只跑 `version --json`。客户机需 Node ≥ 22 且可访问 npm registry。
 - **WeCom**走表中的签名离线插件入口。当前未维护独立 npm 交付流程。
-- **隔离试验**可在独立输出目录显式运行 `package.mjs --test --test-key-id aid-isolated-<唯一值>`，传入所需 Provider 和固定 Node 等参数。随机测试根随该次实验产物单独保存，仅供隔离测试环境。容器格式与低层参数见[插件打包说明](../../clients/runtime-plugin-packaging/README.md)。
+- **隔离试验**可在独立输出目录显式运行 `package.mjs --test --test-key-id aid-isolated-<唯一值>`，传入所需 Provider 和固定 Node 等参数。随机测试根随该次实验产物单独保存，仅供隔离测试环境。容器格式与低层参数见[插件打包说明](../../../clients/runtime-plugin-packaging/README.md)。
 
 ## 7. 验包与证据
 

@@ -97,7 +97,7 @@ wechat_mp 余额不足跳过 item_id=16803 tenant_id=wmp_test_7904e21f320c
 ```
 
 - **现象**：09-16 15:10~15:41 集中 5 条（两波：15:10 两连发、15:36 两连发 + 15:41 一条），成对出现像同一用户重发语音。HTTP 400 说明请求参数/音频格式有问题（非限流）。
-- **关注点**：与生产审计 #7（09-16 单条）同日出现，且记忆中 [aliyun-asr-accesskey-renewal.md](aliyun-asr-accesskey-renewal.md) 提示 ASR 凭据曾续期——需确认测试环境 ASR 凭据/参数是否与生产不同步。
+- **关注点**：与生产审计 #7（09-16 单条）同日出现，且记忆中 [aliyun-asr-accesskey-renewal.md](../guides/deployment/aliyun-asr-accesskey-renewal.md) 提示 ASR 凭据曾续期——需确认测试环境 ASR 凭据/参数是否与生产不同步。
 - **处理建议**：核对 09-16 当天 wecom_kf 语音消息的格式（amr/silk 转码链路）与 ASR accesskey 状态；确认是否用户语音过短/空音频导致 400。若属音频格式问题，补转码兜底并细化报错。
 
 ### 8. 知识库 Word 文档内容不合法拒绝（5 条）【低，不改】

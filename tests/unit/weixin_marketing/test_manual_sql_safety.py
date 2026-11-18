@@ -4,7 +4,7 @@
 'desktop_automation'` 为底座共享类型，微信回滚会误取消同租户其他场景（如
 boss.chat_reply.v1）的排队任务与许可。
 
-防漂移设计：测试**直接从 docs/ops/weixin-marketing-rollout.md 提取 ```sql 块**
+防漂移设计：测试**直接从 docs/guides/deployment/weixin-marketing-rollout.md 提取 ```sql 块**
 执行（占位符 <tid> 替换为真实测试租户），保证被验证的 SQL 与文档永远一致——
 手册改动即测试对象改动。断言：微信场景 queued invocation 被取消、他场景
 queued invocation 与许可不受影响。
@@ -20,7 +20,7 @@ pytestmark = pytest.mark.unit
 from src.db.database import get_db_connection
 from src.local_tools import repository as lt_repository
 
-_MANUAL = Path(__file__).parents[3] / "docs" / "ops" / "weixin-marketing-rollout.md"
+_MANUAL = Path(__file__).parents[3] / "docs" / "guides" / "deployment" / "weixin-marketing-rollout.md"
 
 
 def _manual_sql_blocks() -> list:

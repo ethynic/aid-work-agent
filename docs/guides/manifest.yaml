@@ -1,0 +1,15 @@
+# 教程文档分类清单
+# docs/guides/ 文档中心（Portal「使用教程」页）的数据源之一：
+# 后端 src/api/guides.py 扫描本目录下各分类子目录的 .md 文件，
+# 按本清单的顺序与显示名分组；新增分类时在此登记。
+categories:
+  - dir: deployment
+    name: 部署与运维
+  - dir: channels
+    name: 渠道接入
+  - dir: clients
+    name: 客户端安装与使用
+  - dir: development
+    name: 开发环境与工具
+  - dir: operations
+    name: 管理操作

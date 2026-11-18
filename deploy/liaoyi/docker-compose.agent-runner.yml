@@ -7,7 +7,7 @@
 #
 # ⚠️ 红线：本文件只是部署配置。执行 up/down/restart/recreate 即激活 AgentRunner 接线并变更
 # 用户环境（configs/config.yaml 为三环境共享挂载，agent_runner.enabled 当前为本地验证态 true），
-# 一切启动/回退都必须由用户当场明确授权后按 deploy/agent-runner-deploy-checklist.md 执行。
+# 一切启动/回退都必须由用户当场明确授权后按 docs/guides/deployment/agent-runner-deploy-checklist.md 执行。
 #
 # 2026-11-13 重工具服务化（docs/system/runner-heavy-tool-service-design.md §6/§9）：
 #   - 原 light/general 双池合并为单一 runner-worker 服务
@@ -106,7 +106,7 @@ x-runner-worker: &runner-worker
 services:
   # AgentRunner 独立 API（bootstrap 入口）：接单/事件/控制 HTTP 面，不执行任务。
   # 与主 API/worker 共享数据库与 storage 挂载；不迁移、不建表（启动仅 assert_schema 断言，
-  # 建表走 deploy/db_update.yaml，见 deploy/agent-runner-deploy-checklist.md 前置①）。
+  # 建表走 deploy/db_update.yaml，见 docs/guides/deployment/agent-runner-deploy-checklist.md 前置①）。
   runner-api:
     build:
       context: .

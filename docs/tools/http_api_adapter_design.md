@@ -719,7 +719,7 @@ OAUTH_CLIENT_SECRET=xxx
 
 | 任务 | 说明 | 状态 |
 |------|------|------|
-| 2.1 编写 Skill 开发者指南 | 教用户如何创建使用 http_api 的 Skill | ✅ `docs/http_api_skill_developer_guide.md` |
+| 2.1 编写 Skill 开发者指南 | 教用户如何创建使用 http_api 的 Skill | ✅ `docs/guides/development/http_api_skill_developer_guide.md` |
 
 ### Phase 3：高级功能（按需）
 
@@ -741,7 +741,7 @@ OAUTH_CLIENT_SECRET=xxx
 | `src/tools/network/__init__.py` | 网络工具包初始化 | ✅ |
 | `src/tools/network/http_api.py` | 通用 HTTP API 工具实现（含文件上传） | ✅ |
 | `tests/unit/tools/test_http_api.py` | 工具单元测试（34 个用例） | ✅ |
-| `docs/http_api_skill_developer_guide.md` | Skill 开发者指南 | ✅ |
+| `docs/guides/development/http_api_skill_developer_guide.md` | Skill 开发者指南 | ✅ |
 
 ### 修改文件
 

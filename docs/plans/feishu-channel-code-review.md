@@ -1,6 +1,6 @@
 # 飞书渠道接入 - 代码审核报告
 
-> 审核对象：`docs/channel/feishu/integration_guide.md` 及对应实现
+> 审核对象：`docs/guides/channels/integration_guide.md` 及对应实现
 > 审核日期：2026-06-19
 > 审核范围：`src/channels/feishu/` 全部模块 + `src/saas/api/channel_routes.py` 飞书回调 + `src/saas/api/channel_config.py` 飞书配置项 + `src/saas/services/channel_factory.py`
 

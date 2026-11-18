@@ -5,7 +5,7 @@
 - 本篇覆盖入口、配对、能力、普通调用、取消、断线与恢复。
 - [插件通信与管理](runtime-master-plugin-communication-20261111.md)覆盖离线安装、MCP 进程、工具名单、发现、回执、运行资源与插件直连服务端。
 - [端侧会话任务与企微服务端编排](runtime-master-session-communication-20261111.md)覆盖独立领取通道、v2 写许可、冻结正文和企微后台调用。
-- 相关规范与历史交付见[共同集成契约](../system/runner-desktop-runtime-integration-contract.md)、[插件宿主架构](../system/runtime-plugin-host-architecture-design.md)、[开发计划](../plans/plan-runtime-plugin-host.md)和[打包手册](../ops/runtime-boss-release-guide.md)。本文以实际调用点和 SQL 为准。
+- 相关规范与历史交付见[共同集成契约](../system/runner-desktop-runtime-integration-contract.md)、[插件宿主架构](../system/runtime-plugin-host-architecture-design.md)、[开发计划](../plans/plan-runtime-plugin-host.md)和[打包手册](../guides/deployment/runtime-boss-release-guide.md)。本文以实际调用点和 SQL 为准。
 
 ## 1. 入口与传输边界
 

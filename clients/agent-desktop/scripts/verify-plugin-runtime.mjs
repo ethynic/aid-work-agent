@@ -42,7 +42,7 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     if (args.includes('--output')) writeFileSync(option('--output'), JSON.stringify(report, null, 2) + '\n')
     console.log(JSON.stringify(report))
   } catch (error) {
-    console.error(`目标 Runtime 不能使用此 ${provider} 插件：${error.message}。配套出包见 docs/ops/runtime-boss-release-guide.md。`)
+    console.error(`目标 Runtime 不能使用此 ${provider} 插件：${error.message}。配套出包见 docs/guides/deployment/runtime-boss-release-guide.md。`)
     process.exitCode = 1
   }
 }

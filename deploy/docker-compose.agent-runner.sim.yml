@@ -7,7 +7,7 @@
 #
 # sim.sh / agent1_update.sh 检测到本文件（根级副本）存在时自动叠加并管理
 # runner 服务；删除根级副本即回到「仅 api 容器」形态。
-# 部署前提与核查项见 deploy/agent-runner-deploy-checklist.md。
+# 部署前提与核查项见 docs/guides/deployment/agent-runner-deploy-checklist.md。
 #
 # 与生产 overlay（docker-compose.agent-runner.yml）的差异：
 #   - restart: on-failure（仿真按需启停，异常退出后重建干净槽位）
@@ -28,7 +28,7 @@
 #   （http://aid-runner-api1:8091 / http://aid-runner-api:8091）；
 #   本文件服务名带 -sim 后缀属仓库级根治，勿改回与服务别名撞名。
 #
-# ⚠️ 前提（deploy/agent-runner-deploy-checklist.md）：runner-api/worker 启动仅
+# ⚠️ 前提（docs/guides/deployment/agent-runner-deploy-checklist.md）：runner-api/worker 启动仅
 #   assert_schema 断言五张 agent_runner* 表（不建表），缺表以
 #   AGENT_RUNNER_SCHEMA_REQUIRED 失败退出；worker 启动门槛要求
 #   agent_runner.enabled=true 且全部 peer 均有 token_hash（configs/config.yaml）。

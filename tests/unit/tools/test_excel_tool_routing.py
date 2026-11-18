@@ -451,7 +451,7 @@ async def test_fill_template_routed_with_flat_data_heals_in_one_roundtrip(tmp_pa
 
 # =============================================================================
 # to_md 落盘闭环（Phase 6：全文不再回塞）
-# 契约：docs/tools/tool-development-spec.md §1.3 —— 全文类 > 5000 字符
+# 契约：docs/guides/development/tool-development-spec.md §1.3 —— 全文类 > 5000 字符
 # 必须调 spill_large_content 落盘，返回 preview + 专属落盘键 + truncated + full_size
 # （markdown_file_path，file_path 只留给产物类操作，对齐 pdf 样板）
 # =============================================================================
