@@ -232,6 +232,30 @@
             </div>
           </div>
 
+          <!-- 附件上传开关（默认关：纯文字聊天） -->
+          <div class="flex items-start gap-2">
+            <input
+              id="webc-allow-attachment"
+              type="checkbox"
+              v-model="form.config.allow_attachment"
+              class="mt-1 w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+            />
+            <label for="webc-allow-attachment" class="text-sm text-default cursor-pointer">允许访客发送附件</label>
+            <p class="text-xs text-muted">默认关闭，聊天页仅支持纯文字；开启后访客可上传文件/图片（单次最多 10 个，单个 20MB）</p>
+          </div>
+
+          <!-- 历史会话入口开关（默认关：不显示右上角按钮） -->
+          <div class="flex items-start gap-2">
+            <input
+              id="webc-show-history"
+              type="checkbox"
+              v-model="form.config.show_history"
+              class="mt-1 w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+            />
+            <label for="webc-show-history" class="text-sm text-default cursor-pointer">显示历史会话入口</label>
+            <p class="text-xs text-muted">默认关闭，聊天页右上角不显示「历史会话」按钮；开启后匿名身份可查看本浏览器历史会话</p>
+          </div>
+
           <!-- 集成代码 -->
           <div class="bg-canvas rounded-lg p-3">
             <div class="text-sm font-medium text-default mb-2">集成代码（保存后复制）</div>
@@ -1325,6 +1349,10 @@ function selectChannelType(type: string) {
     if (!form.value.config.identity_mode) form.value.config.identity_mode = 'both'
     if (form.value.config.channel_secret === undefined) form.value.config.channel_secret = ''
     if (form.value.config.enabled === undefined) form.value.config.enabled = true
+    // 附件上传开关：checkbox 绑定需显式初值（默认关，纯文字聊天）
+    if (form.value.config.allow_attachment === undefined) form.value.config.allow_attachment = false
+    // 历史会话入口开关：checkbox 绑定需显式初值（默认关）
+    if (form.value.config.show_history === undefined) form.value.config.show_history = false
   }
   // WP13：切到公众号类型时加载清单源绑定状态（v1 每租户仅一个扫码绑定，
   // 新建弹窗同样展示既有绑定）
