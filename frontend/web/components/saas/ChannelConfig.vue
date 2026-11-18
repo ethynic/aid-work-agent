@@ -282,27 +282,23 @@
 
           <!-- 签名算法说明（ext 模式） -->
           <details class="bg-canvas rounded-lg p-3">
-            <summary class="text-sm font-medium text-default cursor-pointer">签名链接算法说明（官网有登录体系时必读）</summary>
+            <summary class="flex items-center justify-between cursor-pointer text-sm font-medium text-default">
+              <span>签名链接算法说明（官网有登录体系时必读）</span>
+              <BaseButton size="sm" intent="ghost" @click.stop.prevent="copyWebCSignDoc">复制MD</BaseButton>
+            </summary>
             <div class="mt-2 text-xs text-muted space-y-2">
               <p>签名必须在<b class="text-default">官网服务端</b>生成（官网有登录体系即有服务端；前端 JS 内嵌密钥等于没有签名，任何人都可伪造身份读取他人会话）。无法做服务端签名的官网请使用匿名模式。</p>
               <p>链接形态：<code class="font-mono">/c/{tenant_id}/{config_id}?u={userid}&amp;name={urlencode(昵称)}&amp;ts={unix秒}&amp;sig={签名}</code></p>
-              <p>签名算法：<code class="font-mono">sig = HMAC-SHA256(key=channel_secret, message=f"{u}.{ts}.{name}")</code> hex 小写；name 可缺省（缺省时签名串用空串）；ts 与服务端时间差 ≤ 24 小时。</p>
-              <pre class="bg-surface border border-default rounded p-2 font-mono text-[11px] overflow-x-auto text-default">Python:
-import hmac, hashlib, time, urllib.parse
-def sign_url(base, tenant_id, config_id, secret, userid, name=""):
-    ts = int(time.time())
-    sig = hmac.new(secret.encode(), f"{userid}.{ts}.{name}".encode(), hashlib.sha256).hexdigest()
-    name_q = urllib.parse.quote(name)
-    return f"{base}/c/{tenant_id}/{config_id}?u={userid}&amp;name={name_q}&amp;ts={ts}&amp;sig={sig}"
-
-Node.js:
-const crypto = require('crypto');
-const ts = Math.floor(Date.now() / 1000);
-const sig = crypto.createHmac('sha256', secret).update(`${'$'}{userid}.${'$'}{ts}.${'$'}{name}`).digest('hex');
-
-PHP:
-$ts = time();
-$sig = hash_hmac('sha256', "{$userid}.{$ts}.{$name}", $secret);</pre>
+              <p>签名算法：<code class="font-mono">sig = HMAC-SHA256(key=channel_secret, message="{userid}.{ts}.{name}")</code> hex 小写；name 可缺省（缺省时签名串用空串）；ts 与服务端时间差 ≤ 24 小时。</p>
+              <div class="bg-surface border border-default rounded p-2">
+                <p class="font-medium text-default mb-1">本渠道占位符实际取值（替换后即可使用）：</p>
+                <ul class="list-disc list-inside space-y-0.5">
+                  <li><code class="font-mono">{tenant_id}</code> = 当前租户 <code class="font-mono text-default">{{ tenantId }}</code></li>
+                  <li><code class="font-mono">{config_id}</code> = 当前渠道 <code class="font-mono text-default">{{ editingId }}</code></li>
+                  <li><code class="font-mono">channel_secret</code>（即上方「签名密钥」字段）= <code class="font-mono break-all whitespace-normal">{{ form.config.channel_secret || '保存配置后由服务端生成' }}</code></li>
+                </ul>
+              </div>
+              <pre class="bg-surface border border-default rounded p-2 font-mono text-[11px] overflow-x-auto text-default whitespace-pre-wrap">{{ webCSignSamples }}</pre>
             </div>
           </details>
         </div>
@@ -1883,6 +1879,57 @@ function copyWebCSecret() {
     return
   }
   copyText(secret, '签名密钥')
+}
+
+// web_c 签名说明：示例代码（页面展示与「复制MD」共用一份，占位符统一为 {userid} / channel_secret）
+const webCSignSamples = `Python:
+import hmac, hashlib, time, urllib.parse
+def sign_url(base, tenant_id, config_id, channel_secret, userid, name=""):
+    ts = int(time.time())
+    sig = hmac.new(channel_secret.encode(), f"{userid}.{ts}.{name}".encode(), hashlib.sha256).hexdigest()
+    name_q = urllib.parse.quote(name)
+    return f"{base}/c/{tenant_id}/{config_id}?u={userid}&name={name_q}&ts={ts}&sig={sig}"
+
+Node.js:
+const crypto = require('crypto');
+const ts = Math.floor(Date.now() / 1000);
+const sig = crypto.createHmac('sha256', channel_secret).update(\`\${userid}.\${ts}.\${name}\`).digest('hex');
+
+PHP:
+$ts = time();
+$sig = hash_hmac('sha256', "{$userid}.{$ts}.{$name}", $channel_secret);`
+
+// 复制签名算法说明为 Markdown（含本渠道实际取值，租户管理员可粘贴到文本文件交给官网开发）
+function copyWebCSignDoc() {
+  const secret = form.value.config.channel_secret || '（保存配置后由服务端生成）'
+  const cfg = editingId.value || '（保存配置后生成）'
+  const md = [
+    '# 官网客服 签名链接算法说明',
+    '',
+    '签名必须在官网服务端生成（官网有登录体系即有服务端；前端 JS 内嵌密钥等于没有签名，任何人都可伪造身份读取他人会话）。无法做服务端签名的官网请使用匿名模式。',
+    '',
+    '## 链接形态',
+    '',
+    '`/c/{tenant_id}/{config_id}?u={userid}&name={urlencode(昵称)}&ts={unix秒}&sig={签名}`',
+    '',
+    '## 占位符实际取值（本渠道）',
+    '',
+    `- \`{tenant_id}\` = 当前租户 \`${tenantId.value}\``,
+    `- \`{config_id}\` = 当前渠道 \`${cfg}\``,
+    `- \`channel_secret\`（签名密钥）= \`${secret}\``,
+    '',
+    '## 签名算法',
+    '',
+    '`sig = HMAC-SHA256(key=channel_secret, message="{userid}.{ts}.{name}")`，hex 小写；name 可缺省（缺省时签名串用空串）；ts 与服务端时间差 ≤ 24 小时。',
+    '',
+    '## 示例代码',
+    '',
+    '```',
+    webCSignSamples,
+    '```',
+    '',
+  ].join('\n')
+  copyText(md, '签名算法说明MD')
 }
 
 async function rotateWebCSecretKey() {
