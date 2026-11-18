@@ -18,6 +18,7 @@ class TerminalParameters(StrictDTO):
     # 带入供企微 textcard 渲染耗时；0 表示时长未知（未开始执行即终态），渲染
     # 侧兜底不显示。存量事件缺省该字段，其他渠道渲染不读取（可选不破坏）。
     duration_seconds: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    recovery_summary: str | None = Field(default=None, min_length=1, max_length=420)
     # scheduled 终态扩展（Phase 3 复核，设计 §8.2）：任务标识/名称与目标
     # 快照；chat 来源缺省（可选字段，白名单不放宽 extra 校验）。
     # notify_rule_id 为任务选用通知规则的快照（规则优先，notify_target_id
@@ -32,6 +33,12 @@ class TerminalParameters(StrictDTO):
     daily_report_link: str | None = Field(default=None, min_length=1, max_length=512)
     daily_report_summary: str | None = Field(default=None, min_length=1, max_length=200)
     daily_report_missing: str | None = Field(default=None, min_length=1, max_length=200)
+
+    def model_dump(self, **kwargs):
+        parameters = super().model_dump(**kwargs)
+        if self.recovery_summary is None:
+            parameters.pop('recovery_summary', None)
+        return parameters
 
 
 class WaitingInputParameters(StrictDTO):
@@ -256,7 +263,8 @@ def render_inbox_text(event_type, parameters):
                     body += f'\n查看日报：{parameters["daily_report_link"]}'
             return '定时任务执行结果', body
         name = parameters.get('task_name') or parameters['session_title']
-        return '任务执行结果', f'「{name}」中的任务{outcome}。'
+        summary = parameters.get('recovery_summary') or ''
+        return '任务执行结果', f'「{name}」中的任务{outcome}。{summary}'
     if event_type == 'task.manual_rejected':
         return '手动执行未成功', (
             f'「{parameters["task_name"]}」的「立即执行一次」未提交成功：'

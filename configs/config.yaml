@@ -523,6 +523,8 @@ agent_runner:
   web_enabled: true
   # 同池 API/worker 全部升级并完成隔离验收后才显式开启。
   durable_sleep_enabled: false
+  # 原 invocation 所属插件。留空时沿用已有恢复流程。
+  auto_local_recovery_providers: ["boss-recruiting"]
   api_url: "http://127.0.0.1:8091"
   web_service_id: "web"
   peers:

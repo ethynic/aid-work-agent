@@ -39,6 +39,7 @@ class Workers:
             "AGENT_RUNNER_ENABLED": "true", "AGENT_RUNNER_SERVICE_ID": api.service_id,
             "AGENT_RUNNER_WEB_SERVICE_TOKEN": api._service_token,
             "AGENT_RUNNER_SERVICE_SOURCES": "chat,wecom_kf,feishu,dingtalk",
+            "AGENT_RUNNER_AUTO_LOCAL_RECOVERY_PROVIDERS": "",
             "AGENT_RUNNER_RESOURCE_DIR": str(self.root), "AGENT_RUNNER_STORAGE_ROOT": str(self.storage),
             "REDIS_ENABLED": "false"}
 

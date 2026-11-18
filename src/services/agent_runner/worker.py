@@ -324,6 +324,8 @@ class RunnerWorker:
         self._recovery_scan_after = 0
         self._timer_scan_after = 0
         self._continuous_scan_after = 0
+        self._auto_local_scan_after = 0
+        self._auto_local_scan_at = 0.0
         self._acquisition_turn = 0
         self._memory_limit = None
         self._memory_warn_at = 0.0
@@ -455,6 +457,7 @@ class RunnerWorker:
         if self.slot_state is not None:
             self.slot_state.busy(attempt)
         control = DurableControl(self.executions,attempt,row)
+        control.auto_local_recovery_providers = getattr(self.config, "auto_local_recovery_providers", ())
         scope = UsageScope(attempt,self.usage,row['runner_id'])
         started = time.monotonic()
         guard = Path(self.factory.resource_directory)/'guards'/f"{row['runner_id']}.{row['attempt']}.failure"
@@ -649,6 +652,11 @@ class RunnerWorker:
                         if not await self._await_cancel_completion(attempt, control, state):
                             return
                     result = execution_result(state,'cancelled' if control.cancel_requested else None)
+                    from .auto_local_recovery import active_failure, failure_summary
+                    failure = active_failure(control.envelope) if not control.cancel_requested else None
+                    if failure:
+                        result.update(status='failed', error_code=failure['code'],
+                            output=failure_summary(failure, control.envelope))
                     result['duration_ms'] = int((time.monotonic()-started)*1000)
                     result['assistant_metadata'] = copy.deepcopy(control.envelope.get('presentation') or {})
                     staged=await control.stage(state,result)
@@ -986,6 +994,12 @@ class RunnerWorker:
             self._cancel_scan_after = await asyncio.to_thread(release_ready_cancellations,
                 self.repository.connection_factory,after_queue_order=self._cancel_scan_after)
             self._cancel_ready_scan_at = time.monotonic()+10.0
+        providers = getattr(self.config, 'auto_local_recovery_providers', ())
+        if providers and time.monotonic() >= self._auto_local_scan_at:
+            from .auto_local_recovery import advance_waiting
+            self._auto_local_scan_after = await advance_waiting(
+                self.repository, self.authorizer, providers, self._auto_local_scan_after)
+            self._auto_local_scan_at = time.monotonic() + self.config.poll_seconds
         if not getattr(self.config,'durable_sleep_enabled',False):
             return await self._acquire_controls() or await self._acquire_queued()
         priority=getattr(self.executions,'acquire_priority',None)
@@ -1085,6 +1099,9 @@ class RunnerWorker:
                     continue
                 await asyncio.to_thread(recovery.reject_resume,row['runner_id'],revision=row['revision'],
                     control_id=row['resume_control_id'],error_code=error.code)
+                from .auto_local_recovery import fail_automatic_resume
+                await asyncio.to_thread(fail_automatic_resume, self.repository.connection_factory,
+                    row['runner_id'], row['resume_control_id'], error.code)
         return None
 
     async def _acquire_timers(self):

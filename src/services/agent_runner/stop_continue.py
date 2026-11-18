@@ -16,7 +16,7 @@ from .ownership import lock_runner
 from .repository import decoded
 
 
-def dispatch_continue_resume_in_tx(cursor, runner, checkpoint):
+def dispatch_continue_resume_in_tx(cursor, runner, checkpoint, *, automatic_key=None):
     """Write one accepted resume control under the caller's runner FOR UPDATE lock.
 
     Called only from the stop-valid receipt transaction after the scope merged
@@ -29,8 +29,11 @@ def dispatch_continue_resume_in_tx(cursor, runner, checkpoint):
     while an accepted in-flight orchestration stays idempotent.
     """
     from .local_recovery import _cancel_facts
-    if (checkpoint.get('local_verification') or {}).get('continue_after_stop') is not True:
-        return False
+    if automatic_key is None:
+        verification = checkpoint.get('local_verification') or {}
+        if verification.get('continue_after_stop') is not True:
+            return False
+        automatic_key = verification.get('automatic_key')
     row = lock_runner(cursor, runner['runner_id'])
     if (row['status'] not in ('waiting', 'paused', 'interrupted') or row['cancel_requested']
             or row['source'] != 'chat' or row.get('resume_control_id')
@@ -46,7 +49,18 @@ def dispatch_continue_resume_in_tx(cursor, runner, checkpoint):
         if (fact.get('kind') == 'local' and not fact['completion_known']
                 and str(fact['id']) not in verified):
             return False
-    request_prefix = row['runner_id'] + ':continue-after-stop'
+    if automatic_key is not None:
+        from .auto_local_recovery import CHECKPOINT_KEY, owned_recovery_invocation, trusted_local_success
+        from datetime import datetime
+        marker = (checkpoint.get(CHECKPOINT_KEY) or {}).get(automatic_key) or {}
+        if marker.get('status') not in {'working','waiting','observing'} or not marker.get('deadline'):
+            return False
+        cursor.execute('SELECT clock_timestamp() AS now')
+        if (cursor.fetchone()['now'] >= datetime.fromisoformat(marker['deadline'])
+                and not trusted_local_success(owned_recovery_invocation(cursor, row, marker))):
+            return False
+    request_prefix = ('auto-local:' + automatic_key if automatic_key is not None
+                      else row['runner_id'] + ':continue-after-stop')
     cursor.execute('''SELECT status FROM agent_runner_controls
         WHERE runner_id=%s AND left(client_request_id,%s)=%s''',
         (row['runner_id'], len(request_prefix), request_prefix))

@@ -124,10 +124,16 @@ class LocalToolAdapter:
                     result = await materialize_attachment(result, tool_args, tenant_id=tenant_id,
                         user_id=user_id, tool_call_id=context.tool_call_id,
                         state=self.state, assembler=self.attachments)
+                if owner is not None and isinstance(result, dict):
+                    from ..auto_local_recovery import note_unbound_failure
+                    await note_unbound_failure(owner, getattr(tool, 'provider_key', None), result)
                 from src.local_tools.execution_receipts import project_execution_receipt
                 result = await project_execution_receipt(result, tool_name=tool_name, context=context)
                 yield ("result", result)
             except LocalContinuationRequired as error:
+                if owner is not None:
+                    from ..auto_local_recovery import note_verification
+                    await note_verification(owner, getattr(tool, 'provider_key', None), error)
                 yield ("verification", {"kind":"verification", "error_code":error.code,
                     "invocation_id":error.invocation_id, "tool_call_id":context.tool_call_id})
         finally:

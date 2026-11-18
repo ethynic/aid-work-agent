@@ -118,7 +118,8 @@ class RunnerLocalLifecycle:
 
     async def bind_invocation(self, *, branch, ordinal, tool_name, device, arguments,
                               provider_key=None, deadline_at=None, authorization_epoch=None,
-                              execution_lane='standard'):
+                              execution_lane='standard', recovery_deadline=None,
+                              automatic_provider=None, recovery_key=None):
         """New IO uses fresh permission; existing phase never picks a new device."""
         phase = self._phase(branch, ordinal)
         try:
@@ -141,11 +142,16 @@ class RunnerLocalLifecycle:
                     device_id=str(device['id']), tool_name=tool_name, arguments=arguments,
                     provider_key=provider_key, deadline_at=deadline_at,
                     authorization_epoch=authorization_epoch, execution_lane=execution_lane,
+                    **({'recovery_deadline': recovery_deadline, 'recovery_key': recovery_key}
+                       if recovery_deadline is not None else {}),
+                    **({'automatic_provider': automatic_provider} if automatic_provider else {}),
                     device_policy=lambda current, now: device_ready_error(current, tool_name, now))
                 self._accept(row)
             original = await self.saved_phase(branch=branch, ordinal=ordinal)
             return original['invocation']
         except BaseException as error:
+            if isinstance(error, LocalDispatchRejected) and recovery_deadline is not None:
+                raise error.reason
             if isinstance(error, LocalDispatchRejected):
                 # The binding repository proved rollback; persist convergence
                 # with the same owner CAS before exposing a business result.

@@ -225,13 +225,18 @@ class LocalRecoveryProof:
                 continue
             phase = LocalPhase(state.execution_id,fact.call.id,ref['branch'],ref['ordinal'])
             request = ref.get('request') or {}
+            from .auto_local_recovery import RETRY_LIMIT, retry_branch
+            original_phase = LocalPhase(state.execution_id, fact.call.id, 'main', 0)
+            automatic = (ref['branch'] == retry_branch(original_phase, row['runner_id'])
+                         and 1 <= ref['ordinal'] <= RETRY_LIMIT)
             inbound = ref['branch'].startswith('wecom.inbound.') and cls.provider_key == 'wecom'
             resolving = ref['branch'] == RESOLVE_BRANCH and named_send(cls.name,requested_arguments)
-            if (key!=phase.key(row['runner_id']) or ref['ordinal']!=0
-                    or request.get('tool_name')!=('wecom_read_session' if inbound or resolving else allowed.get(ref['branch']))
+            if (key!=phase.key(row['runner_id']) or ref['ordinal']!=0 and not automatic
+                    or request.get('tool_name')!=('wecom_read_session' if inbound or resolving
+                        else cls.name if automatic else allowed.get(ref['branch']))
                     or request.get('device_id')!=original_device
                     or resolving and not validate_resolve_phase(requested_arguments,ref)
-                    or ref['branch'] in {'main','heal.retry'} and request.get('arguments')!=arguments
+                    or (automatic or ref['branch'] in {'main','heal.retry'}) and request.get('arguments')!=arguments
                     or ref['branch']=='heal.inspect' and request.get('arguments')!={}):
                 raise RunnerError('LOCAL_INVOCATION_OWNER_VERIFICATION_REQUIRED',409)
             invocation = repository.get_invocation(ref['invocation_id'],row['tenant_id'])

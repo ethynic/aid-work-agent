@@ -210,6 +210,8 @@ class WecomAppAdapter:
                            else '任务已执行完成，点击查看结果。')
             return f'{session}相关任务已完成', description
         if event_type == 'task.failed':
+            if summary := parameters.get('recovery_summary'):
+                return f'{session}相关任务执行失败', summary
             description = (f'任务已执行 {duration} 后失败，点击查看结果。' if duration
                            else '任务执行失败，点击查看结果。')
             return f'{session}相关任务执行失败', description

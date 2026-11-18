@@ -1,7 +1,7 @@
 """Explicit Host observation, separate from restoring an unknown business action."""
 
 from uuid import uuid4
-from datetime import timedelta
+from datetime import datetime, timedelta
 from .contracts import RunnerError
 from .ownership import lock_runner
 from .persistence_limits import capped_checkpoint_dumps
@@ -59,7 +59,7 @@ def stop_continue_admission(cursor, row, ids, *, capability, fence, online):
     return originals, device, provider, device_id
 
 
-def _continue_settled_scope(connection, cursor, row, checkpoint, request_id, scope):
+def _continue_settled_scope(connection, cursor, row, checkpoint, request_id, scope, automatic_key=None):
     """R9 修复2（契约「停止与接续」）：点击时 scope 原调用已全部完成判定成立
     （可信回执先到）——停止无需派发（与 R8 superseded 同一语义：可信终态回执本身
     证明执行已停稳），直接执行与停稳回执同一事务语义的接续编排。
@@ -75,6 +75,8 @@ def _continue_settled_scope(connection, cursor, row, checkpoint, request_id, sco
     binding = {'runner_id': row['runner_id'], 'version': 3, 'scope_id': str(uuid4()),
         'request_id': request_id, 'original_invocation_ids': scope, 'device_id': devices[0],
         'continue_after_stop': True}
+    if automatic_key is not None:
+        binding['automatic_key'] = automatic_key
     checkpoint['local_verification'] = {**binding, 'invocation_id': None, 'state': 'succeeded',
         'resource_stopped': True, 'page_observed': False, 'stop_error_code': None,
         'page_summary': None, 'target_relation': None, 'error_code': None}
@@ -102,7 +104,7 @@ def _continue_settled_scope(connection, cursor, row, checkpoint, request_id, sco
 
 
 def verify_local(repository, principal, runner_id, request_id, *, stop_resources=False,
-                 continue_after_stop=False):
+                 continue_after_stop=False, automatic_key=None):
     from src.local_tools import repository as local
     from .local_recovery import _cancel_facts
     if continue_after_stop and not stop_resources:
@@ -113,6 +115,17 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
         row = lock_runner(cursor, runner_id)
         repository.assert_owner(principal, row)
         checkpoint = row.get('checkpoint') or {}
+        automatic_deadline = None
+        if automatic_key is not None:
+            from .auto_local_recovery import CHECKPOINT_KEY
+            marker = (checkpoint.get(CHECKPOINT_KEY) or {}).get(automatic_key) or {}
+            if (marker.get('status') not in {'waiting', 'observing'} or not marker.get('deadline')
+                    or row.get('resume_control_id') or row.get('pause_requested')):
+                raise RunnerError('LOCAL_VERIFICATION_NOT_READY', 409)
+            automatic_deadline = datetime.fromisoformat(marker['deadline'])
+            cursor.execute('SELECT clock_timestamp() AS now')
+            if cursor.fetchone()['now'] >= automatic_deadline:
+                raise RunnerError('LOCAL_RECOVERY_DEADLINE', 409)
         # 设备核对入口对 scheduled 开放（设计 §5.3：非提问类等待保留既有
         # 生命周期，任务属主可处理设备确认/人工辅助），归属检查不变
         if row['session_kind'] != 'web' or row['source'] not in ('chat', 'scheduled'):
@@ -169,7 +182,7 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
                     if fact.get('kind') == 'local' and fact.get('holdable'))
                 if scope:
                     settled = _continue_settled_scope(connection, cursor, row, checkpoint,
-                        request_id, scope)
+                        request_id, scope, automatic_key=automatic_key)
                     if settled is not None:
                         return settled
             # A late receipt may settle the hold after the page rendered its button.
@@ -235,8 +248,12 @@ def verify_local(repository, principal, runner_id, request_id, *, stop_resources
             'original_invocation_ids': ids, 'device_id': device_id}
         if continue_after_stop:
             binding['continue_after_stop'] = True
+        if automatic_key is not None:
+            binding['automatic_key'] = automatic_key
         cursor.execute('SELECT clock_timestamp() AS database_now')
         deadline = cursor.fetchone()['database_now'] + timedelta(minutes=5)
+        if automatic_deadline is not None:
+            deadline = min(deadline, automatic_deadline)
         invocation_id = local.create_invocation_in_tx(cursor, row['tenant_id'], row['user_id'],
             device_id, 'runtime_recovery_observe', arguments, row['session_id'],
             provider_key='runtime-recovery', business_kind='agent_runner_recovery',
