@@ -421,13 +421,7 @@ class WebCEventResponse(ObserverResponse):
 
 async def _ensure_user_and_session(identity: WebCIdentity) -> tuple:
     """首次出现身份时创建 users 记录（source=web_c）+ 渠道会话。"""
-    from src.saas.services.auto_register import ensure_user_registered
-
-    user_info = {"name": identity.display_name} if identity.display_name else None
-    user_id = await ensure_user_registered(
-        "web_c", identity.channel_user_id, identity.tenant_id,
-        user_info=user_info, source="web_c",
-    )
+    user_id = await _ensure_web_c_user(identity)
     session = await asyncio.to_thread(
         channel_session_manager.get_or_create_session,
         "web_c", identity.channel_user_id, identity.tenant_id,
@@ -435,6 +429,40 @@ async def _ensure_user_and_session(identity: WebCIdentity) -> tuple:
         None, None, identity.subagent_type or "",
     )
     return user_id, session
+
+
+async def _ensure_web_c_user(identity: WebCIdentity) -> str:
+    """确保 web_c 身份对应 users 记录存在，返回 user_id。"""
+    from src.saas.services.auto_register import ensure_user_registered
+
+    user_info = {"name": identity.display_name} if identity.display_name else None
+    return await ensure_user_registered(
+        "web_c", identity.channel_user_id, identity.tenant_id,
+        user_info=user_info, source="web_c",
+    )
+
+
+def _create_extra_session_sync(identity: WebCIdentity, user_id: str) -> dict:
+    """创建 web_c 身份的额外会话（「新会话」按钮，首条消息发送时惰性创建）。
+
+    session_id 须满足归属前缀 {tenant}_web_c_{uid}_（_assert_session_owned 校验），
+    以 _s{8hex} 后缀与默认会话区分；channel_chat_id 用唯一 token 使
+    get_or_create_session 默认查找（按 chat_id 为空过滤）与缓存 key 均不冲突。
+    """
+    token = f"n_{uuid.uuid4().hex[:8]}"
+    session_id = (
+        f"{identity.tenant_id}_web_c_{identity.channel_user_id}_"
+        f"{identity.subagent_type or ''}_s{uuid.uuid4().hex[:8]}"
+    )
+    return channel_session_manager.create_session(
+        session_id=session_id,
+        channel_type="web_c",
+        channel_user_id=identity.channel_user_id,
+        tenant_id=identity.tenant_id,
+        channel_chat_id=token,
+        user_info={"user_id": user_id, "name": identity.display_name or ""},
+        subagent_id=identity.subagent_type or "",
+    )
 
 
 def _add_user_message(session_id: str, tenant_id: str, text: str,
@@ -527,6 +555,8 @@ class WebCChatRequest(BaseModel):
     text: str = Field(default="", max_length=100_000, description="消息文本")
     client_request_id: str = Field(min_length=8, max_length=128, description="客户端幂等键")
     attachments: List[dict] = Field(default_factory=list, max_length=10, description="上传 ref 数组")
+    session_id: str = Field(default="", max_length=200, description="续聊目标会话（空=默认会话）")
+    new_session: bool = Field(default=False, description="开新会话（首条消息时惰性创建）")
 
     class Config:
         extra = "forbid"
@@ -563,7 +593,15 @@ async def chat(tenant_id: str, config_id: str, body: WebCChatRequest, request: R
     if not text and not refs:
         raise HTTPException(status_code=422, detail="消息内容不能为空")
 
-    user_id, session = await _ensure_user_and_session(identity)
+    user_id = await _ensure_web_c_user(identity)
+    # 会话解析：显式 session_id 续聊（归属校验）> new_session 惰性建新会话 > 默认会话
+    # （多会话模型：一个身份可有多条会话；旧客户端不传两参时行为不变）
+    if body.session_id:
+        session = _assert_session_owned(identity, body.session_id)
+    elif body.new_session:
+        session = await asyncio.to_thread(_create_extra_session_sync, identity, user_id)
+    else:
+        _, session = await _ensure_user_and_session(identity)
     session_id = session["session_id"]
 
     # 用户消息落库（幂等）；附件元数据不含内容，Runner 侧按 file_id 租户域解析。

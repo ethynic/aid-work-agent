@@ -23,6 +23,9 @@ from src.tools.base import BaseTool
 FILL_TEMPLATE_SHAPE_HINT = (
     "当前传入的 data 不含可填充的数据行（rows 为空或不是列表）。两种改法："
     "1) 若要把表格数据填入模板，构造 data={'rows': [{'列名': '值', ...}, ...]} 后重调；"
+    "用户要处理的区块（多档位模板可能只是其中一档）首次即给出完整行"
+    "（包含用户已提供的全部明细行，含附加费/小计类行）与 totals（合计、人均），"
+    "不得虚构用户未提供的行或数值；用户未要求改动的区块保持原样、无需补 data；"
     "2) 若只需填写个别单元格并保留模板其余内容与样式，重新调本工具并改用修改类指令，"
     "instruction 中写明『修改模板』及目标坐标与值，"
     '如 "修改模板：将 B4 单元格填写为2026年11月10日，B5 单元格填写为XX"，'
@@ -80,11 +83,16 @@ class ExcelProcessInput(BaseModel):
                     "形如 {title:\"大标题\", meta:{...}, rows:[{...}], group_subtotals:{...}, totals:{...}}。"
                     "title（可选）为整表大标题，会替换样例的标题格（如 A1）；不传则保留样例原标题。"
                     "**所有值必须是标量（str/int/float/bool），一格一值，不得嵌套 dict/list**："
-                    "totals 形如 {\"grand_total\": 9520, \"per_capita\": {\"成人人均\": 238}}；"
-                    "按列/人数档位分列的合计须拆成独立标量键（如 合计总价_40人: 9520），"
+                    "totals 形如 {\"grand_total\": 9520, \"per_capita\": {\"人均\": 238}}；"
+                    "按列/档位分列的合计须拆成独立标量键（如 合计_档位A: 9520），"
                     "多值明细转为多行放入 rows。"
                     "提供 data + 样例附件(file_paths) 时走智能模板填充：AI 分析样例结构并按版式填入，"
                     "自动处理行数多/少/相等、保留样例样式。"
+                    "**模板含多个档位/多个区块时**：用户要求处理的区块要在首次调用就给出完整数据"
+                    "（把用户已提供的明细行一次性给全，含附加费/小计这类易漏行；合计/人均放 totals），"
+                    "不要只给部分行再分多轮补全，也不得虚构用户未提供的行或数值；"
+                    "用户未要求改动的其他区块保持原样、无需为它们补 data"
+                    "（返回的 unmapped_numeric_rows 列出未覆盖的含数值行，便于确认）。"
                     "**模板填充时数据必须放本字段（不要写进 instruction 文本）；普通数据导出不用本字段。**"
     )
 
@@ -421,7 +429,7 @@ class ExcelProcessTool(BaseTool):
             return {"success": False, "error": analysis.get("error")}
 
         try:
-            return await client.execute(
+            result = await client.execute(
                 tool="excel_process", handler="fill_template_render",
                 params={
                     "template_file": template_path,
@@ -436,6 +444,12 @@ class ExcelProcessTool(BaseTool):
         except HeavyToolUnavailable as e:
             logger.error(f"[ExcelProcess] 重工具服务不可用 fill_template 渲染: {e}")
             return {"success": False, "error": "处理未完成，请稍后重试"}
+        if isinstance(result, dict) and not result.get("success"):
+            # 渲染业务失败（结构绑定错误等）：失效结构缓存，避免 1h TTL 内
+            # 其它调用继续复用同一坏结构（重试自愈能力不能被缓存吃掉）
+            from src.tools.excel.excel_template_ai import invalidate_structure_cache
+            invalidate_structure_cache(template_path, data)
+        return result
 
     def _normalize_input(
         self,
@@ -659,6 +673,12 @@ class ExcelProcessTool(BaseTool):
                         merged["rows_rendered"] = r["rows_rendered"]
                     if r.get("inferred_structure"):
                         merged["inferred_structure"] = r["inferred_structure"]
+                    # 未映射数值行（模板其他档位/区块旧示例）与填充说明必须回给 Agent：
+                    # 否则调用方只能再 read 一次才发现残留，触发整表重填（2026-11-18 聊易事故）
+                    if r.get("unmapped_numeric_rows"):
+                        merged["unmapped_numeric_rows"] = r["unmapped_numeric_rows"]
+                    if r.get("message"):
+                        merged["message"] = r["message"]
                 if op in ("modify", "format"):
                     merged["operations_applied"] = r.get("operations_applied", 0)
                 if op == "export":

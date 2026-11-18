@@ -326,6 +326,10 @@ class ChannelSessionManager:
             if channel_chat_id:
                 lookup_sql += " AND channel_chat_id = %s"
                 lookup_params = (tenant_id, channel_type, channel_user_id, subagent_id, channel_chat_id)
+            else:
+                # 默认会话查找只匹配 chat_id 为空（NULL/空串）的会话：多会话渠道
+                # （web_c 新会话）的额外会话带唯一 chat_id token，不得被默认路径命中
+                lookup_sql += " AND (channel_chat_id IS NULL OR channel_chat_id = '')"
             cursor.execute(lookup_sql, lookup_params)
 
             row = cursor.fetchone()
@@ -410,6 +414,79 @@ class ChannelSessionManager:
                 }
                 set_cached(CacheKeys.CHANNEL_SESSION, *cache_args, value=result, ttl=600)
                 return result
+
+    def create_session(
+        self,
+        *,
+        session_id: str,
+        channel_type: str,
+        channel_user_id: str,
+        tenant_id: str,
+        channel_chat_id: str,
+        user_info: Optional[Dict[str, Any]] = None,
+        subagent_id: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        按显式 session_id 创建渠道会话（多会话渠道用，如 web_c「新会话」）。
+
+        - session_id 由调用方生成并保证唯一（须满足该渠道的归属前缀约定）；
+        - channel_chat_id 必须传唯一 token：与默认 get_or_create 会话区分
+          （默认查找按 chat_id 为空过滤，不会命中本方法创建的会话），
+          同时使缓存 key 按 chat_id 分片、互不覆盖。
+
+        Returns:
+            会话信息字典（含 created_at/updated_at/last_message_at）
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        title = f"{channel_type}会话"
+        if user_info and user_info.get("name"):
+            title = f"{user_info['name']}的{channel_type}会话"
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO channel_sessions
+                (session_id, tenant_id, channel_type, channel_user_id, subagent_id,
+                 channel_chat_id, user_id, username, title, context_data, metadata)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING created_at, updated_at, last_message_at
+            """, (
+                session_id,
+                tenant_id,
+                channel_type,
+                channel_user_id,
+                subagent_id,
+                channel_chat_id,
+                user_info.get("user_id") if user_info else None,
+                user_info.get("name") if user_info else None,
+                title,
+                "{}",
+                json.dumps(metadata, ensure_ascii=False) if metadata else None,
+            ))
+            ts_row = cursor.fetchone()
+            conn.commit()
+
+        result = {
+            "session_id": session_id,
+            "tenant_id": tenant_id,
+            "channel_type": channel_type,
+            "channel_user_id": channel_user_id,
+            "subagent_id": subagent_id,
+            "channel_chat_id": channel_chat_id,
+            "user_id": user_info.get("user_id") if user_info else None,
+            "username": user_info.get("name") if user_info else None,
+            "title": title,
+            "context_data": {},
+            "metadata": metadata,
+            "created_at": ts_row["created_at"],
+            "updated_at": ts_row["updated_at"],
+            "last_message_at": ts_row["last_message_at"],
+        }
+        set_cached(CacheKeys.CHANNEL_SESSION,
+                   *self._session_cache_args(tenant_id, channel_type, channel_user_id,
+                                             subagent_id, channel_chat_id),
+                   value=result, ttl=600)
+        return result
 
     def rebind_existing_session_channel_user(
         self,

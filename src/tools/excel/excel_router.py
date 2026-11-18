@@ -130,7 +130,7 @@ ROUTING_PROMPT_SUFFIX = """
 _MODIFY_INTENT_TOKENS = (
     "修改", "替换", "改为", "改成", "改一下", "改下", "删除", "去掉", "清除",
     "插入", "新增一行", "加一行", "写入", "更新", "重命名", "查找替换",
-    "modify", "填写", "填入", "设置",
+    "modify", "填写", "填入", "设置", "调整", "修正", "补全", "改写", "设为", "设置成",
 )
 
 # 单元格坐标引用（如 B4、AA12、R1C1）；前后不得紧跟字母/数字，避免命中
@@ -171,6 +171,76 @@ def _is_chunked_read_intent(lower_ctx: str) -> bool:
     if _RANGE_RE.search(lower_ctx):
         return True
     return False
+
+
+# 纯读取判定（白名单残差法，2026-11-18 三轮评审收敛）：
+# 动作动词是开放集合（复制/填充/标红/居中/边框/拆成/对调/冻结…列举不完），
+# 黑名单永远会漏——第三轮实测「读取表格并复制A列到B列」仍被 to_md 短路成只读，
+# 返回 success 但无产物（与 2026-09-15 to_md 劫持同型）。
+# 因此改为：把「读取动词 + 只读名词/虚词 + 名词化短语」全部剥离后，指令必须无剩余
+# 内容才判纯读；任何剩余内容（已知或未知动作词）都交 LLM 路由。误判方向安全：
+# 最多多走一轮 LLM 路由，绝不会把写操作降级为只读。
+_READ_VERB_PREFIXES = ("读取", "查看", "检查", "预览", "打开", "看看", "读一下", "看一下")
+_POLITE_PREFIXES = ("请帮我", "麻烦", "帮我", "请", "能否", "可以")
+# 名词化短语：出现在读取指令里描述"读取目的"，不代表写操作（如"检查修改结果"）
+_READ_RESULT_PHRASES = (
+    "修改结果", "修改情况", "修改后", "修改的", "修改效果", "修改前",
+    "调整结果", "调整后", "更新结果", "更新后", "编辑结果",
+)
+# 只读填充词：剥离后若无剩余内容，说明指令只表达"读取/查看某对象"本身
+_READ_FILLER_TOKENS = (
+    "读取", "查看", "检查", "预览", "打开", "看看", "读一下", "看一下", "核对", "确认", "审阅",
+    "文件", "表格", "表头", "表", "excel", "xlsx", "csv", "模板", "内容", "数据", "结构", "版式",
+    "格式", "结果", "情况", "信息", "明细", "单元格", "附件", "文档", "工作表", "sheet",
+    "是否", "正确", "完整", "有无", "重点", "主要", "整体", "初步", "仔细", "当前", "这个", "该",
+    "一下", "的", "了", "中", "里", "内", "和", "并", "再", "后", "请", "帮我", "我", "要", "把",
+    "吗", "呢", "吧", "啊", "这", "那", "下", "上", "有", "没", "无", "多少", "哪些", "几个",
+    "什么", "以及", "然后", "先", "帮", "看", "这个", "这份", "那份",
+)
+_READ_FILLER_RE = re.compile(
+    "|".join(sorted((re.escape(t) for t in _READ_FILLER_TOKENS), key=len, reverse=True))
+)
+_READ_RESIDUE_PUNCT_RE = re.compile(r"[\s，。、；：！？,.;:!?()（）\[\]【】《》\"'`~\-—_/+]+")
+# 已知动作词：仅用于快速否决（非穷尽——兜底靠上面的残差白名单）
+_WRITE_ACTION_TOKENS = (
+    "改为", "改成", "替换", "写入", "填入", "填写", "设置", "删除", "去掉", "清除",
+    "插入", "合并", "重命名", "更新", "调整", "修正", "补全", "改写", "保存", "导出",
+    "生成", "新建", "创建", "覆盖", "粘贴", "追加", "加粗", "改正", "修复", "回填",
+    "拆分", "排序", "去重", "复制", "填充", "标红", "居中", "边框", "对调", "冻结",
+    "转置", "改名", "排列", "移到", "乘以", "除以",
+)
+
+
+def _read_residue(lower_ctx: str) -> str:
+    """剥离只读动词/名词/虚词与名词化短语后的剩余内容（空串 = 纯读取）。"""
+    s = lower_ctx
+    for phrase in _READ_RESULT_PHRASES:
+        s = s.replace(phrase, "")
+    s = _READ_FILLER_RE.sub("", s)
+    s = _READ_RESIDUE_PUNCT_RE.sub("", s)
+    return s
+
+
+def _is_pure_read_instruction(lower_ctx: str) -> bool:
+    """纯读取指令判定：读取动词开头、无坐标，且剥离只读词后无任何剩余内容。"""
+    s = (lower_ctx or "").strip()
+    if not s:
+        return False
+    if _CELL_REF_RE.search(s):
+        return False
+    # 分块读取（前 N 行 / 区域 / 逐段）必须走 LLM 路由生成 read+range 参数
+    if _is_chunked_read_intent(s):
+        return False
+    if any(token in s for token in _WRITE_ACTION_TOKENS):
+        return False  # 快速否决（非穷尽，兜底是下面的残差判定）
+    head = s
+    for prefix in _POLITE_PREFIXES:
+        if head.startswith(prefix):
+            head = head[len(prefix):].lstrip()
+            break
+    if not head.startswith(_READ_VERB_PREFIXES):
+        return False
+    return _read_residue(s) == ""
 
 
 class ExcelRouter:
@@ -337,21 +407,24 @@ class ExcelRouter:
                 "reason": f"规则识别：context包含{data_type}表格数据并要求导出Excel",
             }
 
-        # 修改类指令禁止命中 to_md：此前"把A1的内容改为…"/"文本查找替换"因含"内容"/"文本"
-        # 被劫持成 to_md（只读转文本却返回 success），导致修改静默失效（2026-09-15 研学行程事故）。
-        # 分块读取意图同样禁止命中 to_md：to_md 是整簿转换，大文件会内存超限（2026-11-12 压测），
-        # 分块读取必须走 read + range（read_only 流式+500 行截断）。
-        # 两者落到末尾的规则未命中 → 交给 LLM 路由，由其生成 modify/read+range 的具体参数。
-        if (
-            paths
-            and not _is_modify_intent(lower_ctx)
-            and not _is_chunked_read_intent(lower_ctx)
-            and any(token in lower_ctx for token in ("markdown", "文本", "查看", "读取", "内容"))
-        ):
+        # 纯读取快路径（白名单残差法，见 _is_pure_read_instruction 注释）：
+        # 只有剥离读取动词/只读名词后无任何剩余内容的指令才短路；含修改类名词化语境
+        # （"检查修改结果"）走 read，其余纯读取走 to_md。任何无法确认为纯读取的指令
+        # 一律交给 LLM 路由——写操作绝不能被降级为只读（2026-09-15 to_md 劫持教训）。
+        if paths and _is_pure_read_instruction(lower_ctx):
+            task = "read" if _is_modify_intent(lower_ctx) else "to_md"
+            return {
+                "task": task,
+                "params": {},
+                "reason": f"规则识别：纯读取指令（无写动作残留），走 {task}",
+            }
+
+        # 仅附件无指令：维持既有默认（转可读文本）；有指令但无法确认纯读取的一律交 LLM
+        if paths and not ctx.strip():
             return {
                 "task": "to_md",
                 "params": {},
-                "reason": "规则识别：附件转为可读文本",
+                "reason": "规则识别：仅附件无指令，默认转为可读文本",
             }
 
         if len(paths) >= 2 and any(token in lower_ctx for token in ("合并", "merge")):

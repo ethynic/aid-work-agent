@@ -95,6 +95,7 @@ Agent Desktop installation identity，不建立浏览器专用长期设备记录
 | 技能与配置 | 3 | 纯内存 | 进程生命周期 ~ 300s | 技能定义、Prompt 模板、页面元数据 |
 | 会话与队列 | 6 | Redis + 内存 | 5s ~ 3600s | 会话队列锁、短期记忆、实例状态 |
 | 去重 | 1 | PostgreSQL | 300s | 渠道消息去重 |
+| Excel 模板填充 | 1 | Redis（不可用则跳过缓存） | 3600s | 模板结构分析 LLM 结果复用 |
 | 系统健康监控 | 3 | Redis（采集/读取端禁用降级内存） | 90s ~ 600s | 健康快照、采集心跳、AI 研判结论 |
 
 ---
@@ -446,6 +447,16 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **关键约束**：解决「冷却期跳过后客户再无新消息，最后一批人工期消息永不推送」的缺口；多副本竞争由 RECAP_TASK_DEDUP 幂等键兜底（defer 后缀轮次的幂等键是新鲜的，先占坑者执行）；写入侧 `is_available()` 门控（Redis 不可用登记失败返回 False，退化为旧行为等下一次触发一并覆盖，禁止内存降级）；zadd 失败经 zscore 回读确认，未入队即清理 payload 键并返回 False；消费侧 payload 用 getdel 原子取出，避免并发 re-defer 覆盖的新 payload 被误删
 **源文件**：`src/services/recap/runner.py`（defer_recap_task / poll_due_deferred_tasks）、`src/services/recap/tasks/external_push_human.py`、`src/background_runner.py`（前缀注册：`src/core/cache_utils.py`）
 
+### 7.4.10 Excel 模板结构分析缓存
+
+**存储**：Redis；`is_available()` 为 False 时跳过缓存直接调 LLM（不做内存降级——结构分析结果跨进程复用才有价值，且缺少缓存只是回退到旧行为）
+**键模式**：`excel_structure:v1:{模板内容 sha256[:32]}:{data 键签名[:16]}`（键签名 = data 的 row/meta/totals 键集合排序后的 sha256）
+**TTL**：3600s
+**失效时机**：模板文件内容变化（hash 变）或 data 键集合变化（如新增列）自然不命中；TTL 到期自动失效；无主动清除入口（模板按内容寻址，旧键滞留仅占用 TTL 内的少量内存）
+**关键约束**：结构 = 模板版式绑定 + 数据键到列的映射，两者都相同才可复用；模板字节相同但来自不同路径/租户也安全（结构不含业务数据）；`llm_callable` 注入（测试）时读写缓存均关闭；Redis 读失败/反序列化失败静默降级为重新分析
+**收益**：单次结构分析是思考型 LLM 调用（2026-11-18 聊易实测 79~92s），同模板重复填充可跳过
+**源文件**：`src/tools/excel/excel_template_ai.py`（analyze_structure_safe，前缀注册：`src/core/cache_utils.py`）
+
 ### 7.5 定时任务调度器启动锁
 
 多 worker 环境下，确保只有单个 worker 启动 APScheduler 调度器，避免重复注册定时任务。
@@ -583,6 +594,7 @@ PostgreSQL（持久化，权威数据源）
 ├── open_modules:{tenant_id}:{subagent}:{scope}           # 第三方开放模块清单（TTL=FORM_FILLING_CACHE_TTL，默认 10min）
 ├── recap_task:{tenant_id}:{task_name}:{round_message_id}  # recap 任务幂等（24h）
 ├── recap_task_queue                                       # recap 任务队列（FIFO，无 TTL，消费即出队）
+├── excel_structure:v1:{模板sha256}:{data键签名}          # Excel 模板结构分析结果（1h，Redis 不可用则跳过）
 └── sched_task_lock:manager          # 定时任务调度器启动锁
 
 系统健康监控（src/services/system_health/）：
