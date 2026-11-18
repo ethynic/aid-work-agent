@@ -426,9 +426,40 @@ async def _ensure_user_and_session(identity: WebCIdentity) -> tuple:
         channel_session_manager.get_or_create_session,
         "web_c", identity.channel_user_id, identity.tenant_id,
         {"user_id": user_id, "name": identity.display_name or ""},
-        None, None, identity.subagent_type or "",
+        None, {"channel_config_id": identity.config_id}, identity.subagent_type or "",
     )
+    # 存量会话无渠道归属（渠道归属功能上线前的会话）：本渠道访客到达时补记，
+    # 使租户侧官网接待页可按渠道展示/筛选。幂等：仅补记缺失归属的会话
+    await asyncio.to_thread(_backfill_session_channel_config, identity)
     return user_id, session
+
+
+def _backfill_session_channel_config(identity: "WebCIdentity") -> int:
+    """为本渠道访客的存量 web_c 会话补记 channel_config_id（jsonb 合并，幂等）。
+
+    匿名 uid 按渠道配置隔离（localStorage key web_c_anon_{config_id}），
+    同一 channel_user_id 的会话必属本渠道；ext 签名 userid 跨官网复用时
+    理论上可能误归，按 userid 官网唯一约定风险可忽略。
+    不失效会话缓存：缓存对象无归属字段读点（C 端仅做归属校验），租户侧
+    列表直查 DB，Redis TTL 10 分钟内自愈。
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE channel_sessions
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
+            WHERE tenant_id = %s AND channel_type = 'web_c' AND channel_user_id = %s
+              AND (metadata IS NULL OR NOT (metadata ? 'channel_config_id'))
+            """,
+            (
+                json.dumps({"channel_config_id": identity.config_id}, ensure_ascii=False),
+                identity.tenant_id,
+                identity.channel_user_id,
+            ),
+        )
+        conn.commit()
+        return cursor.rowcount
 
 
 async def _ensure_web_c_user(identity: WebCIdentity) -> str:
@@ -462,6 +493,7 @@ def _create_extra_session_sync(identity: WebCIdentity, user_id: str) -> dict:
         channel_chat_id=token,
         user_info={"user_id": user_id, "name": identity.display_name or ""},
         subagent_id=identity.subagent_type or "",
+        metadata={"channel_config_id": identity.config_id},
     )
 
 

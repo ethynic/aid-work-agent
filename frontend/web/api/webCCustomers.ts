@@ -30,18 +30,30 @@ function query(params: Record<string, string | number | undefined>): string {
   return qs ? `?${qs}` : ''
 }
 
+export interface WebCChannel {
+  config_id: string
+  name: string
+  created_at?: string
+}
+
+export function listWebCChannels(): Promise<{ success: boolean; channels: WebCChannel[] }> {
+  return request(`${API_BASE}/channels`)
+}
+
 export interface WebCCustomer {
   user_id: string
   username: string
   nickname: string | null
   display_name?: string
   channel_user_id?: string
+  channel_config_id?: string
+  channel_name?: string
   avatar_url: string | null
   first_session_at?: string
   last_session_at?: string
 }
 
-export function listWebCCustomers(params: { username?: string; page?: number; page_size?: number }): Promise<{ success: boolean; users: WebCCustomer[]; total: number }> {
+export function listWebCCustomers(params: { username?: string; config_id?: string; page?: number; page_size?: number }): Promise<{ success: boolean; users: WebCCustomer[]; total: number }> {
   return request(`${API_BASE}/users${query(params)}`)
 }
 
@@ -55,10 +67,10 @@ export interface WebCSession {
 }
 
 export function listWebCCustomerSessions(params: {
-  user_id: string; start_date?: string; end_date?: string; subagent_id?: string; page?: number; page_size?: number
+  user_id: string; start_date?: string; end_date?: string; subagent_id?: string; config_id?: string; page?: number; page_size?: number
 }): Promise<{ success: boolean; sessions: WebCSession[]; total: number }> {
   return request(`${API_BASE}/users/${encodeURIComponent(params.user_id)}/sessions${query({
-    start_date: params.start_date, end_date: params.end_date, subagent_id: params.subagent_id,
+    start_date: params.start_date, end_date: params.end_date, subagent_id: params.subagent_id, config_id: params.config_id,
     page: params.page, page_size: params.page_size
   })}`)
 }
