@@ -11,7 +11,7 @@
 - 客户端（Runtime、桌面客户端、业务 CLI 交付物）安装与打包手册
 - 开发环境搭建、工具链与开发规范类指南
 
-**不收录**：设计文档（`docs/design/`、`docs/system/*-design*`）、开发计划（`docs/plans/`）、调研报告（`docs/research/`）、故障复盘（`docs/incidents/`）、子智能体设计（`docs/subagent/`）、审计报告（`docs/audit/`）。环境实例档案（如 `deploy/生产环境部署.md`、济南诺度系列）保留在 `deploy/`，不进本目录。
+**不收录**：设计文档（`docs/design/`、`docs/system/*-design*`）、开发计划（`docs/plans/`）、调研报告（`docs/research/`）、故障复盘（`docs/incidents/`）、子智能体设计（`docs/subagent/`）、审计报告（`docs/audit/`）。环境实例档案（如 `docs/deploy/生产环境部署.md`、济南诺度系列）保留在 `docs/deploy/`，不进本目录。
 
 ## 分类
 

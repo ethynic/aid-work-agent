@@ -21,7 +21,7 @@
 | 20261013-1434 | 结构化提问交互（ask_user 提问卡片） | ✅ 已完成开发；选项焦点白屏已修，独立48项/CR、构建及原卡片实测通过。 | [设计](system/design-ask-user-interactive-question.md) | [实施计划](plans/plan-ask-user-interactive-question.md) |
 | 20261030-1710 | 追踪库保留清理调度化（obs_* 表保留 30 天） | ✅ 已完成并部署 243：每日 01:30 分批删 30 天前 obs_* 数据 + 周日 VACUUM（82ea04b2），生产实测连续 3 天正常执行，存量已收敛。 | [设计 §8](infrastructure/observability-design.md) | — |
 | 20261030-1644 | 每周例行巡检（计费/存储/日志/tool_error/tlog） | ✅ 已完成：周四 11:30 定时巡检五项（cron 9540fb2b），11-12 轮无新增计费缺口，tlog 清理 3 文件待提交。 | [巡检规范](audit/weekly-inspection.md)（[11-05 报告](audit/weekly-2026-11-05.md)、[11-12 报告](audit/weekly-2026-11-12.md)） | — |
-| 20261029-1800 | agent3 在线开发环境拆库启用 | ✅ 已完成：agent3 独立库 aid_work_agent3/logs3（自 agent2 复制）+ runner 容器名参数化 + background3 + test2dev.sh 整库单向同步（d928fc4b），部署验证通过。 | [部署现状 §5.2](../deploy/服务器部署现状.md) | — |
+| 20261029-1800 | agent3 在线开发环境拆库启用 | ✅ 已完成：agent3 独立库 aid_work_agent3/logs3（自 agent2 复制）+ runner 容器名参数化 + background3 + test2dev.sh 整库单向同步（d928fc4b），部署验证通过。 | [部署现状 §5.2](deploy/服务器部署现状.md) | — |
 | 20261026-1744 | 测试入口隔离与 Runtime 断言 | ✅ 已完成开发，支持一键复用本地专用 PostgreSQL 运行 SQL 测试。 | [设计](design/devtools/test-database-isolation-design.md) | [计划](plans/plan-test-database-isolation-runtime-assertions.md) |
 | 20261026-1130 | 调度器幽灵锁自愈修复（发版强杀后后台调度器永久罢工） | ✅ 已完成并发布 243：三调度器与 manager 抢锁失败改循环重试自愈（f3410aa1），47 用例+1649 回归通过，CR 无 P0/P1。 | [事故复盘](incidents/scheduler-ghost-lock-stall-20261021.md) | — |
 | 20261022-2109 | agent2 指定分支发布 | ✅ 已完成开发：支持特性分支固定SHA发布，独立测试及CR通过，待部署验收。 | [设计与计划](plans/plan-agent2-branch-deploy.md) | [计划](plans/plan-agent2-branch-deploy.md) |
@@ -47,7 +47,7 @@
 | 20260618-1052 | 系统核心表文档 | 数据库核心表用途与关系文档，覆盖用户/对话/渠道/知识库/数字员工/SaaS/Prompt 管理等 30+ 张系统表。2026-06-18 | [文档](system/database_system_table.md) | — |
 | 20260618-1705 | 缓存使用情况文档 | 系统缓存使用全景文档，覆盖 Redis 缓存、内存缓存、数据库去重共 17 类缓存，含键模式、TTL、失效策略。2026-06-18 | [文档](system/cache_usage.md) | — |
 | 20260618-1518 | 文件存储使用情况文档 | 系统文件存储全景文档，覆盖新旧双轨路径、文件命名规范、目录结构、清理策略。2026-06-18 | [文档](system/file_usage.md) | — |
-| 20260629-1329 | 服务器部署现状文档 | 记录腾讯云服务器（124.222.3.254）当前部署架构：Nginx 反代 + 生产/测试双 Docker 容器 + PostgreSQL 单实例双库 + 腾讯云 Redis，含端口/目录速查、… | [文档](../deploy/服务器部署现状.md) | — |
+| 20260629-1329 | 服务器部署现状文档 | 记录腾讯云服务器（124.222.3.254）当前部署架构：Nginx 反代 + 生产/测试双 Docker 容器 + PostgreSQL 单实例双库 + 腾讯云 Redis，含端口/目录速查、… | [文档](deploy/服务器部署现状.md) | — |
 | 20260701-2009 | 三智能体开发流程规范 | 非平凡开发任务（新功能/Phase/多文件改动）的标准流程：开发智能体→测试智能体（独立测试+回归+启动安全检查）→CodeReview智能体（独立审查+修复必要问题）… | [规范](../.claude/rules/dev_workflow.md) | — |
 | 20260624-2005 | 会话内上下文压缩（中期记忆） | 解决单 session 长会话上下文爆 token 问题（web/微信客服/钉钉/飞书 全渠道通用）。 | [设计](infrastructure/memory/context_compression_design.md) / [调研](research/context_compression_research.md) | [开发计划](infrastructure/memory/context_compression_dev_plan.md) |
 | 20260608-1610 | 租户数据迁移 | 跨数据库租户数据迁移（知识库 + 业务表），UUID 稳定标识符 + replace/merge 模式 + Excel 导出导入。2026-06-08。**功能已于 2026-11-10 删除**（前提失效：生产已迁至 243，跨库直连+共享存储不再成立）；后续个别租户迁移按 [迁移手册](guides/deployment/tenant-data-migration-manual.md) 人工执行 | [迁移手册](guides/deployment/tenant-data-migration-manual.md) | — |

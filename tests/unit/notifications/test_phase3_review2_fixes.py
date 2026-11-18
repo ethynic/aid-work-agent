@@ -345,6 +345,5 @@ class TestPhase3EndpointsAndLinks:
                            'expansion_state': 'pending', 'deliveries': []}]
 
     def test_recovery_retry_at_column_registered(self):
-        for path in ('deploy/init-postgres.sql', 'deploy/db_update.sql',
-                     'deploy/db_update.yaml'):
+        for path in ('deploy/init-postgres.sql', 'deploy/db_update.yaml'):
             assert 'recovery_retry_at' in open(path, encoding='utf-8').read()

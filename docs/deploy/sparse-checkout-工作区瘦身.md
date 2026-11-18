@@ -15,6 +15,8 @@
 > **应用进度**：2026-11-08 已在 254 旧机 `agent2` / `agent3` 应用（两仓库 clients/contracts 无未提交修改，应用后容器全部健康）；243 新机 `agent` / `agent1` **待执行**。
 
 > ⚠️ `deploy/` **必须保留**在检出列表中：容器 ENTRYPOINT 是 `gunicorn -c deploy/gunicorn.conf.py`（经 `.:/app` 挂载读取）、镜像构建 COPY `deploy/fix_tmp.sh`、更新脚本与备份 cron 都依赖它。
+>
+> 📄 **文档不在 `deploy/`**：2026-11-18 起所有部署文档迁至 `docs/deploy/`，`deploy/` 只留服务器运行必需的 conf/compose/脚本/SQL。服务器上 `docs/` 被本节的 sparse-checkout 排除，属预期行为（运维文档在开发工作区或仓库远程查看）。
 
 > ⚠️ **`plans/` 是运行时可写目录，排除后必须预创建**（2026-09-03 agent3 启动事故教训）：
 >

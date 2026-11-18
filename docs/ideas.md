@@ -21,12 +21,12 @@
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 20261113-1600 | 测试套件提速（Runtime/CLI/BOSS TS 三包） | 🔧 部分完成（整改完成待 CR） | 挂死 2 文件修复、5 项确定性红+2 项摇摆闭环、boss 全量 14s 全绿、去强制重建；余项留档。 | — | [计划](plans/plan-test-suite-speedup.md) |
-| 20261012-1230 | file_assets 历史文件名补录 | ✅ agent2 已补录，生产待执行 | commit 8825d880 上线 file_assets 表持久化文件元数据（根治下载文件名退化）后，存量历史文件名需跑补录脚本恢复（磁盘 + 消息表原始名优先，幂等）。agent2 已执行（磁盘 1241 + 消息 769，共 1457 行）；生产 243 发布后需同样执行。 | — | —（执行步骤见 [生产发布备忘](../deploy/生产发布备忘.md)） |
+| 20261012-1230 | file_assets 历史文件名补录 | ✅ agent2 已补录，生产待执行 | commit 8825d880 上线 file_assets 表持久化文件元数据（根治下载文件名退化）后，存量历史文件名需跑补录脚本恢复（磁盘 + 消息表原始名优先，幂等）。agent2 已执行（磁盘 1241 + 消息 769，共 1457 行）；生产 243 发布后需同样执行。 | — | —（执行步骤见 [生产发布备忘](deploy/生产发布备忘.md)） |
 | 20261012-2130 | docs 文档清理（3 个月前失效文档） | ✅ 已执行（2026-10-13） | 41 个删除项已 git rm；待定 wecom-integration.md 摘取有效章节至 wecom-crypto-troubleshooting.md 后删除；research_index 8 条目 + 全部悬空引用已清理；B 级重点项 6 处已修（含 2 个部署文档凭证脱敏），其余 32 个 B 级小修待后续顺手处理。 | [清理计划](plans/plan-docs-cleanup-20261012.md) | — |
 | 20261021-2200 | 私有云生产环境部署指南 | ✅ 已完成（2026-10-21） | 新增 [docs/guides/deployment/生产环境部署指南.md](guides/deployment/生产环境部署指南.md)：面向客户私有云全新部署的通用 playbook，综合 243 独占迁移档案与济南诺度混部实例（摸底决策、Docker/codeup 三通道、sparse-checkout、PG 绑址、.env 必改项、宝塔 TLS、发布后事项、验收清单、两例踩坑速查）。 | [部署指南](guides/deployment/生产环境部署指南.md) | — |
-| 20261116-1230 | 聊易私有云部署（agent.0635easy.com） | 🔧 部分完成（基础设施+PG+nginx+证书完成，容器验收进行中） | 阿里云 47.104.107.85 裸机全栈部署：百炼 LLM、DigiCert 证书、deploy/liaoyi/ 部署材料与脚本；遗留 253 短信通道、管理员初始化、备份/巡检等（见文档遗留清单）。 | [部署文档](../deploy/liaoyi/聊易私有云部署.md) | — |
-| 20261116-1240 | 创蓝253 短信通道（聊易） | 🔧 部分完成（代码+单测完成，待发版联调） | 新增 ChuangLan253Sender 通道+配置+单测；待配 env/IP 白名单与真机验收。 | [任务文档](../deploy/liaoyi/创蓝253短信通道开发任务.md) | — |
-| 20261117-2040 | 聊易上线首日错误日志排查 | ✅ 已完成（真机复测通过） | log_error 4084 行三类全闭环：DeepSeek 400（.env provider 链与 qwen 模型名错配）、空态摘要同因、企微客服 RunnerError（sales-assistant 定义 llm_provider=deepseek 但客户无 DeepSeek key，置空回落 qwen 后真机复测通过）；遗留定义保存 provider Key 校验防复发。 | [排查文档](../deploy/liaoyi/错误日志排查_20261117.md) | — |
+| 20261116-1230 | 聊易私有云部署（agent.0635easy.com） | 🔧 部分完成（基础设施+PG+nginx+证书完成，容器验收进行中） | 阿里云 47.104.107.85 裸机全栈部署：百炼 LLM、DigiCert 证书、deploy/liaoyi/ 部署材料与脚本；遗留 253 短信通道、管理员初始化、备份/巡检等（见文档遗留清单）。 | [部署文档](deploy/liaoyi/聊易私有云部署.md) | — |
+| 20261116-1240 | 创蓝253 短信通道（聊易） | 🔧 部分完成（代码+单测完成，待发版联调） | 新增 ChuangLan253Sender 通道+配置+单测；待配 env/IP 白名单与真机验收。 | [任务文档](deploy/liaoyi/创蓝253短信通道开发任务.md) | — |
+| 20261117-2040 | 聊易上线首日错误日志排查 | ✅ 已完成（真机复测通过） | log_error 4084 行三类全闭环：DeepSeek 400（.env provider 链与 qwen 模型名错配）、空态摘要同因、企微客服 RunnerError（sales-assistant 定义 llm_provider=deepseek 但客户无 DeepSeek key，置空回落 qwen 后真机复测通过）；遗留定义保存 provider Key 校验防复发。 | [排查文档](deploy/liaoyi/错误日志排查_20261117.md) | — |
 | 20261028-1255 | 外发邮箱配置指南（域名 DNS 侧） | ✅ 已完成（2026-10-28） | 新增 [docs/guides/deployment/outbound-email-dns-setup-guide.md](guides/deployment/outbound-email-dns-setup-guide.md)：面向租户外发邮件域名配置的实操指南，沉淀 tulin.cn 体检实战——SPF/DKIM/DMARC/MX 四记录要点（163 免费企业邮 + 阿里云解析逐步操作）、MX 主机记录误填子域致主域收信中断、权威 DNS 与公共缓存验证口径、DMARC 报告解读与 p 策略升级路径、缺 DKIM 决策参考与验收清单。 | [指南](guides/deployment/outbound-email-dns-setup-guide.md) | — |
 
 ## 系统功能
@@ -104,7 +104,7 @@
 | 20261102-1430 | 企微旁路聊天日志、前端与按日日报 | 🔧 部分完成（工作台由新计划接续） | 旁路日志与日期读取已有初版实现；日报页面及计划按新方案重做。 | [设计](design/wecom/wecom-conversation-operations-design.md) | [历史计划](plans/plan-wecom-conversation-operations.md) / [新计划](plans/plan-wecom-daily-summary-workbench.md) |
 | 20261018-1736 | wecom-cli 登录引导增强（自动拉起 + 二维码直返） | 💡 灵感 | 三态验收发现：need_login 态 probe 已返回登录二维码 base64，缺口是 WECOM_NOT_FOUND（进程未启动）时不自动拉起企微——增加自动启动后把二维码转交 agent 引导用户扫码。 | [验收记录](plans/wecom-cli-localdb-three-state-acceptance.md) | — |
 | 20261014-2043 | wecom-cli 本地库数据通道（local-db） | 🔧 部分完成 | 三件同批出包与双插件隔离导入通过，成品默认进下载目录。 | [设计](design/wecom/wecom-cli-localdb-design.md) | [开发计划](plans/plan-wecom-cli-localdb.md) |
-| 20261026-1110 | 本地生图推理容器（Qwen-Image-2.1 · stable-diffusion.cpp GPU） | 🔧 部分完成 | deploy/image-gen/ 独立 compose（手动启停，不随 agent）：sd-cli CUDA 镜像 + FastAPI t2i/edits 串行队列；agent 侧工具接入待做。 | [部署文档](../deploy/image-gen/README.md) | — |
+| 20261026-1110 | 本地生图推理容器（Qwen-Image-2.1 · stable-diffusion.cpp GPU） | 🔧 部分完成 | deploy/image-gen/ 独立 compose（手动启停，不随 agent）：sd-cli CUDA 镜像 + FastAPI t2i/edits 串行队列；agent 侧工具接入待做。 | [部署文档](deploy/image-gen/README.md) | — |
 | 20260714-1911 | 浏览器混合执行、可视化与人工接管 | 🔧 部分完成 | Phase 0～1 已完成；Phase 2 已实现、待真实 Redis/PostgreSQL 门禁。 | [设计](tools/browser/browser_visualization_design.md) | [开发计划](tools/browser/browser_execution_dev_plan.md) |
 | 20260630-1733 | PDF reportlab 固定版式生成器 | 📋 待开发 | 暂不开发，未来如出现强固定版式需求再评估。 | [设计](tools/pdf/pdf_tool_design.md) | — |
 | 20260630-1734 | PDF 视觉回归样本集 | 💡 灵感 | 低优先级未来项。用于沉淀小型样例 PDF、渲染 PNG 或预期检查结果，后续在改动 PDF 生成器、渲染器、验证器时做回归校验，防止中文乱码、空白页、黑页、页数错误、表格溢出等质量退化。 | [设计](tools/pdf/pdf_tool_design.md) | — |

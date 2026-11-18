@@ -23,14 +23,14 @@ docs/guides/
 
 收录规范见 `docs/guides/README.md`：放入对应子目录即出现在文档中心，无需注册；标题取正文首个一级标题。
 
-**不迁移**：环境实例档案（`deploy/生产环境部署.md`、济南诺度系列、`服务器部署现状.md`、`生产发布备忘.md`、`deploy-eas.md` 内含凭据）、`deploy/redis|image-gen/README.md`（与同目录 compose 强耦合）、设计/计划/调研/复盘类文档。
+**不迁移**：环境实例档案（`docs/deploy/生产环境部署.md`、济南诺度系列、`服务器部署现状.md`、`生产发布备忘.md`、`deploy-eas.md` 内含凭据）、`docs/deploy/redis|image-gen/README.md`（与同目录 compose 强耦合）、设计/计划/调研/复盘类文档。
 
 ### 2.2 引用更新
 
 迁移后全仓更新引用（`*.md/*.py/*.yml/*.sh/*.ps1`）：
 
 - 仓库根风格引用（AGENTS.md、CLAUDE.md、README.md、规则文件、compose 注释、打包脚本注释、代码内文档路径）
-- 留守文档 → 迁移文档的相对链接（`deploy/服务器部署现状.md` 19 处等）
+- 留守文档 → 迁移文档的相对链接（`docs/deploy/服务器部署现状.md` 19 处等）
 - 迁移文档 → 留守文件的相对链接（按旧目录解析后改写为新相对路径）
 - 运行时依赖：`tests/unit/weixin_marketing/test_manual_sql_safety.py` 按 Path 读取 rollout 手册，同步改路径
 - 历史记录文档（`docs/plans/plan-docs-cleanup-20261012.md`）保留旧路径叙述不改

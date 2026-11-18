@@ -1,6 +1,8 @@
 # image-gen：Qwen-Image-2.1 生图推理容器（独立部署）
 
-给 agent 提供文生图/图生图能力的本地推理服务。**独立于 agent 主体**：本目录的 compose 与 agent 的 compose 互不引用、不一起启停，完全手动管理（agent 的重启/更新不影响本服务；本服务崩溃也不影响 agent）。
+> 本文档位于 `docs/deploy/image-gen/`；实际运行目录仍是 `deploy/image-gen/`（compose/Dockerfile/server.py 未迁移）。
+
+给 agent 提供文生图/图生图能力的本地推理服务。**独立于 agent 主体**：`deploy/image-gen/` 的 compose 与 agent 的 compose 互不引用、不一起启停，完全手动管理（agent 的重启/更新不影响本服务；本服务崩溃也不影响 agent）。
 
 | 项 | 说明 |
 |---|---|
@@ -82,7 +84,7 @@ agent 容器（`aid-ai-service` 等）默认与本服务不同网络。两种方
    ```
 2. 端口已映射宿主机 `127.0.0.1:8290`，WSL/Windows 侧直接访问。
 
-agent 代码侧的 provider/工具接入属后续任务（见 `docs/research/image-generation-model-research.md` 的接入建议），本目录只负责独立推理服务。
+agent 代码侧的 provider/工具接入属后续任务（见 `docs/research/image-generation-model-research.md` 的接入建议），`deploy/image-gen/` 只负责独立推理服务。
 
 ## 重建与迁移
 
@@ -92,7 +94,7 @@ agent 代码侧的 provider/工具接入属后续任务（见 `docs/research/ima
 docker compose build --no-cache   # 拉取固定 commit 源码 + CUDA 编译
 ```
 
-- 换机器：新机装 NVIDIA 驱动 + docker nvidia runtime，拷贝本目录与 `~/qwen-image-2.1/models`，按 compose 里的卷路径（或 `IMAGE_MODELS_DIR` 环境变量）挂载即可。
+- 换机器：新机装 NVIDIA 驱动 + docker nvidia runtime，拷贝 `deploy/image-gen/` 与 `~/qwen-image-2.1/models`，按 compose 里的卷路径（或 `IMAGE_MODELS_DIR` 环境变量）挂载即可。
 - 换显卡：改 compose 的 `CUDA_ARCH` 构建参数（4090=89 / 30 系=86 / 50 系=120）后重建。
 - 升级 stable-diffusion.cpp：改 Dockerfile 的 `SD_CPP_COMMIT` 后重建（建议先在 WSL 手动部署验证再固定 commit）。
 - 显存不足：`IMAGE_GEN_QUANT=Q4_K_M docker compose up -d`，或 `SD_BACKEND=cpu` 回退 CPU（慢）。
@@ -112,7 +114,7 @@ docker load -i /tmp/cuda-devel.tar && docker load -i /tmp/cuda-runtime.tar
 
 镜像入本地库后，`docker compose build` 默认不 `--pull`，直接用本地基础镜像；构建期的 git clone/pip 走 compose 里的 `network: host` + 代理 build-args（`IMAGE_BUILD_PROXY` 变量，默认 `http://127.0.0.1:7897`），换环境时按需覆盖。
 
-## 文件清单
+## 文件清单（`deploy/image-gen/`）
 
 | 文件 | 用途 |
 |---|---|

@@ -64,7 +64,7 @@ PROD_USER="${PROD_USER:-aid_readonly}"     # 必须只读，断言强制
 SIM_USER="${SIM_USER:-aid_sim_user}"       # 仅授权仿真库
 PROD_PG_PASSWORD="${PROD_PG_PASSWORD:-}"
 SIM_PG_PASSWORD="${SIM_PG_PASSWORD:-}"
-# 仿真库 DROP/CREATE/建扩展需要超级用户（容器内 aid_user 即超管，见 生产环境部署.md）
+# 仿真库 DROP/CREATE/建扩展需要超级用户（容器内 aid_user 即超管，见 docs/deploy/生产环境部署.md）
 SIM_ADMIN_USER="${SIM_ADMIN_USER:-aid_user}"
 SIM_ADMIN_PASSWORD="${SIM_ADMIN_PASSWORD:-Aid_2026}"
 

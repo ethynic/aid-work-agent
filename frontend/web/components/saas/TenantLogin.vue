@@ -130,7 +130,7 @@ const logoUrl = ref<string | null>(null)
 // 登录页标题动态显示
 const pageTitle = computed(() => {
   if (isPortalRoute.value) {
-    return { title: '爱定义管理后台', subtitle: '' }
+    return { title: 'AID 管理后台', subtitle: '' }
   }
   return { title: tenantName.value || '用户登录', subtitle: '' }
 })

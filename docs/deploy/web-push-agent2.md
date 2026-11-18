@@ -1,7 +1,7 @@
 # agent2 开放 Web 任务通知（Edge/Safari/Firefox）部署说明
 
-> 功能设计：[Web 任务完成浏览器系统通知](../docs/system/web-task-push-notification-design.md)；
-> 开发计划：[统一通知基础设施与 Web 推送开发计划](../docs/plans/plan-web-task-push-notification.md)。
+> 功能设计：[Web 任务完成浏览器系统通知](../system/web-task-push-notification-design.md)；
+> 开发计划：[统一通知基础设施与 Web 推送开发计划](../plans/plan-web-task-push-notification.md)。
 > 本文档只覆盖 agent2（测试环境）的启用操作。执行前需用户明确指示（真机部署授权）。
 
 ## 现状核查（2026-11-02 实测）
