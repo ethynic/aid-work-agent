@@ -62,7 +62,7 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源（上位�
     'weixin_history_read',
     'weixin_session_observe',
     'weixin_unread_list',
-    'weixin_name_resolve',
+    'weixin_chat_latest',
   ])
   assert.equal(m.tools.length, 7)
   const probe = m.tools[0]!
@@ -76,7 +76,10 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源（上位�
   const send = byName.get('weixin_message_send')!
   assert.equal(send.annotations.readOnlyHint, false)
   assert.equal(send.annotations.idempotentHint, false)
-  assert.equal(byName.get('weixin_name_resolve')!.annotations.readOnlyHint, true)
+  assert.equal(byName.get('weixin_chat_latest')!.annotations.readOnlyHint, true)
+  assert.equal(byName.has('weixin_name_resolve'), false)
+  assert.throws(() => getOperationEntry('weixin_name_resolve'), /漂移/)
+  assert.deepEqual(Object.keys(byName.get('weixin_chat_latest')!.inputSchema.properties as object), ['target_name'])
   for (const n of ['weixin_chat_search', 'weixin_history_read', 'weixin_session_observe', 'weixin_unread_list']) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, true, `${n} 应为只读`)
   }
@@ -111,7 +114,7 @@ test('tool_declaration：version 1、声明恰为 4 个云端 v1 工具；微信
     'weixin_probe',
     'weixin_chat_search',
     'weixin_message_send',
-    'weixin_name_resolve',
+    'weixin_chat_latest',
   ])
   assert.equal(new Set(m.tool_declaration.tools.map((t) => t.name)).size, m.tool_declaration.tools.length, '声明名不重复')
   for (const declared of m.tool_declaration.tools) {
@@ -148,7 +151,7 @@ test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => 
     'weixin_history_read',
     'weixin_session_observe',
     'weixin_unread_list',
-    'weixin_name_resolve',
+    'weixin_chat_latest',
   ])
   assert.deepEqual(parsed.tool_declaration, buildManifest().tool_declaration)
 })

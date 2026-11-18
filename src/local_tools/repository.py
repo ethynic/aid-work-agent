@@ -16,7 +16,7 @@ from psycopg2.extras import Json
 from src.core.cache_utils import invalidate_tenant_cache
 from src.db.client_binding_db import ClientUsageLogDB
 from src.db.database import get_db_connection
-from src.local_tools.catalog import LOCAL_ONLY_WEIXIN_MESSAGE, LOCAL_ONLY_WEIXIN_TOOLS
+from src.local_tools.catalog import LOCAL_ONLY_WEIXIN_MESSAGE, LOCAL_ONLY_WEIXIN_TOOLS, WEIXIN_CHAT_LATEST
 from src.local_tools.pricing import tool_credit_price
 from src.local_tools.security import sha256_hex
 
@@ -1347,6 +1347,21 @@ def write_runtime_result(invocation_id, tenant_id, claim_token_hash, success, co
         # Close the invocation with public metadata and discard the original response.
         return write_result(invocation_id, tenant_id, claim_token_hash, False, 'TOOL_NOT_ALLOWED',
             LOCAL_ONLY_WEIXIN_MESSAGE, 'none', None, False, device_id=device_id)
+    if invocation and invocation.get('tool_name') == WEIXIN_CHAT_LATEST:
+        if success:
+            public = data if isinstance(data, dict) else {}
+            status = public.get('status')
+            pages = public.get('pages_scanned')
+            count = public.get('new_count')
+            if (status not in ('initialized', 'updated', 'unchanged')
+                    or type(pages) is not int or pages < 0 or type(count) is not int or count < 0):
+                return write_result(invocation_id, tenant_id, claim_token_hash, False, 'INTERNAL_ERROR',
+                    '微信本机同步回执格式无效', 'none', None, False, device_id=device_id)
+            return write_result(invocation_id, tenant_id, claim_token_hash, True, 'OK',
+                '本机微信会话已同步', 'none', {'status': status, 'pages_scanned': pages, 'new_count': count},
+                False, device_id=device_id)
+        return write_result(invocation_id, tenant_id, claim_token_hash, False, code,
+            '微信本机同步失败', 'none', None, retryable, device_id=device_id)
     if invocation and invocation.get('business_kind') == 'agent_runner_recovery':
         from .recovery_observation import write_result as write_observation_result
         return write_observation_result(invocation_id, tenant_id, claim_token_hash, success,

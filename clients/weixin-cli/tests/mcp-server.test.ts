@@ -85,7 +85,7 @@ test('list_tools：保留标准发送接口、其他本机操作，专用 v2 发
       'weixin_history_read',
       'weixin_session_observe',
       'weixin_unread_list',
-      'weixin_name_resolve',
+      'weixin_chat_latest',
     ])
     const probe = tools[0]!
     assert.equal(probe.annotations?.readOnlyHint, true)

@@ -10,6 +10,7 @@ import { createWeixinMessageSendOperation } from './messageSend.js'
 import { createWeixinProbeOperation } from './probe.js'
 import { createWeixinUnreadListOperation } from './unreadList.js'
 import { createNameOperations } from './nameOperations.js'
+import { createWeixinChatLatestOperation } from './chatLatest.js'
 import type { WeixinOperation } from './types.js'
 
 export interface OperationEntry {
@@ -30,7 +31,7 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   weixin_history_read: { operation: createWeixinHistoryReadOperation(), cli: { write: false } },
   weixin_unread_list: { operation: createWeixinUnreadListOperation(), cli: { write: false } },
   weixin_session_observe: { operation: nameOperations.observe, cli: { write: false } },
-  weixin_name_resolve: { operation: nameOperations.resolve, cli: { write: false } },
+  weixin_chat_latest: { operation: createWeixinChatLatestOperation(), cli: { write: false } },
 }
 
 export const OPERATION_NAMES = Object.keys(OPERATIONS)

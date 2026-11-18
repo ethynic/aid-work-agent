@@ -1,5 +1,7 @@
 """本地代理轻量清单；不得从此模块导入 repository/service。"""
 
+from .catalog import WEIXIN_CHAT_LATEST
+
 LOCAL_PROXY_TOOL_NAMES = frozenset({
     "boss_filter", "boss_clear_filter", "boss_filter_options", "boss_goto",
     "boss_greet", "boss_lookup_candidates", "boss_greet_selected",
@@ -18,5 +20,5 @@ LOCAL_PROXY_TOOL_NAMES = frozenset({
     "wecom_probe", "wecom_message_send", "wecom_send_image",
     "wecom_send_file", "wecom_read_session", "wecom_unread_list",
     "wecom_send_status", "wecom_group_poll", "wecom_read_sessions", "wecom_session_directory",
-    "wecom_config_doctor", "wecom_config_calibrate",
+    "wecom_config_doctor", "wecom_config_calibrate", WEIXIN_CHAT_LATEST,
 })

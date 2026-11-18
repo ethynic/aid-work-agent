@@ -101,7 +101,6 @@ GOLDEN_TOOLS = [
     "weixin_automation_manage",
     "weixin_automation_prepare",
     "weixin_automation_publish",
-    "weixin_name_resolve",
     "word_process",
     "write",
     "x_to_image",

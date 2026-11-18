@@ -25,7 +25,7 @@ import { flagString, parseArgs, parseDomainFlag, hasFlag } from './args.js'
 const USAGE = `aid-weixin — 微信操作 CLI / MCP Provider（M2）
 
 操作命令：
-  probe [--verbose]         只读环境探测：平台 / 交互会话 / PowerShell / Weixin.exe 进程（不激活窗口、不发送输入、不改剪贴板）
+  probe [--verbose]         微信运行诊断：平台、交互桌面、进程、主窗口及可核实登录态
   search --domain chat --query <词> [--type friend|group|any] [--limit N]
                             微信全局搜索好友/群（只读，返回带 target_ref 的结果列表）
   send --domain chat --target-ref <ref> --text <文本>
@@ -34,6 +34,8 @@ const USAGE = `aid-weixin — 微信操作 CLI / MCP Provider（M2）
                             提交一条微信好友申请，视觉定位使用服务端计费代理
   read --domain chat-history --target-name <当前会话全名> [--since-days N] [--max-pages N]
                             在本机读取已打开会话的聊天记录
+  read --domain chat-latest --target-name <当前会话全名> [--json]
+                            同步本机加密副本，默认以 JSON 返回有序新增消息
   read --domain unread [--name <名>]
                             未读会话列表（只读，不开会话不清未读）
   watch --target-name <当前会话全名> [--interval <秒>]
@@ -41,7 +43,9 @@ const USAGE = `aid-weixin — 微信操作 CLI / MCP Provider（M2）
 
 Provider 命令：
   mcp --stdio               启动标准本地 MCP server（stdout 只承载协议，供 Codex/WorkBuddy 等 Host 使用）
-  doctor [--json]           只读环境检查（平台 / 交互会话 / PowerShell / artifact 目录），任一失败退出码 1
+  doctor [--json]           微信运行诊断及安装检查，返回就绪状态与处理指引
+  doctor --restore-window [--json]
+                            在本机恢复已核对的微信主窗口，支持最小化与通知区隐藏
   version [--json]          版本信息；--json 输出机器可读 manifest（含 schema_digest）
 
 命名约定：所有命令以动词开头；搜一搜/文章/聊天/公众号等操作对象只能作为参数值
@@ -101,8 +105,12 @@ async function main(): Promise<number> {
       return mcpCommand({ stdio: hasFlag(args, 'stdio') })
     }
     case 'doctor': {
+      if (hasFlag(args, 'restore-window') && (args.flags.get('restore-window') !== true || args.duplicateFlags.has('restore-window'))) {
+        console.error('--restore-window 只接受一次无值开关')
+        return 2
+      }
       const { doctorCommand } = await import('./commands/doctor.js')
-      return doctorCommand({ json: hasFlag(args, 'json') })
+      return doctorCommand({ json: hasFlag(args, 'json'), restoreWindow: hasFlag(args, 'restore-window') })
     }
     case 'version': {
       const { versionCommand } = await import('./commands/version.js')

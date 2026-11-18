@@ -3,7 +3,7 @@ import { runWeixinOperation } from './context.js'
 import { CodedOperationError, type WeixinOperation } from './types.js'
 import { ConversationAligner } from '../platform/aligner.js'
 import { sessionObserverRequestSchema } from '../platform/sessionObserver.js'
-import { readWeixinNativeObservation, resolveWeixinNativeName, type NativeMessageWindow } from '../platform/nativeMessages.js'
+import { readWeixinNativeObservation, type NativeMessageWindow } from '../platform/nativeMessages.js'
 import type { RunPowerShellDriverFn } from '../platform/powershell.js'
 import { createWeixinSessionObserveOperation, observerUnavailable, type SessionObserveArgs } from './sessionObserve.js'
 
@@ -16,21 +16,10 @@ interface NameObservationState {
 
 export function createNameOperations(deps: {
   nativeDriver?: RunPowerShellDriverFn
-  resolveEvidence?: Parameters<typeof resolveWeixinNativeName>[3]
   observeCurrentOnly?: boolean
 } = {}) {
-  const resolved = new Map<string, Awaited<ReturnType<typeof resolveWeixinNativeName>>>()
   const states = new Map<string, NameObservationState>()
   const fallback = createWeixinSessionObserveOperation()
-  const resolve: WeixinOperation<{ target_name: string }> = {
-    name: 'weixin_name_resolve',
-    execute(args, ctx) { return runWeixinOperation('readonly', ctx, () => typeof args?.target_name === 'string' && args.target_name.trim() && args.target_name.length <= 128 && !/[\x00-\x1f\x7f]/.test(args.target_name) ? null : 'target_name 必须是有效联系人名称', async () => {
-      const target = await resolveWeixinNativeName(args.target_name, ctx.signal, deps.nativeDriver, deps.resolveEvidence)
-      resolved.delete(args.target_name); resolved.set(args.target_name, target)
-      if (resolved.size > 32) resolved.delete(resolved.keys().next().value!)
-      return { message: '唯一名称会话已定位', data: { target_name: args.target_name, title_exact: true, unique_match: true, name_match_mode:'uia_exact_unique', evidence_ref: target.evidenceRef } }
-    }) },
-  }
   const observe: WeixinOperation<SessionObserveArgs & { target_name?: string }> = {
     name: 'weixin_session_observe',
     execute(args, ctx) {
@@ -42,12 +31,11 @@ export function createNameOperations(deps: {
         if (args.account_identity_version !== 0) throw new CodedOperationError('BLOCKED','名称场景仅支持当前登录上下文')
         if (args.watermark && !old?.fingerprints.has(args.watermark.window_fingerprint)) return gap('alignment_broken')
         const previous=old?.window
-        const target=resolved.get(name)
         let read: Awaited<ReturnType<typeof readWeixinNativeObservation>>
         try{
           read=await readWeixinNativeObservation({
-            targetName:name,nativeTitle:previous?.native_title ?? target?.title,
-            nativeSessionIdentity:old?.nativeSessionIdentity ?? target?.session_identity,
+            targetName:name,nativeTitle:previous?.native_title,
+            nativeSessionIdentity:old?.nativeSessionIdentity,
             includeEvidence:!deps.observeCurrentOnly,previousFrame:previous?.frame,signal:ctx.signal,
           },deps.nativeDriver)
         }catch(error){
@@ -84,5 +72,5 @@ export function createNameOperations(deps: {
       })
     },
   }
-  return {resolve,observe}
+  return {observe}
 }

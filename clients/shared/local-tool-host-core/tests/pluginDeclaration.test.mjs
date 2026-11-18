@@ -124,6 +124,23 @@ test('未预知插件与已交付插件同一逻辑：受信面 = 声明 tools �
   assert.equal(unknown.execution_target, 'local_required')
 })
 
+test('新版微信签名声明接受串行 latest 元数据工具，已交付名称工具仍按旧声明兼容', () => {
+  const currentDeclared = WEIXIN_DECLARED.map(name => name === 'weixin_name_resolve' ? 'weixin_chat_latest' : name)
+  const currentTools = WEIXIN_TOOLS.map(name => name === 'weixin_name_resolve' ? 'weixin_chat_latest' : name)
+  const manifest = pluginManifest('ai.aidwork.weixin', currentTools, WEIXIN_WRITE, [], currentDeclared)
+  const current = deriveProviderManifest(manifest)
+  assert.ok(current.tools.includes('weixin_chat_latest'))
+  assert.ok(!current.tools.includes('weixin_name_resolve'))
+  assert.ok(!current.write_tools.has('weixin_chat_latest'))
+  const assembled = assembleStoreManifests([{
+    plugin_id: 'ai.aidwork.weixin', provider_key: 'weixin', manifest, declaration: manifest.tool_declaration,
+  }])
+  assert.equal(assembled.parallelTools.weixin, undefined)
+  assert.deepEqual(assembled.declaredTools.weixin, currentDeclared)
+  assert.ok(TRUSTED_MANIFESTS.weixin.tools.includes('weixin_name_resolve'))
+  assert.ok(!TRUSTED_MANIFESTS.weixin.tools.includes('weixin_chat_latest'))
+})
+
 test('清单未声明的本机工具不进云端受信面', () => {
   // wecom 清单 17 项 vs 声明 12 项：内部命令不经云端派发，不进声明也不进受信面
   const wecom = deriveProviderManifest(pluginManifest('ai.aidwork.wecom', WECOM_TOOLS, WECOM_WRITE, WECOM_PARALLEL, WECOM_DECLARED))

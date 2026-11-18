@@ -20,6 +20,7 @@ public static class WeixinProbeWin32 {
  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr p);
  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h,System.Text.StringBuilder b,int n);
@@ -73,17 +74,24 @@ function Test-WeixinExecutablePath {
 }
 
 function Get-VisibleWindowList {
+    param([switch]$IncludeHidden, [uint32[]]$ProcessIds = @())
     $list = New-Object Collections.Generic.List[object]
+    $processes = @{}
     [WeixinProbeWin32]::EnumWindows({
         param($h, $unused)
-        if ([WeixinProbeWin32]::IsWindowVisible($h)) {
+        $visible = [WeixinProbeWin32]::IsWindowVisible($h)
+        if ($visible -or $IncludeHidden) {
             $windowProcessId = [uint32]0
             [void][WeixinProbeWin32]::GetWindowThreadProcessId($h, [ref]$windowProcessId)
+            if ($ProcessIds.Count -gt 0 -and $ProcessIds -notcontains $windowProcessId) { return $true }
             try {
-                $p = Get-Process -Id $windowProcessId -ErrorAction Stop
+                if (-not $processes.ContainsKey($windowProcessId)) {
+                    $processes[$windowProcessId] = Get-Process -Id $windowProcessId -ErrorAction Stop
+                }
+                $p = $processes[$windowProcessId]
                 $list.Add([pscustomobject]@{
                     Hwnd = $h.ToInt64(); MainWindowHwnd = $p.MainWindowHandle.ToInt64()
-                    Visible = $true; ProcessPath = $p.Path
+                    Visible = $visible; ProcessPath = $p.Path
                 })
             } catch {}
         }
@@ -130,8 +138,10 @@ function Test-WeixinMainIdentity {
 }
 
 function Invoke-WeixinActivation {
-    param([int64]$Hwnd)
-    [void][WeixinProbeWin32]::ShowWindow([IntPtr]$Hwnd, 9)
+    param([int64]$Hwnd, [switch]$PreservePlacement)
+    if (-not $PreservePlacement -or [WeixinProbeWin32]::IsIconic([IntPtr]$Hwnd)) {
+        [void][WeixinProbeWin32]::ShowWindow([IntPtr]$Hwnd, 9)
+    }
     for ($attempt = 0; $attempt -lt 3; $attempt++) {
         $attached = @()
         $current = [uint32][WeixinProbeWin32]::GetCurrentThreadId()

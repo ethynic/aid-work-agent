@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 . (Join-Path $PSScriptRoot '_common.ps1')
 . (Join-Path $PSScriptRoot 'native-messages.ps1')
+. (Join-Path $PSScriptRoot 'latest-history.ps1')
 
 function Test-WeixinHistoryCutoff($Rows, [int]$Days) {
     if ($Days -le 0) { return $false }
@@ -23,7 +24,11 @@ function Test-WeixinHistoryCutoff($Rows, [int]$Days) {
 
 Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WeixinCli.NativeObserve' -Body {
     $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
-    $session = Get-WeixinCurrentNativeSession -TargetName $request.target_name
+    $session = Get-WeixinCurrentNativeSession -TargetName $request.target_name -ExpectedSessionIdentity $request.session_identity
+    if ($request.mode -ceq 'identity') {
+        return @{title=$session.Title;session_identity=$session.Identity;process_started_at=(Get-WeixinLatestProcessStart $session)}
+    }
+    if ($request.mode -ceq 'latest') { return Invoke-WeixinLatestCapture $session $request }
     $chat = Get-WeixinNativeTitleInfo $session
     if (-not (Invoke-WeixinActivation -Hwnd $session.Handle)) {
         Throw-DriverError 'UI_CHANGED' '无法将微信主窗口切换到前台'

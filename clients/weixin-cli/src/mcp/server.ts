@@ -110,7 +110,7 @@ export async function startMcpServer(): Promise<void> {
       async (args, extra) => {
         const startedAt = Date.now()
         const progressToken = extra._meta?.progressToken
-        const result = await runExclusive(running, mutex, def.name, () =>
+        const outcome = await runExclusive(running, mutex, def.name, () =>
           operation.execute(args ?? {}, {
             signal: extra.signal,
             progress: (p) => {
@@ -130,6 +130,17 @@ export async function startMcpServer(): Promise<void> {
             },
           }),
         )
+        const result = def.name === 'weixin_chat_latest'
+          ? {
+            ...outcome,
+            message: outcome.success ? '本机最新消息同步完成' : '本机最新消息同步失败',
+            data: outcome.success ? {
+              status: outcome.data.status,
+              pages_scanned: outcome.data.pages_scanned,
+              new_count: outcome.data.new_count,
+            } : {},
+          }
+          : outcome
         logLine(
           `tool=${def.name} run_id=${result.run_id} success=${result.success} code=${result.code} ` +
             `effect=${result.effect} elapsed_ms=${Date.now() - startedAt}`,
