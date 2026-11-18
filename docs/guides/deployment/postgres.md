@@ -29,7 +29,7 @@
 | `aid_work_agent2` | `aid_user`（容器 env 实测，非文档旧记的 `aid_user2`） | 测试/在线开发主库 |
 | `aid_work_logs2` | `aid_user` | 测试/在线开发日志库 |
 
-> **旧生产库已禁用（2026-09-15）**：旧机上的原生产库已改名 `aid_work_agent_rollback_20260915` / `aid_work_logs_rollback_20260915`，`datallowconn=false` + `CONNECTION LIMIT 0`（数据完整保留，防误操作/误写入）。回滚恢复步骤见 [生产环境部署.md](../../../deploy/生产环境部署.md) §3。注意：`aid_user` 在旧库容器中是**超级用户**，`REVOKE CONNECT` / `CONNECTION LIMIT` 对其无效，必须用 `ALLOW_CONNECTIONS false` 才能彻底禁连。
+> **旧生产库已禁用（2026-09-15）**：旧机上的原生产库已改名 `aid_work_agent_rollback_20260915` / `aid_work_logs_rollback_20260915`，`datallowconn=false` + `CONNECTION LIMIT 0`（数据完整保留，防误操作/误写入）。回滚恢复步骤见 [生产环境部署.md](../../deploy/生产环境部署.md) §3。注意：`aid_user` 在旧库容器中是**超级用户**，`REVOKE CONNECT` / `CONNECTION LIMIT` 对其无效，必须用 `ALLOW_CONNECTIONS false` 才能彻底禁连。
 
 ## 3. 扩展
 

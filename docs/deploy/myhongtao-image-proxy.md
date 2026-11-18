@@ -35,7 +35,7 @@ https://myhongtao.aidingyi.cn/*  ->  https://myhongtao.oss-cn-shenzhen.aliyuncs.
 | 位置 | 文件 |
 |------|------|
 | 测试服务器（124.222.3.254） | `/etc/nginx/conf.d/myhongtao.aidingyi.cn.conf` |
-| 仓库副本 | [myhongtao.aidingyi.cn.conf](./myhongtao.aidingyi.cn.conf) |
+| 仓库副本 | [myhongtao.aidingyi.cn.conf](../../deploy/myhongtao.aidingyi.cn.conf) |
 
 关键配置点：
 

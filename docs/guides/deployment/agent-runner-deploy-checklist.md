@@ -115,7 +115,7 @@ AGENT_RUNNER_API_URL=http://runner-api:8091
 实际 `DATABASE_URL` 指向不同业务库，并确认旧 KF 容器已完成收尾。若两个环境重新指向同一库，
 **同一数据库同一时刻只允许一个环境常驻 runner-worker 双池**，否则会跨环境分摊任务。
 
-> **2026-10-15 起 agent3 环境曾停用**（共库 + lease 池跨环境抢任务，见 `服务器部署现状.md` §1.2）。
+> **2026-10-15 起 agent3 环境曾停用**（共库 + lease 池跨环境抢任务，见 `docs/deploy/服务器部署现状.md` §1.2）。
 > **2026-10-29 已拆库恢复启用**：agent3 改用独立库 `aid_work_agent3`/`aid_work_logs3`（自
 > agent2 库全量复制），`.env` 已切库，本条共库风险解除；两环境 runner 容器名已参数化隔离
 > （agent3 侧 `AGENT_RUNNER_*_CONTAINER` 加 `3` 后缀，见 overlay 头部说明）。测试数据经

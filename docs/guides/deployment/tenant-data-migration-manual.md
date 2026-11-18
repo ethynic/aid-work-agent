@@ -15,7 +15,7 @@
 
 ## 环境拓扑
 
-- 测试环境在 254 服务器（agent2/agent3），生产环境在 243 服务器；SSH 用 `ubuntu@`（禁 root），服务器现状见 `deploy/服务器部署现状.md`。
+- 测试环境在 254 服务器（agent2/agent3），生产环境在 243 服务器；SSH 用 `ubuntu@`（禁 root），服务器现状见 `docs/deploy/服务器部署现状.md`。
 - 跨服务器文件传输：`tar` 打包 + `scp` 传输，两侧都落到 `storage/tenants/{tid}/` 对应场景子目录。
 
 ## 租户数据构成（盘点起点，不是完整清单）

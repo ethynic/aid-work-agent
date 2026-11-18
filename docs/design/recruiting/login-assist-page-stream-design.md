@@ -61,7 +61,7 @@ flowchart LR
 
 ## 4. 数据库模型（DDL 约束）
 
-DDL 同步写入 `deploy/init-postgres.sql`（新库基线）和 `deploy/db_update.yaml`（存量库启动时自动增量）。`deploy/db_update.sql` 已封存为运维历史留档，本功能不得修改。YAML 新增一个 datetime 严格递增、SQL 幂等的逻辑块，由 `_db_update_applied` 记录进度。所有表使用 `TIMESTAMPTZ`、UUID 默认 `gen_random_uuid()`；repository 的每个对象查询都包含 `tenant_id`。页面标题、完整 URL、query、fragment、DOM、JPEG 和票据明文不得入库。
+DDL 同步写入 `deploy/init-postgres.sql`（新库基线）和 `deploy/db_update.yaml`（存量库启动时自动增量）。`deploy/db_update.sql` 已删除（历史内容见 git 历史），不得再新增该文件。YAML 新增一个 datetime 严格递增、SQL 幂等的逻辑块，由 `_db_update_applied` 记录进度。所有表使用 `TIMESTAMPTZ`、UUID 默认 `gen_random_uuid()`；repository 的每个对象查询都包含 `tenant_id`。页面标题、完整 URL、query、fragment、DOM、JPEG 和票据明文不得入库。
 
 ### 4.1 `page_view_offers`
 

@@ -5,7 +5,7 @@
 - prompt_library: 提示词库（留用 / 黑名单 / 模版 三类合并一表）
 
 视频库复用 work_outcomes 表（outcome_type='file' + subagent_id='video-agent'），不新建。
-subagent_definitions 扩展两列（chat_toolbar JSONB + upload_accept TEXT）由 deploy/db_update.sql 兜底，
+subagent_definitions 扩展两列（chat_toolbar JSONB + upload_accept TEXT）由 deploy/db_update.yaml 兜底，
 本模块仅在启动时幂等 ALTER，保证开发环境未跑迁移也能用。
 
 设计依据：docs/plans/plan-video-agent-phase1.md §1.1 / §1.2 / §1.5
@@ -83,7 +83,7 @@ def init_video_agent_tables(conn) -> None:
     """)
 
     # subagent_definitions 扩展两列（声明式 UI 配置）
-    # deploy/db_update.sql 也会兜底，这里再保险一次，开发环境未跑迁移也能用
+    # deploy/db_update.yaml 也会兜底，这里再保险一次，开发环境未跑迁移也能用
     cursor.execute("""
         ALTER TABLE subagent_definitions ADD COLUMN IF NOT EXISTS chat_toolbar JSONB DEFAULT '[]'::jsonb
     """)

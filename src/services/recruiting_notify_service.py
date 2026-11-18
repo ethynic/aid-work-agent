@@ -6,7 +6,7 @@
 - 本模块管「要不要发、发什么、留痕」：租户配置读写、消息模板、通知编排、日志补推
 - 发送动作委托 src/services/wecom_bot.py（纯发送，便于测试替身）
 
-两表（幂等建表，database.py 启动注册 + deploy/db_update.sql 登记）：
+两表（幂等建表，database.py 启动注册 + deploy/db_update.yaml 登记）：
 - bs_recruiting_notify_settings：租户通知配置（webhook_url Fernet 密文存储，
   API 层只出掩码 ***+末4位，沿 channel_config 范式）
 - bs_recruiting_notify_logs：通知留痕（kind=pre|done / candidates JSONB / content /
