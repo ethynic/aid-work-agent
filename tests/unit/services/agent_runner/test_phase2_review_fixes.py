@@ -176,6 +176,69 @@ def test_public_recovery_actions_match_matrix_for_scheduled():
     assert public_runner(_recovery_runner_row("chat"))["local_recovery_actions"] == ["verify", "stop", "resume", "end"]
 
 
+def test_public_automatic_recovery_follows_config_and_preserves_legacy_actions(monkeypatch):
+    from src.config.settings import settings
+    from src.services.agent_runner.auto_local_recovery import CHECKPOINT_KEY
+    from src.services.agent_runner.event_contracts import safe_public_state
+    from src.services.agent_runner.public_view import public_runner
+
+    row = _recovery_runner_row("chat")
+    marker = {"provider": "configured-plugin", "status": "observing", "deadline": None}
+    row["checkpoint"][CHECKPOINT_KEY] = {"step": marker}
+    legacy_actions = ["verify", "stop", "resume", "end"]
+    monkeypatch.setattr(settings.agent_runner, "auto_local_recovery_providers", [])
+    assert "local_recovery_mode" not in public_runner(row)
+    assert public_runner(row)["local_recovery_actions"] == legacy_actions
+
+    monkeypatch.setattr(settings.agent_runner, "auto_local_recovery_providers", ["configured-plugin"])
+    assert public_runner(row)["local_recovery_mode"] == "automatic"
+    assert public_runner(row)["local_recovery_actions"] == legacy_actions  # Existing clients
+    assert "local_recovery_mode" not in public_runner({**row, "source": "scheduled"})
+    assert "local_recovery_mode" not in public_runner({**row, "cancel_requested": True})
+
+    running = {**row, "status": "running"}
+    before = safe_public_state(running)
+    assert before["local_recovery_mode"] is None  # Observing any normal tool is not recovery.
+    marker.update(status="waiting", deadline="2026-11-18T00:05:00+00:00")
+    after = safe_public_state(running)
+    assert {key for key in after if after[key] != before[key]} == {"local_recovery_mode"}
+    assert after["local_recovery_mode"] == "automatic"
+
+
+def test_public_automatic_outcome_retains_provenance_after_rollout_is_disabled(monkeypatch):
+    from src.config.settings import settings
+    from src.services.agent_runner.auto_local_recovery import CHECKPOINT_KEY
+    from src.services.agent_runner.public_view import public_runner
+
+    monkeypatch.setattr(settings.agent_runner, "auto_local_recovery_providers", [])
+    row = _recovery_runner_row("chat")
+    marker = {"provider": "configured-plugin", "status": "failed"}
+    row["checkpoint"][CHECKPOINT_KEY] = {"step": marker}
+    assert public_runner({**row, "status": "finalizing", "cancel_requested": True})["local_recovery_mode"] == "automatic"
+    assert public_runner({**row, "status": "failed", "pause_requested": True})["local_recovery_mode"] == "automatic"
+
+    marker["status"] = "recovered"
+    row["checkpoint"]["local_verification"] = {"state": "succeeded", "automatic_key": "step"}
+    assert public_runner({**row, "status": "completed"})["local_recovery_mode"] == "automatic"
+    assert "local_recovery_mode" not in public_runner(row)
+    row["checkpoint"]["local_verification"].pop("automatic_key")
+    assert "local_recovery_mode" not in public_runner({**row, "status": "failed"})
+
+
+def test_failure_remembers_an_automatic_retry_that_completed_before_a_later_step_failed(monkeypatch):
+    from src.config.settings import settings
+    from src.services.agent_runner.auto_local_recovery import CHECKPOINT_KEY
+    from src.services.agent_runner.public_view import public_runner
+
+    monkeypatch.setattr(settings.agent_runner, "auto_local_recovery_providers", [])
+    row = {**_recovery_runner_row("chat"), "status": "failed"}
+    marker = {"provider": "configured-plugin", "status": "recovered", "deadline": None}
+    row["checkpoint"][CHECKPOINT_KEY] = {"step": marker}
+    assert "local_recovery_mode" not in public_runner(row)
+    marker["deadline"] = "2026-11-18T00:05:00+00:00"
+    assert public_runner(row)["local_recovery_mode"] == "automatic"
+
+
 def test_verify_local_source_gate_passes_for_scheduled():
     """verify_local 不再对 scheduled 抛 LOCAL_VERIFICATION_FORBIDDEN——
     到达后续就绪/适用性判定（NOT_APPLICABLE）即证明 source 门已开放"""

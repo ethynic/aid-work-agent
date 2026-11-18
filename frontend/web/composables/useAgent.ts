@@ -230,7 +230,8 @@ export function useAgent() {
     void state.messages.value
     void state.isProcessing.value
     const rows = [...state.runnerViews.values()].sort((a,b) => b.queue_order-a.queue_order)
-    return rows.find(row => !runnerTerminal(row.status)
+    return rows.find(row => row.local_recovery_mode === 'automatic' && !runnerTerminal(row.status))
+      || rows.find(row => !runnerTerminal(row.status)
       && (row.execution_mode === 'continuous' || runnerWaitLeaf(row.snapshot.waiting)?.kind === 'timer'))
       || (rows[0]?.execution_mode === 'continuous' ? rows[0] : undefined)
       // 暂停、中断或等用户答复时，普通任务同样保留停止入口。
@@ -253,6 +254,7 @@ export function useAgent() {
     const row = targetRunnerId ? state.runnerViews.get(targetRunnerId) : durableTask.value
     if (!row || durableTaskBusy.value || state.pendingControl || row.resume_requested
       || row.cancel_requested || runnerTerminal(row.status)) return
+    if (row.local_recovery_mode === 'automatic' && (row.status === 'finalizing' || action === 'pause')) return
     const wait = runnerWaitLeaf(row.snapshot.waiting)
     if (action === 'resume' && (resumePending.value === row.runner_id || !runnerResumable(row))) return
     const headers = getEffectiveAuthHeader()
@@ -282,8 +284,10 @@ export function useAgent() {
     const rows = [...state.runnerViews.values()].sort((a,b) => b.queue_order-a.queue_order)
     // resume_requested（含服务端停稳后的自动接续）让位：恢复被拒绝时控制链
     // 清除 resume_control_id，卡片随投影自动回归。
-    return rows.find(row => (row.local_recovery || row.local_verification_available) && !row.resume_requested)
-      || (rows[0]?.local_verification?.resource_stopped && !rows[0].resume_requested ? rows[0] : undefined)
+    return rows.find(row => row.local_recovery_mode !== 'automatic'
+      && (row.local_recovery || row.local_verification_available) && !row.resume_requested)
+      || (rows[0]?.local_recovery_mode !== 'automatic' && rows[0]?.local_verification?.resource_stopped
+        && !rows[0].resume_requested ? rows[0] : undefined)
   })
   // R11 真机反馈：恢复卡按钮合并——stop_and_continue 可用时卡片只保留
   // 「停止上一步并继续」一个按钮，旧四按钮（verify/stop/resume/end）不再并列渲染；
@@ -511,7 +515,8 @@ export function useAgent() {
         }
       }
     }
-    if (!state.controlIssue && row.status !== 'failed' && row.session.session_id === sessionId.value && error.value === state.runnerIssue) error.value = null
+    if (!state.controlIssue && (row.status !== 'failed' || row.local_recovery_mode === 'automatic')
+        && row.session.session_id === sessionId.value && error.value === state.runnerIssue) error.value = null
     if (!state.controlIssue) state.runnerIssue = undefined
     state.runnerViews.set(row.runner_id, row)
     reconcileAskConflicts(state, row)
@@ -539,7 +544,7 @@ export function useAgent() {
         state.hasUnreadCompletion.value = true
       }
     }
-    if (row.status === 'failed') runnerError(row.session.session_id,
+    if (row.status === 'failed' && row.local_recovery_mode !== 'automatic') runnerError(row.session.session_id,
       new Error(row.result?.error_code || 'RUNNER_EXECUTION_FAILED'), notify && previous?.status !== 'failed')
   }
 
@@ -1285,7 +1290,11 @@ export function useAgent() {
         || [...state.runnerViews.values()].some(row => row.resume_requested || ['queued','running','finalizing'].includes(row.status))
     }
 
-    if (!currentSendContext() || (retryFiles && [...state.runnerViews.values()].some(view => !runnerTerminal(view.status)))) return
+    if (!currentSendContext()) return
+    if ([...state.runnerViews.values()].some(row => row.local_recovery_mode === 'automatic' && !runnerTerminal(row.status))) {
+      return { restoreInput:true, canRestore:currentSendContext }
+    }
+    if (retryFiles && [...state.runnerViews.values()].some(view => !runnerTerminal(view.status))) return
 
     if (executionMode && [...state.runnerViews.values()].some(row => !runnerTerminal(row.status))) {
       runnerError(effectiveSessionId,new Error('当前会话已有任务，请先处理原任务后再开启持续执行。'))

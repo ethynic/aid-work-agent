@@ -62,6 +62,8 @@ export function historyMessages(records: ChatMessageRecord[]): ChatMessage[] {
 export function runnerMessages(row: RunnerView): ChatMessage[] {
   const accepted = time(row.accepted_at, Date.now())
   const snapshot = row.snapshot
+  const automatic = row.local_recovery_mode === 'automatic'
+  const terminal = ['completed', 'failed', 'cancelled'].includes(row.status)
   const display = { ...(row.result?.assistant_metadata || {}), ...snapshot }
   // Control acceptance/rejection updates the runner, not the old assistant reply.
   // Legacy snapshots without event times retain the accepted time while parked.
@@ -78,18 +80,16 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
   let wait = snapshot.waiting
   let depth = 64
   while (wait?.kind === 'child_wait' && depth-- > 0) wait = wait.child_wait
-  if (!['completed', 'failed', 'cancelled'].includes(row.status)
-      && wait?.kind === 'verification' && typeof wait.question === 'string') {
+  if (!automatic && !terminal && wait?.kind === 'verification' && typeof wait.question === 'string') {
     details.waitingNotice = wait.question
   }
-  if (!details.waitingNotice && wait?.kind === 'verification'
-      && !['completed', 'failed', 'cancelled'].includes(row.status)) {
+  if (!automatic && !terminal && !details.waitingNotice && wait?.kind === 'verification') {
     details.waitingNotice = '任务已暂停，当前操作结果需要核对。请先检查页面和实际结果，再决定如何继续；系统不会自动重复操作。'
   }
-  if (!details.waitingNotice && row.status === 'interrupted') {
+  if (!automatic && !details.waitingNotice && row.status === 'interrupted') {
     details.waitingNotice = '任务已中断，尚未完成。已保留执行记录；下方进度仅表示已执行的步骤，不能作为最终结果。可尝试继续，若仍无法恢复请联系管理员。'
   }
-  if (['completed', 'failed', 'cancelled'].includes(row.status) && !details.progressMessages?.some(item => ['complete', 'error'].includes(item.type))) {
+  if (terminal && !details.progressMessages?.some(item => ['complete', 'error'].includes(item.type))) {
     details.progressMessages?.push({ type: row.status === 'completed' ? 'complete' : 'error', timestamp: finished,
       content: row.status === 'completed' ? '✅ 任务完成' : row.status === 'cancelled' ? '已停止' : '任务未完成' })
   }
@@ -98,7 +98,6 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
   // 结构化提问卡片投影（WP4，设计 §7.1）：仅未终态 runner 的 clarification leaf wait
   // 带 form 时，把卡片绑定（评审 P1：定格自己的 runner/wait/execution 身份）挂到对应
   // 问题 assistant 消息；wait 消费或终态后卡片自然消失，只读回显走 supplementalInputs。
-  const terminal = ['completed', 'failed', 'cancelled'].includes(row.status)
   const liveForm = !terminal && wait?.kind === 'clarification' && wait.form && wait.wait_id ? wait : undefined
   // 受理 control 携带 form 快照与归一化答案时，用户答案消息附带只读已答卡片（§7.1）；
   // 纯文本历史（无 form）保持既有形状，不新增键。
@@ -128,7 +127,7 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
       content: snapshot.input?.text || '', attachments: snapshot.input?.attachments, timestamp: accepted },
     ...additions,
   ]
-  if (row.status === 'failed') {
+  if (row.status === 'failed' && !automatic) {
     const input = [...messages].reverse().find(message => message.role === 'user')
     if (input) {
       const errorCode = row.result?.error_code || 'EXECUTION_FAILED'
@@ -139,10 +138,11 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
       })
     }
   }
+  const output = row.result?.output ?? snapshot.output ?? ''
   const assistant: ChatMessage = { ...common, role: 'assistant', messageId: row.runner_id + (row.execution_mode === 'continuous' || snapshot.history_version === 1 ? ':final' : ':assistant'),
-      content: row.result?.output ?? snapshot.output ?? '', timestamp: finished,
+      content: automatic && row.status === 'failed' && !output.trim() ? '任务未完成。' : output, timestamp: finished,
       ...details, images, cancelled: row.status === 'cancelled',
-      runnerActive: !['completed', 'failed', 'cancelled'].includes(row.status) }
+      runnerActive: !terminal }
   // 失败详情归到用户消息；已有回复/产物仍保留，不制造空白最终回复框。
   if (row.status !== 'failed' || assistant.content.trim() || images.length
       || details.downloadableFiles?.length || details.browserAssistance) messages.push(assistant)

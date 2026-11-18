@@ -90,6 +90,20 @@ def test_detach_changes_cloud_wait_only_and_does_not_release_browser_or_domain_u
     assert cancel_completion_status([{'state':'unknown','effect':'unknown'}], detached_local_wait=True)[0] is False
 
 
+def test_automatic_cancel_finishes_only_local_operations_held_by_the_original_runner():
+    from src.services.agent_runner.auto_local_recovery import CANCEL_CHECKPOINT_KEY
+    from src.services.agent_runner.local_recovery import cancellation_ready
+
+    still_running = {'kind': 'local', 'id': INVOCATION_ID, 'state': 'cancel_requested', 'effect': None}
+    checkpoint = {CANCEL_CHECKPOINT_KEY: True, 'detached_local_wait': True,
+                  'detached_local_invocations': [INVOCATION_ID]}
+    assert cancellation_ready([still_running], checkpoint) == (True, None)
+    unresolved_domain = {'kind': 'domain', 'known': False}
+    assert cancellation_ready([still_running, unresolved_domain], checkpoint)[0] is False
+    other_local = {'kind': 'local', 'id': 'legacy-binding', 'state': 'unknown', 'effect': 'unknown'}
+    assert cancellation_ready([still_running, other_local], checkpoint)[0] is False
+
+
 def test_r9_stop_proof_hands_unknown_result_back_without_new_dispatch():
     """R9 修复1 结果交接：停稳证明（v3 已核，经 owner.root.envelope 随领取载入）
     覆盖的原调用轮询到 EXECUTION_UNKNOWN → 结果原样交回（模型可见效果未知事实，

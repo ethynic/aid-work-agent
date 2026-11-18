@@ -12,6 +12,7 @@ import uuid
 from loguru import logger
 from src.core.agent_engine.contracts import AgentMode, CheckpointFailure, ExecutionState, Outcome
 from .authorization import RunnerAuthorizer
+from .auto_local_recovery import CANCEL_CHECKPOINT_KEY
 from .contracts import RunnerError
 from .durable_control import DurableControl, DurableObserver
 from .execution_repository import ExecutionRepository
@@ -247,6 +248,13 @@ class RuntimeFactory:
         return attachments
 
 
+def _automatic_cancel_output(checkpoint):
+    if checkpoint.get(CANCEL_CHECKPOINT_KEY) and checkpoint.get('detached_local_invocations'):
+        return ('任务已取消。原本机操作的结果尚未确认，已完成的结果已保留。'
+                '你可以在本会话开始其他任务。与原操作冲突的本机任务需等待原设备确认停稳。')
+    return None
+
+
 def execution_result(state, status=None, error_code=None):
     if state is None:
         return {'status':status or 'failed','output':'','images':[], 'messages':[], 'error_code':error_code}
@@ -427,7 +435,7 @@ class RunnerWorker:
             attempt,request=request,complete_audit=complete_audit)
 
     async def _await_cancel_completion(self, attempt, control, state=None):
-        from .local_recovery import cancel_completion_status
+        from .local_recovery import cancellation_ready
         from .cancellation_projection import accept_cancellation_row
         resource_cancel=getattr(self.factory,'request_resource_cancellation',None)
         if resource_cancel is not None:
@@ -440,8 +448,7 @@ class RunnerWorker:
         facts = await collect(not control.envelope.get('cancel_completion_requested',False))
         until = time.monotonic()+5.0
         while True:
-            ready, issue = cancel_completion_status(facts,
-                detached_local_wait=control.envelope.get('detached_local_wait') is True)
+            ready, issue = cancellation_ready(facts, control.envelope)
             if ready:
                 return True
             if issue != 'LOCAL_CANCEL_ACK_PENDING' or time.monotonic() >= until:
@@ -506,7 +513,11 @@ class RunnerWorker:
                     state = control.envelope.get('execution')
                     state = ExecutionState.restore(state) if state else None
                     result = execution_result(state,'cancelled')
-                    if control.envelope.get('detached_local_wait') is True:
+                    cancel_output = _automatic_cancel_output(control.envelope)
+                    if cancel_output:
+                        result['output'] = cancel_output
+                    elif (control.envelope.get('detached_local_wait') is True
+                          and not control.envelope.get(CANCEL_CHECKPOINT_KEY)):
                         result['output'] = '已结束原任务的云端等待，可以继续对话。原本机操作结果仍待核对；确认停止前，该设备的新操作会被阻止。'
                     result['duration_ms'] = int((time.monotonic()-started)*1000)
                     await control.stage(state,result)
@@ -652,6 +663,9 @@ class RunnerWorker:
                         if not await self._await_cancel_completion(attempt, control, state):
                             return
                     result = execution_result(state,'cancelled' if control.cancel_requested else None)
+                    cancel_output = _automatic_cancel_output(control.envelope) if control.cancel_requested else None
+                    if cancel_output:
+                        result['output'] = cancel_output
                     from .auto_local_recovery import active_failure, failure_summary
                     failure = active_failure(control.envelope) if not control.cancel_requested else None
                     if failure:

@@ -13,6 +13,7 @@ from .local_invocations import LocalPhase
 RETRY_LIMIT = 2
 WAIT_LIMIT = timedelta(minutes=5)
 CHECKPOINT_KEY = 'automatic_local_recovery'
+CANCEL_CHECKPOINT_KEY = 'automatic_local_cancel'
 
 _ACTION_REQUIRED = {
     'NOT_LOGGED_IN': ('原设备尚未登录。', '登录后可在本会话重新发起。'),
@@ -78,7 +79,7 @@ async def _remember(owner, phase, provider, status, code, invocation=None):
         'branch': phase.branch, 'ordinal': phase.ordinal, 'status': status, 'code': code,
         'invocation_id': str(invocation['id']) if invocation else None,
         'deadline': (existing or {}).get('deadline') or (
-            None if status == 'observing' else (datetime.now(timezone.utc) + WAIT_LIMIT).isoformat())}
+            (datetime.now(timezone.utc) + WAIT_LIMIT).isoformat() if status in {'waiting', 'failed'} else None)}
     if marker != existing:
         episodes[key] = marker
         await owner.control.save(owner.state, 'automatic_local_recovery')
@@ -221,18 +222,44 @@ def failure_summary(failure, checkpoint):
     return f'步骤「{step}」未完成。{reason} 已完成 {completed} 个工具步骤，记录已保留。{items}{action}'
 
 
+def _parked_episode_key(row, episodes, providers):
+    if (row['source'] != 'chat' or row['session_kind'] != 'web'
+            or row['status'] not in {'waiting', 'interrupted'}
+            or row.get('lease_valid') or row.get('worker_id') is not None
+            or row.get('cancel_requested') or row.get('pause_requested')):
+        return None
+    return next((key for key, marker in episodes.items()
+                 if marker.get('status') in {'waiting', 'observing'} and marker.get('provider') in providers), None)
+
+
+def publicly_automatic(row, checkpoint, providers, local_wait):
+    """Signal only recovery owned by the background flow, without exposing its private facts."""
+    if row['source'] != 'chat' or row['session_kind'] != 'web':
+        return False
+    if checkpoint.get(CANCEL_CHECKPOINT_KEY) is True:
+        return True
+    episodes = checkpoint.get(CHECKPOINT_KEY) or {}
+    status = row['status']
+    if status in {'finalizing', 'failed', 'completed'}:
+        stopped_key = (checkpoint.get('local_verification') or {}).get('automatic_key')
+        return any(key == stopped_key or marker.get('status') == 'failed'
+                   or (marker.get('status') == 'recovered' and marker.get('deadline'))
+                   for key, marker in episodes.items())
+    if row.get('cancel_requested') or row.get('pause_requested'):
+        return False
+    if local_wait and _parked_episode_key(row, episodes, providers) is not None:
+        return True
+    if status == 'running':
+        return any(marker.get('provider') in providers and marker.get('deadline')
+                   and marker.get('status') in {'waiting', 'observing'} for marker in episodes.values())
+    return False
+
+
 def _parked(cursor, runner_id, providers):
     from .ownership import lock_runner
     row = lock_runner(cursor, runner_id)
-    if (row['source'] != 'chat' or row['session_kind'] != 'web'
-            or row['status'] not in {'waiting', 'interrupted'}
-            or row['lease_valid'] or row.get('worker_id') is not None
-            or row.get('cancel_requested') or row.get('pause_requested')):
-        return None, None
     episodes = (row.get('checkpoint') or {}).get(CHECKPOINT_KEY) or {}
-    key = next((key for key, marker in episodes.items()
-                if marker.get('status') in {'waiting', 'observing'} and marker.get('provider') in providers), None)
-    return row, key
+    return row, _parked_episode_key(row, episodes, providers)
 
 
 def _write_parked(cursor, row, *, finalizing=False):

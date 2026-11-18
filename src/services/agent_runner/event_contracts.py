@@ -33,7 +33,8 @@ def safe_public_state(row):
             'pause_requested', 'resume_requested', 'control_revision')} | {
                 'snapshot': snapshot, 'result': value['result'],
                 'usage':value.get('usage'),'execution_mode':value.get('execution_mode'),
-                'sleep_blocked':value.get('sleep_blocked')}
+                'sleep_blocked':value.get('sleep_blocked'),
+                'local_recovery_mode':value.get('local_recovery_mode')}
 
 
 def change_kind(before, after, requested='revision_changed'):

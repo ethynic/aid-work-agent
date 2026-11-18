@@ -61,20 +61,28 @@ def _notifications(database, identifier):
                          ('terminal:' + identifier,))
 
 
-@pytest.mark.parametrize('outcome', ['success', 'exhausted', 'login'])
+@pytest.mark.parametrize('outcome', ['ordinary-success', 'retry-success', 'later-model-failure', 'exhausted', 'login'])
 def test_configured_real_worker_retries_only_safe_local_failures(workers, ordinary_local, service_database, outcome):
     _enable(workers)
     actor, profile, folder, _ = ordinary_local
     device = json.loads((folder/'device-ready.json').read_text())['device_id']
-    identifier = _accept_local(workers, actor, profile)
+    if outcome == 'later-model-failure':
+        prompt = workers.provider.register(tool_reply('boss_select_job',
+            {'job_name': 'Fixture exact job'}, call_id='recovery-local-call'), Reply(status=400))
+        identifier = accept(workers.api, actor, prompt, profile_id=profile)['runner_id']
+    else:
+        identifier = _accept_local(workers, actor, profile)
+    retries_succeed = outcome in {'retry-success', 'later-model-failure'}
     child, _ = workers.start()
-    if outcome == 'login':
+    if outcome == 'ordinary-success':
+        call_ids = [_deliver(workers, service_database, identifier, actor, device, effect='applied')]
+    elif outcome == 'login':
         call_ids = [_deliver(workers, service_database, identifier, actor, device, code='NOT_LOGGED_IN', retryable=True)]
     else:
-        attempts = 1 if outcome == 'success' else 3
+        attempts = 1 if retries_succeed else 3
         call_ids = [_deliver(workers, service_database, identifier, actor, device, code='BUSY', retryable=True)
                     for _ in range(attempts)]
-        if outcome == 'success':
+        if retries_succeed:
             call_ids.append(_deliver(workers, service_database, identifier, actor, device, effect='applied'))
     finished = terminal(service_database, identifier, timeout=25)
     workers.assert_clean_exit(child)
@@ -86,9 +94,14 @@ def test_configured_real_worker_retries_only_safe_local_failures(workers, ordina
         assert len({item['business_ref']['branch'] for item in records[1:]}) == 1
         assert [item['business_ref']['ordinal'] for item in records[1:]] == list(range(1, len(records)))
     notices = _notifications(service_database, identifier)
-    if outcome == 'success':
-        assert finished['status'] == 'completed'
-        assert not notices
+    if retries_succeed or outcome == 'ordinary-success':
+        assert finished['status'] == ('failed' if outcome == 'later-model-failure' else 'completed')
+        episode = next(iter(finished['checkpoint'][CHECKPOINT_KEY].values()))
+        assert episode['status'] == 'recovered'
+        assert bool(episode['deadline']) == retries_succeed
+        view = workers.api.call('GET', f'/v1/runners/{identifier}', actor=actor).json()['runner']
+        assert view.get('local_recovery_mode') == ('automatic' if retries_succeed else None)
+        assert not notices  # Later model failure is outside the local-recovery notice policy.
     else:
         assert finished['status'] == 'failed'
         assert finished['result']['error_code'] == ('NOT_LOGGED_IN' if outcome == 'login' else 'LOCAL_RECOVERY_EXHAUSTED')
@@ -372,3 +385,11 @@ def test_automatic_worker_orchestrates_verified_stop_without_replaying_original(
     rows = service_database.rows('SELECT id,effect FROM local_tool_invocations WHERE tenant_id=%s',
                                  (actor.tenant_id,))
     assert {str(item['id']): item['effect'] for item in rows} == {original: 'unknown', probe: 'none'}
+
+    # A verified stop releases the original device as well as the chat session.
+    followup = _accept_local(workers, actor, profile)
+    next_worker, _ = workers.start()
+    new_invocation = _deliver(workers, service_database, followup, actor, device['id'], effect='applied')
+    assert terminal(service_database, followup)['status'] == 'completed'
+    workers.assert_clean_exit(next_worker)
+    assert new_invocation not in {original, probe}

@@ -331,6 +331,63 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     expect(agent.localRecoveryBusy.value).toBe(false)
   })
 
+  it('preserves input during automatic recovery, then shows the persisted outcome and accepts new work', async () => {
+    const recovering = runnerView({ status:'interrupted', local_recovery:true, local_recovery_mode:'automatic',
+      local_recovery_actions:['stop_and_continue', 'verify', 'resume', 'end'],
+      snapshot:{ waiting:{ kind:'verification', question:'Legacy verification prompt' } } })
+    await discoverParked(recovering)
+    const attachment = { file_id:'retained', name:'retained.txt', size:4, type:'file' as const, mime_type:'text/plain' }
+    agent.currentFiles.value = [attachment]
+    expect(agent.durableTask.value?.runner_id).toBe('runner-A')
+    expect(agent.localRecovery.value).toBeUndefined()
+    expect(agent.resumableTask.value).toBeUndefined()
+    expect(agent.messages.value.some(message => message.waitingNotice)).toBe(false)
+    agent.resumeResumableTask()
+    await agent.controlDurableTask('resume', 'runner-A')
+    await agent.controlDurableTask('pause', 'runner-A')
+    await agent.resolveLocalRecovery('end')
+    const disposition = await agent.sendMessage('保留这条新任务', null, 'A')
+    expect(disposition?.restoreInput).toBe(true)
+    expect(agent.currentFiles.value).toEqual([attachment])
+    expect(agent.runnerFeedback.value).toBeNull()
+    expect(network.requests.filter(item => item.method === 'POST')).toEqual([])
+
+    request('/runners/runner-A').respond({ success:true,
+      runner:{ ...recovering, view_revision:2, resume_requested:true } })
+    await flush()
+    expect(agent.localRecovery.value).toBeUndefined()
+    expect(agent.resumableTask.value).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1000)
+    request('/runners/runner-A').respond({ success:true,
+      runner:{ ...recovering, status:'finalizing', view_revision:3 } })
+    await flush()
+    await agent.controlDurableTask('cancel', 'runner-A')
+    expect(network.requests.filter(item => item.method === 'POST')).toEqual([])
+    await vi.advanceTimersByTimeAsync(1000)
+    const output = '原任务未能恢复。已完成一个步骤，记录已保留。'
+    request('/runners/runner-A').respond({ success:true, runner:runnerView({
+      status:'failed', settlement_status:'settled', view_revision:4, local_recovery_mode:'automatic',
+      result:{status:'failed', output, error_code:'LOCAL_RECOVERY_DEADLINE'},
+      local_verification_available:true,
+      local_verification:{invocation_id:'previous-attempt', state:'succeeded', resource_stopped:true},
+    }) })
+    await flush()
+    expect(agent.messages.value.filter(message => message.content === output)).toHaveLength(1)
+    expect(agent.messages.value.some(message => message.runnerFailure)).toBe(false)
+    expect(agent.localRecovery.value).toBeUndefined()
+    expect(agent.durableTask.value).toBeUndefined()
+    expect(agent.runnerFeedback.value).toBeNull()
+    expect(agent.currentFiles.value).toEqual([attachment])
+
+    const sendNew = agent.sendMessage('保留这条新任务', null, 'A'); await flush()
+    if (network.pending.some(item => item.url.endsWith('/capabilities'))) { capability(); await flush() }
+    const post = request('/runners', 'POST')
+    expect(JSON.parse(post.body!)).toMatchObject({message:'保留这条新任务',session_id:'A',files:[attachment]})
+    post.respond({success:true,runner:runnerView({runner_id:'runner-B', queue_order:2})},202)
+    await sendNew; await flush()
+    expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(1)
+  })
+
   it.each(['resume', 'end'] as const)('an undispatched old checkpoint can %s in the same session', async action => {
     const row = runnerView({ status:'interrupted', local_recovery:true,
       local_recovery_kind:'dispatch_unconfirmed', local_recovery_actions:['resume','end'] })

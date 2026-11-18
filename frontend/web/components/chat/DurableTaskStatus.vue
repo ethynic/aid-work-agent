@@ -1,7 +1,7 @@
 <template>
   <section class="mb-3 rounded-lg border border-default bg-surface p-3 text-sm text-default" aria-label="任务状态">
     <div class="flex flex-wrap items-center justify-between gap-2">
-      <p class="font-medium">{{ title }}</p>
+      <p class="font-medium" :role="automatic ? 'status' : undefined">{{ title }}</p>
       <span v-if="row.execution_mode === 'continuous'" class="text-xs text-muted">持续任务</span>
     </div>
     <p v-if="timer && row.status === 'waiting' && !row.pause_requested && !row.sleep_blocked" class="mt-1 text-muted">
@@ -15,9 +15,9 @@
       <span v-if="row.usage.pending">（部分用量待结算）</span>
     </p>
     <p v-if="row.usage?.updated_at" class="mt-1 text-xs text-muted">积分更新于 {{ dateTime(row.usage.updated_at) }}</p>
-    <div v-if="!terminal" class="mt-2 flex flex-wrap gap-2">
+    <div v-if="!terminal && !(automatic && row.status === 'finalizing')" class="mt-2 flex flex-wrap gap-2">
       <BaseButton v-if="canResume" size="sm" :disabled="disabled" @click="$emit('control', 'resume')">{{ row.status === 'paused' || row.status === 'interrupted' ? '继续任务' : '立即继续' }}</BaseButton>
-      <BaseButton v-if="row.status === 'running' || row.status === 'waiting'" size="sm" intent="secondary" :disabled="disabled || row.pause_requested" @click="$emit('control', 'pause')">暂停</BaseButton>
+      <BaseButton v-if="!automatic && (row.status === 'running' || row.status === 'waiting')" size="sm" intent="secondary" :disabled="disabled || row.pause_requested" @click="$emit('control', 'pause')">暂停</BaseButton>
       <BaseButton size="sm" intent="danger" :disabled="disabled" @click="$emit('control', 'cancel')">停止任务</BaseButton>
     </div>
   </section>
@@ -31,12 +31,14 @@ import { runnerResumable, runnerTerminal, runnerWaitLeaf, type RunnerView } from
 const props = defineProps<{ row: RunnerView; busy: boolean; resumePending?: boolean }>()
 defineEmits<{ control: [action: 'pause' | 'resume' | 'cancel'] }>()
 const terminal = computed(() => runnerTerminal(props.row.status))
+const automatic = computed(() => props.row.local_recovery_mode === 'automatic' && !terminal.value)
 const wait = computed(() => runnerWaitLeaf(props.row.snapshot.waiting))
 const timer = computed(() => wait.value?.kind === 'timer' ? wait.value : undefined)
 // 与 sendMessage/播放按钮同一恢复判定（含发版中断的 verification 等待）
 const canResume = computed(() => !props.resumePending && runnerResumable(props.row))
 const disabled = computed(() => props.busy || props.resumePending || props.row.cancel_requested || !!props.row.resume_requested)
-const title = computed(() => props.row.cancel_requested && !terminal.value ? '正在停止任务'
+const title = computed(() => automatic.value ? (props.row.status === 'finalizing' ? '正在保存任务结果' : '后台正在恢复本机任务')
+  : props.row.cancel_requested && !terminal.value ? '正在停止任务'
   : props.row.pause_requested && props.row.status !== 'paused' ? '正在暂停任务'
   : props.resumePending || props.row.resume_requested ? '正在恢复任务'
   : props.row.sleep_blocked ? '自动继续已暂停'
