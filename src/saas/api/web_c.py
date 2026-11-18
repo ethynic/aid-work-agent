@@ -501,6 +501,10 @@ async def bootstrap(tenant_id: str, config_id: str, request: Request):
     return {
         "success": True,
         "greeting": identity.greeting or "您好，我是本公司的智能助手，有什么可以帮您？",
+        # 附件上传开关（渠道 config，默认 False：隐藏附件按钮 + 服务端拒绝上传）
+        "allow_attachment": bool(conf.get("allow_attachment", False)),
+        # 历史会话入口开关（渠道 config，默认 False：不显示右上角「历史会话」按钮）
+        "show_history": bool(conf.get("show_history", False)),
         "identity": {
             "mode": identity.mode,
             "channel_user_id": identity.channel_user_id,
@@ -553,6 +557,9 @@ async def chat(tenant_id: str, config_id: str, body: WebCChatRequest, request: R
 
     text = (body.text or "").strip()
     refs = _validate_attachment_refs(body.attachments)
+    # 附件开关（渠道 config，默认关）：未开启时拒绝带附件的消息（前端按钮已隐藏，此处兜底）
+    if refs and not conf.get("allow_attachment", False):
+        raise HTTPException(status_code=403, detail="该渠道未开放附件发送")
     if not text and not refs:
         raise HTTPException(status_code=422, detail="消息内容不能为空")
 
@@ -801,6 +808,9 @@ async def upload_file(tenant_id: str, config_id: str, request: Request,
     """C 端附件/图片上传（multipart，独立于 chat 限流：每身份每分钟 10 个）。"""
     identity = _resolve_identity(request, tenant_id, config_id)
     _, conf = _load_web_c_config(tenant_id, config_id)
+    # 附件开关（渠道 config，默认关）：未开启时拒绝上传（前端按钮已隐藏，此处兜底）
+    if not conf.get("allow_attachment", False):
+        raise HTTPException(status_code=403, detail="该渠道未开放附件上传")
     limiters = _get_limiters(config_id, conf)
     if not limiters["upload"].is_allowed(f"{config_id}:{identity.channel_user_id}"):
         return JSONResponse(status_code=429, content={

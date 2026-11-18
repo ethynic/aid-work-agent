@@ -118,6 +118,10 @@ export function identityPath(tenantId: string, configId: string, identity: Ident
 export interface BootstrapResponse {
   success: boolean
   greeting: string
+  /** 附件上传开关（渠道 config，默认 false：隐藏附件按钮，纯文字聊天） */
+  allow_attachment?: boolean
+  /** 历史会话入口开关（渠道 config，默认 false：不显示右上角「历史会话」按钮） */
+  show_history?: boolean
   identity: { mode: string; channel_user_id: string; display_name?: string | null }
   subagent: { agent_id: string; name: string } | null
   sessions: { session_id: string; subagent_id: string; updated_at: string; last_message_at: string }[]

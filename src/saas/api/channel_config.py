@@ -163,11 +163,17 @@ def _normalize_web_c_config(config: dict, existing: Optional[dict] = None) -> No
 
     - channel_secret：缺失/空串/掩码保留旧值（update 场景 existing 传入），
       create 时无旧值则自动生成；伪造防线密钥不由租户表单提供。
-    - enabled：缺省 True；greeting：缺省通用文案；identity_mode：缺省 both，
+    - enabled：缺省 True；greeting：缺省通用文案；allow_attachment：缺省 False
+      （纯文字聊天）；show_history：缺省 False（聊天页不显示历史会话入口）；
+      identity_mode：缺省 both，
       非法值 400（表单单选来源，出现非法值即为异常调用，不静默纠正）。
     """
     config["enabled"] = bool(config.get("enabled", True))
     config["greeting"] = str(config.get("greeting") or "").strip() or _WEB_C_DEFAULT_GREETING
+    # 附件上传开关：默认关闭（纯文字聊天）；开启后 C 端显示附件按钮并放行上传
+    config["allow_attachment"] = bool(config.get("allow_attachment", False))
+    # 历史会话入口开关：默认关闭（聊天页右上角不显示「历史会话」按钮）
+    config["show_history"] = bool(config.get("show_history", False))
     mode = str(config.get("identity_mode") or "both").strip()
     if mode not in _WEB_C_IDENTITY_MODES:
         raise HTTPException(status_code=400, detail="身份模式取值应为 ext / anon / both")
