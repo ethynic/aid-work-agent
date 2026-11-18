@@ -17,7 +17,8 @@ docs/guides/
 ├── deployment/        # 部署与运维（deploy/ 通用指南 + docs/ops/ + 租户迁移手册）
 ├── channels/          # 渠道接入（钉钉/飞书/企微/企微客服手册）
 ├── clients/           # 客户端安装与使用（安装手册、打包手册）
-└── development/       # 开发环境与工具（容器化环境、MCP、Skill 指南、工具规范）
+├── development/       # 开发环境与工具（容器化环境、MCP、Skill 指南、工具规范）
+└── operations/        # 管理操作（portal/租户管理员操作教程，含文档内截图 images/）
 ```
 
 收录规范见 `docs/guides/README.md`：放入对应子目录即出现在文档中心，无需注册；标题取正文首个一级标题。
