@@ -14,7 +14,7 @@
       <button
         v-if="showHistoryEnabled && identityMode !== 'ext'"
         class="text-xs text-muted hover:text-default border border-default rounded-md px-2 py-1"
-        @click="showHistory = !showHistory"
+        @click="toggleHistory"
       >
         历史会话
       </button>
@@ -23,7 +23,13 @@
     <div class="flex-1 flex min-h-0">
       <!-- 历史会话侧栏（anon 模式本浏览器历史；入口开关关闭时不渲染） -->
       <aside v-if="showHistoryEnabled && showHistory && identityMode !== 'ext'" class="w-64 border-r border-default bg-surface flex flex-col max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-10">
-        <div class="px-3 py-2 text-xs text-muted border-b border-default">本浏览器历史会话</div>
+        <div class="px-3 py-2 border-b border-default flex items-center justify-between gap-2">
+          <span class="text-xs text-muted">本浏览器历史会话</span>
+          <button
+            class="text-xs text-primary-600 hover:text-primary-700 border border-primary-200 rounded-md px-2 py-1 shrink-0"
+            @click="startNewSession"
+          >+ 新会话</button>
+        </div>
         <div class="flex-1 overflow-y-auto">
           <button
             v-for="s in sessions"
@@ -150,7 +156,7 @@ import { computed, onMounted, onBeforeUnmount, ref, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   buildIdentityQuery, getBootstrap, postChat, uploadFile, cancelRunner,
-  getRunner, getSessionMessages, webCFileUrl, runnerEventsUrl,
+  getRunner, getSessionMessages, listSessions, webCFileUrl, runnerEventsUrl,
   type IdentityQuery, type UploadRef, type RunnerSnapshot, type SessionSummary,
   type ChannelMessage
 } from '@/api/webC'
@@ -283,6 +289,32 @@ async function switchSession(sessionId: string) {
   await openSession(sessionId)
 }
 
+/** 新会话：本地进入空白聊天，首条消息发送时才调后端惰性创建（避免空会话垃圾数据） */
+function startNewSession() {
+  showHistory.value = false
+  resetStreamState()
+  currentSessionId.value = ''
+  messages.value = []
+  isLoading.value = false
+  errorMessage.value = ''
+}
+
+/** 打开侧栏时刷新会话列表（新会话/其他标签页产生的会话在此同步） */
+function toggleHistory() {
+  showHistory.value = !showHistory.value
+  if (showHistory.value) void refreshSessions()
+}
+
+async function refreshSessions() {
+  try {
+    const data = await listSessions(tenantId.value, configId.value, identity.value, 20)
+    sessions.value = (data.sessions || []).slice().sort((a, b) =>
+      (Date.parse(b.updated_at || b.created_at || '') || 0) - (Date.parse(a.updated_at || a.created_at || '') || 0))
+  } catch {
+    /* 列表刷新失败保持现状 */
+  }
+}
+
 function resetStreamState() {
   observeAbort.abort()
   observeAbort = new AbortController()
@@ -411,12 +443,16 @@ async function submit() {
   isTerminal.value = false
 
   try {
+    const isNewSession = !currentSessionId.value
     const reply = await postChat(tenantId.value, configId.value, identity.value, {
       text,
       client_request_id: newClientId(),
-      attachments
+      attachments,
+      session_id: currentSessionId.value || undefined,
+      new_session: isNewSession || undefined
     })
     currentSessionId.value = reply.session_id
+    if (isNewSession) void refreshSessions()
     if (reply.direct_reply) {
       messages.value.push({ role: 'assistant', content: reply.direct_reply, created_at: nowIso(), attachments: [], images: [], files: [] })
       submitting.value = false

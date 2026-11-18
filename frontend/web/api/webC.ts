@@ -159,7 +159,7 @@ export interface ChatResponse {
 
 export function postChat(
   tenantId: string, configId: string, identity: IdentityQuery,
-  body: { text: string; client_request_id: string; attachments: UploadRef[] }
+  body: { text: string; client_request_id: string; attachments: UploadRef[]; session_id?: string; new_session?: boolean }
 ): Promise<ChatResponse> {
   return request(identityPath(tenantId, configId, identity, '/chat'), {
     method: 'POST',
