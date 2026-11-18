@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
-import { ref } from 'vue'
+import { reactive, ref } from 'vue'
 import GuidesCenter from '@/components/saas/GuidesCenter.vue'
 import { getGuideDoc, getGuidesCatalog } from '@/api/guides'
 
 const push = vi.fn()
+const routeParams = reactive<{ doc_path?: string }>({})
 
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ params: { doc_path: '' } }),
+  useRoute: () => ({ params: routeParams }),
   useRouter: () => ({ push }),
 }))
 vi.mock('@/composables/useTenantAuth', () => ({
@@ -49,7 +50,7 @@ const DOC_CONTENT = [
   '### 异地容灾',
   '正文。',
   '',
-  '相关文档：[部署总览](./DEPLOYMENT.md)',
+  '相关文档：[部署总览](./DEPLOYMENT.md#4-备份策略)',
 ].join('\n')
 
 let wrapper: ReturnType<typeof mount> | undefined
@@ -109,12 +110,27 @@ it('sidebar click navigates to the doc route', async () => {
   expect(push).toHaveBeenCalledWith('/portal/guides/development/mcp_server.md')
 })
 
-it('intercepts relative .md links in the doc and routes within the viewer', async () => {
+it('intercepts relative .md links (with or without anchor) and routes within the viewer', async () => {
   const w = await render()
-  const link = w.find('.markdown-body a[href="./DEPLOYMENT.md"]')
+  const link = w.find('.markdown-body a[href="./DEPLOYMENT.md#4-备份策略"]')
   expect(link.exists()).toBe(true)
   await link.trigger('click')
   expect(push).toHaveBeenLastCalledWith('/portal/guides/deployment/DEPLOYMENT.md')
+})
+
+it('route change reloads the doc and clears stale TOC on failure', async () => {
+  const w = await render()
+  expect(w.findAll('aside button').filter(b => b.text() === '备份策略')).toHaveLength(1)
+
+  vi.mocked(getGuideDoc).mockRejectedValue(new Error('HTTP 404: Not Found'))
+  routeParams.doc_path = 'deployment/missing.md'
+  await flushPromises()
+
+  expect(w.text()).toContain('加载失败')
+  expect(w.find('.markdown-body').exists()).toBe(false)
+  // 旧文档的 TOC 不残留
+  expect(w.findAll('aside button').filter(b => b.text() === '备份策略')).toHaveLength(0)
+  expect(w.text()).toContain('本文档无二级及以下标题')
 })
 
 it('shows load error message when doc fetch fails', async () => {

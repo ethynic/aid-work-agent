@@ -1,123 +1,160 @@
-# 容器化开发与自测环境
+# 本地开发调试环境说明（venv / WSL 容器 / Mac 容器）
 
-需要启动项目或自测时，优先使用本机 Linux 容器。各平台复用仓库的 [Dockerfile](../../../Dockerfile)、[本地 Compose](../../../docker-compose.local.yml) 和测试入口，容器挂载本次开发的工作区。
+> 本文档明确项目支持的三种本地开发、调试、测试方式，以及各自的网络要求。
+> 三种方式的目标一致：**后端服务统一落在 `localhost:8000`，前端 Vite 代理（`http://127.0.0.1:8000`）与 `.env` 配置（数据库统一连 `DATABASE_URL` 指向的线上测试库）无需按环境改动**，启动容器后本地调试体验与 venv 完全一致。
 
-## 1. 选择 Docker 环境
+---
 
-| 开发机 | 选择顺序 | 在哪里执行命令 |
-| --- | --- | --- |
-| Windows | WSL2 发行版内的 Docker Engine 优先，其次是 Docker Desktop 的 Linux 容器 | WSL2 路径在发行版终端执行，Docker Desktop 路径在 Windows 终端执行 |
-| macOS | Docker Desktop | macOS 终端 |
-| Linux | 本机 Docker Engine | Linux 终端 |
-| WSL2 内的智能体 | 当前发行版中的 Docker Engine | 当前终端 |
+## 1. 三种方式总览
 
-在 Windows 运行 `wsl.exe --list --verbose` 确认可用的 WSL2 发行版。在选中的发行版中进入实际工作区，例如 `cd /mnt/c/repos/aid-work-agent`。若发行版或其 Docker Engine 不可用，检查 Windows Docker Desktop。其余平台直接在本机终端检查 Docker。
+| # | 方式 | 适用环境 | 容器文件 | 网络要求 |
+|---|------|---------|---------|---------|
+| 方式一 | 本地 venv 虚拟环境 | Windows（主）、macOS 均可 | 不用容器 | 直接走本机网络，天然 localhost |
+| 方式二 | WSL2 内运行容器 | Windows + WSL2（容器网络与本地一致，**不走 NAT**） | `docker-compose.local.yml` | WSL 开启 mirrored 网络模式；容器建议走 host 网络覆盖文件 |
+| 方式三 | Mac 版 Docker Desktop 容器 | macOS | `docker-compose.local.yml` | 端口发布到 localhost（默认）；或 4.34+ 开启 host networking |
+
+**统一原则**：
+
+1. 容器网络必须与开发机本地网络一致（桥接/host 模式），**禁止依赖 NAT 后的独立网段 IP**（如 `172.x.x.x`）访问服务。
+2. 任何一种方式下，开发者都只使用 `http://localhost:8000` 访问后端，与 venv 方式无差别。
+3. **同一时间只运行一种方式**：venv 进程与容器都默认绑定 8000 端口，混跑会端口冲突。切换方式前先停掉另一种（venv 停进程，容器 `docker compose -f docker-compose.local.yml down`）。
+
+---
+
+## 2. 公共前置（三种方式通用）
+
+1. **环境变量**：复制 `.env.example` 为 `.env` 并填写必要配置（LLM API Key、`DATABASE_URL` 等）。
+2. **数据库**：数据库连接统一使用 `.env` 中 `DATABASE_URL` 配置的**线上测试数据库**，本地**不部署任何数据库服务**（不新增本地 Postgres/Redis 等）。三种方式连接的是同一个测试库，`.env` 无需按环境改动；唯一要求是开发机到测试库的网络可达。
+3. **前端**：三种方式下前端都不进容器，统一在 `frontend/` 目录 `npm install && npm run dev`。Vite 已配置 `/api` 代理到 `http://127.0.0.1:8000`（见 `frontend/vite.config.ts`），后端落在 localhost:8000 后前端无需任何改动。
+
+---
+
+## 3. 方式一：本地 venv 环境
+
+Windows 上的默认方式，直接使用宿主机 Python 环境。
 
 ```bash
-docker context show
-docker info --format '{{.OSType}}'
-docker compose version
+# 1. 创建并激活虚拟环境（首次）
+python -m venv venv
+venv\Scripts\activate            # Windows；macOS/Linux 为 source venv/bin/activate
+
+# 2. 安装依赖（首次）
+pip install -r requirements.txt
+
+# 3. 配置 .env 后启动后端（默认监听 8000）
+python -m src.main
+
+# CLI 聊天模式（可选）
+CLI_MODE=true python -m src.main
 ```
 
-确认实际连接的是本机引擎，且 `OSType` 为 `linux`。本机的 WSL2 路径示例使用 `Ubuntu-22.04`。在 Windows 仓库根目录可执行 `wsl.exe -d Ubuntu-22.04 --exec bash -l`，进入后以 `pwd` 确认路径。
+- 优点：无虚拟化层，调试器断点、日志、文件 IO 都是原生路径，启动最快。
+- 特点：依赖安装在 Windows 侧 venv 中；部分依赖（Playwright/Chromium、Pandoc 等）需按工具文档单独安装。
+- 验证：`curl http://localhost:8000/health` 返回正常即启动成功。
 
-## 2. 复用或启动本地服务
+---
 
-先检查现有 API 容器。挂载到 `/app` 的目录应是当前工作区，在 WSL2 下按 Linux 路径核对，例如 `/mnt/c/repos/aid-work-agent`。
+## 4. 方式二：WSL2 内运行容器（容器网络与本地一致，不走 NAT）
 
-```bash
-docker inspect --format '{{range .Mounts}}{{if eq .Destination "/app"}}{{.Source}}{{end}}{{end}}' aid-agent-api
-docker compose -f docker-compose.local.yml ps
-```
+适用场景：希望后端跑在与生产一致的 Linux 容器里（Python 3.11-slim + 完整工具链），同时保留本地 localhost 调试体验。容器编排文件为根目录 [docker-compose.local.yml](../../../docker-compose.local.yml)：挂载整个项目目录、uvicorn `--reload` 热更新、已设 `WATCHFILES_FORCE_POLLING=true` 兼容 Windows 文件系统的变更监听。
 
-已经运行且挂载正确的容器直接复用。多个工作区共享 Docker 引擎时，`aid-agent-api` 是固定容器名，8000 是默认端口。另一个工作区在用时，普通单测可使用下文的一次性容器，服务联调时先协调切换。
+### 4.1 前置：WSL2 开启 mirrored 网络模式（关键，不走 NAT）
 
-WSL2 可直接使用 Windows 盘上的工作区。如果密集文件访问或测试子进程在 `/mnt/c` 下超时，可以把当前开发工作区放到 WSL2 文件系统中，再从该路径启动和自测。原工作区有未提交改动时，先确认新路径包含同样的改动。
+WSL2 默认使用 NAT 虚拟网络（WSL 内是独立网段），必须改为 **mirrored 镜像网络**，让 WSL 与 Windows 共享同一套网络接口，容器端口才会直接落在 Windows 的 localhost 上：
 
-### 首次准备依赖
+1. 编辑（新建）`%UserProfile%\.wslconfig`：
 
-完整启动需要本机专用 PostgreSQL、Redis 和三个持久化卷。现有 WSL2 环境已具备 `aid-wecom-local_local` 网络、`postgres` / `redis` 服务和对应卷，可直接使用。在新机器上，按以下步骤准备：
-
-1. 在仓库根目录构建后端镜像。首次构建在填入实际 `.env` 前进行。已有凭据时，用包含本次源码且排除了 `.env` 的构建上下文更新镜像。
-
-   ```bash
-   docker build --build-arg APT_MIRROR=https://mirrors.aliyun.com -t aid-agent-api:latest .
+   ```ini
+   [wsl2]
+   networkingMode=mirrored
    ```
 
-2. 创建缺少的依赖资源。下列命令需要在终端环境中已设置仅用于本机的 `POSTGRES_PASSWORD`。Bash 中用 `repo="$PWD"` 设置当前路径，PowerShell 中用 `$repo = (Get-Location).Path`。
+2. 重启 WSL 生效：
 
-   ```bash
-   docker network create aid-wecom-local_local
-   docker volume create aid-wecom-local_storage
-   docker volume create aid-wecom-local_uploads
-   docker volume create aid-wecom-local_logs
-   docker run -d --name aid-dev-postgres --restart unless-stopped --network aid-wecom-local_local --network-alias postgres -e POSTGRES_USER=aid_local -e POSTGRES_PASSWORD -e POSTGRES_DB=aid_work_agent_local -v aid-dev-postgres-data:/var/lib/postgresql/data --mount "type=bind,source=${repo}/deploy/init-postgres.sql,target=/docker-entrypoint-initdb.d/10-aid.sql,readonly" pgvector/pgvector:pg16
-   docker run -d --name aid-dev-redis --restart unless-stopped --network aid-wecom-local_local --network-alias redis -v aid-dev-redis-data:/data redis:7-alpine redis-server --appendonly yes
-   docker exec aid-dev-postgres pg_isready -h 127.0.0.1 -U aid_local -d aid_work_agent_local
-   docker exec aid-dev-redis redis-cli ping
+   ```powershell
+   wsl --shutdown
    ```
 
-3. 从 `.env.example` 创建 `.env` 并填入本地配置。如果沿用已有 `.env`，在启动前核对 PostgreSQL 和 Redis 指向本机开发资源。使用上述网络时，`DATABASE_URL` 的主机为 `postgres`，端口为 `5432`，数据库为 `aid_work_agent_local`，用户为 `aid_local`，密码与容器一致。追踪库 `LOGS_DATABASE_URL` 按需指向专用本地库。设置 `REDIS_ENABLED=true`、`REDIS_HOST=redis`、`HEAVY_TOOLS_MODE=local`。联调 Runner 时，设置 `AGENT_RUNNER_API_URL=http://runner-api:8091` 和本地 `AGENT_RUNNER_WEB_SERVICE_TOKEN`，可设 `AGENT_RUNNER_WORKER_SLOTS=1`。模型或第三方凭据按实际联调范围配置。
+3. 验证：在 WSL 内 `ip addr` 看到的应是 Windows 宿主机的 IP（而非 `172.x.x.x` 独立网段）；Windows 侧 `curl http://localhost:8000` 与 WSL 侧互相可达（mirrored 模式下 loopback 双向共享）。
 
-### 启动与检查
+   > mirrored 模式要求 Windows 11 22H2（build 22621）及以上。
 
-默认使用 bridge 网络，容器通过服务名访问本机 PostgreSQL 和 Redis，API 端口发布到开发机的 8000。按本次任务选择服务。
+4. 在 WSL 发行版内安装 Docker Engine（docker-ce，非 Docker Desktop；已装可跳过）：
 
-```bash
-docker compose -f docker-compose.local.yml config --quiet
-docker compose -f docker-compose.local.yml up -d --no-build aid-agent-api
-# 需要联调 Runner 时
-docker compose -f docker-compose.local.yml up -d --no-build aid-agent-api runner-api runner-worker
-docker compose -f docker-compose.local.yml ps
-```
+   ```bash
+   curl -fsSL https://get.docker.com | sh
+   ```
 
-访问 `http://localhost:8000/health`，只记录响应的 `status` 字段。应看到 `healthy`。Runner 联调另外确认 Runner API 和 worker 的状态。API 使用 uvicorn 热重载监视 `src/`。修改依赖时更新镜像，修改 `.env` 时重新创建本地容器。WSL2 访问默认端口时先检查 WSL 和 Windows 两侧的 `localhost:8000`。仅在已有 WSL mirrored 网络且需要让 API 使用宿主网络时考虑 [host 网络覆盖](../../../docker-compose.local.hostnet.yml)。该覆盖会使 API 脱离 Compose 网络，依赖 `postgres`、`redis`、`runner-api` 等容器 DNS 的本机配置继续使用默认 bridge。
+### 4.2 启动（推荐：host 网络覆盖，容器无 NAT、无端口映射）
 
-## 3. 在容器内自测
-
-**后端。** 在可以调用 Docker 的 Bash 中，从当前工作区用 `bash scripts/dev_test.sh <相关测试> -p no:cacheprovider -q` 复用运行中的 `aid-agent-api`。复用入口使用宿主 Python 核对测试安全文件，实际 pytest 在容器内运行。Windows 的 WSL2 路径可从仓库根执行 `wsl.exe --exec bash -lc 'bash scripts/dev_test.sh tests/unit/test_models.py -p no:cacheprovider -q'`，非默认发行版在 `--exec` 前加 `-d <发行版>`。
-
-普通单测不需要启动 API、PostgreSQL 或 Redis。无匹配的运行容器、宿主没有 Bash 或 Python 时，在启动 API 之前构建或复用同一仓库镜像，再从选中的 Docker 终端运行一次性容器。替换示例测试路径，`repo` 的设置同上。
+项目提供 [docker-compose.local.hostnet.yml](../../../docker-compose.local.hostnet.yml) 覆盖文件，让容器直接使用 WSL 的网络栈（等价于桥接到本地网络）：容器内 `localhost` 即 WSL loopback（mirrored 模式下即 Windows loopback），回环语义与 venv 完全一致，8000 端口直接绑定在宿主网络栈上。
 
 ```bash
-docker run --rm --mount "type=bind,source=${repo},target=/app" -w /app --entrypoint bash aid-agent-api:latest scripts/dev_test.sh tests/unit/test_models.py -p no:cacheprovider -q
+cd /mnt/c/repos/aid-work-agent    # 或 clone 到 WSL 文件系统内的路径
+docker compose -f docker-compose.local.yml -f docker-compose.local.hostnet.yml up -d --build
+docker compose -f docker-compose.local.yml -f docker-compose.local.hostnet.yml logs -f aid-agent-api
 ```
 
-Python 临时检查也使用选定的应用镜像或当前容器，例如 `docker exec aid-agent-api python --version`。浏览器用例按 [测试脚本](../../../scripts/dev_test.sh) 使用 Redis helper。普通 pytest 未显式配置隔离库时使用无数据库模式。测试或检查指向其他工作区的结果不得用于当前改动。
+> host 网络模式下 compose 的 `ports` 端口映射会被忽略（启动时有 warning，属预期），服务固定监听在宿主 8000 端口。
 
-**PostgreSQL。** 本地 API 和 Runner 默认连本地业务库。联调已有业务流程时，可以查询本地业务数据，也可以写入本轮专用记录。先核对实际目标是本机容器和预期数据库。有事务的测试可回滚，需要提交的联调记录按确切 ID 及时清理。[测试规范](../../../.claude/rules/testing.md#数据库安全入口)
+### 4.3 备选：默认 bridge + 端口发布
+
+不加载覆盖文件时，`docker-compose.local.yml` 使用 bridge 网络 + `8000:8000` 端口发布。在 WSL mirrored 模式下发布的端口同样直接落在 Windows localhost，开发体验一致（差异仅在容器内的回环语义，见 4.4 注意事项）：
 
 ```bash
-docker exec -it <本地业务PG容器> psql -U <本地业务用户> -d <本地业务库>
+docker compose -f docker-compose.local.yml up -d --build
 ```
 
-自动化 SQL 回归、迁移和批量数据验证使用专用 PostgreSQL。从当前仓库根目录执行以下命令，示例以 Runner 存储集成测试为例。
+### 4.4 注意事项
+
+- **仓库位置与热重载延迟**：仓库放 Windows 盘（`/mnt/c/...`）时 WSL 跨文件系统 IO 较慢。compose 已将 uvicorn 热重载监听收窄到 `--reload-dir src`（避免轮询扫描 frontend/node_modules 等数万文件），实测 /mnt/c 下代码修改到自动重载约 10-15 秒。需要秒级热重载的密集后端迭代，建议将仓库 clone 到 WSL 原生文件系统（如 `~/repos/aid-work-agent`）；两份工作区不要同时运行服务（8000 端口冲突）。
+- **数据库**：三种方式统一连接 `.env` 中 `DATABASE_URL` 指向的线上测试数据库，容器直接出网访问该库，bridge 与 host 网络模式无差异，`.env` 不需要按环境改动。本地不新增任何数据库服务。
+- **前端**：可在 Windows 侧照常 `npm run dev`（代理 127.0.0.1:8000 直接可达），也可在 WSL 内运行，二者等价。
+- 验证清单：Windows 侧 `curl http://localhost:8000/health`；WSL 侧同样 `curl http://localhost:8000/health`；后端日志确认已连上 `.env` 指向的线上测试库；前端页面正常调用后端接口。
+
+---
+
+## 5. 方式三：macOS + Docker Desktop 容器
+
+Mac 上没有 venv 方式的历史约束，直接用 Mac 版 Docker Desktop 跑同一份 `docker-compose.local.yml`：
 
 ```bash
-docker compose -f docker-compose.test-db.yml run --rm sql tests/integration/agent_runner_service/test_storage.py -p no:cacheprovider -q
+cd /path/to/aid-work-agent
+docker compose -f docker-compose.local.yml up -d --build
+docker compose -f docker-compose.local.yml logs -f aid-agent-api
 ```
 
-首次自动启动专用 PG，之后复用同一个容器。每轮 pytest 连接自己的 `aid_test_*` 库并在结束时清理。测试入口直接使用当前工作区和已有的 `aid-agent-api:latest` 镜像，连接配置已在 Compose 中提供。纯 SQL 路径禁用 Redis，避免等待本地业务 Redis。可用 `docker compose -f docker-compose.test-db.yml ps` 查看状态，用 `docker compose -f docker-compose.test-db.yml up -d --wait postgres` 提前启动。手工验证 SQL 时可在专用 PG 内用 `docker compose -f docker-compose.test-db.yml exec postgres psql -U postgres -d postgres`，按需创建并清理本轮临时库。
+### 网络说明（桥接到本地 localhost，不走 NAT 网段）
 
-**Web 前端。** 复用应用镜像内的 Node.js 和 npm，使用锁文件安装依赖并执行 Web 构建。匿名卷隔离 Linux `node_modules`，同时保留宿主机已有依赖目录。
+Docker Desktop for Mac 运行在一台轻量虚拟机中，但**发布（publish）的端口由 Docker Desktop 自动转发到 Mac 的 loopback**——`ports: "8000:8000"` 发布后，Mac 侧直接 `http://localhost:8000` 访问，开发者视角与桥接/venv 一致，不接触虚拟机 NAT 网段 IP。
 
-```bash
-docker run --rm --mount "type=bind,source=${repo},target=/app" --mount type=volume,target=/app/frontend/node_modules -w /app/frontend --entrypoint bash aid-agent-api:latest -c 'npm ci && npm run build'
-```
+- **数据库**：与方式二相同，统一连接 `.env` 中 `DATABASE_URL` 指向的线上测试数据库，容器直接出网访问，无需 `host.docker.internal`，`.env` 零改动。
 
-针对性测试使用同样的镜像执行 `npm ci && npm test -- <相关测试>`。页面联调时，Vite 的 `/api` 代理访问 `127.0.0.1:8000`。WSL2 和 Linux 可让 Vite 容器使用 host 网络，后端继续使用默认 bridge 并发布 8000 端口。Docker Desktop 4.34 及以上可在本机已启用 host networking 时使用同一命令。[Vite 配置](../../../frontend/vite.config.ts) · [Docker host 网络说明](https://docs.docker.com/engine/network/drivers/host/#docker-desktop)
+- **可选：真正的 host 网络**（Docker Desktop 4.34+）：Settings → Resources → Network → 勾选 **Enable host networking** 后，可使用 `docker-compose.local.hostnet.yml` 覆盖文件（同方式二），容器内 `localhost` 即 Mac loopback，行为与方式二完全一致。
 
-```bash
-docker run --rm --network host --mount "type=bind,source=${repo},target=/app" --mount type=volume,target=/app/frontend/node_modules -w /app/frontend --entrypoint bash aid-agent-api:latest -c 'npm ci && npm run dev -- --host 127.0.0.1 --port 3000 --strictPort'
-```
+- **前端**：Mac 侧 `frontend/` 下 `npm run dev`，代理 127.0.0.1:8000 直接可达。
+- 验证清单：Mac 终端 `curl http://localhost:8000/health`；后端日志确认已连上 `.env` 指向的线上测试库；前端页面正常调用后端接口。
 
-从开发机打开 `http://localhost:3000`。桌面端原生运行、打包及签名按各客户端的目标系统执行。
+---
 
-## 4. 本地容器不可用时使用 agent3
+## 6. 常见问题
 
-本机无法运行容器，或所需集成在本地无法验证时，使用已有配套服务的 **agent3 在线开发测试环境**。记录本机阻塞原因，并按验证类型选择入口。
+| 现象 | 原因与处理 |
+|------|-----------|
+| 容器启动后 Windows 访问不到 localhost:8000（WSL） | 未开启 mirrored 网络模式，或改完 `.wslconfig` 未执行 `wsl --shutdown`。确认 WSL 内 IP 与 Windows 一致 |
+| WSL 内 `ip addr` 显示 172.x 网段 | 仍是 NAT 模式。Windows 版本需 11 22H2+；确认 `.wslconfig` 中 `networkingMode=mirrored` 拼写与节名 `[wsl2]` 正确 |
+| 8000 端口被占用 | venv 进程与容器混跑。切换方式前先停另一种（`docker compose -f docker-compose.local.yml down` 或结束 python 进程） |
+| 容器内连不上测试数据库 | 数据库统一是 `.env` 中 `DATABASE_URL` 指向的线上测试库。确认开发机到测试库网络可达（VPN/白名单）、`DATABASE_URL` 配置正确；venv 与容器连接的是同一个库，排查时先看后端启动日志中的数据库初始化报错 |
+| 改代码后容器没反应 | 热重载只监听 `--reload-dir src`（见 `docker-compose.local.yml`），改 src/ 以外的文件（configs、skills 等）需手动重启容器：`docker compose -f docker-compose.local.yml -f docker-compose.local.hostnet.yml restart`；/mnt/c 下检测延迟约 10-15 秒属正常（轮询机制） |
+| 容器内时区/文件权限异常 | 参见 `docker-compose.local.yml` 内注释中的已知问题兜底（tmpfs /tmp mode=1777 等） |
 
-- 单测和构建可在已有访问权限且可用的任务专属工作区运行，再核对提交和未提交改动是否与当前工作区一致。使用隔离测试容器和测试数据，保留在线服务的工作区和运行状态。
-- 服务联调先确认在线版本是否包含本次改动。若需向在线服务更新代码、运行部署脚本、重建或重启，按 [真机部署授权](../../../AGENTS.md#真机部署授权) 执行。
+---
 
-记录实际运行的代码版本和验证结果。当前版本仍未验证的项目注明缺口。
+## 7. 相关文件
+
+| 文件 | 用途 |
+|------|------|
+| [docker-compose.local.yml](../../../docker-compose.local.yml) | 本地开发容器编排（方式二/三共用）：挂载源码、uvicorn --reload |
+| [docker-compose.local.hostnet.yml](../../../docker-compose.local.hostnet.yml) | host 网络覆盖文件：容器直接绑定宿主网络栈（不走 bridge/NAT、无端口映射） |
+| [Dockerfile](../../../Dockerfile) | 后端镜像构建（多阶段，python:3.11-slim） |
+| `frontend/vite.config.ts` | 前端开发服务器与 `/api` 代理（固定指向 127.0.0.1:8000） |

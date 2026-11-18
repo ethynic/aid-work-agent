@@ -133,6 +133,8 @@ def test_doc_reads_nested_path():
     "deployment\\backup.md",
     "",
     "/etc/passwd",
+    "\x00",                    # 空字节：resolve 抛 ValueError，须按 404 处理而非 500
+    "C:/Windows/settings.md",  # Windows 盘符路径：解析后必然越界
 ])
 def test_doc_rejects_invalid_paths(bad_path):
     p1, p2 = _patch_platform_admin()

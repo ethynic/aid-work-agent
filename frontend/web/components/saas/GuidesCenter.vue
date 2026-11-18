@@ -154,23 +154,32 @@ async function loadCatalog() {
   }
 }
 
+let loadSeq = 0
+
 async function loadDoc(path: string) {
   if (!path) {
     currentDoc.value = null
     return
   }
+  const seq = ++loadSeq
   docLoading.value = true
   docError.value = ''
   try {
-    currentDoc.value = await getGuideDoc(path)
+    const doc = await getGuideDoc(path)
+    if (seq !== loadSeq) return // 已有更新的加载请求，丢弃过期响应
+    currentDoc.value = doc
     narrowSelected.value = path
     await nextTick()
     buildToc()
   } catch (e) {
+    if (seq !== loadSeq) return
     currentDoc.value = null
+    detachScroll()
+    tocItems.value = []
+    activeTocId.value = ''
     docError.value = e instanceof Error ? `加载失败：${e.message}` : `加载失败：${String(e)}`
   } finally {
-    docLoading.value = false
+    if (seq === loadSeq) docLoading.value = false
   }
 }
 
@@ -261,11 +270,14 @@ function onContentClick(e: MouseEvent) {
     e.preventDefault()
     return
   }
-  if (href.endsWith('.md')) {
+  // 拆出锚点：xxx.md 与 xxx.md#section 都拦截进 viewer（跨文档锚点暂不滚动）
+  const hashIdx = href.indexOf('#')
+  const pathPart = hashIdx >= 0 ? href.slice(0, hashIdx) : href
+  if (pathPart.endsWith('.md')) {
     e.preventDefault()
     const base = (currentDoc.value?.path || currentPath.value).split('/')
     base.pop()
-    const parts = href.split('/')
+    const parts = pathPart.split('/')
     const stack = [...base]
     for (const part of parts) {
       if (part === '.' || part === '') continue

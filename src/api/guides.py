@@ -108,10 +108,11 @@ def _resolve_doc_path(rel_path: str) -> Path:
     """校验相对路径落在 guides 根内且为 .md，返回绝对路径；否则 404。"""
     if not rel_path or rel_path.startswith(("/", "\\")) or "\\" in rel_path:
         raise HTTPException(status_code=404, detail="文档不存在")
-    candidate = (GUIDES_ROOT / rel_path).resolve()
     try:
+        candidate = (GUIDES_ROOT / rel_path).resolve()
         candidate.relative_to(GUIDES_ROOT.resolve())
-    except ValueError:
+    except (ValueError, OSError):
+        # ValueError：空字节等非法路径；OSError：非法路径字符；统一按不存在处理
         raise HTTPException(status_code=404, detail="文档不存在")
     if candidate.suffix != ".md" or not candidate.is_file():
         raise HTTPException(status_code=404, detail="文档不存在")

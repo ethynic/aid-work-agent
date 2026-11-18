@@ -22,7 +22,7 @@
 |---|------|------|------|---------|---------|
 | 20261012-1230 | file_assets 历史文件名补录 | ✅ agent2 已补录，生产待执行 | commit 8825d880 上线 file_assets 表持久化文件元数据（根治下载文件名退化）后，存量历史文件名需跑补录脚本恢复（磁盘 + 消息表原始名优先，幂等）。agent2 已执行（磁盘 1241 + 消息 769，共 1457 行）；生产 243 发布后需同样执行。 | — | —（执行步骤见 [生产发布备忘](../deploy/生产发布备忘.md)） |
 | 20261012-2130 | docs 文档清理（3 个月前失效文档） | ✅ 已执行（2026-10-13） | 41 个删除项已 git rm；待定 wecom-integration.md 摘取有效章节至 wecom-crypto-troubleshooting.md 后删除；research_index 8 条目 + 全部悬空引用已清理；B 级重点项 6 处已修（含 2 个部署文档凭证脱敏），其余 32 个 B 级小修待后续顺手处理。 | [清理计划](plans/plan-docs-cleanup-20261012.md) | — |
-| 20261021-2200 | 私有云生产环境部署指南 | ✅ 已完成（2026-10-21） | 新增 [deploy/生产环境部署指南.md](guides/deployment/生产环境部署指南.md)：面向客户私有云全新部署的通用 playbook，综合 243 独占迁移档案与济南诺度混部实例（摸底决策、Docker/codeup 三通道、sparse-checkout、PG 绑址、.env 必改项、宝塔 TLS、发布后事项、验收清单、两例踩坑速查）。 | [部署指南](guides/deployment/生产环境部署指南.md) | — |
+| 20261021-2200 | 私有云生产环境部署指南 | ✅ 已完成（2026-10-21） | 新增 [docs/guides/deployment/生产环境部署指南.md](guides/deployment/生产环境部署指南.md)：面向客户私有云全新部署的通用 playbook，综合 243 独占迁移档案与济南诺度混部实例（摸底决策、Docker/codeup 三通道、sparse-checkout、PG 绑址、.env 必改项、宝塔 TLS、发布后事项、验收清单、两例踩坑速查）。 | [部署指南](guides/deployment/生产环境部署指南.md) | — |
 | 20261028-1255 | 外发邮箱配置指南（域名 DNS 侧） | ✅ 已完成（2026-10-28） | 新增 [docs/ops/outbound-email-dns-setup-guide.md](guides/deployment/outbound-email-dns-setup-guide.md)：面向租户外发邮件域名配置的实操指南，沉淀 tulin.cn 体检实战——SPF/DKIM/DMARC/MX 四记录要点（163 免费企业邮 + 阿里云解析逐步操作）、MX 主机记录误填子域致主域收信中断、权威 DNS 与公共缓存验证口径、DMARC 报告解读与 p 策略升级路径、缺 DKIM 决策参考与验收清单。 | [指南](guides/deployment/outbound-email-dns-setup-guide.md) | — |
 
 ## 系统功能
