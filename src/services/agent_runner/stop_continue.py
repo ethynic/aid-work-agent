@@ -23,7 +23,10 @@ def dispatch_continue_resume_in_tx(cursor, runner, checkpoint):
     into verified_local_invocations. Gates mirror the original acceptance
     order of control_repository: parked row, no cancellation, no in-flight
     resume, and original cancellation facts complete with the stop proof
-    covering the merged scope.
+    covering the merged scope. R12: the client_request_id carries a per-runner
+    attempt ordinal so a worker-rejected continuation is not replay-shorted —
+    a re-click (or a genuinely new stop episode) dispatches a fresh resume,
+    while an accepted in-flight orchestration stays idempotent.
     """
     from .local_recovery import _cancel_facts
     if (checkpoint.get('local_verification') or {}).get('continue_after_stop') is not True:
@@ -43,11 +46,19 @@ def dispatch_continue_resume_in_tx(cursor, runner, checkpoint):
         if (fact.get('kind') == 'local' and not fact['completion_known']
                 and str(fact['id']) not in verified):
             return False
-    request_id = row['runner_id'] + ':continue-after-stop'
-    cursor.execute('SELECT control_id FROM agent_runner_controls WHERE runner_id=%s AND client_request_id=%s',
-        (row['runner_id'], request_id))
-    if cursor.fetchone():
+    request_prefix = row['runner_id'] + ':continue-after-stop'
+    cursor.execute('''SELECT status FROM agent_runner_controls
+        WHERE runner_id=%s AND left(client_request_id,%s)=%s''',
+        (row['runner_id'], len(request_prefix), request_prefix))
+    prior = cursor.fetchall()
+    # 幂等门：编排在途（accepted）时不重复投递；被拒/已消费的既往尝试不短路
+    # 新投递（R12）——Worker 拒绝后重按必须产生新接续，新一轮停稳同理；
+    # 已消费的成功接续离开 parked 状态后由上方行门阻断重复，行再次 parked
+    # 只可能是新停稳事实，允许按序数投递。
+    if any(item['status'] == 'accepted' for item in prior):
         return False
+    attempt = len(prior) + 1
+    request_id = request_prefix if attempt == 1 else '%s#%d' % (request_prefix, attempt)
     payload = {'action': 'resume'}
     control_id = 'control_' + uuid.uuid4().hex
     cursor.execute('''INSERT INTO agent_runner_controls

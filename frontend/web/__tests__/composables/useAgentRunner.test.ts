@@ -539,12 +539,44 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     expect(agent.localRecoveryActions.value).toEqual(['verify','stop','resume','end'])
   })
 
-  it('a landed stop_and_continue renders no settled-stop guidance notification', async () => {
+  // ---- R12：接续被拒后的按钮回退与提示（R11 单按钮合并按停稳落地状态收窄） ----
+
+  it('a rejected auto-continue falls back to the full server action list with a retry hint', async () => {
     await discoverParked(runnerView({status:'interrupted',local_recovery:true,
       local_recovery_actions:continueActions,
       local_verification:{invocation_id:'stop-continue-A',state:'succeeded',resource_stopped:true,
-        page_observed:false,continue_after_stop:true,error_code:'WRONG_PAGE'}}))
+        page_observed:false,continue_after_stop:true,error_code:null}}))
     expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+    expect(agent.localRecoveryActions.value).toEqual(['verify','stop','stop_and_continue','resume','end'])
+    expect(agent.localVerificationMessage.value).toContain('设备已停稳，原任务尚未继续')
+    expect(agent.localVerificationMessage.value).toContain('停止上一步并继续')
+  })
+
+  it('an in-flight stop_and_continue before the stop receipt keeps the merged single button', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:continueActions,
+      local_verification:{invocation_id:'stop-continue-A',state:'queued',continue_after_stop:true}}))
+    expect(agent.localRecoveryActions.value).toEqual(['stop_and_continue'])
+    expect(agent.localVerificationMessage.value).toContain('停止上一步')
+  })
+
+  it('a landed plain stop without auto-continue keeps the R11 merged single button', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:continueActions,
+      local_verification:{invocation_id:'stop-A',state:'succeeded',resource_stopped:true,
+        page_observed:false,error_code:'WRONG_PAGE'}}))
+    expect(agent.localRecoveryActions.value).toEqual(['stop_and_continue'])
+  })
+
+  it('a landed stop_and_continue whose resume stayed in flight clears the recovery card', async () => {
+    // R11 语义适配说明：停稳落地且 resume_requested=true（服务端停稳回执同一事务
+    // 设置）时卡片整体让位——静默场景只存在于在途状态；卡片可见的停稳落地态
+    // 现在渲染「接续未生效」提示（上一用例），R11 的静默断言按新语义收敛。
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:continueActions,resume_requested:true,
+      local_verification:{invocation_id:'stop-continue-A',state:'succeeded',resource_stopped:true,
+        page_observed:false,continue_after_stop:true,error_code:null}}))
+    expect(agent.localRecovery.value).toBeUndefined()
     expect(agent.localVerificationMessage.value).toBe('')
   })
 

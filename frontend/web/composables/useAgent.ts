@@ -124,6 +124,7 @@ const LOCAL_RECOVERY_MESSAGES = {
   verifyUnavailable: '本机只读核验暂不可用，请确认原 Runtime 连接后重试；原操作不会重新执行。',
   unavailable: '原操作暂不能结束等待。请保持原 Runtime 连接以回传结果，再核对原操作；补充消息和附件仍保留。',
   stopContinue: '正在停止上一步并解锁设备；停稳后将自动继续原任务，也可以直接发送新指令。本次输入和附件已保留。',
+  continueRejected: '设备已停稳，原任务尚未继续：自动接续未生效（如积分不足等原因被拒）。原因解决后可重试「停止上一步并继续」，也可改用「核对并继续」或「结束等待，继续对话」。',
 } as const
 
 const RECOVERY_REPLY_MESSAGES: Record<string, string> = {
@@ -287,10 +288,15 @@ export function useAgent() {
   // R11 真机反馈：恢复卡按钮合并——stop_and_continue 可用时卡片只保留
   // 「停止上一步并继续」一个按钮，旧四按钮（verify/stop/resume/end）不再并列渲染；
   // 动作不含 stop_and_continue 或旧服务端未投影动作列表时保持既有四按钮回退。
+  // R12：停稳已落地（resource_stopped）而恢复卡仍可见 = 自动接续不在途
+  // （在途时 resume_requested 让位整卡）→ 接续被拒或未投递，回退渲染服务端
+  // 完整动作列表：保留重试入口与「核对并继续」「结束等待」手工路径。
   const localRecoveryActions = computed<Array<'verify' | 'stop' | 'stop_and_continue' | 'resume' | 'end'>>(() => {
-    const actions = localRecovery.value?.local_recovery_actions
-    if (actions?.includes('stop_and_continue')) return ['stop_and_continue']
-    return actions ?? ['verify', 'stop', 'resume', 'end']
+    const row = localRecovery.value
+    const actions = row?.local_recovery_actions
+    if (!row || !actions?.includes('stop_and_continue')) return actions ?? ['verify', 'stop', 'resume', 'end']
+    if (row.local_verification?.continue_after_stop && row.local_verification?.resource_stopped) return actions
+    return ['stop_and_continue']
   })
   const localVerificationMessage = computed(() => {
     const value = localRecovery.value?.local_verification
@@ -298,10 +304,10 @@ export function useAgent() {
     if (value.state === 'queued' || value.state === 'running' || value.state === 'claimed') return value.continue_after_stop
       ? LOCAL_RECOVERY_MESSAGES.stopContinue
       : '正在等待原 Runtime 处理核验请求，不会重新执行原操作。'
-    // R11 真机反馈：「停止上一步并继续」停稳已落地（resource_stopped 为真，state 随
-    // 停稳回执进入终态）时任务已由服务端自动接续，停稳指引通知是噪音，不再渲染；
+    // R12：停稳已落地而恢复卡仍可见（在途接续会让位整卡，见 localRecovery）
+    // → 自动接续未生效，必须提示用户行动与重试/手工路径，不再静默吞掉；
     // 停止未落地的失败指引（下方 stop_error_code / 默认分支）保留。
-    if (value.continue_after_stop && value.resource_stopped) return ''
+    if (value.continue_after_stop && value.resource_stopped) return LOCAL_RECOVERY_MESSAGES.continueRejected
     if (value.resource_stopped && value.page_observed === false) return value.waiting_ended
       ? '旧执行已停稳，但原页面未核对；原等待已结束。请明确提出当前页的新意图，未知发送不会重发。'
       : '旧执行已停稳，但原页面未核对。请结束等待，再明确提出当前页的新意图，未知发送不会重发。'
