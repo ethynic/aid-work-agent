@@ -9,15 +9,33 @@
     />
 
     <div class="flex-1 flex overflow-hidden">
-      <!-- 左侧：文档目录（窄屏隐藏，用顶部下拉替代） -->
-      <aside class="hidden lg:flex lg:flex-col w-64 shrink-0 border-r border-default bg-surface overflow-y-auto">
-        <div v-for="cat in catalog?.categories || []" :key="cat.dir" class="px-3 py-2">
-          <div class="text-xs font-semibold text-muted uppercase tracking-wide px-2 py-1">{{ cat.name }}</div>
-          <ul>
+      <!-- 左侧：文档目录（文件夹式分类，可折叠；窄屏隐藏，用顶部下拉替代） -->
+      <aside class="hidden lg:flex lg:flex-col w-64 shrink-0 border-r border-default bg-surface overflow-y-auto py-2">
+        <div v-for="cat in catalog?.categories || []" :key="cat.dir" class="px-2">
+          <button
+            type="button"
+            class="w-full flex items-center gap-2 px-2 py-2 rounded text-left hover:bg-surface-hover"
+            :aria-expanded="!collapsedCategories.has(cat.dir)"
+            @click="toggleCategory(cat.dir)"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 shrink-0 text-primary-600" aria-hidden="true">
+              <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+            </svg>
+            <span class="text-sm font-semibold text-default truncate">{{ cat.name }}</span>
+            <svg
+              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              class="w-3.5 h-3.5 shrink-0 ml-auto text-muted transition-transform"
+              :class="collapsedCategories.has(cat.dir) ? '' : 'rotate-90'"
+              aria-hidden="true"
+            >
+              <path d="M9 6l6 6-6 6" />
+            </svg>
+          </button>
+          <ul v-show="!collapsedCategories.has(cat.dir)" class="mt-0.5 mb-1">
             <li v-for="doc in cat.docs" :key="doc.path">
               <button
                 type="button"
-                class="w-full text-left text-sm px-2 py-1.5 rounded truncate block"
+                class="w-full text-left text-sm pl-7 pr-2 py-1.5 rounded truncate block"
                 :class="doc.path === currentPath ? 'bg-primary-50 text-primary-700 font-medium' : 'text-default hover:bg-surface-hover'"
                 :title="doc.title"
                 @click="openDoc(doc.path)"
@@ -113,7 +131,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -227,8 +245,23 @@ async function loadDocImages(seq: number) {
   }
 }
 
+// ============== 目录折叠 ==============
+
+const collapsedCategories = reactive(new Set<string>())
+
+function toggleCategory(dir: string) {
+  if (collapsedCategories.has(dir)) collapsedCategories.delete(dir)
+  else collapsedCategories.add(dir)
+}
+
+function expandCategoryOf(docPath: string) {
+  const cat = catalog.value?.categories.find(c => docPath.startsWith(`${c.dir}/`))
+  if (cat) collapsedCategories.delete(cat.dir)
+}
+
 function openDoc(path: string) {
   if (!path) return
+  expandCategoryOf(path)
   if (path === currentPath.value) {
     // 路由未变化时（默认文档 / 重复点击）直接加载
     if (currentDoc.value?.path !== path) loadDoc(path)
@@ -340,6 +373,7 @@ watch(narrowSelected, (p) => { openDoc(p) })
 onMounted(async () => {
   await loadCatalog()
   if (currentPath.value) {
+    expandCategoryOf(currentPath.value)
     loadDoc(currentPath.value)
   } else {
     openDefaultDoc()
