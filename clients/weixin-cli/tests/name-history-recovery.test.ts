@@ -1,20 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { objectsFromTextRegions } from '../src/platform/nameSession.js'
 import { ConversationAligner } from '../src/platform/aligner.js'
 
-test('unreadable older regions stay opaque while a new bottom message survives',()=>{
-  const regions=[10,50,90].map(y=>({sender:'peer' as const,bounds:{x0:10,x1:150,y0:y,y1:y+30}}))
-  const box=(text:string,y:number,score=1)=>({text,score,x0:20,x1:140,y0:y+4,y1:y+20})
-  for(const top of [[],[box('damaged',10,.5)]]) {
-    const objects=objectsFromTextRegions(regions,[...top,box('anchor',50),box('new',90)])
-    assert.equal(objects[0]!.type,'image')
-    const a=new ConversationAligner(),base=a.align([{sender:'peer',text:'old'},{sender:'peer',text:'anchor'}],null)
-    assert.ok(base.kind==='ok')
-    const result=a.align(objects.map(o=>({sender:o.sender,text:o.text,unsupported:o.type!=='text'})),base.messages[1]!.local_message_id)
-    assert.ok(result.kind==='ok')
-    assert.equal(result.messages.at(-1)!.text,'new')
-  }
+test('a clipped older message stays opaque while a new bottom message survives',()=>{
+  const p=(text:string)=>({sender:'peer' as const,text})
+  const a=new ConversationAligner(),base=a.align([p('old'),p('anchor')],null)
+  assert.ok(base.kind==='ok')
+  const result=a.align([{...p(''),unsupported:true},p('anchor'),p('new')],base.messages[1]!.local_message_id)
+  assert.ok(result.kind==='ok')
+  assert.equal(result.messages.at(-1)!.text,'new')
 })
 
 test('baseline opaque slots remain history without hiding newly appended media',()=>{

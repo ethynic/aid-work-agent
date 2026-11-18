@@ -90,6 +90,32 @@ def test_detach_changes_cloud_wait_only_and_does_not_release_browser_or_domain_u
     assert cancel_completion_status([{'state':'unknown','effect':'unknown'}], detached_local_wait=True)[0] is False
 
 
+def test_r9_stop_proof_hands_unknown_result_back_without_new_dispatch():
+    """R9 修复1 结果交接：停稳证明（v3 已核，经 owner.root.envelope 随领取载入）
+    覆盖的原调用轮询到 EXECUTION_UNKNOWN → 结果原样交回（模型可见效果未知事实，
+    未知招呼零重发），不再 LOCAL_EFFECT_VERIFICATION_REQUIRED；无停稳证明保持
+    拒绝（兼容锚），无 owner 上下文（旧链路）语义不变。"""
+    from types import SimpleNamespace
+    from src.local_tools.durable_flow import LocalContinuationRequired
+    from src.local_tools.lifecycle import local_operation_scope
+    from src.local_tools.overlay_flow import _known
+    unknown_greet = {'success': False, 'code': 'EXECUTION_UNKNOWN',
+        'message': '本机执行结果无法确认', 'effect': 'unknown', 'data': None,
+        'invocation_id': INVOCATION_ID}
+    owner = SimpleNamespace(root=SimpleNamespace(
+        envelope={'verified_local_invocations': [INVOCATION_ID]}))
+    with local_operation_scope(owner, branch='main', ordinal=0):
+        handed_back = _known(dict(unknown_greet))
+    assert handed_back['code'] == 'EXECUTION_UNKNOWN' and handed_back['effect'] == 'unknown'
+    stranger = SimpleNamespace(root=SimpleNamespace(envelope={'verified_local_invocations': []}))
+    with local_operation_scope(stranger, branch='main', ordinal=0):
+        with pytest.raises(LocalContinuationRequired) as blocked:
+            _known(dict(unknown_greet))
+    assert blocked.value.code == 'LOCAL_EFFECT_VERIFICATION_REQUIRED'
+    with pytest.raises(LocalContinuationRequired):
+        _known(dict(unknown_greet))
+
+
 def test_only_pending_local_operation_offers_recovery_not_historical_local_or_ask_user():
     node = {'tools': {'call': {'phase':'waiting'}}, 'resources': {
         'local_invocations': {'key': {'tool_call_id':'call'}}}}

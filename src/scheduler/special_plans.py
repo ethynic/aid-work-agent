@@ -1,6 +1,7 @@
 """Markers owned by dedicated plan APIs, excluded from ordinary task management."""
 
-SPECIAL_PLAN_MARKERS = ('[wecom-conversation:daily]',)
+WECOM_SCHEDULED_SEND_MARKER = '[wecom-conversation:scheduled-send]'
+SPECIAL_PLAN_MARKERS = ('[wecom-conversation:daily]', WECOM_SCHEDULED_SEND_MARKER)
 RESERVED_MARKERS = SPECIAL_PLAN_MARKERS + ('[wecom-conversation:backfill]',)
 
 # Python str.strip() whitespace, excluding LF because split_part already removes it.

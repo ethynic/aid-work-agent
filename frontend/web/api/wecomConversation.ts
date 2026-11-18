@@ -231,6 +231,65 @@ export function addConversations(sessions: string[], expected?: { expected_devic
   return request('POST', '/conversations/add', { sessions, ...expected })
 }
 
+export type ScheduledSendRule = 'once' | 'daily' | 'weekly'
+
+export interface ScheduledSendWrite {
+  name: string
+  text: string
+  sessions: string[]
+  schedule_type: ScheduledSendRule
+  time_config: { run_at?: string; hour?: number; minute?: number; weekdays?: string[] }
+  expected_device_id?: string
+  expected_source_generation?: string
+}
+
+export interface ScheduledSendPlan extends Omit<ScheduledSendWrite, 'expected_device_id' | 'expected_source_generation'> {
+  task_id: string
+  status: 'paused' | 'active' | 'completed' | 'expired'
+  next_due_at: string | null
+  device_id: string
+  account: string
+  device_name: string | null
+  session_names: Record<string, string | null>
+}
+
+export interface ScheduledSendExecution {
+  id: number
+  task_id: string
+  plan_name: string
+  session_name: string | null
+  due_at: string
+  started_at: string | null
+  status: 'queued' | 'dispatched' | 'running' | 'succeeded' | 'failed' | 'expired' | 'cancelled' | 'unknown'
+  reason: string | null
+  diagnostic_id: string | null
+}
+
+const SCHEDULED_SENDS = '/scheduled-sends'
+
+export function listScheduledSends(offset = 0): Promise<{ plans: ScheduledSendPlan[]; has_more: boolean }> {
+  return request('GET', `${SCHEDULED_SENDS}?offset=${offset}`)
+}
+
+export function listScheduledSendExecutions(offset = 0, taskId?: string): Promise<{ executions: ScheduledSendExecution[]; has_more: boolean }> {
+  const query = new URLSearchParams({ offset: String(offset) })
+  if (taskId) query.set('task_id', taskId)
+  return request('GET', `${SCHEDULED_SENDS}/executions?${query}`)
+}
+
+export function saveScheduledSend(body: ScheduledSendWrite, taskId?: string): Promise<{ plan: ScheduledSendPlan }> {
+  return taskId ? request('PATCH', `${SCHEDULED_SENDS}/${encodeURIComponent(taskId)}`, body)
+    : request('POST', SCHEDULED_SENDS, body)
+}
+
+export function setScheduledSendState(taskId: string, action: 'enable' | 'pause'): Promise<{ plan: ScheduledSendPlan }> {
+  return request('POST', `${SCHEDULED_SENDS}/${encodeURIComponent(taskId)}/${action}`)
+}
+
+export function deleteScheduledSend(taskId: string): Promise<{ task_id: string }> {
+  return request('DELETE', `${SCHEDULED_SENDS}/${encodeURIComponent(taskId)}`)
+}
+
 export interface DailyPlanWrite {
   target_day: 'today' | 'yesterday'
   scope_mode: 'all' | 'selected'

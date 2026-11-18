@@ -25,6 +25,7 @@ function manifest() {
     provider_id: providerId, provider_version: version, protocol: 'mcp', transport: 'stdio',
     platforms: ['win32-x64'], execution_target: 'local_required', min_mcp_protocol_version: '2024-11-05',
     entrypoint: ['dist/src/cli/index.js', 'mcp', '--stdio'], tools,
+    tool_declaration: { version: 1, tools: tools.map(tool => ({ name: tool.name })) },
     schema_digest: 'sha256:' + createHash('sha256').update(JSON.stringify(tools)).digest('hex'),
   }
 }

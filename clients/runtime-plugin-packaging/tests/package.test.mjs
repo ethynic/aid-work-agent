@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync, verify } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, cpSync, existsSync, realpathSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, cpSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,19 +9,23 @@ import test from 'node:test'
 import canonicalize from 'canonicalize'
 import { createOfflinePackage, copyCurrentProviderDist, copyProviderScriptAssets, copyProviderDriverAssets, filesUnder, sha256, zipBytes, main, stageNativeInputDependency } from '../package.mjs'
 
-test('WeCom staging excludes removed compiled commands even when dist is stale', () => {
-  const root = mkdtempSync(join(tmpdir(), 'aid-wecom-stale-dist-'))
-  try {
-    mkdirSync(join(root, 'src/cli'), { recursive: true })
-    mkdirSync(join(root, 'dist/src/cli'), { recursive: true })
-    writeFileSync(join(root, 'src/cli/index.ts'), 'export {}')
-    writeFileSync(join(root, 'dist/src/cli/index.js'), 'export {}')
-    writeFileSync(join(root, 'dist/src/cli/addCustomer.js'), 'throw Error("stale")')
-    copyCurrentProviderDist(root, join(root, 'staged'))
-    assert.ok(existsSync(join(root, 'staged/cli/index.js')))
-    assert.ok(!existsSync(join(root, 'staged/cli/addCustomer.js')))
-  } finally { rmSync(root, { recursive: true, force: true }) }
-})
+for (const [provider, removedModule] of [['WeCom', 'cli/addCustomer.js'], ['Weixin', 'platform/liveBridge.js']]) {
+  test(`${provider} staging excludes removed compiled commands even when dist is stale`, () => {
+    const root = mkdtempSync(join(tmpdir(), 'aid-provider-stale-dist-'))
+    try {
+      mkdirSync(join(root, 'src/cli'), { recursive: true })
+      mkdirSync(join(root, 'dist/src/cli'), { recursive: true })
+      writeFileSync(join(root, 'src/cli/index.ts'), 'export {}')
+      writeFileSync(join(root, 'dist/src/cli/index.js'), 'export {}')
+      const removed = join(root, 'dist/src', removedModule)
+      mkdirSync(dirname(removed), { recursive: true })
+      writeFileSync(removed, 'throw Error("stale")')
+      copyCurrentProviderDist(root, join(root, 'staged'))
+      assert.ok(existsSync(join(root, 'staged/cli/index.js')))
+      assert.ok(!existsSync(join(root, 'staged', removedModule)))
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+}
 
 test('release signature binds inner payload and full canonical manifest, with no self hash', async () => {
   const pair = generateKeyPairSync('ed25519')
@@ -106,31 +110,22 @@ test('required files describes actual relocated payload bytes and rejects direct
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
 
-test('Weixin PowerShell OCR path relocates and fails closed for installed packages', () => {
+test('Weixin packages stage native history and send drivers with their shared UIA dependencies', () => {
   const clients = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-  const home = mkdtempSync(join(tmpdir(), 'aid-ps-ocr-paths-'))
+  const home = mkdtempSync(join(tmpdir(), 'aid-weixin-native-drivers-'))
   try {
-    for (const [provider, resolver] of [['weixin-cli', 'Resolve-WeixinOcrPython']]) {
-      const pkg = join(home, provider)
-      mkdirSync(join(pkg, 'drivers/ps1'), { recursive: true })
-      cpSync(join(clients, provider, 'drivers/ps1/_common.ps1'), join(pkg, 'drivers/ps1/_common.ps1'))
-      if (provider === 'weixin-cli') cpSync(join(clients, provider, 'drivers/ps1/win32-lib.ps1'), join(pkg, 'drivers/ps1/win32-lib.ps1'))
-      mkdirSync(join(pkg, 'ocr-python'))
-      const python = join(pkg, 'ocr-python/python.exe')
-      writeFileSync(python, '')
-      const script = `. '${join(pkg, 'drivers/ps1/_common.ps1').replaceAll("'", "''")}'; ${resolver}`
-      let result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true })
-      assert.equal(result.status, 0, result.stderr)
-      assert.equal(realpathSync.native(result.stdout.trim()), realpathSync.native(python))
-      rmSync(python)
-      writeFileSync(join(pkg, 'runtime-manifest.json'), '{}')
-      result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true })
-      assert.notEqual(result.status, 0)
-      assert.match(result.stderr, /CONFIG_MISSING/)
+    copyProviderDriverAssets(join(clients, 'weixin-cli/drivers'), join(home, 'drivers'))
+    const paths = filesUnder(home).map(file => file.path)
+    for (const driver of ['_common.ps1', 'win32-lib.ps1', 'native-messages.ps1', 'native-session-search.ps1',
+      'history-read.ps1', 'message-send.ps1', 'latest-history.ps1', 'window-doctor.ps1']) {
+      assert.ok(paths.includes(`drivers/ps1/${driver}`), `missing relocated Weixin driver ${driver}`)
     }
-    const history = readFileSync(join(clients, 'weixin-cli/drivers/ps1/history-read.ps1'), 'utf8')
-    assert.match(history, /Resolve-WeixinOcrPython/)
-    assert.doesNotMatch(history, /experiments|venv\\Scripts/)
+    assert.ok(!paths.includes('drivers/ps1/name-resolve-native.ps1'), 'retired name resolution must not ship')
+    for (const driver of ['history-read.ps1', 'message-send.ps1']) {
+      const contents = readFileSync(join(home, 'drivers/ps1', driver), 'utf8')
+      assert.match(contents, /native-messages\.ps1/)
+      assert.doesNotMatch(contents, /Resolve-WeixinOcrPython|Test-WeixinOcrMatch|experiments|venv\\Scripts/)
+    }
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
 
@@ -255,19 +250,6 @@ test('native input dependency: no declaration stays untouched; declared one is r
     // 不再包含相对路径（staged npm 无法解析）
     assert.ok(!readFileSync(join(ready, 'package.json'), 'utf8').includes('../shared'))
   } finally { rmSync(home, { recursive: true, force: true }) }
-})
-
-test('Weixin OCR asset lock retains its existing pinned timezone wheel', () => {
-  const lock = JSON.parse(readFileSync(new URL('../ocr-assets.lock.json', import.meta.url), 'utf8'))
-  const tzdata = lock.wheels.find((wheel) => wheel.name === 'tzdata')
-  assert.ok(tzdata, 'existing Weixin OCR lock keeps its pinned tzdata wheel')
-  assert.match(tzdata.filename, /^tzdata-\d+\.\d+(\.\d+)?-py2\.py3-none-any\.whl$/)
-  assert.match(tzdata.url, /^https:\/\/files\.pythonhosted\.org\//)
-  assert.match(tzdata.sha256, /^[0-9a-f]{64}$/)
-  const prepare = readFileSync(new URL('../prepare-ocr.py', import.meta.url), 'utf8')
-  // 最终便携解释器冒烟必须断言日期入口（ZoneInfo + 日期边界数学）
-  assert.match(prepare, /ZoneInfo\("Asia\/Shanghai"\)/)
-  assert.match(prepare, /assert int\(end\.timestamp\(\)\)-int\(start\.timestamp\(\)\)==86400/)
 })
 
 test('wecom release closure verifies date/IANA capability end to end (review 3 P1-5)', () => {

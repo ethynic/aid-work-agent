@@ -1,10 +1,8 @@
 /**
  * weixin_unread_list operation（M2）：读取主窗口会话列表的未读消息（只读，effect=none）。
  *
- * 不打开任何会话、不清除未读角标：PrintWindow 截主窗口（窗口被遮挡/非前台也能出图）
- * → drivers/py/unread_list.py（RapidOCR，只取窗口宽 29% 以左的会话列表区）→
- * 按 y 聚合出行 {name, preview, unread_count}。没有未读的会话不出现。
- * 单栏模式（无左侧会话列表）→ UI_CHANGED（message 说明需恢复两栏）。
+ * PowerShell 读取原生会话行并在本机核对角标，只返回有未读计数的
+ * {name, preview, unread_count}。读取不会打开会话或清除未读。
  */
 import { fileURLToPath } from 'node:url'
 import { runWeixinOperation } from './context.js'
@@ -44,8 +42,8 @@ export function createWeixinUnreadListOperation(
           return null
         },
         async () => {
-          ctx.progress({ stage: 'execute', message: '截取主窗口并 OCR 会话列表' })
-          const data = await runDriverFn({ script: DRIVER_PATH, signal: ctx.signal })
+          ctx.progress({ stage: 'execute', message: '读取微信未读会话' })
+          const data = await runDriverFn({ script: DRIVER_PATH, signal: ctx.signal, useVisionProxy: false })
           // PS 5.1 ConvertTo-Json 对单元素数组有解包怪癖，TS 侧防御性归一
           const rawUnread = Array.isArray(data.unread) ? data.unread : data.unread != null ? [data.unread] : []
           let unread: UnreadEntry[] = rawUnread.map((it) => ({

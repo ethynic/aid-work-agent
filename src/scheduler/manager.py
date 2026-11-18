@@ -1436,6 +1436,19 @@ class ScheduledTaskManager:
                       WHERE s.opening_send_status IN ('pending','sending')
                          OR (s.opening_send_status='unknown' AND
                              (i.result_json IS NOT NULL OR s.opening_send_reconcile_id IS NOT NULL))
+                     UNION
+                     SELECT s.tenant_id, s.device_id, s.account
+                       FROM bs_wecom_scheduled_sends s
+                       LEFT JOIN local_tool_invocations i ON i.id=s.invocation_id AND i.tenant_id=s.tenant_id
+                       LEFT JOIN local_tool_invocations r ON r.id=s.reconcile_invocation_id AND r.tenant_id=s.tenant_id
+                      WHERE s.status IN ('queued','dispatched','running')
+                         OR (s.status IN ('unknown','succeeded') AND s.released_at IS NULL)
+                         OR (s.status='succeeded' AND s.billed_at IS NULL)
+                         OR (s.status='unknown' AND
+                             ((s.reconcile_invocation_id IS NULL AND (i.result_json->'data' ? 'receipt_id'
+                                        OR i.result_json->'_late_result'->'data' ? 'receipt_id'))
+                              OR i.result_json ? '_late_result' OR r.result_json ? '_late_result'
+                              OR r.state IN ('queued','claimed','running','cancel_requested','succeeded')))
                    ) groups ORDER BY tenant_id, device_id, wecom_account_id''')
             return [(row['tenant_id'], str(row['device_id']), row['wecom_account_id'])
                     for row in cursor.fetchall()]

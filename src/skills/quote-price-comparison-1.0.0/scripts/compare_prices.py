@@ -35,7 +35,8 @@ from collections import Counter, defaultdict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from qc_common import (  # noqa: E402
     DIMENSION_BASE_UNIT, FLAG_LABEL, GREEN_FILL, GREEN_FONT, RED_FILL, RED_FONT,
-    dump_json, dump_text, load_json, norm_text, similarity, today, uom_dimension,
+    apply_docx_font, apply_workbook_font, dump_json, dump_text, load_json,
+    norm_text, set_run_font, similarity, today, uom_dimension,
 )
 
 
@@ -616,6 +617,8 @@ def write_excel(path, results, cfg, quotes_meta, anomalies, suspicious):
         row[1].alignment = Alignment(wrap_text=True, vertical="top")
         ws4.row_dimensions[row[0].row].height = 30
 
+    # 统一字体为免费可商用 Noto Sans SC（含中文/英文/符号，保留既有颜色/粗体/字号）
+    apply_workbook_font(wb)
     wb.save(path)
     return path
 
@@ -741,6 +744,9 @@ def write_summary(path, results, cfg, quotes_meta, anomalies, suspicious, marks)
     bullet("*_marked.*：带红绿标记与批注的源报价单副本", "")
     bullet("comparison.json、marks.json：结构化结果与标色指令", "")
     bullet("summary.docx：本摘要（Word 格式）", "")
+
+    # 统一字体为免费可商用 Noto Sans SC（含中文 eastAsia），避免中文回退到特殊主题字体
+    apply_docx_font(doc)
 
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     doc.save(path)

@@ -51,6 +51,15 @@ RUN python -c "import redis; print('redis loaded OK:', redis.__version__)" || \
      pip install --no-cache-dir 'redis>=5.0.0' -i https://pypi.org/simple/ && \
      python -c "import redis; print('redis loaded OK:', redis.__version__)")
 
+# 确保 pdf2docx 安装成功（doc-layout-clone 技能依赖，间接拉 opencv-python-headless 等大包）。
+# 镜像缺包时 skill 依赖自动安装会触发运行时 pip install，pypi.org 直连大包下载
+# 必超 600s 命令超时 -> 用量存储 guard 破坏 -> 整任务中断
+# （2026-11-17 agent2 tr_runner_8c2c2b59 事故，RUNNER_USAGE_STORAGE_FAILED）
+RUN python -c "import importlib.metadata as m; import pdf2docx; print('pdf2docx loaded OK:', m.version('pdf2docx'))" || \
+    (echo "ERROR: pdf2docx not installed, reinstalling from pypi.org..." && \
+     pip install --no-cache-dir 'pdf2docx>=0.5.8' -i https://pypi.org/simple/ && \
+     python -c "import importlib.metadata as m; import pdf2docx; print('pdf2docx loaded OK:', m.version('pdf2docx'))")
+
 # MCP 单独安装（依赖较多，独立一层便于排查与缓存）
 # 注意 1：不要使用 --no-deps，mcp 2.0.0 依赖 httpx2/mcp-types/opentelemetry-api，
 #         跳过会导致 import mcp 失败（ModuleNotFoundError: No module named 'mcp_types'）。
@@ -218,6 +227,14 @@ RUN printf '%s\n' \
 
 # 创建必要的目录（日志等）
 RUN mkdir -p log/agent && chown -R appuser:appgroup log
+
+# pip 运行时镜像源：skill 依赖自动安装（prepare_dependencies）在容器内跑
+# pip install，无镜像源时 pypi.org 直连拉大包必超 600s 命令超时，
+# 导致任务中断（2026-11-17 agent2 tr_runner_8c2c2b59 事故）。构建阶段已显式
+# 传 -i 腾讯云源；此 ENV 兜底运行时 pip（243/254 均为腾讯云内网，TTFB 最低）。
+# 注意：单独放 Playwright 层之后，避免改顶部 ENV 块令 apt/Playwright 层缓存
+# 失效（2026-11-17 曾因 ENV 位置导致 Chromium 199MiB 重走 Azure 源、10 分钟仅 10%）
+ENV PIP_INDEX_URL=https://mirrors.cloud.tencent.com/pypi/simple
 
 # 复制应用代码
 # 注意：从这里开始的层会因项目代码改动而失效，所以 Playwright 安装必须放在此行之前。

@@ -1,0 +1,39 @@
+# 本地数据库代码测试。与业务 Compose 拥有独立的 PostgreSQL 实例。
+name: aid-dev-test-db
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    network_mode: none
+    environment:
+      # 只有共享本服务网络命名空间的本地容器可以通过 TCP 访问。
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - test-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  sql:
+    image: aid-agent-api:latest
+    network_mode: service:postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app
+    volumes:
+      - type: bind
+        source: ${AID_LOCAL_SOURCE_DIR:-.}
+        target: /app
+        bind:
+          create_host_path: false
+    environment:
+      DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
+      REDIS_ENABLED: "false"
+    entrypoint: ["python", "scripts/dev_test_isolated_db.py"]
+
+volumes:
+  test-pg-data:

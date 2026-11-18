@@ -48,6 +48,8 @@
 
 ## 4. 验证（三层各有分工）
 
+本地验证环境和容器入口见[开发环境手册](../../docs/infrastructure/local-dev-environments.md#3-在容器内自测)。单测路径可直接传给手册中的 Python 入口。
+
 1. **我方单测**：`./scripts/dev_test.sh tests/unit/test_<skill>.py -p no:cacheprovider -q`，确认既有断言不回归。
 2. **上游自带 verify**：第三方包常带自验证脚本，全部跑一遍——它们覆盖上游作者的意图，能发现我方合并引入的偏差。
 3. **CLI 端到端冒烟**：在容器内（`docker exec aid-agent-api`）用最小 content 走一遍完整命令，确认 stdout JSON 结构、我方特有路径（如无模板兜底、fail-fast 拒绝）行为正常。

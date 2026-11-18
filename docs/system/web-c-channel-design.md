@@ -129,7 +129,7 @@ C 端流程：
 
 1. `POST /chat`：验签 -> 限流 -> 积分拦截 -> `get_or_create_session` -> 用户消息 `add_message`（`channel_messages`，role=user）-> `ChannelRunnerAgent.submit()` -> 返回 `runner_id`。
 2. `GET /runners/{runner_id}/events`：SSE 透传 Runner events，前端 token 级渲染。
-3. **终态落库（代理层职责）**：事件流出现 `completed` 时，读 Runner `/v1/runners/{runner_id}/channel-result` 的 output 与 public snapshot 的 `downloadableFiles`/`images` 投影（口径同 `runner_agent.py:222-232`），assistant 消息 `add_message` 落 `channel_messages`。连接中断兜底：落库幂等（按 `client_request_id`/runner_id 判重），SSE 断开后由下次 `/sessions/{sid}/messages` 拉取前触发补写检查。
+3. **终态落库（代理层职责）**：事件流出现 `completed` 时，读 Runner `/v1/runners/{runner_id}/channel-result` 的 output 与 public snapshot 的 `downloadableFiles`/`images` 投影（口径同 `runner_agent.py:222-232`），assistant 消息落 `channel_messages`。终态回复按会话与 `runner_id` 去重。用户消息与直接回复按会话、角色和 `client_request_id` 去重，同一次请求可保留两条消息。唯一索引仅匹配官网客服会话前缀，其他渠道继续使用各自的落库规则。SSE 断开后，下次拉取 `/sessions/{sid}/messages` 前触发补写检查。
 4. 提问等待（clarification）：以渠道文本化口径渲染（沿用 `ask_render` 的 single/segments 结构，web_c 归入 single 渠道组），用户以普通文本回复 -> 下一轮 `/chat` 走既有 reply control 路径（`submit()` 已含）。结构化表单交互列 Phase 2+ 升级项。
 5. 同会话并发提交：沿用 `submit()` 的既有语义（取消未完成 runner 后受理新消息）；前端按钮单飞防抖。
 

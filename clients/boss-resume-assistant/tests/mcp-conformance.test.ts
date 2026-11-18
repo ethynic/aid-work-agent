@@ -53,6 +53,7 @@ test('mcp-conformance 套件全项通过', async () => {
     requireBase: import.meta.url,
     spawn: { command: process.execPath, args: baseArgs, env: { ...process.env, AID_BOSS_AUTO_CHROME: '0' } as Record<string, string> },
     expectTools: [
+      'boss_recovery_probe',
       'boss_filter',
       'boss_clear_filter',
       'boss_goto',
@@ -111,7 +112,7 @@ test('mcp-conformance 套件 CLI 模式可独立运行', async () => {
       '--require-base',
       path.join(DIST_ROOT, '..', 'package.json'),
       '--expect-tools',
-      'boss_filter,boss_clear_filter,boss_goto,boss_greet,boss_lookup_candidates,boss_greet_selected,boss_accept_resume,boss_reject_current,boss_interview_demo,boss_send_to,boss_send_current,boss_read_chat,boss_open_chat,boss_overlay_inspect,boss_overlay_dismiss,boss_list_jobs,boss_select_job,boss_filter_options,boss_resume_detail,boss_resume_batch,boss_resume_next,boss_open_detail,boss_greet_detail,boss_close_detail',
+      'boss_recovery_probe,boss_filter,boss_clear_filter,boss_goto,boss_greet,boss_lookup_candidates,boss_greet_selected,boss_accept_resume,boss_reject_current,boss_interview_demo,boss_send_to,boss_send_current,boss_read_chat,boss_open_chat,boss_overlay_inspect,boss_overlay_dismiss,boss_list_jobs,boss_select_job,boss_filter_options,boss_resume_detail,boss_resume_batch,boss_resume_next,boss_open_detail,boss_greet_detail,boss_close_detail',
       '--call',
       'boss_goto:{"target":"chat"}',
       '--invalid',

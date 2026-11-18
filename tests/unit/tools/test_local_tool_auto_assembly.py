@@ -1,4 +1,5 @@
 """Business visibility follows actor devices, without becoming a recovery gate."""
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -42,6 +43,50 @@ def names(tools):
 def config(allowed=(), excluded=(), inherit=False):
     return SimpleNamespace(tools={'inherit': inherit}, get_allowed_tools=lambda: list(allowed),
                            get_excluded_tools=lambda: list(excluded))
+
+
+@pytest.mark.asyncio
+async def test_weixin_chat_latest_follows_signed_declaration_and_keeps_legacy_dispatch(monkeypatch):
+    tools = tool_catalog()
+    old_caps = {'providers': ['weixin']}
+    new_caps = {
+        'providers': ['weixin'],
+        'capabilities': ['tool_declarations_v1'],
+        'declared_tools': {'weixin': ['weixin_probe', 'weixin_chat_latest']},
+    }
+    lookup = Mock(side_effect=[
+        [{**device('weixin'), 'capabilities_json': old_caps}],
+        [{**device('weixin'), 'capabilities_json': new_caps}],
+    ])
+    monkeypatch.setattr('src.local_tools.repository.list_devices', lookup)
+    await tools.prime_local_tools(IDENTITY)
+    assert 'weixin_chat_latest' not in names(tools)
+    assert catalog.is_tool_allowed_for_device(old_caps, 'weixin', 'weixin_name_resolve')
+    assert not catalog.is_tool_allowed_for_device(old_caps, 'weixin', 'weixin_chat_latest')
+    await tools.prime_local_tools(IDENTITY)
+    assert 'weixin_chat_latest' in names(tools)
+    assert 'weixin_name_resolve' not in names(tools)
+    assert catalog.is_tool_allowed_for_device(new_caps, 'weixin', 'weixin_chat_latest')
+    assert not catalog.is_tool_allowed_for_device(new_caps, 'weixin', 'weixin_history_read')
+
+
+@pytest.mark.asyncio
+async def test_weixin_chat_latest_proxy_only_dispatches_to_a_declaring_device(monkeypatch):
+    from src.local_tools.proxy_tool import WeixinChatLatestTool
+
+    tool = WeixinChatLatestTool()
+    selected = {**device('weixin'), 'last_seen_at': datetime.now(timezone.utc)}
+    monkeypatch.setattr('src.local_tools.repository.list_devices', Mock(return_value=[selected]))
+    dispatch = AsyncMock(return_value={'success': True})
+    monkeypatch.setattr(tool, '_dispatch_and_wait', dispatch)
+    args = dict(_trusted_tenant_id='tenant', _trusted_user_id='user', target_name='fixture contact')
+    assert (await tool.execute(**args))['code'] == 'DEVICE_UNAVAILABLE'
+    dispatch.assert_not_awaited()
+    selected['capabilities_json'].update(
+        capabilities=['tool_declarations_v1'], declared_tools={'weixin': ['weixin_chat_latest']})
+    assert (await tool.execute(**args))['success']
+    assert tool.invocation_provider_key == 'weixin'
+    dispatch.assert_awaited_once_with('tenant', 'user', None, selected, {'target_name': 'fixture contact'}, None)
 
 
 @pytest.mark.asyncio

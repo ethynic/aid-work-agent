@@ -8,7 +8,7 @@ description: >
   脚本只做确定性的解析、归一化、计算、写文件；知识库检索、联网比价、规格判断由上级
   智能体在对话中完成。适用于采购比价、多家报价对比、货比三家、报价单价格审核等场景。
 metadata:
-  version: "1.2.1"
+  version: "1.2.2"
   author: aid-work-agent
 dependencies:
   - openpyxl
@@ -93,6 +93,12 @@ requires_tools:
 
 颜色：`FFFFC7CE`(红底)/`FF9C0006`(红字)、`FFC6EFCE`(绿底)/`FF006100`(绿字)。
 红=贵、绿=便宜按用户口径执行，不套用证券涨跌配色。
+
+**输出字体（免费可商用）**：所有交付物统一用 **Noto Sans SC（思源黑体，SIL OFL 1.1，可免费商用/嵌入）**，
+中文/英文/常规符号（¥ ± × → ① 等）全覆盖。定义于 `qc_common.DOC_FONT`，换字体只改这一处。
+Word 必须同时写 `w:eastAsia`（否则中文回退到主题特殊字体）——由 `apply_docx_font()` 统一处理
+样式、`docDefaults`、表格条件格式与所有 run；Excel 由 `apply_workbook_font()` 统一设置全部单元格，
+标色副本的标注单元格用 `Font(name=DOC_FONT, ...)`。目标机器若缺该字体，安装 Noto Sans SC 即可（免费）。
 
 ## 五、红线（必须遵守）
 

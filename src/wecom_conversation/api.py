@@ -59,6 +59,43 @@ async def _directory_call(tool, tenant_id, user_id, device, arguments):
     return data, None
 
 
+async def _resolve_directory_targets(tenant_id, user_id, sessions, *, expected_device=None,
+                                     expected_generation=None, expected_account=None):
+    tool, device, error = await _directory_device(tenant_id, user_id)
+    if error:
+        return None, error
+    device_id = str(device['id'])
+    if expected_device is not None and expected_device != device_id:
+        return None, _err(409, '选定设备已改变，请重新打开添加会话', 'DEVICE_MISMATCH')
+    account = generation = None
+    targets = []
+    for start in range(0, len(sessions), 50):
+        current, _ = await tool._find_ready_device(tenant_id, user_id)
+        if current is None or str(current['id']) != device_id:
+            return None, _err(409, '选定设备已改变，请重新打开添加会话', 'DEVICE_MISMATCH')
+        chunk = sessions[start:start + 50]
+        data, error = await _directory_call(tool, tenant_id, user_id, device, {'mode': 'resolve', 'sessions': chunk})
+        if error:
+            return None, error
+        if account is None:
+            account, generation = data['self_user_id'], data.get('source_generation')
+            if expected_generation is not None and expected_generation != generation:
+                return None, _err(409, '企微本地库已变化，请重新搜索会话', 'IDENTITY_UNCONFIRMED')
+            if expected_account is not None and expected_account != account:
+                return None, _err(409, '当前企微账号与原计划不同，请切回原账号', 'IDENTITY_UNCONFIRMED')
+        if account != data['self_user_id'] or generation != data.get('source_generation') or not generation:
+            return None, _err(409, '企微账号或本地库在添加期间改变，请重试', 'IDENTITY_UNCONFIRMED')
+        resolved = data.get('resolved_targets')
+        if not isinstance(resolved, list) or len(resolved) != len(chunk) or (
+                [row.get('session') for row in resolved if isinstance(row, dict)] != chunk):
+            return None, _err(409, '本地会话核验结果不完整，未添加任何会话', 'DIRECTORY_SCHEMA_INVALID')
+        targets.extend(resolved)
+    current, _ = await tool._find_ready_device(tenant_id, user_id)
+    if current is None or str(current['id']) != device_id:
+        return None, _err(409, '选定设备已改变，请重新打开添加会话', 'DEVICE_MISMATCH')
+    return {'account': account, 'device_id': device_id, 'targets': targets}, None
+
+
 @router.get('/directory')
 async def list_local_directory(request: Request, query: str = Query('', max_length=100),
                                cursor: str | None = Query(None, max_length=4096),
@@ -120,37 +157,12 @@ async def add_local_conversations(request: Request):
                for value in (expected_device, expected_generation)):
             return _err(400, '目录来源预期值无效', 'VALIDATION_FAILED')
         sessions = list(dict.fromkeys(sessions))
-        tool, device, error = await _directory_device(tenant_id, user_id)
+        binding, error = await _resolve_directory_targets(tenant_id, user_id, sessions,
+            expected_device=expected_device, expected_generation=expected_generation)
         if error:
             return error
-        if expected_device is not None and expected_device != str(device['id']):
-            return _err(409, '选定设备已改变，请重新打开添加会话', 'DEVICE_MISMATCH')
-        account = generation = None
-        targets = []
-        for start in range(0, len(sessions), 50):
-            current, ready_error = await tool._find_ready_device(tenant_id, user_id)
-            if current is None or str(current['id']) != str(device['id']):
-                return _err(409, '选定设备已改变，请重新打开添加会话', 'DEVICE_MISMATCH')
-            chunk = sessions[start:start + 50]
-            data, error = await _directory_call(tool, tenant_id, user_id, device,
-                                                 {'mode': 'resolve', 'sessions': chunk})
-            if error:
-                return error
-            if account is None:
-                account, generation = data['self_user_id'], data.get('source_generation')
-                if expected_generation is not None and expected_generation != generation:
-                    return _err(409, '企微本地库已变化，请重新搜索会话', 'IDENTITY_UNCONFIRMED')
-            if account != data['self_user_id'] or generation != data.get('source_generation') or not generation:
-                return _err(409, '企微账号或本地库在添加期间改变，请重试', 'IDENTITY_UNCONFIRMED')
-            resolved = data.get('resolved_targets')
-            if not isinstance(resolved, list) or [row.get('session') for row in resolved if isinstance(row, dict)] != chunk:
-                return _err(409, '本地会话核验结果不完整，未添加任何会话', 'DIRECTORY_SCHEMA_INVALID')
-            targets.extend(resolved)
-        current, ready_error = await tool._find_ready_device(tenant_id, user_id)
-        if current is None or str(current['id']) != str(device['id']):
-            return _err(409, '选定设备已改变，请重新打开添加会话', 'DEVICE_MISMATCH')
-        rows = await asyncio.to_thread(service.add_verified_conversations, tenant_id, user_id,
-                                       targets, account=account, device_id=str(device['id']))
+        rows = await asyncio.to_thread(service.add_verified_conversations, tenant_id, user_id, binding['targets'],
+                                       account=binding['account'], device_id=binding['device_id'])
         return _ok({'conversations': [item['conversation'] for item in rows],
                     'added_count': sum(item['created'] for item in rows)})
     except service.ConversationServiceError as exc:

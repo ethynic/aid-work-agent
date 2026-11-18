@@ -118,7 +118,7 @@ services:
     container_name: aid-redis
     restart: unless-stopped
     mem_limit: 384m
-    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
+    command: ["sh", "-c", "exec redis-server --maxmemory 300mb --maxmemory-policy allkeys-lru --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD required}
     volumes:

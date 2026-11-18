@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.main.json",
     "build:main": "tsc -p tsconfig.main.json",
     "typecheck": "tsc --noEmit -p tsconfig.main.json",
+    "pack:portable": "node scripts/pack-portable.mjs",
     "test": "npm run build:main && node scripts/run-tests.mjs",
     "cli": "npm run build:main && node dist/src/cli/index.js"
   },

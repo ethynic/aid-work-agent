@@ -1,24 +1,25 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createWeixinSessionObserveOperation, type CaptureFn } from '../src/operations/sessionObserve.js'
+import { createWeixinSessionObserveOperation } from '../src/operations/sessionObserve.js'
+import type { Bubble } from '../src/platform/aligner.js'
 import { validateSessionObservation } from '../src/platform/sessionObserver.js'
 
 const request = { conversation_binding_id: 'binding', binding_version: 1, account_identity_version: 2, watermark: null }
 const ctx = { signal: new AbortController().signal, progress: () => {} }
-const capture: CaptureFn = async () => ({
-  image: 'test-only.png', region: { minX: 0, maxX: 800, selfStartX: 500 },
+const capture = async (_bindingId: string, bubbles: Bubble[] = []) => ({
+  bubbles,
   identity: { conversation_binding_id: 'binding', binding_version: 1, account_identity_version: 2 },
   evidence_ref: 'dpapi:controlled_test_evidence',
 })
 
 test('空基线聚合期A到A+B复用A的ID', async () => {
-  let boxes: Array<{ text: string; x0: number; y0: number; x1: number; y1: number }> = []
-  const op = createWeixinSessionObserveOperation({ captureFn: capture, recognizeFn: async () => boxes })
+  let bubbles: Bubble[] = []
+  const op = createWeixinSessionObserveOperation({ captureFn: id => capture(id, bubbles) })
   const baseline = (await op.execute(request, ctx)).data
   const watermark = { last_local_message_id: null, window_fingerprint: baseline.window_fingerprint as string }
-  boxes = [{ text: 'A', x0: 10, y0: 10, x1: 100, y1: 30 }]
+  bubbles = [{ text: 'A', sender: 'peer' }]
   const first = (await op.execute({ ...request, watermark }, ctx)).data
-  boxes.push({ text: 'B', x0: 10, y0: 100, x1: 100, y1: 120 })
+  bubbles.push({ text: 'B', sender: 'peer' })
   const next = (await op.execute({ ...request, watermark }, ctx)).data
   const a = first.ordered_messages as Array<{ local_message_id: string }>
   const ab = next.ordered_messages as Array<{ local_message_id: string }>
@@ -30,7 +31,6 @@ test('实际身份版本与请求同步更新也不能接受旧指纹', async ()
   let version = 1
   const op = createWeixinSessionObserveOperation({
     captureFn: async id => { const c = await capture(id); return { ...c, identity: { ...c.identity, binding_version: version } } },
-    recognizeFn: async () => [],
   })
   const baseline = (await op.execute(request, ctx)).data
   version = 2
@@ -41,7 +41,6 @@ test('实际身份版本与请求同步更新也不能接受旧指纹', async ()
 test('LRU淘汰第65个绑定后旧水位报gap', async () => {
   const op = createWeixinSessionObserveOperation({
     captureFn: async id => { const c = await capture(id); return { ...c, identity: { ...c.identity, conversation_binding_id: id } } },
-    recognizeFn: async () => [],
   })
   const baseline = (await op.execute(request, ctx)).data
   for (let i = 0; i < 64; i++) await op.execute({ ...request, conversation_binding_id: `binding-${i}` }, ctx)
@@ -55,14 +54,16 @@ test('真实采集未接线时明确不可用，非法参数结构化拒绝', as
   assert.equal((await op.execute(null as never, ctx)).code, 'INVALID_ARGUMENT')
 })
 
-test('身份漂移与缺失证据不能进入OCR或冒充complete_window', async () => {
+test('身份漂移与缺失证据不能接纳消息或冒充complete_window', async () => {
   for (const bad of [
     { identity: { conversation_binding_id: 'other', binding_version: 1, account_identity_version: 2 } },
     { evidence_ref: '' },
   ]) {
     const op = createWeixinSessionObserveOperation({
-      captureFn: async id => ({ ...await capture(id), ...bad }),
-      recognizeFn: async () => { assert.fail('身份/证据未验证不应OCR') },
+      captureFn: async id => ({
+        ...await capture(id), ...bad,
+        get bubbles(): Bubble[] { return assert.fail('身份或证据未验证不应接纳消息') },
+      }),
     })
     const result = await op.execute(request, ctx)
     assert.equal(result.data.coverage, 'unavailable')
@@ -71,8 +72,8 @@ test('身份漂移与缺失证据不能进入OCR或冒充complete_window', async
 })
 
 test('相同窗口指纹稳定，证据来自采集器；新增气泡只输出一次', async () => {
-  let boxes = [{ text: '第一条', x0: 10, y0: 10, x1: 100, y1: 30 }]
-  const op = createWeixinSessionObserveOperation({ captureFn: capture, recognizeFn: async () => boxes })
+  let bubbles: Bubble[] = [{ text: '第一条', sender: 'peer' }]
+  const op = createWeixinSessionObserveOperation({ captureFn: id => capture(id, bubbles) })
   const baseline = (await op.execute(request, ctx)).data
   assert.equal(validateSessionObservation(baseline).ok, true)
   const messages = baseline.ordered_messages as Array<{ local_message_id: string; source_evidence_ref: string }>
@@ -81,13 +82,13 @@ test('相同窗口指纹稳定，证据来自采集器；新增气泡只输出�
   const unchanged = (await op.execute({ ...request, watermark }, ctx)).data
   assert.equal(unchanged.window_fingerprint, baseline.window_fingerprint)
   assert.deepEqual(unchanged.ordered_messages, [])
-  boxes = [...boxes, { text: '第二条', x0: 10, y0: 100, x1: 100, y1: 120 }]
+  bubbles = [...bubbles, { text: '第二条', sender: 'peer' }]
   const next = (await op.execute({ ...request, watermark }, ctx)).data
   assert.equal((next.ordered_messages as unknown[]).length, 1)
 })
 
 test('Provider重启后空水位也报gap，不将已有消息重新当连续新消息', async () => {
-  const deps = { captureFn: capture, recognizeFn: async () => [] }
+  const deps = { captureFn: capture }
   const first = (await createWeixinSessionObserveOperation(deps).execute(request, ctx)).data
   const restarted = createWeixinSessionObserveOperation(deps)
   const result = await restarted.execute({ ...request, watermark: { last_local_message_id: null, window_fingerprint: first.window_fingerprint as string } }, ctx)

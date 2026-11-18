@@ -1,0 +1,493 @@
+<template>
+  <div class="page-container bg-canvas">
+    <AppHeader
+      :title="title"
+      :is-logged-in="effectiveIsLoggedIn"
+      :user="effectiveUser"
+      @toggle-sidebar="handleToggleSidebar"
+      @logout="handleLogout"
+    />
+
+    <div class="page-content p-6 space-y-6 overflow-y-auto">
+      <!-- 数据源未开通空态（开通入口：portal 企业管理「数据源」页签） -->
+      <div v-if="sourceNotFound" class="bg-warning-50 border border-warning-200 rounded-lg p-4 text-sm text-warning-800">
+        <p class="font-medium mb-1">本租户尚未开通「{{ title }}」数据源</p>
+        <p class="text-warning-700">请联系平台管理员在管理后台「企业管理 → 数据源」中开通后再使用本页面。</p>
+      </div>
+
+      <template v-else>
+        <!-- ==================== 源设置 ==================== -->
+        <div class="bg-surface rounded-lg border border-default p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-base font-medium text-default">同步设置</h2>
+            <div class="flex items-center gap-2">
+              <BaseButton intent="ghost" size="sm" :disabled="sourceLoading" @click="loadSource">刷新</BaseButton>
+              <BaseButton
+                size="sm"
+                :disabled="sourceLoading || triggerLoading"
+                @click="handleTrigger"
+              >
+                {{ triggerLoading ? '提交中...' : '立即同步' }}
+              </BaseButton>
+            </div>
+          </div>
+
+          <div v-if="sourceLoading" class="text-center py-6 text-muted text-sm">加载中...</div>
+          <template v-else-if="source">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label class="block text-xs font-medium text-muted mb-1">同步方式</label>
+                <BaseSelect
+                  :model-value="source.enabled ? 'auto' : 'manual'"
+                  size="sm"
+                  :disabled="savingSource"
+                  class="max-w-44"
+                  @update:model-value="onSyncModeChange"
+                >
+                  <option value="auto">自动同步（按频率定时）</option>
+                  <option value="manual">仅手动同步</option>
+                </BaseSelect>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-muted mb-1">同步频率</label>
+                <BaseSelect
+                  :model-value="intervalChoice"
+                  size="sm"
+                  :disabled="savingSource || !source.enabled"
+                  class="max-w-40"
+                  @update:model-value="onIntervalChange"
+                >
+                  <option v-if="!INTERVAL_OPTIONS.some((o) => o.value === intervalChoice)" :value="intervalChoice">
+                    每 {{ intervalChoice }} 小时
+                  </option>
+                  <option v-for="opt in INTERVAL_OPTIONS" :key="opt.value" :value="opt.value">
+                    {{ opt.label }}
+                  </option>
+                </BaseSelect>
+                <p v-if="!source.enabled" class="text-xs text-muted mt-1">仅手动模式下不按频率运行</p>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-muted mb-1">最近同步</label>
+                <p class="text-sm text-default">{{ formatTime(source.last_sync_at) || '尚未同步' }}</p>
+              </div>
+            </div>
+
+            <!-- 入库范围（六分类开关；sccy 单表全量无范围开关） -->
+            <div v-if="hasScope" class="mt-4">
+              <label class="block text-xs font-medium text-muted mb-2">入库范围（取消勾选的分类将在下一轮同步从知识库下架）</label>
+              <div class="flex items-center gap-4 flex-wrap">
+                <label
+                  v-for="opt in SYNC_TABLE_OPTIONS"
+                  :key="opt.id"
+                  class="flex items-center gap-1.5 text-sm text-default"
+                >
+                  <input
+                    type="checkbox"
+                    class="accent-primary-600 w-4 h-4"
+                    :checked="draftScope.has(opt.id)"
+                    @change="toggleScope(opt.id)"
+                  />
+                  {{ opt.label }}
+                </label>
+                <BaseButton
+                  size="sm"
+                  intent="primary"
+                  :disabled="savingSource || !scopeDirty"
+                  @click="handleSaveScope"
+                >
+                  {{ savingSource ? '保存中...' : scopeDirty ? '保存范围' : '已保存' }}
+                </BaseButton>
+              </div>
+              <p class="text-xs text-muted mt-1">全部勾选等价于全量同步；至少保留一个分类。</p>
+            </div>
+            <div v-else class="mt-4 text-xs text-muted">入库范围：全部政策文章（单表全量比对）</div>
+
+            <div
+              v-if="source.last_error"
+              class="mt-3 rounded-lg bg-danger-50 border border-danger-200 p-3 text-xs text-danger-800"
+            >
+              最近错误：{{ source.last_error }}
+            </div>
+            <p v-if="sourceSavedTip" class="mt-2 text-xs text-success-700">{{ sourceSavedTip }}</p>
+            <p v-if="sourceError" class="mt-2 text-xs text-danger-600">{{ sourceError }}</p>
+          </template>
+        </div>
+
+        <!-- ==================== 运行账本 ==================== -->
+        <div class="bg-surface rounded-lg border border-default p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-base font-medium text-default">运行记录</h2>
+            <BaseButton intent="ghost" size="sm" @click="loadRuns">刷新</BaseButton>
+          </div>
+          <div v-if="runsLoading" class="text-center py-8 text-muted text-sm">加载中...</div>
+          <template v-else>
+            <BaseTable :columns="runColumns" :data="runs" row-key="id" :on-row-click="toggleRunDetail">
+              <template #status="{ row }">
+                <BaseBadge :intent="runStatusIntent(row.status)">{{ runStatusLabel(row.status) }}</BaseBadge>
+              </template>
+              <template #trigger_type="{ row }">{{ triggerLabel(row.trigger_type) }}</template>
+              <template #counts="{ row }">
+                <span class="text-xs text-muted">
+                  新增 {{ row.new_count ?? 0 }} · 更新 {{ row.updated_count ?? 0 }} · 跳过 {{ row.skipped_count ?? 0 }}
+                  · 下架 {{ row.deleted_count ?? 0 }} · 恢复 {{ row.restored_count ?? 0 }} · 失败 {{ row.failed_count ?? 0 }}
+                </span>
+              </template>
+              <template #usage="{ row }">
+                <span class="text-xs text-muted">
+                  嵌入 {{ row.embedding_tokens ?? 0 }} tokens · {{ row.credits_charged ?? 0 }} 积分
+                </span>
+              </template>
+              <template #created_at="{ row }">{{ formatTime(row.created_at) }}</template>
+              <template #expand="{ row }">
+                <span class="text-primary-600 text-xs">{{ expandedRunId === row.id ? '收起明细 ▲' : '展开明细 ▼' }}</span>
+              </template>
+            </BaseTable>
+            <p v-if="runs.length === 0" class="text-center text-sm text-muted py-6">暂无运行记录</p>
+
+            <div v-if="expandedRunId" class="mt-3 rounded-lg border border-default bg-canvas p-3">
+              <div v-if="itemsLoading" class="text-center py-4 text-muted text-sm">加载明细中...</div>
+              <template v-else>
+                <p v-if="runItems.length === 0" class="text-center text-xs text-muted py-4">无明细</p>
+                <div v-else class="max-h-72 overflow-y-auto">
+                  <table class="w-full text-xs">
+                    <thead>
+                      <tr class="text-left text-muted border-b border-default">
+                        <th class="py-1.5 pr-3">条目</th>
+                        <th class="py-1.5 pr-3">动作</th>
+                        <th class="py-1.5 pr-3">状态</th>
+                        <th class="py-1.5 pr-3">嵌入 tokens</th>
+                        <th class="py-1.5">错误</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="item in runItems" :key="item.native_id" class="border-b border-default/60">
+                        <td class="py-1.5 pr-3 text-default">{{ item.native_id }}</td>
+                        <td class="py-1.5 pr-3">{{ actionLabel(item.action) }}</td>
+                        <td class="py-1.5 pr-3">
+                          <BaseBadge size="sm" :intent="itemStatusIntent(item.status)">{{ item.status || '-' }}</BaseBadge>
+                        </td>
+                        <td class="py-1.5 pr-3 text-muted">{{ item.embedding_tokens ?? 0 }}</td>
+                        <td class="py-1.5 text-danger-700">{{ item.error_code || item.error_message || '-' }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, inject, onMounted, ref, watch } from 'vue'
+import { useToast } from 'vue-toastification'
+import AppHeader from '@/components/AppHeader.vue'
+import BaseButton from '@/components/ui/BaseButton.vue'
+import BaseBadge from '@/components/ui/BaseBadge.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
+import BaseTable, { type TableColumn } from '@/components/ui/BaseTable.vue'
+import {
+  getSource,
+  patchSource,
+  triggerSource,
+  getRuns,
+  getRun,
+  SYNC_TABLE_OPTIONS,
+  type SyncRun,
+  type SyncRunItem,
+  type SyncSource,
+} from '@/api/employmentSync'
+import { useTenantAuth } from '@/composables/useTenantAuth'
+
+const props = defineProps<{
+  /** 后端模块路径（lyjy-employment / sccy-policy） */
+  modulePath: string
+  title: string
+  /** 是否展示入库范围开关（lyjy 六分类 true；sccy 单表全量 false） */
+  hasScope?: boolean
+}>()
+
+const toast = useToast()
+
+const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
+const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)
+const effectiveUser = computed(() =>
+  tenantAdmin.value
+    ? {
+        user_id: tenantAdmin.value.user_id,
+        username: tenantAdmin.value.username,
+        phone: tenantAdmin.value.phone,
+      }
+    : null,
+)
+const toggleSidebarFn = inject<() => void>('toggleSidebar')
+function handleToggleSidebar() {
+  if (toggleSidebarFn) toggleSidebarFn()
+}
+async function handleLogout() {
+  if (tenantLogout) await tenantLogout()
+}
+
+// ==================== 源设置 ====================
+
+const INTERVAL_OPTIONS = [
+  { value: '1', label: '每小时' },
+  { value: '6', label: '每 6 小时' },
+  { value: '12', label: '每 12 小时' },
+  { value: '24', label: '每天' },
+  { value: '48', label: '每 2 天' },
+  { value: '168', label: '每周' },
+]
+
+const sourceLoading = ref(false)
+const sourceNotFound = ref(false)
+const sourceError = ref('')
+const sourceSavedTip = ref('')
+const savingSource = ref(false)
+const triggerLoading = ref(false)
+const source = ref<SyncSource | null>(null)
+const intervalChoice = ref('24')
+// 入库范围草稿（勾选的源表集合；与 source.selected_ids/全选态对比判 dirty）
+const draftScope = ref<Set<string>>(new Set(SYNC_TABLE_OPTIONS.map((o) => o.id)))
+
+const ALL_SCOPE_IDS = SYNC_TABLE_OPTIONS.map((o) => o.id)
+const scopeDirty = computed(() => {
+  if (!source.value) return false
+  const saved =
+    source.value.selection_mode === 'all' ? new Set(ALL_SCOPE_IDS) : new Set(source.value.selected_ids)
+  if (saved.size !== draftScope.value.size) return true
+  return [...draftScope.value].some((id) => !saved.has(id))
+})
+
+function syncDraftFromSource() {
+  if (!source.value) return
+  draftScope.value = new Set(
+    source.value.selection_mode === 'all'
+      ? ALL_SCOPE_IDS
+      : source.value.selected_ids,
+  )
+}
+
+async function loadSource() {
+  sourceLoading.value = true
+  sourceError.value = ''
+  try {
+    const resp = await getSource(props.modulePath)
+    source.value = resp.source
+    intervalChoice.value = String(resp.source.sync_interval_hours)
+    sourceNotFound.value = false
+    syncDraftFromSource()
+  } catch (e) {
+    if ((e as Error & { status?: number }).status === 404) {
+      sourceNotFound.value = true
+    } else {
+      sourceError.value = (e as Error).message
+    }
+  } finally {
+    sourceLoading.value = false
+  }
+}
+
+async function saveSourcePatch(patch: Parameters<typeof patchSource>[1], tip: string) {
+  savingSource.value = true
+  sourceError.value = ''
+  sourceSavedTip.value = ''
+  try {
+    const resp = await patchSource(props.modulePath, patch)
+    source.value = resp.source
+    intervalChoice.value = String(resp.source.sync_interval_hours)
+    syncDraftFromSource()
+    sourceSavedTip.value = tip
+    toast.success(tip)
+  } catch (e) {
+    sourceError.value = (e as Error).message
+    toast.error((e as Error).message)
+  } finally {
+    savingSource.value = false
+  }
+}
+
+// 同步方式切换：自动同步=按频率定时；仅手动同步=关闭调度，仅「立即同步」触发
+async function onSyncModeChange(mode: string | number) {
+  if (!source.value) return
+  const wantAuto = String(mode) === 'auto'
+  if (wantAuto === source.value.enabled) return
+  await saveSourcePatch(
+    { enabled: wantAuto },
+    wantAuto ? '已切换为自动同步' : '已切换为仅手动同步',
+  )
+}
+
+// 频率下拉变更即保存（保存失败时回显旧值）
+async function onIntervalChange(value: string) {
+  if (!source.value) return
+  const previous = String(source.value.sync_interval_hours)
+  const hours = parseInt(value, 10)
+  if (!hours || hours === source.value.sync_interval_hours) return
+  intervalChoice.value = value
+  await saveSourcePatch({ sync_interval_hours: hours }, `同步频率已改为每 ${hours} 小时`)
+  if (sourceError.value) intervalChoice.value = previous
+}
+
+function toggleScope(tableId: string) {
+  const next = new Set(draftScope.value)
+  if (next.has(tableId)) {
+    next.delete(tableId)
+  } else {
+    next.add(tableId)
+  }
+  draftScope.value = next
+}
+
+async function handleSaveScope() {
+  if (!draftScope.value.size) {
+    toast.error('至少保留一个分类（如需整体停用请联系平台管理员）')
+    return
+  }
+  if (draftScope.value.size === ALL_SCOPE_IDS.length) {
+    await saveSourcePatch({ selection_mode: 'all' }, '已恢复全量同步')
+  } else {
+    await saveSourcePatch(
+      { selected_ids: [...draftScope.value] },
+      `入库范围已保存（${draftScope.value.size} 个分类），下一轮同步生效`,
+    )
+  }
+}
+
+async function handleTrigger() {
+  triggerLoading.value = true
+  try {
+    const resp = await triggerSource(props.modulePath)
+    if (resp.run.deduped) {
+      toast.info('已有同步任务在队列中，无需重复触发')
+    } else {
+      toast.success('已加入同步队列，可在运行记录中查看进度')
+    }
+    loadRuns()
+  } catch (e) {
+    toast.error((e as Error).message)
+  } finally {
+    triggerLoading.value = false
+  }
+}
+
+// ==================== 运行账本 ====================
+
+const runsLoading = ref(false)
+const runs = ref<SyncRun[]>([])
+const expandedRunId = ref<number | null>(null)
+const itemsLoading = ref(false)
+const runItems = ref<SyncRunItem[]>([])
+
+const runColumns: TableColumn[] = [
+  { key: 'id', label: 'ID' },
+  { key: 'status', label: '状态' },
+  { key: 'trigger_type', label: '触发' },
+  { key: 'counts', label: '条目计数' },
+  { key: 'usage', label: '用量 / 计费' },
+  { key: 'created_at', label: '时间' },
+  { key: 'expand', label: '' },
+]
+
+async function loadRuns() {
+  runsLoading.value = true
+  try {
+    const resp = await getRuns(props.modulePath, 20)
+    runs.value = resp.runs
+  } catch (e) {
+    toast.error((e as Error).message)
+  } finally {
+    runsLoading.value = false
+  }
+}
+
+function toggleRunDetail(row: Record<string, any>) {
+  const runId = row.id as number
+  if (expandedRunId.value === runId) {
+    expandedRunId.value = null
+    return
+  }
+  expandedRunId.value = runId
+  itemsLoading.value = true
+  getRun(props.modulePath, runId)
+    .then((resp) => {
+      runItems.value = resp.items
+    })
+    .catch((e: Error) => toast.error(e.message))
+    .finally(() => {
+      itemsLoading.value = false
+    })
+}
+
+// ==================== 展示辅助 ====================
+
+function runStatusLabel(status: string): string {
+  const map: Record<string, string> = {
+    queued: '排队中',
+    running: '进行中',
+    success: '成功',
+    partial_failed: '部分失败',
+    failed: '失败',
+    skipped_no_credit: '余额不足',
+    interrupted: '已中断',
+  }
+  return map[status] || status
+}
+
+function runStatusIntent(status: string): 'success' | 'danger' | 'warning' | 'info' | 'neutral' {
+  if (status === 'success') return 'success'
+  if (status === 'running' || status === 'queued') return 'info'
+  if (status === 'partial_failed' || status === 'interrupted') return 'warning'
+  return 'danger'
+}
+
+function itemStatusIntent(status: string | null): 'success' | 'danger' | 'warning' | 'info' | 'neutral' {
+  if (status === 'success' || status === 'skipped') return 'success'
+  if (status === 'running' || status === 'pending') return 'info'
+  if (status === 'interrupted') return 'warning'
+  return 'danger'
+}
+
+function triggerLabel(trigger: string): string {
+  const map: Record<string, string> = {
+    manual: '手动',
+    scheduled: '定时',
+    reconcile: '每日对账',
+    retry: '重试',
+  }
+  return map[trigger] || trigger
+}
+
+function actionLabel(action: string | null): string {
+  const map: Record<string, string> = {
+    new: '新增',
+    update: '更新',
+    skip: '跳过',
+    delete: '下架',
+    restore: '恢复',
+  }
+  return action ? map[action] || action : '-'
+}
+
+function formatTime(value: string | null): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+// ==================== 初始化 ====================
+
+onMounted(async () => {
+  await loadSource()
+  if (!sourceNotFound.value) await loadRuns()
+})
+watch(() => props.modulePath, async () => {
+  expandedRunId.value = null
+  await loadSource()
+  if (!sourceNotFound.value) await loadRuns()
+})
+</script>

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test, beforeEach, afterEach } from 'node:test'
 import { main } from '../src/cli.js'
+import { ApiClient } from '../src/apiClient.js'
 import { loadDeviceToken, hasDeviceToken } from '../src/credentials.js'
 import { loadConfig, saveConfig, type RuntimeConfig } from '../src/config.js'
 import { openRuntimeHost } from '../src/runtimeHost.js'
@@ -110,12 +111,20 @@ test('unpair refuses a leased Host before touching old identity, then clears saf
   assert.equal(existsSync(path.join(home, 'management-secret.bin')), true)
 })
 
-test('CLI start waits for running and repeated stop signals drain before releasing the same Host lease', { timeout: 10_000 }, async () => {
+test('CLI start with legacy sessionTasks config keeps running without claiming cloud conversation tasks', { timeout: 10_000 }, async (t) => {
   cloud.issueCode('START001')
   assert.equal(await main(['pair', '--code', 'START001', '--server', cloud.baseUrl]), 0)
+  saveConfig({ ...loadConfig()!, sessionTasks: true })
+  const claim = t.mock.method(ApiClient.prototype, 'sessionTaskClaim', async () => null)
+  const events = t.mock.method(ApiClient.prototype, 'sessionTaskEvents')
   const signalsBefore = process.listenerCount('SIGINT')
   assert.equal(await main(['start']), 0)
   assert.equal(existsSync(path.join(home, 'host-running.json')), true)
+  const token = cloud.lastPairToken!
+  for (let tries = 0; !cloud.heartbeatCount(token) && tries < 100; tries++) await delay(25)
+  assert.ok(cloud.heartbeatCount(token), 'the ordinary runtime loop must still heartbeat')
+  assert.equal(claim.mock.callCount(), 0, 'the legacy option must not start cloud tasks')
+  assert.equal(events.mock.callCount(), 0, 'the legacy option must not sync session events')
   assert.equal(await main(['unpair']), 1, 'a running CLI owns the shared lease')
   process.emit('SIGINT')
   process.emit('SIGINT')

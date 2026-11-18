@@ -17,6 +17,8 @@ DDL_STATEMENTS = (
         sync_interval_hours INT NOT NULL DEFAULT 24,
         selection_mode VARCHAR(8) NOT NULL DEFAULT 'all',
         selected_ids JSONB,
+        sync_state JSONB,
+        connection_encrypted TEXT,
         last_sync_at TIMESTAMP,
         last_error TEXT,
         created_at TIMESTAMP DEFAULT now(),
@@ -120,6 +122,11 @@ DDL_STATEMENTS = (
     CREATE INDEX IF NOT EXISTS idx_content_sync_records_retry
         ON bs_content_sync_records(tenant_id, module, processing_status, next_retry_at)
     """,
+    # ---- sources 补列（存量库升级；新列三处同步：本文件 / init-postgres.sql / db_update.yaml）----
+    # sync_state：模块自管水位/删除 id 集合等运行态（平台层不解读，各源模块读写）
+    "ALTER TABLE bs_content_sync_sources ADD COLUMN IF NOT EXISTS sync_state JSONB",
+    # connection_encrypted：外部数据库连接配置 Fernet 整包加密（data_connectors 同模式）
+    "ALTER TABLE bs_content_sync_sources ADD COLUMN IF NOT EXISTS connection_encrypted TEXT",
     # ---- 图级 VL 缓存（tenant+URL 键：任何源的图片共用；URL 不变即图不变）----
     """
     CREATE TABLE IF NOT EXISTS bs_image_vision_cache (

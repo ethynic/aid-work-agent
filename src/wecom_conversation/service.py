@@ -127,29 +127,34 @@ def conversations_for_locators(tenant_id, user_id, locators):
 
 def add_verified_conversations(tenant_id, user_id, targets, *, account, device_id):
     """Atomically enroll CLI-verified targets without moving an existing device binding."""
-    from . import archive
-    rows = []
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))',
-                       (str(tenant_id), str(user_id)))
-        for target in targets:
-            locator = target['session']
-            decoded = decode_locator(locator)
-            if decoded is None or decoded[0] != account:
-                raise ConversationServiceError('IDENTITY_UNCONFIRMED', '会话不属于当前企业微信账号', 409)
-            cursor.execute(
-                '''SELECT device_id FROM bs_wecom_conversations
-                   WHERE tenant_id=%s AND user_id=%s AND source_account_id=%s AND source_conversation_id=%s''',
-                (tenant_id, user_id, *decoded))
-            existing = cursor.fetchone()
-            if existing and existing['device_id'] and str(existing['device_id']) != str(device_id):
-                raise ConversationServiceError('DEVICE_MISMATCH', '会话已绑定其他设备，未更换来源', 409)
-            row, created = archive.register_scope(conn, tenant_id, user_id, locator,
-                name=target.get('name'), kind=target.get('kind'),
-                peer_platform=target.get('peer_platform'), device_id=device_id, reason='manual_add')
-            rows.append({'conversation': row, 'created': created})
+        rows = add_verified_conversations_in_tx(conn, tenant_id, user_id, targets, account=account, device_id=device_id)
         conn.commit()
+    return rows
+
+
+def add_verified_conversations_in_tx(conn, tenant_id, user_id, targets, *, account, device_id):
+    from . import archive
+
+    rows = []
+    cursor = conn.cursor()
+    cursor.execute('SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))', (str(tenant_id), str(user_id)))
+    for target in targets:
+        locator = target['session']
+        decoded = decode_locator(locator)
+        if decoded is None or decoded[0] != account:
+            raise ConversationServiceError('IDENTITY_UNCONFIRMED', '会话不属于当前企业微信账号', 409)
+        cursor.execute(
+            '''SELECT device_id FROM bs_wecom_conversations
+               WHERE tenant_id=%s AND user_id=%s AND source_account_id=%s AND source_conversation_id=%s FOR UPDATE''',
+            (tenant_id, user_id, *decoded))
+        existing = cursor.fetchone()
+        if existing and existing['device_id'] and str(existing['device_id']) != str(device_id):
+            raise ConversationServiceError('DEVICE_MISMATCH', '会话已绑定其他设备，未更换来源', 409)
+        row, created = archive.register_scope(conn, tenant_id, user_id, locator,
+            name=target.get('name'), kind=target.get('kind'),
+            peer_platform=target.get('peer_platform'), device_id=device_id, reason='manual_add')
+        rows.append({'conversation': row, 'created': created})
     return rows
 
 

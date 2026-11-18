@@ -14,6 +14,9 @@ test('签名清单和真实 MCP 工具一致，拒绝额外导航输入', async 
   try {
     assert.deepEqual((await client.listTools()).tools, version.tools)
     assert.deepEqual(version.tools.map(tool => tool.name), ['xiaohongshu_login', 'xiaohongshu_open'])
+    assert.deepEqual(version.tool_declaration, {
+      version: 1, tools: [{ name: 'xiaohongshu_login' }, { name: 'xiaohongshu_open' }],
+    })
     const result = await client.callTool({ name: 'xiaohongshu_open', arguments: {
       profile_key: 'a'.repeat(64), url: 'https://example.invalid/',
     } })

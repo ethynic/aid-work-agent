@@ -52,6 +52,7 @@ docker-compose*.yml
 .docker/
 
 # 本地配置
+.env
 .env.local
 .env.development
 .env.test

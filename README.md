@@ -48,34 +48,9 @@ aid-work-agent/
 
 ## 快速开始
 
-### 1. 安装依赖
+本地启动、Python / SQL / Web 自测和命令行调试统一见[开发环境手册](docs/infrastructure/local-dev-environments.md)。验证开发分支或未提交改动时，见[指定工作区验证](docs/infrastructure/local-dev-environments.md#4-指定工作区验证)。
 
-```bash
-pip install -r requirements.txt
-```
-
-### 2. 配置环境变量
-
-```bash
-# 复制环境变量模板
-cp .env.example .env
-
-# 编辑 .env 文件，填写必要的配置
-```
-
-### 3. 启动服务
-
-```bash
-# 启动Web服务
-python -m src.main
-
-# 或使用命令行聊天模式
-CLI_MODE=true python -m src.main
-```
-
-> 本地开发调试支持三种方式：①本地 venv；②WSL2 内容器（mirrored/host 网络，不走 NAT）；③macOS Docker Desktop 容器。三种方式后端统一落在 `localhost:8000`，详见 [本地开发调试环境说明](docs/infrastructure/local-dev-environments.md)。
-
-### 4. 访问API
+### 访问 API
 
 - 健康检查: `GET /health`
 - Web聊天: `POST /api/chat`

@@ -43,6 +43,10 @@ class ToolCatalog:
                                and d.get('status') == 'active'), None)
             if device and key in catalog.get_provider_keys_for_device(device.get('capabilities_json')):
                 visible = catalog.agent_tools(key)
+                if key == 'weixin':
+                    declared = catalog.declared_tools_for_device(device.get('capabilities_json')) or {}
+                    if catalog.WEIXIN_CHAT_LATEST not in declared.get(key, []):
+                        visible = [name for name in visible if name != catalog.WEIXIN_CHAT_LATEST]
                 if key == 'wecom' and 'wecom_session_directory_search' not in (
                     (device.get('capabilities_json') or {}).get('capabilities') or []
                 ):

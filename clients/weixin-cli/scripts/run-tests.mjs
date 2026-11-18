@@ -1,9 +1,9 @@
 /**
- * node:test 收集器。递归收集 dist/tests 下所有 .test.js（先 build:main 编译）。
+ * node:test 收集器。执行当前测试源码对应的 dist/tests 文件（先 build:main 编译）。
  * 与 boss-resume-assistant 同一范式：零第三方测试框架。
  */
 import { spawnSync } from 'node:child_process'
-import { readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -16,7 +16,7 @@ function collectTestFiles(dir, acc = []) {
     const st = statSync(full)
     if (st.isDirectory()) {
       collectTestFiles(full, acc)
-    } else if (entry.endsWith('.test.js')) {
+    } else if (entry.endsWith('.test.js') && existsSync(path.join(sourceTests, path.relative(testsDir, full).replace(/\.js$/, '.ts')))) {
       acc.push(full)
     }
   }
@@ -24,6 +24,7 @@ function collectTestFiles(dir, acc = []) {
 }
 
 const testsDir = path.join(root, 'dist', 'tests')
+const sourceTests = path.join(root, 'tests')
 let files
 try {
   files = collectTestFiles(testsDir)

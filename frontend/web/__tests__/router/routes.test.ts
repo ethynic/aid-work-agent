@@ -73,7 +73,7 @@ describe('entry route responsibilities', () => {
         "notification-rules",
         "local-tools",
         "daily-report",
-        "wecom-agent/:tab(conversations|daily|proxy)?",
+        "wecom-agent/:tab(conversations|daily|proxy|scheduled)?",
         "wecom-conversations",
         "wecom-conversations/daily",
         "wecom-conversations/proxy",
@@ -114,6 +114,15 @@ describe('entry route responsibilities', () => {
     const resolved = router.resolve('/t/acme/tasks/sched_abc123')
     expect(resolved.name).toBe('tenant-scheduled-task-view')
     expect(resolved.params).toEqual({ tenant_id: 'acme', task_id: 'sched_abc123' })
+  })
+
+  it('resolves the WeCom scheduled send and existing monitor tabs', () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: agentRoutes })
+    for (const tab of ['scheduled', 'proxy']) {
+      const result = router.resolve(`/t/acme/wecom-agent/${tab}`)
+      expect(result.name).toBe('tenant-wecom-agent')
+      expect(result.params).toEqual({ tenant_id: 'acme', tab })
+    }
   })
 
   it('keeps weixin marketing workbench list and routed run detail pages for tenant', () => {

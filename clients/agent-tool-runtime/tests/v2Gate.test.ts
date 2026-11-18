@@ -4,6 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { deriveProviderManifest, weixinV2Manifest } from '../src/providers.js'
 import { startTestStack, fakeProviderEntry } from './helpers/runtimeStack.js'
 
 async function waitForResult(stack: Awaited<ReturnType<typeof startTestStack>>, id: string, label: string) {
@@ -55,6 +56,43 @@ test('v2 门禁：v1 invocation 不受影响，weixin 工具正常执行（门�
     await stack.cloud.waitFor(() => stack.cloud.getInvocation(id)?.state === 'succeeded', 10_000, 'v1 weixin success')
   } finally {
     await stack.stop()
+  }
+})
+
+test('云端领取微信正文工具时，旧直配、旧插件声明和 v2 变体均不能调用本机 MCP', async () => {
+  const localReads = ['weixin_history_read', 'weixin_unread_list', 'weixin_session_observe']
+  const oldDeclared = ['weixin_probe', ...localReads].map(name => ({ name, annotations: { readOnlyHint: true } }))
+  const installed = deriveProviderManifest({
+    manifest_version: 1,
+    provider_id: 'ai.aidwork.weixin',
+    provider_version: '1.0.0',
+    display_name: 'Weixin',
+    description: 'Legacy plugin fixture',
+    entrypoint: ['dist/cli.js', 'mcp', '--stdio'],
+    execution_target: 'local_required',
+    schema_digest: 'legacy',
+    distribution: { platform: 'win32', arch: 'x64', node: { version: '24', modules_abi: '137' }, required_files: [] },
+    tools: oldDeclared,
+    tool_declaration: { version: 1, tools: oldDeclared.map(({ name }) => ({ name })) },
+  })
+  for (const manifest of [undefined, installed, weixinV2Manifest()]) {
+    const stack = await startTestStack({
+      providerEntries: { weixin: fakeProviderEntry() },
+      manifests: manifest && { weixin: manifest },
+    })
+    try {
+      for (const tool of localReads) {
+        const args = manifest?.protocol_version === 2 ? { protocol_version: 2 } : {}
+        const id = stack.cloud.enqueueInvocation(tool, args, { provider: 'weixin' })
+        const result = await waitForResult(stack, id, `${tool}: 本机专用`)
+        assert.equal(result.payload['code'], 'TOOL_NOT_ALLOWED')
+        assert.equal(result.payload['data'], undefined)
+        assert.ok(!stack.cloud.callsFor(id).some(call => call.type === 'started'))
+      }
+      assert.equal(stack.providers.get('weixin').isRunning, false, '正文工具不启动 Provider')
+    } finally {
+      await stack.stop()
+    }
   }
 })
 

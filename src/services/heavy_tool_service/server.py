@@ -25,6 +25,7 @@
 
 import argparse
 import asyncio
+import contextvars
 import hmac
 import os
 import threading
@@ -247,9 +248,13 @@ async def execute(request: Request):
         )
         with tool_execution_scope(context_obj):
             loop = asyncio.get_running_loop()
+            # run_in_executor 不传播 ContextVar（executor 线程内工具上下文恒为
+            # None，产物会兜底落 _anonymous，2026-11-16 tr_runner_93506544 事故
+            # 根因）；用 copy_context().run 在 scope 内捕获上下文后于线程内恢复
+            thread_ctx = contextvars.copy_context()
             future = loop.run_in_executor(
                 None,
-                lambda: handlers.dispatch(tool, handler, params, cancel_event),
+                lambda: thread_ctx.run(handlers.dispatch, tool, handler, params, cancel_event),
             )
             try:
                 result = await asyncio.wait_for(asyncio.shield(future),

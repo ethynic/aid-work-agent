@@ -110,8 +110,6 @@ test('weixin manifest：名称定位只读，默认仅 message_send 为写，v2�
     'weixin_name_resolve',
     'weixin_chat_search',
     'weixin_message_send',
-    'weixin_history_read',
-    'weixin_unread_list',
   ])
   assert.equal(weixin.provider_id, 'ai.aidwork.weixin')
   assert.equal(weixin.execution_target, 'local_required')
@@ -133,7 +131,7 @@ test('weixin v2 会话变体：仅显式协商后生效（setManifestOverride）
     const v2 = getProviderManifest('weixin')!
     assert.equal(v2.protocol_version, 2)
     assert.equal(v2.shared_lock_capable, true)
-    assert.ok(isToolAllowedFor(v2, 'weixin_session_observe'), '观察工具在 v2 变体')
+    assert.ok(!isToolAllowedFor(v2, 'weixin_session_observe'), '观察正文仅在本机工具提供')
     assert.ok(isToolAllowedFor(v2, 'weixin_message_send_v2'), 'v2 发送在 v2 变体')
     assert.ok(isWriteToolFor(v2, 'weixin_message_send_v2'), 'v2 发送为写')
     assert.ok(!isWriteToolFor(v2, 'weixin_session_observe'), '观察只读')

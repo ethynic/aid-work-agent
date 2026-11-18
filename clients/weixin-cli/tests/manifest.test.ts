@@ -49,6 +49,7 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源（上位�
   assert.equal(m.execution_target, 'local_required')
 
   // 运行时字段
+  for (const field of ['tools', 'provider_version', 'schema_digest']) assert.ok(!(field in staticFile))
   const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
   assert.equal(m.provider_version, pkg.version)
   assert.equal(m.schema_digest, computeSchemaDigest())
@@ -61,23 +62,24 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源（上位�
     'weixin_history_read',
     'weixin_session_observe',
     'weixin_unread_list',
-    'weixin_name_resolve',
-    'weixin_message_send_v2',
+    'weixin_chat_latest',
   ])
-  assert.equal(m.tools.length, 8)
+  assert.equal(m.tools.length, 7)
   const probe = m.tools[0]!
   assert.equal(probe.name, 'weixin_probe')
   assert.ok(probe.title.length > 0 && probe.description.length > 0)
   assert.equal(probe.inputSchema.type, 'object')
   assert.equal(probe.annotations.readOnlyHint, true)
 
-  // 两种发送入口均为写动作，名称定位与观察仍为只读。
+  // 聊天发送为写动作，名称定位与观察仍为只读。
   const byName = new Map(m.tools.map((t) => [t.name, t]))
   const send = byName.get('weixin_message_send')!
   assert.equal(send.annotations.readOnlyHint, false)
   assert.equal(send.annotations.idempotentHint, false)
-  assert.equal(byName.get('weixin_message_send_v2')!.annotations.readOnlyHint, false)
-  assert.equal(byName.get('weixin_name_resolve')!.annotations.readOnlyHint, true)
+  assert.equal(byName.get('weixin_chat_latest')!.annotations.readOnlyHint, true)
+  assert.equal(byName.has('weixin_name_resolve'), false)
+  assert.throws(() => getOperationEntry('weixin_name_resolve'), /漂移/)
+  assert.deepEqual(Object.keys(byName.get('weixin_chat_latest')!.inputSchema.properties as object), ['target_name'])
   for (const n of ['weixin_chat_search', 'weixin_history_read', 'weixin_session_observe', 'weixin_unread_list']) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, true, `${n} 应为只读`)
   }
@@ -98,6 +100,44 @@ test('toolDefs ↔ registry 一致性守卫：每个 toolDef 可取到 operation
   assert.throws(() => getOperationEntry('weixin_nonexistent'), /漂移/)
 })
 
+test('标准多模态发送是唯一声明的聊天写工具', () => {
+  const derived = manifestTools().filter((t) => t.annotations.readOnlyHint !== true).map((t) => t.name).sort()
+  assert.deepEqual(derived, ['weixin_message_send'])
+})
+
+test('tool_declaration：version 1、声明恰为 4 个云端 v1 工具；微信全部串行', () => {
+  const m = buildManifest()
+  assert.equal(m.tool_declaration.version, 1)
+  // 声明即调度授权（契约 2.20 修订）：写死预期名单，防声明面漂移（与 runtime
+  // TRUSTED_MANIFESTS weixin v1 受信面同一集合；新增云端工具必须显式更新此断言）
+  assert.deepEqual(m.tool_declaration.tools.map((t) => t.name), [
+    'weixin_probe',
+    'weixin_chat_search',
+    'weixin_message_send',
+    'weixin_chat_latest',
+  ])
+  assert.equal(new Set(m.tool_declaration.tools.map((t) => t.name)).size, m.tool_declaration.tools.length, '声明名不重复')
+  for (const declared of m.tool_declaration.tools) {
+    assert.ok(TOOL_NAMES.includes(declared.name), `${declared.name} 必须出现在清单 tools 内`)
+    assert.equal(declared.parallel, undefined, '微信全部桌面操作，整插件串行')
+  }
+  // 调度声明不计入 schema_digest（digest 沿用旧规则只覆盖 tools 数组）
+  assert.equal(m.schema_digest, computeSchemaDigest())
+})
+
+test('微信正文读取仅供本机 MCP，已撤下专用 v2 发送', () => {
+  const m = buildManifest()
+  const declared = new Set(m.tool_declaration.tools.map((t) => t.name))
+  assert.ok(!declared.has('weixin_message_send_v2'))
+  assert.ok(!TOOL_NAMES.includes('weixin_message_send_v2'))
+  assert.throws(() => getOperationEntry('weixin_message_send_v2'), /漂移/)
+  for (const name of ['weixin_history_read', 'weixin_unread_list', 'weixin_session_observe']) {
+    assert.ok(!declared.has(name), `${name} 不能从云端调度`)
+    assert.ok(m.tools.some(tool => tool.name === name), `${name} 仍可在本机 MCP 使用`)
+  }
+  assert.equal(m.schema_digest, computeSchemaDigest())
+})
+
 test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => {
   const cli = path.join(ROOT, 'dist', 'src', 'cli', 'index.js')
   const out = execFileSync(process.execPath, [cli, 'version', '--json'], { encoding: 'utf8' })
@@ -111,7 +151,7 @@ test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => 
     'weixin_history_read',
     'weixin_session_observe',
     'weixin_unread_list',
-    'weixin_name_resolve',
-    'weixin_message_send_v2',
+    'weixin_chat_latest',
   ])
+  assert.deepEqual(parsed.tool_declaration, buildManifest().tool_declaration)
 })

@@ -33,6 +33,114 @@ FLAG_LABEL = {
 }
 
 # ---------------------------------------------------------------------------
+# 交付物字体（免费可商用）
+# ---------------------------------------------------------------------------
+# Noto Sans SC（思源黑体的 Google 版本，SIL Open Font License 1.1）：
+#   - 可免费商用、可嵌入、无需授权；Windows/macOS/Linux 均可获取
+#   - 中文 / 英文 / 常用符号（含 ¥、±、×、→、① 等）全覆盖
+# 生成 Word / Excel 时必须同时写 w:eastAsia，否则中文会回退到主题字体，
+# 表现为「很特殊的字体」。下列 helper 统一处理，替换字体只改 DOC_FONT 一处。
+DOC_FONT = "Noto Sans SC"
+
+
+def _docx_rfonts(rPr, font_name):
+    """在 w:rPr 上写入 ascii/hAnsi/eastAsia/cs 字体，并清除主题字体覆盖。"""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    rFonts = rPr.find(qn("w:rFonts"))
+    if rFonts is None:
+        rFonts = OxmlElement("w:rFonts")
+        rPr.insert(0, rFonts)
+    for a in ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme"):
+        if rFonts.get(qn(a)) is not None:
+            del rFonts.attrib[qn(a)]
+    for a in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+        rFonts.set(qn(a), font_name)
+    return rFonts
+
+
+def set_run_font(run, font_name=DOC_FONT, size=None, bold=None, italic=None, color=None):
+    """给单个 Word run 设置字体（含 eastAsia），可选同时设置字号/粗体/斜体/颜色。"""
+    from docx.shared import Pt
+    run.font.name = font_name
+    _docx_rfonts(run._element.get_or_add_rPr(), font_name)
+    if size is not None:
+        run.font.size = Pt(size)
+    if bold is not None:
+        run.font.bold = bold
+    if italic is not None:
+        run.font.italic = italic
+    if color is not None:
+        from docx.shared import RGBColor
+        run.font.color.rgb = RGBColor.from_string(color)
+    return run
+
+
+def apply_docx_font(doc, font_name=DOC_FONT):
+    """把整份 Word 的样式与所有 run 统一到 font_name（覆盖 eastAsia）。
+
+    三层处理：1) 所有样式（Normal/标题/列表/表格/内置模板样式）——覆盖继承与新增内容；
+    2) 已有 run——避免直接格式覆盖样式；3) 扫描全部 rFonts——清除主题字体残留（含 docDefaults）。
+    保存前调用一次即可。
+    """
+    # 遍历所有样式（含默认模板自带的 Macro/Grid/Theme 等未使用样式），
+    # 避免任何一处残留主题字体导致中文回退到特殊字体。
+    seen = set()
+    for st in list(doc.styles) + [doc.styles["Normal"]]:
+        if st is None:
+            continue
+        try:
+            key = id(st.element)
+            if key in seen:
+                continue
+            seen.add(key)
+            st.font.name = font_name
+            _docx_rfonts(st.element.get_or_add_rPr(), font_name)
+        except Exception:
+            continue
+
+    def _walk(paras):
+        for p in paras:
+            for r in p.runs:
+                r.font.name = font_name
+                _docx_rfonts(r._element.get_or_add_rPr(), font_name)
+
+    _walk(doc.paragraphs)
+    for t in doc.tables:
+        for row in t.rows:
+            for cell in row.cells:
+                _walk(cell.paragraphs)
+
+    # 3) 兜底：扫描 styles.xml 全部 rFonts（含 docDefaults 与表格样式的条件格式 rPr），
+    #    任何残留主题字体都改写为指定字体，杜绝中文在极端情况下回退。
+    from docx.oxml.ns import qn
+    for rPr in doc.styles.element.iter(qn("w:rPr")):
+        rFonts = rPr.find(qn("w:rFonts"))
+        if rFonts is not None:
+            for a in ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme"):
+                if rFonts.get(qn(a)) is not None:
+                    del rFonts.attrib[qn(a)]
+            for a in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
+                rFonts.set(qn(a), font_name)
+    return doc
+
+
+def apply_workbook_font(wb, font_name=DOC_FONT, size=None):
+    """把整个工作簿所有单元格字体统一到 font_name，保留颜色/粗体/斜体等。"""
+    from copy import copy
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                f = copy(cell.font)
+                if f.name != font_name or f.scheme not in (None, ""):
+                    f.name = font_name
+                    f.scheme = None
+                    if size is not None:
+                        f.sz = size
+                    cell.font = f
+    return wb
+
+# ---------------------------------------------------------------------------
 # 单位体系（单一数据源，避免别名表与量纲表两处维护而失配）
 #
 # UOM_SPEC[原始写法] = (规范名, 量纲, 该单位相对量纲基准单位的倍率)

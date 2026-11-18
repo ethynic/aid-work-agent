@@ -1,6 +1,6 @@
 {
   "name": "aid-xiaohongshu",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "小红书本机 Chrome 连接器",
   "type": "module",

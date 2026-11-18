@@ -12,7 +12,7 @@ const root = dirname(fileURLToPath(import.meta.url))
 const clients = resolve(root, '..')
 export const definitions = {
   boss: { directory: 'boss-resume-assistant', display_name: 'BOSS 招聘', assets: ['scripts'], ocr: false },
-  weixin: { directory: 'weixin-cli', display_name: '微信', assets: ['drivers'], ocr: true },
+  weixin: { directory: 'weixin-cli', display_name: '微信', assets: ['drivers/ps1'] },
   wecom: { directory: 'wecom-cli', display_name: '企业微信', assets: ['drivers'], localdbPython: true },
   xiaohongshu: { directory: 'xiaohongshu-cli', display_name: '小红书', assets: [] },
 }
@@ -131,21 +131,13 @@ async function buildProvider(name, options, signer) {
   if (!existsSync(join(source, 'dist/src/cli/index.js'))) throw new Error('Build Provider before packaging')
   const stage = mkdtempSync(join(tmpdir(), 'aid-provider-package-'))
   try {
-    if (name === 'wecom') copyCurrentProviderDist(source, join(stage, 'dist/src'))
+    if (name === 'wecom' || name === 'weixin') copyCurrentProviderDist(source, join(stage, 'dist/src'))
     else cpSync(join(source, 'dist/src'), join(stage, 'dist/src'), { recursive: true })
     for (const assets of definition.assets) {
       // BOSS needs approved PowerShell drivers, not developer live probes.
       if (assets === 'scripts') {
         copyProviderScriptAssets(name, join(source, assets), join(stage, assets))
       } else copyProviderDriverAssets(join(source, assets), join(stage, assets))
-    }
-    if (definition.ocr) {
-      const ocr = resolve(options.ocr ?? join(root, 'assets/ocr-python-final'))
-      if (!existsSync(join(ocr, 'python.exe')) || existsSync(join(ocr, 'pyvenv.cfg')) || !existsSync(join(ocr, 'asset-provenance.json')) || !existsSync(join(ocr, 'msvcp140.dll')) || !existsSync(join(ocr, 'msvcp140_1.dll'))) throw new Error('Verified embedded OCR input with app-local CRT required')
-      filesUnder(ocr) // reject links before copying or executing
-      copyProviderDriverAssets(ocr, join(stage, 'ocr-python'))
-      const env = { ...process.env }; delete env.PYTHONHOME; delete env.PYTHONPATH
-      execFileSync(join(stage, 'ocr-python/python.exe'), ['-I', '-B', '-c', 'from rapidocr_onnxruntime import RapidOCR; from PIL import Image; RapidOCR(); print("OCR_BUNDLE_OK")'], { cwd: stage, env, timeout: 90000 })
     }
     if (definition.localdbPython) {
       const localdb = resolve(options.localdb_python ?? join(root, 'assets/localdb-python-final'))
@@ -219,7 +211,7 @@ export async function main(argv) {
   for (let index = 0; index < argv.length; index++) {
     const key = argv[index]
     if (key === '--test') { options.test = true; continue }
-    const allowed = { '--provider': 'provider', '--node': 'node', '--npm-cli': 'npm_cli', '--ocr': 'ocr', '--localdb-python': 'localdb_python', '--output': 'output', '--signer': 'signer', '--release-id': 'release_id', '--created-at': 'created_at', '--test-key-id': 'test_key_id' }
+    const allowed = { '--provider': 'provider', '--node': 'node', '--npm-cli': 'npm_cli', '--localdb-python': 'localdb_python', '--output': 'output', '--signer': 'signer', '--release-id': 'release_id', '--created-at': 'created_at', '--test-key-id': 'test_key_id' }
     if (!Object.hasOwn(allowed, key) || !argv[index + 1]) throw new Error('Invalid packaging arguments')
     options[allowed[key]] = argv[++index]
   }

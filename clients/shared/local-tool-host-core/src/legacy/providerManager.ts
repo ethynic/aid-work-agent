@@ -2,7 +2,9 @@
  * MCP stdio Provider 生命周期管理。
  *
  * - spawn `node <entry> mcp --stdio`（不用 shell，entry 固定为本地 config，禁止云端下发）
- * - 单飞：进程级同时只执行一个 tool call（云端协议一设备一任务，本地仍兜底）
+ * - 单飞：串行 lane 进程级同时只执行一个 tool call（云端协议一设备一任务，本地仍兜底）；
+ *   并行 lane（契约 2.20，opts.parallel）绕过单飞门——MCP stdio 按请求 id 关联并发，
+ *   同 Provider 可与串行/并行调用并发，isBusy/waitForIdle 覆盖并行在途
  * - 崩溃处理：MCP 进程退出/stdio 断开 → 进行中的调用抛 ProviderCrashError，
  *   随后 ensureStarted() 自动 respawn 供下一个 invocation
  * - 回收：shutdown() 关 stdin（SDK close 内部 2s 后 SIGTERM），限时 5s 未退出再 SIGKILL
@@ -47,6 +49,10 @@ export interface ProviderCallOptions {
   signal?: AbortSignal
   /** 单次调用超时（默认 10 分钟；进度通知不重置） */
   timeoutMs?: number
+  /** 契约 2.20：并行 lane 调用——绕过串行单飞门（MCP stdio 按请求 id 关联并发，响应
+   *  路由正确），不占用串行 busy 标志；计入并行在途（isBusy/waitForIdle/shutdown 覆盖）。
+   *  缺省串行 lane：busy 门行为与现状完全不变。 */
+  parallel?: boolean
 }
 
 export interface ProviderOptions {
@@ -97,6 +103,8 @@ export class ProviderManager {
   private transport: StdioClientTransport | null = null
   private crashed = false
   private busy = false
+  /** 并行 lane 在途调用数（契约 2.20）：不占 busy 标志，但覆盖 stop/waitForIdle 语义 */
+  private parallelInFlight = 0
   private shuttingDown = false
   private resumeNextSupported: boolean | undefined
   private sendStatusSupported: boolean | undefined
@@ -133,7 +141,8 @@ export class ProviderManager {
     }
   }
 
-  get isBusy(): boolean { return this.busy }
+  /** 串行单飞占用或并行 lane 在途（recoverIdlePool 等资源停止路径据此拒绝并发恢复） */
+  get isBusy(): boolean { return this.busy || this.parallelInFlight > 0 }
 
   get childPid(): number | null {
     return this.transport?.pid ?? null
@@ -280,13 +289,19 @@ export class ProviderManager {
 
   /**
    * 调用 Provider 工具，返回 structuredContent（boss OperationResult 形态）。
-   * Provider 崩溃 → ProviderCrashError；并发占用 → ProviderBusyError。
+   * Provider 崩溃 → ProviderCrashError；串行 lane 并发占用 → ProviderBusyError。
+   * 并行 lane（opts.parallel）：绕过串行单飞门（MCP stdio 按 id 关联并发），可与任何调用并发。
    */
   async callTool(name: string, args: Record<string, unknown>, opts: ProviderCallOptions = {}): Promise<Record<string, unknown>> {
-    if (this.busy) {
-      throw new ProviderBusyError(`Provider 正在执行其他调用（单飞兜底）`)
+    const parallel = opts.parallel === true
+    if (parallel) {
+      this.parallelInFlight++
+    } else {
+      if (this.busy) {
+        throw new ProviderBusyError(`Provider 正在执行其他调用（单飞兜底）`)
+      }
+      this.busy = true
     }
-    this.busy = true
     try {
       if (name === 'wecom_read_sessions' || name === 'wecom_session_directory' || (['wecom_read_session', 'wecom_message_send'].includes(name) && args.session !== undefined)) {
         let supported: ReadonlySet<string>
@@ -382,7 +397,8 @@ export class ProviderManager {
       if (decoded.diagnostic) logError(`Provider result rejected ${JSON.stringify(decoded.diagnostic)}`)
       return decoded.result
     } finally {
-      this.busy = false
+      if (parallel) this.parallelInFlight--
+      else this.busy = false
     }
   }
 
@@ -420,7 +436,7 @@ export class ProviderManager {
   }
 
   async waitForIdle(): Promise<void> {
-    while (this.busy) await sleep(25)
+    while (this.busy || this.parallelInFlight > 0) await sleep(25)
   }
 
   private async ensureChildReaped(pid: number, timeoutMs: number): Promise<void> {

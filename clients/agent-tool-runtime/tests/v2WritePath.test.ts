@@ -317,8 +317,10 @@ test('断网回执：执行完成后回执网络断 → 重启（同设备/同�
       device: { device_id: stack1.deviceId, token: stack1.token },
     })
     try {
+      // 等待条件含 outbox 条目删除：云端 state 翻转与回传方本地删除之间有 ACK 落账窗口，
+      // 只等 state 会在高并发下抢在 remove 之前断言（断言保留，只消除竞态窗口）
       await stack2.cloud.waitFor(
-        () => stack2.cloud.getInvocation(id)!.state === 'succeeded',
+        () => stack2.cloud.getInvocation(id)!.state === 'succeeded' && stack2.outbox.load(id) === null,
         15_000,
         'replay acked',
       )
@@ -422,8 +424,9 @@ test('R21 断网/重启 E2E：发送成功→断网→服务端清扫置 permit 
       device: { device_id: stack1.deviceId, token: stack1.token },
     })
     try {
+      // 同上：等待条件含 outbox 条目删除，消除「state 先翻转、remove 后落盘」的竞态窗口
       await stack2.cloud.waitFor(
-        () => stack2.cloud.getInvocation(id)!.state === 'succeeded',
+        () => stack2.cloud.getInvocation(id)!.state === 'succeeded' && stack2.outbox.load(id) === null,
         15_000,
         'late evidence accepted after replay',
       )

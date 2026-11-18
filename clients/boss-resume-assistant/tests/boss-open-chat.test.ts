@@ -54,9 +54,12 @@ function fakeFactory(url: string) {
 const CHAT_URL = 'https://www.zhipin.com/web/chat/index'
 const RECOMMEND_URL = 'https://www.zhipin.com/web/chat/recommend'
 
+/** 测试提速：executor 节奏 sleep 注入空实现（断言不含时序语义） */
+const noSleep = { sleep: async () => {} }
+
 test('chat/index + 头部已是目标联系人 → via=already，effect=none（零点击）', async () => {
   const f = fakeFactory(CHAT_URL)
-  const op = createBossOpenChatOperation(f.factory)
+  const op = createBossOpenChatOperation(f.factory, noSleep)
   const r = await op.execute({ contact: '杨鸿杰' }, silentCtx())
   assert.equal(r.success, true)
   assert.equal(r.code, 'OK')
@@ -71,7 +74,7 @@ test('chat/index + 头部已是目标联系人 → via=already，effect=none（�
 
 test('URL 不含 /web/chat/index → WRONG_PAGE（可重试），提示 goto chat 且不自动跳转', async () => {
   const f = fakeFactory(RECOMMEND_URL)
-  const op = createBossOpenChatOperation(f.factory)
+  const op = createBossOpenChatOperation(f.factory, noSleep)
   const r = await op.execute({ contact: '杨鸿杰' }, silentCtx())
   assert.equal(r.success, false)
   assert.equal(r.code, 'WRONG_PAGE')
@@ -84,7 +87,7 @@ test('URL 不含 /web/chat/index → WRONG_PAGE（可重试），提示 goto cha
 
 test('contact 空白字符串 → INVALID_ARGUMENT，且不连 Chrome', async () => {
   const f = fakeFactory(CHAT_URL)
-  const op = createBossOpenChatOperation(f.factory)
+  const op = createBossOpenChatOperation(f.factory, noSleep)
   const r = await op.execute({ contact: '   ' }, silentCtx())
   assert.equal(r.success, false)
   assert.equal(r.code, 'INVALID_ARGUMENT')
@@ -94,7 +97,7 @@ test('contact 空白字符串 → INVALID_ARGUMENT，且不连 Chrome', async ()
 
 test('联系人不存在（搜索无入口 + 列表 0 命中）→ UI_CHANGED 不可重试，文案列可用联系人', async () => {
   const f = fakeFactory(CHAT_URL)
-  const op = createBossOpenChatOperation(f.factory)
+  const op = createBossOpenChatOperation(f.factory, noSleep)
   const r = await op.execute({ contact: '张三丰' }, silentCtx())
   assert.equal(r.success, false)
   assert.equal(r.code, 'UI_CHANGED')
@@ -107,7 +110,7 @@ test('联系人不存在（搜索无入口 + 列表 0 命中）→ UI_CHANGED �
 
 test('点击列表项后头部未切换（轮询 8 次超时）→ UI_CHANGED（不可自动重试）', async () => {
   const f = fakeFactory(CHAT_URL)
-  const op = createBossOpenChatOperation(f.factory)
+  const op = createBossOpenChatOperation(f.factory, noSleep)
   const r = await op.execute({ contact: '席彬玮' }, silentCtx())
   assert.equal(r.success, false)
   assert.equal(r.code, 'UI_CHANGED')
