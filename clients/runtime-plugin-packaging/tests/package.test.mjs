@@ -117,9 +117,10 @@ test('Weixin packages stage native history and send drivers with their shared UI
     copyProviderDriverAssets(join(clients, 'weixin-cli/drivers'), join(home, 'drivers'))
     const paths = filesUnder(home).map(file => file.path)
     for (const driver of ['_common.ps1', 'win32-lib.ps1', 'native-messages.ps1', 'native-session-search.ps1',
-      'history-read.ps1', 'message-send.ps1', 'name-resolve-native.ps1']) {
+      'history-read.ps1', 'message-send.ps1', 'latest-history.ps1', 'window-doctor.ps1']) {
       assert.ok(paths.includes(`drivers/ps1/${driver}`), `missing relocated Weixin driver ${driver}`)
     }
+    assert.ok(!paths.includes('drivers/ps1/name-resolve-native.ps1'), 'retired name resolution must not ship')
     for (const driver of ['history-read.ps1', 'message-send.ps1']) {
       const contents = readFileSync(join(home, 'drivers/ps1', driver), 'utf8')
       assert.match(contents, /native-messages\.ps1/)

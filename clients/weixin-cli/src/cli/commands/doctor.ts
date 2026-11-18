@@ -13,9 +13,11 @@
 import {
   artifactDir,
   checkArtifactDirWritable,
-  probeEnvironment,
   type ProbeEnvironmentOptions,
 } from '../../platform/environment.js'
+import { diagnoseWeixinRuntime, type WindowState } from '../../platform/runtimeDiagnosis.js'
+import type { RunPowerShellDriverFn } from '../../platform/powershell.js'
+import { NamedMutex, resolveMutexScope } from '../../platform/namedMutex.js'
 
 export interface DoctorCheck {
   name: string
@@ -31,6 +33,10 @@ export interface DoctorReport {
   artifact_dir: string | null
   /** 基础运行条件；进程存在不等于已核验登录态。 */
   runtime_readiness: { ready: boolean; reason?: string }
+  window_state: WindowState
+  login_state: 'online' | 'unknown'
+  guidance: string
+  restore?: { restored: boolean; error_code?: string }
 }
 
 export interface DoctorCommandOptions {
@@ -38,10 +44,13 @@ export interface DoctorCommandOptions {
   /** 测试注入（模拟非 win32 / 无 PowerShell 等） */
   env?: ProbeEnvironmentOptions
   localAppData?: string
+  restoreWindow?: boolean
+  runDriverFn?: RunPowerShellDriverFn
 }
 
 export async function runDoctorChecks(opts: DoctorCommandOptions = {}): Promise<DoctorReport> {
-  const env = await probeEnvironment(opts.env)
+  const diagnosis = await diagnoseWeixinRuntime({ env: opts.env, runDriverFn: opts.runDriverFn, restoreWindow: opts.restoreWindow })
+  const env = diagnosis.environment
   const checks: DoctorCheck[] = []
 
   checks.push({
@@ -89,21 +98,45 @@ export async function runDoctorChecks(opts: DoctorCommandOptions = {}): Promise<
     severity: 'info',
     detail: env.weixin_running ? `运行中（${env.weixin_processes} 个进程）` : '未检测到进程（执行业务操作前请启动并登录微信）',
   })
+  checks.push({ name: '微信窗口与登录态', ok: diagnosis.runtime_readiness.ready, severity: 'info', detail: diagnosis.runtime_readiness.reason })
+  if (opts.restoreWindow) {
+    checks.push({ name: '微信窗口恢复', ok: diagnosis.restored && diagnosis.runtime_readiness.ready,
+      severity: 'gate', detail: diagnosis.restored ? '原微信主窗口已恢复并核实会话列表' : diagnosis.guidance })
+  }
 
   return {
     success: checks.every((c) => c.severity !== 'gate' || c.ok),
     checks,
     artifact_dir: dir,
-    runtime_readiness: {
-      ready: checks.every((c) => c.severity !== 'gate' || c.ok) && env.weixin_running,
-      reason: !env.weixin_running ? '请启动微信并登录'
-        : checks.some((c) => c.severity === 'gate' && !c.ok) ? '桌面运行条件未满足' : '基础条件已满足，请确认微信已登录',
-    },
+    runtime_readiness: checks.some((c) => c.severity === 'gate' && !c.ok)
+      ? { ready: false, reason: '桌面运行条件未满足或窗口恢复失败' } : diagnosis.runtime_readiness,
+    window_state: diagnosis.window_state, login_state: diagnosis.login_state, guidance: diagnosis.guidance,
+    ...(opts.restoreWindow ? { restore: { restored: diagnosis.restored, ...(diagnosis.error_code ? { error_code: diagnosis.error_code } : {}) } } : {}),
   }
 }
 
 export async function doctorCommand(opts: DoctorCommandOptions): Promise<number> {
-  const report = await runDoctorChecks(opts)
+  const mutex = opts.restoreWindow ? new NamedMutex(resolveMutexScope()) : undefined
+  let acquired = false
+  let report: DoctorReport
+  try {
+    if (mutex) acquired = await mutex.acquire()
+    if (mutex && !acquired) {
+      report = {
+        success: false, checks: [{ name: '微信窗口恢复', ok: false, severity: 'gate', detail: '另一个 aid-weixin 操作正在执行，请稍后重试' }],
+        artifact_dir: null, runtime_readiness: { ready: false, reason: '微信操作互斥占用中' },
+        window_state: 'unavailable', login_state: 'unknown', guidance: '请等待当前微信操作结束后重试',
+        restore: { restored: false, error_code: 'BUSY' },
+      }
+    } else { report = await runDoctorChecks(opts) }
+  } catch {
+    report = {
+      success: false, checks: [{ name: '微信运行诊断', ok: false, severity: 'gate', detail: '无法完成诊断，请稍后重试' }],
+      artifact_dir: null, runtime_readiness: { ready: false, reason: '诊断执行失败' },
+      window_state: 'unavailable', login_state: 'unknown', guidance: '请确认当前桌面环境后重试',
+      ...(opts.restoreWindow ? { restore: { restored: false, error_code: 'INTERNAL_ERROR' } } : {}),
+    }
+  } finally { if (acquired) await mutex!.release() }
   if (opts.json) {
     console.log(JSON.stringify(report, null, 2))
     return report.success ? 0 : 1
@@ -113,7 +146,7 @@ export async function doctorCommand(opts: DoctorCommandOptions): Promise<number>
     console.log(`${mark} ${c.name}${c.detail ? `：${c.detail}` : ''}`)
   }
   if (!report.success) {
-    console.log('\n存在失败项，请按提示修复后重试（doctor 为只读检查，未对系统做任何修改）')
+    console.log('\n存在失败项，请按提示处理后重试')
     return 1
   }
   console.log('\n全部检查通过')

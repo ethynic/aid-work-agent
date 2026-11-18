@@ -3062,6 +3062,39 @@ class WecomSendStatusTool(WecomLocalToolProxyTool):
         return await self._poll_invocation(invocation, tenant_id, progress_queue, durable=operation is not None)
 
 
+class WeixinChatLatestTool(LocalToolProxyTool):
+    name = catalog.WEIXIN_CHAT_LATEST
+    display_name = "同步微信会话最新消息"
+    description = (
+        "在选定设备的 Windows 微信中，按完整名称同步当前已打开的单聊或群聊。"
+        "本机保存聊天正文，只返回同步状态、扫描页数和新增条数。"
+    )
+    category = "weixin"
+    provider_key = "weixin"
+    invocation_provider_key = "weixin"
+    heal_eligible = False
+    unsupported_provider_message = "选定设备尚未声明微信最新消息同步。请更新本机微信插件"
+
+    class InputModel(BaseModel, extra="forbid"):
+        target_name: str = Field(min_length=1, max_length=128, description="当前已打开的微信会话全名")
+
+        @field_validator("target_name")
+        @classmethod
+        def valid_name(cls, value: str) -> str:
+            if not value.strip() or any(ord(char) < 32 or ord(char) == 127 for char in value):
+                raise ValueError("微信会话名称无效")
+            return value
+
+    async def _find_ready_device(self, tenant_id, user_id):
+        device, error = await super()._find_ready_device(tenant_id, user_id)
+        if not device:
+            return None, error
+        declared = catalog.declared_tools_for_device(device.get("capabilities_json")) or {}
+        if self.name not in declared.get(self.provider_key, []):
+            return None, self.unsupported_provider_message
+        return device, None
+
+
 LOCAL_PROXY_TOOL_CLASSES = (
     BossFilterTool,
     BossClearFilterTool,
@@ -3101,6 +3134,7 @@ LOCAL_PROXY_TOOL_CLASSES = (
     WecomUnreadListTool,
     WecomSendStatusTool,
     WecomGroupPollTool,
+    WeixinChatLatestTool,
 )
 
 LOCAL_PROXY_TOOL_NAMES = frozenset(cls.name for cls in LOCAL_PROXY_TOOL_CLASSES)

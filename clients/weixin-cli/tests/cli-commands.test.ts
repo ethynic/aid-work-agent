@@ -7,12 +7,16 @@ import test from 'node:test'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { NamedMutex } from '../src/platform/namedMutex.js'
 
 const DIST_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CLI = path.join(DIST_ROOT, 'src', 'cli', 'index.js')
 
 function runCli(args: string[]): { status: number | null; stdout: string; stderr: string } {
-  const r = spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', timeout: 30000 })
+  const r = spawnSync(process.execPath, [CLI, ...args], {
+    encoding: 'utf8', timeout: 30000,
+    env: { ...process.env, AID_WEIXIN_MUTEX_SCOPE: 'cli-commands-test-' + process.pid },
+  })
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }
 }
 
@@ -56,7 +60,7 @@ test('probe：人类可读输出，退出码 0（win32 交互会话）', () => {
   const { status, stdout } = runCli(['probe'])
   if (process.platform === 'win32') {
     assert.equal(status, 0)
-    assert.ok(stdout.includes('环境探测完成'))
+    assert.ok(stdout.includes('微信运行诊断完成'))
   }
 })
 
@@ -84,4 +88,38 @@ test('send --json：参数错误也输出 OperationResult JSON（AI 组合链路
   assert.equal(parsed.success, false)
   assert.equal(parsed.code, 'INVALID_ARGUMENT')
   assert.equal(typeof parsed.run_id, 'string')
+})
+
+test('read chat-latest always returns JSON so its one-time incremental result cannot disappear into a status message', () => {
+  for (const flags of [[], ['--json']]) {
+    // Missing target fails before UI access and exercises both normal render paths.
+    const { status, stdout } = runCli(['read', '--domain', 'chat-latest', ...flags])
+    assert.equal(status, 2)
+    const parsed = JSON.parse(stdout.trim())
+    assert.equal(parsed.code, 'INVALID_ARGUMENT')
+    assert.deepEqual(parsed.data, {})
+  }
+})
+
+test('doctor restore shares the CLI and MCP mutex and returns a failed report before any native action when busy', async () => {
+  const scope = 'doctor-restore-busy-' + process.pid
+  const mutex = new NamedMutex(scope)
+  assert.equal(await mutex.acquire(), true)
+  try {
+    for (const flags of [['--restore-window', 'false'], ['--restore-window', '--restore-window']]) {
+      const invalid = spawnSync(process.execPath, [CLI, 'doctor', ...flags, '--json'], {
+        encoding: 'utf8', timeout: 5000, env: { ...process.env, AID_WEIXIN_MUTEX_SCOPE: scope },
+      })
+      assert.equal(invalid.status, 2, 'invalid restore flags must fail before the occupied UI mutex')
+    }
+    const result = spawnSync(process.execPath, [CLI, 'doctor', '--restore-window', '--json'], {
+      encoding: 'utf8', timeout: 5000, env: { ...process.env, AID_WEIXIN_MUTEX_SCOPE: scope },
+    })
+    assert.equal(result.status, 1)
+    const report = JSON.parse(result.stdout)
+    assert.equal(report.success, false)
+    assert.equal(report.runtime_readiness.ready, false)
+    assert.deepEqual(report.restore, { restored: false, error_code: 'BUSY' })
+    assert.ok(report.checks.some((check: { severity: string; ok: boolean }) => check.severity === 'gate' && !check.ok))
+  } finally { await mutex.release() }
 })

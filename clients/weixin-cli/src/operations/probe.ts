@@ -9,6 +9,8 @@
  * 只体现在 data.weixin_running（探测的职责是报告能力矩阵，不是替调用方决策）。
  */
 import { probeEnvironment, type ProbeEnvironmentOptions } from '../platform/environment.js'
+import { diagnoseWeixinRuntime } from '../platform/runtimeDiagnosis.js'
+import type { RunPowerShellDriverFn } from '../platform/powershell.js'
 import { hangUntilAbort, runWeixinOperation } from './context.js'
 import { CodedOperationError, type OperationResult, type OpContext, type WeixinOperation } from './types.js'
 
@@ -21,7 +23,7 @@ export interface WeixinProbeArgs {
 const TEST_HANG_ENV = 'AID_WEIXIN_TEST_HANG'
 
 export function createWeixinProbeOperation(
-  deps: { probeEnvironmentFn?: (opts: ProbeEnvironmentOptions) => ReturnType<typeof probeEnvironment> } = {},
+  deps: { probeEnvironmentFn?: (opts: ProbeEnvironmentOptions) => ReturnType<typeof probeEnvironment>; runDriverFn?: RunPowerShellDriverFn } = {},
 ): WeixinOperation<WeixinProbeArgs> {
   const probeFn = deps.probeEnvironmentFn ?? probeEnvironment
   return {
@@ -45,9 +47,11 @@ export function createWeixinProbeOperation(
             ctx.progress({ stage: 'check', message: '测试 hook：悬挂等待取消' })
             await hangUntilAbort(ctx.signal)
           }
-          const env = await probeFn({
-            onStep: (step) => ctx.progress({ stage: 'check', message: step }),
+          const diagnosis = await diagnoseWeixinRuntime({
+            probeEnvironmentFn: probeFn, runDriverFn: deps.runDriverFn, signal: ctx.signal,
+            env: { onStep: (step) => ctx.progress({ stage: 'check', message: step }) },
           })
+          const env = diagnosis.environment
           if (!env.platform_ok) {
             throw new CodedOperationError(
               'WINDOWS_REQUIRED',
@@ -68,14 +72,18 @@ export function createWeixinProbeOperation(
             powershell_path: env.powershell_path,
             weixin_running: env.weixin_running,
             weixin_processes: env.weixin_processes,
+            window_state: diagnosis.window_state,
+            login_state: diagnosis.login_state,
+            runtime_readiness: diagnosis.runtime_readiness,
+            guidance: diagnosis.guidance,
           }
           if (args.verbose) {
             data.os_release = (await import('node:os')).release()
             data.node_version = process.version
           }
           const summary = env.weixin_running
-            ? `环境探测完成：Weixin.exe 运行中（${env.weixin_processes} 个进程），PowerShell ${env.powershell_available ? '可用' : '不可用'}`
-            : `环境探测完成：未检测到 Weixin.exe 进程，PowerShell ${env.powershell_available ? '可用' : '不可用'}`
+            ? `微信运行诊断完成：Weixin.exe 运行中（${env.weixin_processes} 个进程），${diagnosis.runtime_readiness.reason}`
+            : `微信运行诊断完成：未检测到 Weixin.exe 进程，PowerShell ${env.powershell_available ? '可用' : '不可用'}`
           return { message: summary, data }
         },
       )

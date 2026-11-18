@@ -320,6 +320,25 @@ def test_late_legacy_weixin_receipt_discards_body_before_persistence():
     )
 
 
+def test_weixin_chat_latest_receipt_only_persists_sync_metadata():
+    public = {"status": "updated", "pages_scanned": 2, "new_count": 3}
+    body = local_tools_api.ResultRequest(
+        claim_token="claimed", success=True, message="private text", effect="none",
+        data={**public, "messages": [{"text": "private text"}], "snapshot": "private image"},
+    )
+    device = {"id": DEVICE, "tenant_id": TENANT}
+    row = {"state": "succeeded", "effect": "none", "tool_name": catalog.WEIXIN_CHAT_LATEST, "provider_key": "weixin"}
+    with (
+        patch.object(repository, "get_invocation", return_value=row),
+        patch.object(repository, "write_result", return_value=row) as write,
+    ):
+        assert asyncio.run(local_tools_api.runtime_result("inv-latest", body, device=device))["success"]
+    write.assert_called_once_with(
+        "inv-latest", TENANT, local_tools_api.sha256_hex("claimed"), True, "OK",
+        "本机微信会话已同步", "none", public, False, device_id=DEVICE,
+    )
+
+
 def test_old_claim_cannot_start_a_plaintext_weixin_read_after_policy_change():
     queries = []
     cursor = SimpleNamespace(

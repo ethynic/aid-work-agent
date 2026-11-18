@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 # Reserved names of local MCP tools whose results can contain WeChat messages.
 LOCAL_ONLY_WEIXIN_TOOLS = frozenset({"weixin_history_read", "weixin_unread_list", "weixin_session_observe"})
 LOCAL_ONLY_WEIXIN_MESSAGE = "此微信读取工具仅支持本机 CLI 或 MCP"
+WEIXIN_CHAT_LATEST = "weixin_chat_latest"
 
 TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "runtime-recovery": {"provider_id":"ai.aidwork.runtime-recovery", "min_provider_version":"1.0.0",
@@ -73,6 +74,7 @@ TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "provider_id": "ai.aidwork.weixin",
         "min_provider_version": "1.0.0",
         "execution_target": "local_required",
+        "agent_tools": ["weixin_probe", "weixin_chat_search", "weixin_message_send_v2", WEIXIN_CHAT_LATEST],
         "tools": [
             "weixin_probe",
             "weixin_name_resolve",
@@ -304,6 +306,7 @@ def project_agent_definitions(definitions, device_tools=None):
     """Project business definitions; None means availability is not being filtered."""
     native = {name for provider in TRUSTED_PROVIDERS.values() for name in provider['tools']}
     business = {name for key in TRUSTED_PROVIDERS for name in agent_tools(key)}
+    native.update(business)
     independent = {name for provider in TRUSTED_PROVIDERS.values()
                    for name in provider.get('device_independent_tools', [])}
     return [item for item in definitions

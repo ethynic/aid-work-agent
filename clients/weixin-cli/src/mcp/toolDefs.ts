@@ -30,14 +30,14 @@ export interface WeixinToolDef {
 export const TOOL_DEFS: WeixinToolDef[] = [
   {
     name: 'weixin_probe',
-    title: '微信环境探测',
+    title: '微信运行诊断',
     description:
-      '只读探测微信操作环境：Windows 平台、交互桌面会话（已登录未锁屏）、PowerShell 可用性、Weixin.exe 进程存在性。' +
+      '只读诊断微信运行条件：Windows 平台、交互桌面会话、PowerShell、进程、主窗口状态和原生会话列表就绪度。' +
       '不激活窗口、不发送输入、不改剪贴板，无外部写副作用。',
     zodShape: {
       verbose: z.boolean().optional().describe('返回更多诊断字段（系统版本/Node 版本），默认 false'),
     },
-    annotations: { title: '微信环境探测', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: { title: '微信运行诊断', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: 'weixin_chat_search',
@@ -113,6 +113,6 @@ export const TOOL_DEFS: WeixinToolDef[] = [
 ]
 
 TOOL_DEFS.push(
-  { name:'weixin_name_resolve', title:'定位微信名称会话', description:'通过微信原生搜索唯一精确定位并打开联系人。只返回定位证据，不读取历史正文。', zodShape:{target_name:z.string().min(1).max(128)}, annotations:{title:'定位微信名称会话',readOnlyHint:true,destructiveHint:false,idempotentHint:false,openWorldHint:true}},
+  { name:'weixin_chat_latest', title:'同步微信最新消息', description:'同步当前已打开会话的本机加密副本。仅返回同步状态、扫描页数和新增条数，正文与截图保留在本机。', zodShape:{target_name:z.string().min(1).max(128)}, annotations:{title:'同步微信最新消息',readOnlyHint:true,destructiveHint:false,idempotentHint:false,openWorldHint:true}},
 )
 export const TOOL_NAMES = TOOL_DEFS.map((t) => t.name)

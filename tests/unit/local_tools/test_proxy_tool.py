@@ -70,16 +70,22 @@ class TestToolDefinitions:
         registered = {cls.name for cls in LOCAL_PROXY_TOOL_CLASSES}
         boss = set(catalog.allowed_tools("boss-recruiting"))
         wecom = set(catalog.allowed_tools("wecom"))
+        weixin_declared = set(catalog.agent_tools("weixin")) - set(catalog.allowed_tools("weixin"))
         assert len(registered) == len(LOCAL_PROXY_TOOL_CLASSES)
         assert registered == LOCAL_PROXY_TOOL_NAMES == manifest.LOCAL_PROXY_TOOL_NAMES
-        assert registered == boss | wecom
+        assert registered == boss | wecom | weixin_declared
         assert boss.isdisjoint(wecom)
         assert "wecom_session_directory" in registered
         assert "wecom_session_directory" in catalog.agent_tools("wecom")
+        categories = {
+            **dict.fromkeys(boss, "local_boss"),
+            **dict.fromkeys(wecom, "local_wecom"),
+            **dict.fromkeys(weixin_declared, "weixin"),
+        }
         for cls in LOCAL_PROXY_TOOL_CLASSES:
             tool = cls()
             assert tool.execution_target == ExecutionTarget.LOCAL_REQUIRED
-            assert tool.category == ("local_wecom" if tool.name in wecom else "local_boss")
+            assert tool.category == categories[tool.name]
             assert tool.display_name
             assert tool.description
 

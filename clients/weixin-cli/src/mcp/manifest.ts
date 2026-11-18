@@ -44,7 +44,7 @@ const DECLARED_TOOLS = new Set([
   'weixin_probe',
   'weixin_chat_search',
   'weixin_message_send',
-  'weixin_name_resolve',
+  'weixin_chat_latest',
 ])
 
 /** 调度声明：白名单工具按清单顺序一项 {name} */

@@ -5,9 +5,8 @@ import { test } from 'node:test'
 
 const driver = fileURLToPath(new URL('../../drivers/ps1/message-send.ps1', import.meta.url))
 const search = fileURLToPath(new URL('../../drivers/ps1/native-session-search.ps1', import.meta.url))
-const resolveDriver = fileURLToPath(new URL('../../drivers/ps1/name-resolve-native.ps1', import.meta.url))
 
-test('native search checks complete results and name resolution requires a typed contact section', { skip: process.platform !== 'win32' }, () => {
+test('native search checks complete results without confusing history and known group matches', { skip: process.platform !== 'win32' }, () => {
   const script = `
 $ErrorActionPreference = 'Stop'
 [void](Add-Type -AssemblyName UIAutomationTypes)
@@ -19,14 +18,13 @@ function Item($label, $class = 'mmui::XTableCell', $id = '') {
     return @{Current=@{ClassName=$class; AutomationId=$id; ProcessId=42;
         ControlType=[Windows.Automation.ControlType]::ListItem; Name=$label; IsOffscreen=$false}}
 }
-function Pick($nodes, [string]$TargetType = 'friend', [switch]$RequireTypedSection) {
+function Pick($nodes, [string]$TargetType = 'friend') {
     try {
-        $node = Select-WeixinNativeSearchCandidate $nodes @{ProcessId=42;Title='contact'} $TargetType -RequireTypedSection:$RequireTypedSection
+        $node = Select-WeixinNativeSearchCandidate $nodes @{ProcessId=42;Title='contact'} $TargetType
         return $node.Current.AutomationId
     } catch { return $_.Exception.Message }
 }
 $person = Item 'contact' 'mmui::SearchContentCellView' 'search_item_contact'
-$multiline = Item ('contact' + [char]10 + 'memo') 'mmui::SearchContentCellView' 'search_item_contact'
 $recent = Item '最常使用'
 $contacts = Item '联系人'
 $groups = Item '群聊'
@@ -39,11 +37,6 @@ ConvertTo-Json @{
     moreContacts=Pick @($recent,$person,$contacts,$more,$web)
     noCompletionBoundary=Pick @($recent,$person)
     sendKnownGroup=Pick @($recent,$person,$web) -TargetType 'group'
-    resolveOnlyTypedContact=Pick @($contacts,$person,$web) -RequireTypedSection
-    resolveTypedDuplicates=Pick @($contacts,$person,$person,$web) -RequireTypedSection
-    resolveOnlyCommon=Pick @($recent,$person,$web) -RequireTypedSection
-    resolveCommonAndContact=Pick @($recent,$person,$contacts,$person,$web) -RequireTypedSection
-    resolveMultilineCommonAndContact=Pick @($recent,$multiline,$contacts,$person,$web) -RequireTypedSection
 } -Compress
 `
   const result = spawnSync('powershell.exe', ['-NoProfile', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8' })
@@ -54,11 +47,6 @@ ConvertTo-Json @{
     moreContacts: 'TARGET_AMBIGUOUS',
     noCompletionBoundary: 'UI_CHANGED',
     sendKnownGroup: 'search_item_contact',
-    resolveOnlyTypedContact: 'search_item_contact',
-    resolveTypedDuplicates: 'TARGET_AMBIGUOUS',
-    resolveOnlyCommon: 'TARGET_AMBIGUOUS',
-    resolveCommonAndContact: 'TARGET_AMBIGUOUS',
-    resolveMultilineCommonAndContact: 'TARGET_AMBIGUOUS',
   })
 })
 
@@ -101,45 +89,6 @@ ConvertTo-Json $cases -Compress
     viewportChanged: false,
     moreThanOneNewMessage: false,
     normalizationCannotApprove: false,
-  })
-})
-
-test('name resolution obtains only a shared native contact selection and verifies it before returning', { skip: process.platform !== 'win32' }, () => {
-  const script = `
-$ErrorActionPreference = 'Stop'
-$ast = [Management.Automation.Language.Parser]::ParseFile(${JSON.stringify(resolveDriver).replaceAll('\\\\', '\\')}, [ref]$null, [ref]$null)
-$entry = [ScriptBlock]::Create($ast.EndBlock.Statements[-1].Extent.Text)
-function Throw-DriverError($Code, $Message) { throw $Code }
-function Invoke-DriverMain($MutexName, $Body) { & $Body }
-function Open-WeixinNativeSearchTarget($TargetName, $TargetType, [switch]$RequireTypedSection) {
-    if ($TargetName -cne 'fixture' -or $TargetType -cne 'friend' -or -not $RequireTypedSection) { throw 'unexpected target' }
-    $script:searches++
-    return @{Identity='123:42:17.1'}
-}
-function Assert-WeixinNativeSelectedSession($Session) {
-    if ($script:scenario -eq 'changed' -or $Session.Identity -cne '123:42:17.1') { throw 'UI_CHANGED' }
-}
-function Get-WeixinNativeTitleInfo($Session) {
-    $title = if ($script:scenario -eq 'different') { 'Fixture' } else { 'fixture' }
-    return @{title=$title;is_group=$script:scenario -eq 'group'}
-}
-$outcomes = @{}
-foreach ($case in @('resolved','changed','different','group')) {
-    $script:scenario = $case
-    $script:searches = 0
-    [Console]::SetIn([IO.StringReader]::new('{"target_name":"fixture"}'))
-    $result = try { & $entry } catch { $_.Exception.Message }
-    $outcomes[$case] = @{result=$result;searches=$script:searches}
-}
-ConvertTo-Json $outcomes -Compress
-`
-  const result = spawnSync('powershell.exe', ['-NoProfile', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8' })
-  assert.equal(result.status, 0, result.stderr)
-  assert.deepEqual(JSON.parse(result.stdout.trim()), {
-    resolved: { result: { title: 'fixture', session_identity: '123:42:17.1' }, searches: 1 },
-    changed: { result: 'UI_CHANGED', searches: 1 },
-    different: { result: 'UI_CHANGED', searches: 1 },
-    group: { result: 'UI_CHANGED', searches: 1 },
   })
 })
 

@@ -10,7 +10,6 @@ import type { Bubble } from './aligner.js'
 import { runPowerShellDriver, type RunPowerShellDriverFn } from './powershell.js'
 
 const OBSERVE_PATH = fileURLToPath(new URL('../../../drivers/ps1/observe-native.ps1', import.meta.url))
-const RESOLVE_PATH = fileURLToPath(new URL('../../../drivers/ps1/name-resolve-native.ps1', import.meta.url))
 const bounds = z.object({
   x0: z.number().int().nonnegative(), y0: z.number().int().nonnegative(),
   x1: z.number().int().positive(), y1: z.number().int().positive(),
@@ -56,23 +55,6 @@ async function saveNativeEvidence(value: string, signal: AbortSignal, opts: Evid
   await mkdir(stateDir, { recursive: true })
   await writeFile(join(stateDir, id + '.dpapi'), encrypted, { flag: 'wx', signal })
   return 'dpapi:' + id
-}
-
-export async function resolveWeixinNativeName(
-  targetName: string,
-  signal: AbortSignal,
-  runDriver: RunPowerShellDriverFn = runPowerShellDriver,
-  evidenceOptions?: EvidenceOptions,
-) {
-  const raw = await runDriver({
-    script: RESOLVE_PATH, stdin: JSON.stringify({ target_name: targetName }), signal, useVisionProxy: false,
-  })
-  const confirmation = identitySchema.strict().safeParse(raw)
-  if (!confirmation.success || confirmation.data.title !== targetName) {
-    throw new CodedOperationError('UI_CHANGED', '微信联系人原生定位证据不可用')
-  }
-  const evidenceRef = await saveNativeEvidence(JSON.stringify({ version: 1, ...confirmation.data }), signal, evidenceOptions)
-  return { ...confirmation.data, evidenceRef }
 }
 
 export function parseNativeObservation(raw: unknown, info: { targetName: string; nativeTitle?: string; nativeSessionIdentity?: string }) {
