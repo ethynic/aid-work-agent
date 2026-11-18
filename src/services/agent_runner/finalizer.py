@@ -93,7 +93,9 @@ class RunnerFinalizer:
             snapshot['usage'] = usage_in_tx(cursor,runner,settlement)
             # 已接入 Runner 的渠道以最终合并 owner 写入历史，
             # 避免 Runner 与渠道 process_and_persist 双写 channel_messages。
-            if runner['source'] not in ('wecom_kf', 'feishu', 'dingtalk', 'wecom'):
+            # web_c 消息落库职责由 C 端 API 层承担（web-c-channel-design.md §5.3：
+            # 用户消息 chat 入口落库、assistant 终态由代理层幂等落库），同属此列。
+            if runner['source'] not in ('wecom_kf', 'feishu', 'dingtalk', 'wecom', 'web_c'):
                 write_history(cursor, runner, result)
             cursor.execute('''DELETE FROM agent_runner_session_claims WHERE owner_runner_id=%s
                     AND scope_key=%s AND session_kind=%s AND session_id=%s RETURNING owner_runner_id''',

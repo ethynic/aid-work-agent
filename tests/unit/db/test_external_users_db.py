@@ -134,8 +134,10 @@ class TestListExternalUsersCombinationGranularity:
         count_sql = calls[0][0][0]
         assert "cs.channel_type = %s" not in count_sql
 
-    def test_no_channel_type_excludes_office_channel_rows(self):
-        """不传 channel_type 时应排除办公软件渠道会话组合（防止企微内部员工混入微信接待客户页）"""
+    def test_no_channel_type_whitelist_reception_channels(self):
+        """不传 channel_type 时只显示接待类渠道白名单会话组合（fail-closed，新渠道默认不进本页）"""
+        from src.db.models import UserDB
+
         _, calls = self._run(
             tenant_id="tenant_001",
             page=1,
@@ -143,14 +145,24 @@ class TestListExternalUsersCombinationGranularity:
         )
         count_sql = calls[0][0][0]
         list_sql = calls[1][0][0]
-        expected = "(cs.channel_type IS NULL OR cs.channel_type NOT IN ('wecom', 'dingtalk', 'feishu'))"
+        expected = "(cs.channel_type IS NULL OR cs.channel_type = ANY(%s))"
         assert expected in count_sql
         assert expected in list_sql
-        # source 非空硬条件仍保留
+        # 白名单参数与 UserDB.RECEPTION_CHANNEL_TYPES 一致（当前仅 wecom_kf），
+        # 办公软件渠道（wecom/dingtalk/feishu）与官网客服（web_c）均被排除
+        assert list(UserDB.RECEPTION_CHANNEL_TYPES) in calls[0][0][1]
+        assert list(UserDB.RECEPTION_CHANNEL_TYPES) in calls[1][0][1]
+        # source 非空硬条件仍保留（无会话的引流客户靠它可见）
         assert "u.source IS NOT NULL" in count_sql
 
-    def test_channel_type_passed_no_office_exclusion(self):
-        """传 channel_type（办公软件会话页）时不应加办公渠道排除条件"""
+    def test_web_c_not_in_reception_whitelist(self):
+        """官网客服（web_c）有独立查看页，不在微信接待客户页白名单内（2026-11-18 混入事故回归）"""
+        from src.db.models import UserDB
+
+        assert "web_c" not in UserDB.RECEPTION_CHANNEL_TYPES
+
+    def test_channel_type_passed_no_whitelist(self):
+        """传 channel_type（办公软件/官网会话页）时不加白名单条件，按指定渠道过滤"""
         _, calls = self._run(
             tenant_id="tenant_001",
             channel_type="wecom",
@@ -158,7 +170,7 @@ class TestListExternalUsersCombinationGranularity:
             page_size=20,
         )
         count_sql = calls[0][0][0]
-        assert "cs.channel_type NOT IN" not in count_sql
+        assert "cs.channel_type = ANY(%s)" not in count_sql
         assert "u.source IS NOT NULL" not in count_sql
 
     def test_group_by_subagent_splits_combinations(self):
