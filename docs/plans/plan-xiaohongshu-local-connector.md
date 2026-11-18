@@ -4,7 +4,7 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
-| Phase 1 | 本机 Chrome 扫码及会话复用，连接中心入口，Runtime 按需能力 | ✅ 完成（2026-11-16） | 真实扫码重开、独立测试及代码审查通过，待发布验收。 |
+| Phase 1 | 本机 Chrome 扫码及会话复用，连接中心入口，Runtime 按需能力 | ✅ 完成（2026-11-16） | 2026-11-18 配套包安装和本机容器端到端验收通过。 |
 
 按 [本机连接器设计](../design/xiaohongshu-local-connector-design.md) 与 [共同检查点](../system/runner-desktop-runtime-integration-contract.md#小红书本机网页登录连接器) 实施。
 
@@ -27,3 +27,10 @@
 小红书包升至 1.0.1，补充新版 Runtime 所需的 v1 全串行工具声明。两项原工具的参数、结果和浏览器 Profile 行为沿用 1.0.0。能力上报消费当前已验签清单，产品信任和库存数量沿 master 的信任配置来源。
 
 开发自测中，WSL2 Docker 后端 local_tools 单测 826 项、Web 构建通过。Windows Core 插件声明/安装/验签 37 项、Runtime 声明/并行/能力/信任 39 项和打包测试 15 项通过。小红书合成浏览器用例在并发构建时首次报页面状态未确认，独立重跑通过，需独立验证继续核对。合并带入的 `plan-test-suite-speedup.md` 原有两处空白使全局 cached diff 检查非零，本次冲突文件检查通过。
+
+## 2026-11-18 本机安装验收
+
+- 打包源码为 `3792969b`，父节点为小红书分支 `cd5cfe72` 和当次最新的 `origin/master` `52090f05`。Runtime 1.0.3 验收安装器与小红书插件 1.0.1 合成一个 ZIP。Runtime 资源清单、插件签名和 ZIP SHA-256 核验通过。本机签名根仅登记于验收构建副本。
+- 合并后独立复验通过。Web 和 Runtime 构建、Web 14 项、后端定向 108 项、隔离 PostgreSQL 31 项、Windows 定向 79 项。
+- 运行真实验收安装器到隔离目录，安装后的主程序、应用资源、Runtime Host 和信任根与打包资源摘要一致。用安装包内的 Node 与 Host 实际配对、导入已验签插件并上线。导入以本地验收脚本提供固定的离线包路径，Runtime 桌面文件选择对话框不在本轮验证范围。
+- 从 Windows Chrome 的连接中心实际操作，使用 WSL2 Docker 本地 Web、API 和专用 PostgreSQL。用户本人扫描本机 Chrome 二维码后打开成功。停掉 Runtime 后确认专用 Chrome 进程数为 0。重新启动 Runtime，再在连接中心点「打开小红书」，直接返回已登录。数据库记录为 `qr_ready → opened → opened`，同一设备、同一 Profile。
