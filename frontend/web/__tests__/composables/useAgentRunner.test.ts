@@ -519,6 +519,43 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     expect(agent.localRecovery.value).toBeUndefined()
   })
 
+  // ---- R11 真机反馈：恢复卡按钮合并为单个「停止上一步并继续」+ 停稳后不再渲染停稳指引通知 ----
+
+  it('projects stop_and_continue as the only recovery action while it is available', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:continueActions}))
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+    expect(agent.localRecoveryActions.value).toEqual(['stop_and_continue'])
+  })
+
+  it('keeps the legacy recovery actions projectable when stop_and_continue is absent', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:['verify','stop','resume','end']}))
+    expect(agent.localRecoveryActions.value).toEqual(['verify','stop','resume','end'])
+  })
+
+  it('keeps the legacy four-button fallback for an older service without the actions field', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true}))
+    expect(agent.localRecoveryActions.value).toEqual(['verify','stop','resume','end'])
+  })
+
+  it('a landed stop_and_continue renders no settled-stop guidance notification', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:continueActions,
+      local_verification:{invocation_id:'stop-continue-A',state:'succeeded',resource_stopped:true,
+        page_observed:false,continue_after_stop:true,error_code:'WRONG_PAGE'}}))
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+    expect(agent.localVerificationMessage.value).toBe('')
+  })
+
+  it('a failed stop_and_continue still explains why the stop did not land', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:continueActions,
+      local_verification:{invocation_id:'stop-continue-A',state:'failed',resource_stopped:false,
+        page_observed:false,continue_after_stop:true,stop_error_code:'LOCAL_RECOVERY_BUSY'}}))
+    expect(agent.localVerificationMessage.value).toContain('还有正在执行的任务')
+  })
+
   it('only-read verification reports active-original guidance through the exact safe message reducer', async () => {
     await discoverParked(runnerView({status:'interrupted',local_recovery:true}))
     const checking = agent.resolveLocalRecovery('verify'); await flush()

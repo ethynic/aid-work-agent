@@ -284,9 +284,24 @@ export function useAgent() {
     return rows.find(row => (row.local_recovery || row.local_verification_available) && !row.resume_requested)
       || (rows[0]?.local_verification?.resource_stopped && !rows[0].resume_requested ? rows[0] : undefined)
   })
+  // R11 真机反馈：恢复卡按钮合并——stop_and_continue 可用时卡片只保留
+  // 「停止上一步并继续」一个按钮，旧四按钮（verify/stop/resume/end）不再并列渲染；
+  // 动作不含 stop_and_continue 或旧服务端未投影动作列表时保持既有四按钮回退。
+  const localRecoveryActions = computed<Array<'verify' | 'stop' | 'stop_and_continue' | 'resume' | 'end'>>(() => {
+    const actions = localRecovery.value?.local_recovery_actions
+    if (actions?.includes('stop_and_continue')) return ['stop_and_continue']
+    return actions ?? ['verify', 'stop', 'resume', 'end']
+  })
   const localVerificationMessage = computed(() => {
     const value = localRecovery.value?.local_verification
     if (!value) return ''
+    if (value.state === 'queued' || value.state === 'running' || value.state === 'claimed') return value.continue_after_stop
+      ? LOCAL_RECOVERY_MESSAGES.stopContinue
+      : '正在等待原 Runtime 处理核验请求，不会重新执行原操作。'
+    // R11 真机反馈：「停止上一步并继续」停稳已落地（resource_stopped 为真，state 随
+    // 停稳回执进入终态）时任务已由服务端自动接续，停稳指引通知是噪音，不再渲染；
+    // 停止未落地的失败指引（下方 stop_error_code / 默认分支）保留。
+    if (value.continue_after_stop && value.resource_stopped) return ''
     if (value.resource_stopped && value.page_observed === false) return value.waiting_ended
       ? '旧执行已停稳，但原页面未核对；原等待已结束。请明确提出当前页的新意图，未知发送不会重发。'
       : '旧执行已停稳，但原页面未核对。请结束等待，再明确提出当前页的新意图，未知发送不会重发。'
@@ -294,9 +309,6 @@ export function useAgent() {
     if (value.resource_stopped) return value.target_relation === 'original'
       ? '旧执行已停稳，已只读观察原页面。请结束等待，再明确提出新的页面操作；未知发送不会重发。'
       : '旧执行已停稳，已只读观察当前页面，但无法核对原目标。请结束等待，再明确提出当前页的新意图；未知发送不会重发。'
-    if (value.state === 'queued' || value.state === 'running' || value.state === 'claimed') return value.continue_after_stop
-      ? LOCAL_RECOVERY_MESSAGES.stopContinue
-      : '正在等待原 Runtime 处理核验请求，不会重新执行原操作。'
     const stopIssue = value.stop_error_code
     if (stopIssue === 'LOCAL_RECOVERY_BUSY') return '原设备还有正在执行的任务，本次未回收受管进程。请等该任务结束后重试；只读观察仍可使用。'
     if (stopIssue === 'LOCAL_RECOVERY_LEGACY_UNMANAGED') return '检测到未受管的旧 Runtime 实例。请先结束该旧实例，再停止旧执行并解锁设备；无需重启 Windows。'
@@ -1860,6 +1872,7 @@ export function useAgent() {
     resumeResumableTask,
     localRecovery,
     localRecoveryBusy,
+    localRecoveryActions,
     localVerificationMessage,
     resolveLocalRecovery,
     sessionId,
