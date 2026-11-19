@@ -370,7 +370,7 @@ interface PageFrameSource {
 
 `BossCdpPageFrameSource` 使用 `Page.captureScreenshot({format:'jpeg',quality:70,fromSurface:true,clip?})`；SHA-256 相同则不发送；每次截图前确认 target origin 仍在 allowlist。禁止 `Runtime.enable`。stop 只 detach session，不关闭 Chrome/tab。
 
-Playwright v1 只交付 fake contract adapter。真实 Playwright owner 后续以 embedded producer 调用同一 WSS client；本期不修改现有 `BrowserViewHub`。
+Playwright v1 只交付 fake contract adapter。真实 Playwright owner 后续以 embedded producer 调用同一 WSS client。
 
 ## 10. Boss 登录辅助的确定实现
 
@@ -391,7 +391,7 @@ toolDefs/manifest、Runtime trusted manifest、云端 catalog/proxy、recruiting
 - `frontend/web/types/index.ts` 新增 `PageViewOffer/StreamState` 和 `ChatMessage.pageViewOffers`；`frontend/web/api/agent.ts` 注册 SSE 类型。
 - `useAgent.ts` 维护会话级 `activePageViewOffers`，SSE upsert，`loadSession()` 后调用 active-offer API，不把 offer 塞进某条历史 message。
 - 新增 `components/page-stream/PageViewTray.vue`，放在 Chat 消息区底部；显示来源、设备、只读、不保存、有效期。
-- 新增 `PageViewConsentCard.vue` 和 `LivePageView.vue`。后者处理 meta+binary 帧和 object URL，但保留原 BrowserView 路径兼容。
+- 新增 `PageViewConsentCard.vue` 和 `LivePageView.vue`。后者处理 meta+binary 帧和 object URL。
 - mounted、SSE 重连、历史加载都不 consent。点击时生成并复用一个 `client_request_id`；成功后取 viewer ticket。
 - 页面 hidden 30 秒调用 stop；刷新可在 15 秒 grace 内用新 ticket 重连。停止按钮立即 DELETE。
 - viewer 不发送消息，不注册输入转发，不显示可复制 URL。Web 为 v1 唯一正式交付端；`desktop.legacy.html` 可继承 Web 能力但不作为验收门禁。独立新 Desktop 壳与 `desktop_remote_gateway` 另立后续设计。

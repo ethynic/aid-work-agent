@@ -8,7 +8,7 @@
 | Phase 1 | 接线原生 MCP 与第一方 Provider | ✅ 完成（2026-11-19） | 原生 35 项，原工具名及输入 schema，Chat 调用拒绝 |
 | Phase 2 | 打包并在 Windows Runtime 导入 | ✅ 完成（2026-11-19） | 隔离签名与离线验包通过，真实 Host 导入后已启用、就绪 |
 | Phase 3 | Runtime 本机流程验收 | ✅ 完成（2026-11-19） | 本地 Device API 派发、可见 Chrome、批处理、上传和 Chat 拒绝通过 |
-| Phase 4 | 配套验收 Runtime 与浏览器签名包 | 🔧 进行中 | 已登记浏览器专用验收公钥，构建 Runtime 1.3.0 和浏览器插件 0.1.0 |
+| Phase 4 | 配套验收 Runtime 与浏览器签名包 | ✅ 完成（2026-11-19） | Runtime 1.3.0、浏览器 0.1.0 配套出包及八项 Host 检查通过 |
 
 关联[设计](../tools/browser/browser_tool_rebuild_design.md)、[原包调研与实测](../research/browser-tool-rebuild-research.md)和 [Runtime 共同契约](../system/runner-desktop-runtime-integration-contract.md)。
 
@@ -41,3 +41,4 @@
 
 - Windows Runtime 1.3.0 使用仓库当前 Host 和固定 Node，保留原有发布信任，新增仅授权 `ai.aidwork.browser` 的验收发布者 `aidwork-acceptance-browser-v1`。
 - 浏览器原包与第一方接线沿用隔离验收的固定输入。配套包走已有 Windows 安装器和离线签名插件流程，目标 Runtime 须使用其自带的发布信任验签。 [打包手册](../guides/deployment/runtime-boss-release-guide.md#6-其他包形态)
+- 安装器资源验包、27 项打包回归和浏览器离线验签通过。使用安装器自带 Host、Node 和公钥完成隔离导入、35 项声明与 8 项操作验收。BOSS 1.2.0 和企业微信 1.0.1 的既有插件包均通过目标 Runtime 核验。
