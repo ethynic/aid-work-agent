@@ -26,7 +26,7 @@
 | 20261021-2200 | 私有云生产环境部署指南 | ✅ 已完成（2026-10-21） | 新增 [docs/guides/deployment/生产环境部署指南.md](guides/deployment/生产环境部署指南.md)：面向客户私有云全新部署的通用 playbook，综合 243 独占迁移档案与济南诺度混部实例（摸底决策、Docker/codeup 三通道、sparse-checkout、PG 绑址、.env 必改项、宝塔 TLS、发布后事项、验收清单、两例踩坑速查）。 | [部署指南](guides/deployment/生产环境部署指南.md) | — |
 | 20261116-1230 | 聊易私有云部署（agent.0635easy.com） | 🔧 部分完成（基础设施+PG+nginx+证书完成，容器验收进行中） | 阿里云 47.104.107.85 裸机全栈部署：百炼 LLM、DigiCert 证书、deploy/liaoyi/ 部署材料与脚本；遗留 253 短信通道、管理员初始化、备份/巡检等（见文档遗留清单）。 | [部署文档](deploy/liaoyi/聊易私有云部署.md) | — |
 | 20261116-1240 | 创蓝253 短信通道（聊易） | 🔧 部分完成（代码+单测完成，待发版联调） | 新增 ChuangLan253Sender 通道+配置+单测；待配 env/IP 白名单与真机验收。 | [任务文档](deploy/liaoyi/创蓝253短信通道开发任务.md) | — |
-| 20261119-1500 | 租户前台菜单隐藏部署开关（TENANT_HIDDEN_MENUS） | 🔧 部分完成（开发+单测完成，待提交部署） | .env 单变量逗号分隔菜单键，经 /saas/auth/me 下发、MenuSidebar 过滤连接中心/管理菜单 8 项；仅控显示，直链 404 兜底；聊易按 PM 清单配 8 键。 | — | — |
+| 20261119-1500 | 租户前台菜单隐藏部署开关（TENANT_HIDDEN_MENUS） | ✅ 已完成（fd17ad37，聊易已部署生效，待真机 UI 验收） | .env 单变量逗号分隔菜单键，经 /saas/auth/me 下发、MenuSidebar 过滤连接中心/管理菜单 8 项；仅控显示，直链 404 兜底；聊易已配 8 键并重建容器+前端原子切换，容器 env 值级核验通过。 | — | — |
 | 20261117-2040 | 聊易上线首日错误日志排查 | ✅ 已完成（真机复测通过） | log_error 4084 行三类全闭环：DeepSeek 400（.env provider 链与 qwen 模型名错配）、空态摘要同因、企微客服 RunnerError（sales-assistant 定义 llm_provider=deepseek 但客户无 DeepSeek key，置空回落 qwen 后真机复测通过）；遗留定义保存 provider Key 校验防复发。 | [排查文档](deploy/liaoyi/错误日志排查_20261117.md) | — |
 | 20261028-1255 | 外发邮箱配置指南（域名 DNS 侧） | ✅ 已完成（2026-10-28） | 新增 [docs/guides/deployment/outbound-email-dns-setup-guide.md](guides/deployment/outbound-email-dns-setup-guide.md)：面向租户外发邮件域名配置的实操指南，沉淀 tulin.cn 体检实战——SPF/DKIM/DMARC/MX 四记录要点（163 免费企业邮 + 阿里云解析逐步操作）、MX 主机记录误填子域致主域收信中断、权威 DNS 与公共缓存验证口径、DMARC 报告解读与 p 策略升级路径、缺 DKIM 决策参考与验收清单。 | [指南](guides/deployment/outbound-email-dns-setup-guide.md) | — |
 
