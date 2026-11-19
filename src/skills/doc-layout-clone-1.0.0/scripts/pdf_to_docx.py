@@ -104,9 +104,19 @@ def convert_pdf2docx(src, dst, pages=None, dpi=150):
     try:
         kwargs = {"dpi": int(dpi)}
         if pages:
-            kwargs["pages"] = parse_pages(pages, len(cv.pages)) if hasattr(cv, "pages") else None
-            if not kwargs["pages"]:
-                kwargs.pop("pages")
+            # 用 PDF 真实总页数解析页范围，不依赖 cv.pages（不同版本形态不一：
+            # 可能是 PageRange 对象或 None，len() 不可靠）。
+            try:
+                import fitz
+                _doc = fitz.open(src)
+                total_pages = len(_doc)
+                _doc.close()
+            except Exception:
+                total_pages = 0
+            selected = parse_pages(pages, total_pages) if total_pages else []
+            if selected:
+                # pdf2docx 接受 0-based 页码 list
+                kwargs["pages"] = selected
         cv.convert(dst, **kwargs)
     finally:
         cv.close()

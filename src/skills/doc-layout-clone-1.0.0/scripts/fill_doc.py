@@ -33,6 +33,7 @@ from docx.oxml.ns import qn
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dump_template import layout_signature  # noqa: E402
+from probe import dep_eval, has_value  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -153,44 +154,53 @@ _UNITS = ["", "拾", "佰", "仟"]
 _BIG = ["", "万", "亿", "兆"]
 
 
+def _section_cn(g):
+    """把 1..9999 的一节转成中文（节内中间的零保留，末尾的零省略）。"""
+    seg, zero = "", False
+    for pos in range(3, -1, -1):
+        d = (g // (10 ** pos)) % 10
+        if d == 0:
+            if seg:
+                zero = True
+        else:
+            if zero:
+                seg += "零"
+                zero = False
+            seg += _DIGITS[d] + _UNITS[pos]
+    return seg
+
+
 def cny_upper(v):
     n = to_number(v)
     if n is None:
         return str(v)
+    neg = n < 0
     n = round(abs(n), 2)
-    neg = to_number(v) < 0
     integer, frac = int(n), int(round((n - int(n)) * 100))
     jiao, fen = divmod(frac, 10)
-    parts = []
     if integer == 0:
         int_str = "零元"
     else:
+        # 每四位一节：groups[0]=个节, [1]=万节, [2]=亿节, [3]=兆节
         groups, x = [], integer
         while x > 0:
             groups.append(x % 10000)
             x //= 10000
+        parts, any_out, need_zero = [], False, False
         for gi in range(len(groups) - 1, -1, -1):
             g = groups[gi]
             if g == 0:
-                if parts and parts[-1] != "零":
-                    parts.append("零")
+                # 中间整节为零：若已有更高节输出，则下一非零节前需补一个零
+                if any_out:
+                    need_zero = True
                 continue
-            seg, zero = "", False
-            for pos in range(3, -1, -1):
-                d = (g // (10 ** pos)) % 10
-                if d == 0:
-                    if seg:
-                        zero = True
-                else:
-                    if zero:
-                        seg += "零"
-                        zero = False
-                    seg += _DIGITS[d] + _UNITS[pos]
+            seg = _section_cn(g)
+            # 节间断档补零：中间有全零节，或本节不足四位（千位为零且更高节已输出）
+            if any_out and (need_zero or g < 1000):
+                seg = "零" + seg
             parts.append(seg + _BIG[gi])
-        int_str = "".join(parts).strip("零")
-        while "零零" in int_str:
-            int_str = int_str.replace("零零", "零")
-        int_str += "元"
+            any_out, need_zero = True, False
+        int_str = "".join(parts) + "元"
     if frac == 0:
         return ("负" if neg else "") + int_str + "整"
     res = ("负" if neg else "") + int_str
@@ -396,7 +406,11 @@ def apply_locator(doc, loc, value, values, sink=None):
             matched += _replace_spans(c["para"], [(s, e, put(new_text))])
 
     elif kind == "cell":
-        cell = doc.tables[loc["table"]].rows[loc["row"]].cells[loc["col"]]
+        # 坐标写错时不要抛异常中断整次回填，交给上层记入 unmatched_locators。
+        try:
+            cell = doc.tables[loc["table"]].rows[loc["row"]].cells[loc["col"]]
+        except (KeyError, IndexError):
+            return 0
         sample = loc.get("sample")
         if sample and replace_literal_in_cell(cell, sample, new_text, sink):
             matched = 1
@@ -405,7 +419,10 @@ def apply_locator(doc, loc, value, values, sink=None):
             matched = 1
 
     elif kind == "paragraph":
-        p = doc.paragraphs[loc["index"]]
+        try:
+            p = doc.paragraphs[loc["index"]]
+        except IndexError:
+            return 0
         full = "".join(r.text for r in _runs(p))
         if full:
             matched = _replace_spans(p, [(0, len(full), put(new_text))])
@@ -619,15 +636,30 @@ def fill(template_path, analysis_path, answers_path, out_path, normalize=False):
                     report["warnings"].append("清单项 %s 列公式失败: %s" %
                                               (it.get("name", "?"), e))
 
-    values = {k: v for k, v in answers.items()
-              if not str(k).startswith("_") and not isinstance(v, list)}
+    # 用户显式答案（排除 _ 元键与清单数组）优先级最高，公式/默认值都不得覆盖。
+    explicit_keys = {k for k, v in answers.items()
+                     if not str(k).startswith("_") and not isinstance(v, list)}
+    values = {k: answers[k] for k in explicit_keys}
+    # 公式次之：仅对没有显式答案的字段计算。
     for fld in analysis.get("fields", []):
-        if fld.get("formula") and not str(values.get(fld["key"]) or "").strip():
-            try:
-                values[fld["key"]] = eval_expr(fld["formula"], make_env(values, items_all))
-                report["derived"][fld["key"]] = values[fld["key"]]
-            except Exception as e:
-                report["warnings"].append("字段 %s 公式失败: %s" % (fld["key"], e))
+        key = fld.get("key")
+        if not key or key in explicit_keys or not fld.get("formula"):
+            continue
+        try:
+            values[key] = eval_expr(fld["formula"], make_env(values, items_all))
+            report["derived"][key] = values[key]
+        except Exception as e:
+            report["warnings"].append("字段 %s 公式失败: %s" % (key, e))
+    # 默认值兜底：既无显式答案、公式也没算出值的字段，用 analysis 声明的 default。
+    # 这样 required + default 的字段不会误报 missing_required 导致 ok=false。
+    report["defaults"] = []
+    for fld in analysis.get("fields", []):
+        key = fld.get("key")
+        if not key or key in explicit_keys or str(values.get(key) or "").strip():
+            continue
+        if has_value(fld.get("default")):
+            values[key] = fld["default"]
+            report["defaults"].append({"field": key, "value": fld["default"]})
     for key, expr in (analysis.get("derived_fields") or {}).items():
         if str(values.get(key) or "").strip():
             continue
@@ -649,7 +681,13 @@ def fill(template_path, analysis_path, answers_path, out_path, normalize=False):
         val = values.get(key)
         if val in (None, ""):
             if fld.get("required"):
-                report["missing_required"].append(key)
+                # 依赖未满足的字段本轮不问，也不计缺失；由下一轮继续收集
+                ok_dep, blockers = dep_eval(fld.get("depends_on"), values)
+                if ok_dep or fld.get("skip_when_blocked", True) is False:
+                    report["missing_required"].append(key)
+                else:
+                    report.setdefault("deferred", []).append(
+                        {"field": key, "blocked_by": blockers})
             continue
         report["fields_filled"] += 1
         for i, loc in enumerate(fld.get("locators", [])):
@@ -709,6 +747,7 @@ def fill(template_path, analysis_path, answers_path, out_path, normalize=False):
         "checks": {
             "unmatched_locators": len(report["unmatched_locators"]),
             "missing_required": len(report["missing_required"]),
+            "deferred_by_dependency": len(report.get("deferred") or []),
             "sentinel_left": sentinel_left,
             "placeholder_left": placeholder_left,
             "layout_drift": not report["layout"]["identical"],
@@ -721,11 +760,12 @@ def fill(template_path, analysis_path, answers_path, out_path, normalize=False):
             sentinel_left or not report["layout"]["identical"]):
         report["ok"] = False
     report["summary"] = ("ok=%s | 字段 %d/%d | 清单 %d 项 | 未命中定位 %d | "
-                         "板式一致 %s | 警告 %d" %
+                         "板式一致 %s | 依赖暂缓 %d | 警告 %d" %
                          (report["ok"], report["fields_filled"], report["fields_total"],
                           sum(t.get("items", 0) for t in report["tables"]),
                           len(report["unmatched_locators"]),
-                          report["layout"]["identical"], len(report["warnings"])))
+                          report["layout"]["identical"],
+                          len(report.get("deferred") or []), len(report["warnings"])))
     return report
 
 
@@ -762,11 +802,13 @@ def main():
         try:
             thash = args.cache_key
             if not thash:
+                # 与 prep.py 的 selected.hash 命名保持一致：<ext>-<16位hash>
                 h = hashlib.sha256()
                 with open(args.template, "rb") as f:
                     for chunk in iter(lambda: f.read(65536), b""):
                         h.update(chunk)
-                thash = h.hexdigest()[:16]
+                ext = os.path.splitext(args.template)[1].lower().lstrip(".")
+                thash = "%s-%s" % (ext, h.hexdigest()[:16])
             cache_dir = os.path.abspath(args.cache_dir or os.path.join(
                 os.path.dirname(os.path.dirname(os.path.abspath(args.output))),
                 "_analysis_cache"))

@@ -178,7 +178,8 @@ def main():
         out["analysis_cache"] = {"hit": True, "path": cached,
                                  "copied_to": dst, "meta": meta}
         out["next_action"] = ("分析缓存命中：analysis.json 已就位，跳过第 2 步，"
-                              "直接进入第 3 步一次性收集答案。")
+                              "直接进入第 3 步。无 depends_on 依赖时一轮问全；"
+                              "有依赖时用 probe.py 分轮（先看 ready_to_fill）。")
     else:
         out["analysis_cache"] = {"hit": False, "path": cached}
         out["next_action"] = ("分析缓存未命中：依据 compact_dump / anchors / tables_schema 写 "
