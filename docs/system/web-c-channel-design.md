@@ -185,7 +185,7 @@ C 端流程：
 
 - 路由：`/c/:tenant_id/:config_id`（公开路由，不套 PortalLayout/AppHeader 登录体系）；`?embed=1` 为 iframe 紧凑模式（隐藏页头，深浅色跟随宿主参数可选）。SPA fallback 已由 nginx `try_files` 覆盖，无需新增下载限速。
 - 建议形态：**按钮新开标签为推荐集成形态**（匿名身份持久性最好），iframe 同 URL + `?embed=1` 支持；配置页给出两种集成代码片段。
-- UI：单会话对话视图为主（消息流 + 输入框 + 停止按钮 + 流式光标），greeting 开场卡；历史会话入口按 `identity_mode` 决定是否展示（anon 模式仍可看本浏览器历史）；附件双向支持：用户上传（图片粘贴/选择 + 文件选择，走 §4.6）与 AI 产出可下载文件（复用 `ImageRef`/downloadableFiles 渲染与 §4.6 代理下载）。
+- UI：单会话对话视图为主（消息流 + 输入框 + 停止按钮 + 流式光标），greeting 开场卡；历史会话入口按 `identity_mode` 决定是否展示（2026-11-19 起仅签名链接模式开放，anon/uid 在 bootstrap 强制 False，渠道配置弹框同步禁用置灰）；附件双向支持：用户上传（图片粘贴/选择 + 文件选择，走 §4.6）与 AI 产出可下载文件（复用 `ImageRef`/downloadableFiles 渲染与 §4.6 代理下载）。
 - 组件独立于 B 端聊天组件（消息结构不同：channel_messages + 渠道文本化提问），避免耦合 `useAgent` 的 B 端 SSE 契约；复用 `marked` 渲染、`ImageGallery`、`DownloadFileCard` 等原子组件。
 
 ### 4.6 附件与图片上传（Phase 1 纳入，裁决 2026-11-16）

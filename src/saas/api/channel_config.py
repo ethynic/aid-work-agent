@@ -168,7 +168,8 @@ def _normalize_web_c_config(config: dict, existing: Optional[dict] = None) -> No
     - channel_secret：缺失/空串/掩码保留旧值（update 场景 existing 传入），
       create 时无旧值则自动生成；伪造防线密钥不由租户表单提供。
     - enabled：缺省 True；greeting：缺省通用文案；allow_attachment：缺省 False
-      （纯文字聊天）；show_history：缺省 False（聊天页不显示历史会话入口）；
+      （纯文字聊天）；show_history：缺省 False（聊天页不显示历史会话入口；
+      仅签名链接模式生效，uid/anon 在 bootstrap 强制 False）；
       identity_mode：缺省 anon（2026-11-19 起下线「签名 + 匿名」组合模式，
       仅保留匿名 / 签名 / userid 三种单一模式），
       非法值 400（表单单选来源，出现非法值即为异常调用，不静默纠正）。

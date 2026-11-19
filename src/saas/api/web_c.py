@@ -643,12 +643,11 @@ async def bootstrap(tenant_id: str, config_id: str, request: Request):
     from src.saas.services.agent_name_resolver import resolve_agent_names
 
     # uid 模式（设计 §3.5）：userid 不验签，只登记归属不派生默认会话；
-    # 最近会话摘要与历史入口在服务端强制置空（开关只挡 UI 不挡 API）
+    # 最近会话摘要在服务端强制置空（开关只挡 UI 不挡 API）
     if identity.mode == "uid":
         await _ensure_web_c_user(identity)
         await asyncio.to_thread(_backfill_session_channel_config, identity)
         recent = []
-        show_history = False
     else:
         _, sessions = await _ensure_user_and_session(identity)
         recent = await asyncio.to_thread(
@@ -656,7 +655,9 @@ async def bootstrap(tenant_id: str, config_id: str, request: Request):
             "web_c", None, identity.tenant_id, None, None, identity.channel_user_id, 10,
         )
         recent.sort(key=lambda x: x.get("updated_at") or x.get("created_at") or "", reverse=True)
-        show_history = bool(conf.get("show_history", False))
+    # 历史会话入口仅签名链接（ext）模式开放：uid 不验签无跨访问历史；anon 模式
+    # 强制关闭（2026-11-19 与渠道配置弹框禁用置灰同口径，开关只挡 UI 不挡 API）
+    show_history = bool(conf.get("show_history", False)) and identity.mode == "ext"
     subagent = None
     if identity.subagent_type:
         names = resolve_agent_names(tenant_id, [identity.subagent_type])
@@ -670,7 +671,7 @@ async def bootstrap(tenant_id: str, config_id: str, request: Request):
         # 附件上传开关（渠道 config，默认 False：隐藏附件按钮 + 服务端拒绝上传）
         "allow_attachment": bool(conf.get("allow_attachment", False)),
         # 历史会话入口开关（渠道 config，默认 False：不显示右上角「历史会话」按钮；
-        # uid 模式服务端强制 False，见 §3.5）
+        # 仅 ext 模式生效，uid/anon 服务端强制 False，见 §3.5）
         "show_history": show_history,
         "identity": {
             "mode": identity.mode,
