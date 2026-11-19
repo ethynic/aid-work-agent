@@ -106,6 +106,11 @@ class PromptSources:
             user_info_section = f"\n\n## 当前用户\n姓名: {user.name}\nID: {user.user_id}\n"
             if user.phone:
                 user_info_section += f"手机号：{user.phone}\n"
+            # 姓名仅供身份识别，禁止衍生称呼（如「X姐」「X总」），回复直接输出内容
+            user_info_section += (
+                "以上信息仅用于身份识别与审计，回复正文中不要使用用户姓名或任何"
+                "由姓名衍生的称呼（如「X姐」「X哥」「X总」），直接输出内容。\n"
+            )
 
         # 长期记忆注入：从用户记忆文件加载
         long_term_memory = self._load_long_term_memory(user)
