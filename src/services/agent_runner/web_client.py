@@ -166,7 +166,11 @@ class RunnerServiceClient:
         if not self.token:
             raise RunnerError('RUNNER_GATEWAY_NOT_CONFIGURED', 503)
         headers = {'X-AgentRunner-Service': self.config.web_service_id,
-                   'X-AgentRunner-Service-Token': self.token, 'Authorization': authorization}
+                   'X-AgentRunner-Service-Token': self.token}
+        # 与 request() 同口径：authorization 为空（如 web_c 仅凭服务凭据 + 渠道头）时不写该 header，
+        # 否则 httpx 对 None 值抛 TypeError，事件流握手必败
+        if authorization:
+            headers['Authorization'] = authorization
         if tenant:
             headers['X-Tenant-Id'] = tenant
         if channel_source:
