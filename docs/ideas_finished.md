@@ -181,6 +181,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261119-1534 | Runtime 浏览器 MCP 第一方插件 | ✅ 已完成开发，隔离 Runtime 签名导入和浏览器操作通过。 | [设计](tools/browser/browser_tool_rebuild_design.md) | [开发计划](plans/plan-browser-tool-rebuild.md) |
 | 20261118-1000 | 微信 CLI 单会话最新消息 | ✅ 已完成开发，UIA 增量写入本机加密时间线，Agent 可触发同步。 | [设计](design/weixin/weixin-cli-design.md#14-单会话最新消息与本机副本) | [计划](plans/plan-weixin-cli-latest-chat.md) |
 | 20261118-1051 | 微信 CLI 环境诊断与窗口恢复 | ✅ 已完成开发，后台、最小化和托盘窗口恢复通过真机验证。 | [设计](design/weixin/weixin-cli-design.md#15-环境诊断与窗口恢复) | [计划](plans/plan-weixin-cli-window-doctor.md) |
 | 20261117-1415 | 微信 CLI 移除本地 OCR | ✅ 已完成开发，原生名称定位复用发送搜索，签名包和便携包已清除 OCR 和内置 Python。 | [设计](design/weixin/weixin-cli-design.md#13-移除本地-ocr) | [计划](plans/plan-weixin-cli-remove-ocr.md) |
