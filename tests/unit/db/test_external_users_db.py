@@ -197,6 +197,27 @@ class TestListExternalUsersCombinationGranularity:
         # keyword 未传时无组合搜索条件
         assert "cs.subagent_id = ANY(%s)" not in count_sql
 
+    def test_group_by_session_splits_sessions(self):
+        """group_by_session=True 时子查询按 user/channel/session 分组并带出 cs.session_id"""
+        result, calls = self._run(
+            tenant_id="tenant_001",
+            channel_type="web_c",
+            group_by_session=True,
+            page=1,
+            page_size=20,
+        )
+        count_sql = calls[0][0][0]
+        list_sql = calls[1][0][0]
+        # 子查询分组三要素变为 user_id / channel_type / session_id
+        assert "GROUP BY user_id, channel_type, session_id" in count_sql
+        assert "GROUP BY user_id, channel_type, session_id" in list_sql
+        # 外层 SELECT 带出 cs.session_id
+        assert "cs.session_id," in list_sql
+        # 不按 wecom_kf CASE 折叠，保留 channel_chat_id 占位列（外层 SELECT 固定引用该列）
+        assert "CASE WHEN channel_type = 'wecom_kf'" not in list_sql
+        assert "'' AS channel_chat_id" in count_sql
+        assert "'' AS channel_chat_id" in list_sql
+
     def test_keyword_searches_username_or_agent_name(self):
         """keyword 组合搜索：用户名/昵称 OR 智能体名称（翻译成 agent_id 集合后 ANY 匹配）"""
         from src.db.models import UserDB

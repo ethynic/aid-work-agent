@@ -464,3 +464,106 @@ class TestIdentityModeConfigNormalize:
             config = {"identity_mode": mode}
             _normalize_web_c_config(config)
             assert config["identity_mode"] == mode
+
+
+class TestClarificationPersistence:
+    """ask_user 反问落库（2026-11-19 测试反馈：中途追问未落库致接待页/历史缺失）。"""
+
+    @staticmethod
+    def _waiting_row(wait_id="wait_1", kind="clarification", form=None):
+        row = _valid_runner_row(status="waiting")
+        waiting = {"kind": kind, "wait_id": wait_id, "target_execution_id": "exec_1",
+                   "question": "请补充你的城市？"}
+        if form is not None:
+            waiting["form"] = form
+        row["snapshot"] = {"waiting": waiting}
+        return row
+
+    def test_clarification_question_extracts_text_and_wait_id(self):
+        from src.saas.api.web_c import _clarification_question
+
+        question, wait_id = _clarification_question(self._waiting_row())
+        assert question == "请补充你的城市？"
+        assert wait_id == "wait_1"
+        # 非澄清等待（如 child_wait）不产生反问文本
+        assert _clarification_question(_valid_runner_row(status="running")) == ("", "")
+        child = _valid_runner_row(status="waiting")
+        child["snapshot"] = {"waiting": {"kind": "child_wait", "child_wait": {
+            "kind": "clarification", "wait_id": "w2", "question": "q"}}}
+        assert _clarification_question(child) == ("q", "w2")
+
+    def test_persist_skips_when_question_or_wait_id_missing(self):
+        from src.saas.api.web_c import _persist_clarification_message
+
+        with patch("src.saas.api.web_c.get_db_connection") as mock_conn:
+            assert _persist_clarification_message("t1", "s1", "run_1", "", "wait_1") is False
+            assert _persist_clarification_message("t1", "s1", "run_1", "q", "") is False
+            mock_conn.assert_not_called()
+
+    def test_persist_inserts_then_dedupes_by_wait_id(self):
+        from src.saas.api.web_c import _persist_clarification_message
+
+        class FakeCursor:
+            def __init__(self, exists_result):
+                self.exists_result = exists_result
+                self.executed = []
+
+            def execute(self, sql, params=None):
+                self.executed.append(" ".join(sql.split()))
+
+            def fetchone(self):
+                return self.exists_result
+
+        class FakeConn:
+            def __init__(self, cursor):
+                self._cursor = cursor
+
+            def cursor(self):
+                return self._cursor
+
+            def commit(self):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        # 首次：SELECT 无记录 -> INSERT 成功 -> UPDATE 会话时间戳
+        cursor = FakeCursor(exists_result=None)
+        cursor.rowcount = 1
+        with patch("src.saas.api.web_c.get_db_connection", return_value=FakeConn(cursor)):
+            assert _persist_clarification_message("t1", "t1_web_c_uid_0011_x_sab", "run_1",
+                                                  "请补充你的城市？", "wait_1") is True
+        assert any("INSERT INTO channel_messages" in sql for sql in cursor.executed)
+        assert any("ON CONFLICT DO NOTHING" in sql for sql in cursor.executed)
+
+        # 已存在（SELECT 命中）-> 不再 INSERT
+        cursor2 = FakeCursor(exists_result={"exists": 1})
+        with patch("src.saas.api.web_c.get_db_connection", return_value=FakeConn(cursor2)):
+            assert _persist_clarification_message("t1", "t1_web_c_uid_0011_x_sab", "run_1",
+                                                  "请补充你的城市？", "wait_1") is False
+        assert len(cursor2.executed) == 1 and cursor2.executed[0].startswith("SELECT 1")
+
+    @pytest.mark.asyncio
+    async def test_get_runner_persists_waiting_question(self):
+        from unittest.mock import MagicMock
+
+        from src.saas.api.web_c import get_runner
+
+        row = self._waiting_row()
+
+        async def fake_get_owned_runner(identity, runner_id, client=None):
+            return row
+
+        # 生产路径经 asyncio.to_thread 调用，桩须为同步 MagicMock
+        with patch("src.saas.api.web_c._resolve_identity", return_value=None), \
+             patch("src.saas.api.web_c._get_owned_runner", new=fake_get_owned_runner), \
+             patch("src.saas.api.web_c._persist_clarification_message", new=MagicMock()) as mock_persist:
+            response = await get_runner("t1", "cfg1", "run_1", request=None)
+        assert response["runner"]["waiting_text"] == "请补充你的城市？"
+        mock_persist.assert_called_once()
+        args = mock_persist.call_args.args
+        assert args[:2] == ("t1", "t1_web_c_ext_u1_")
+        assert args[3] == "请补充你的城市？" and args[4] == "wait_1"

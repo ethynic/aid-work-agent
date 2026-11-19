@@ -62,9 +62,9 @@
           <div v-else>
             <div
               v-for="user in userList"
-              :key="user.user_id"
+              :key="user.session_id || user.user_id"
               class="p-4 border-b border-default cursor-pointer transition-all"
-              :class="selectedUserId === user.user_id ? 'bg-primary-50 border-l-4 border-l-primary-500' : 'hover:bg-surface-hover'"
+              :class="selectedRowKey === rowKey(user) ? 'bg-primary-50 border-l-4 border-l-primary-500' : 'hover:bg-surface-hover'"
               @click="selectUser(user)"
             >
               <div class="flex items-center gap-3">
@@ -500,12 +500,32 @@ function handleSearch() {
 
 watch(userPage, () => void loadUsers())
 
+/** 行唯一键：会话粒度行（带 session_id）同一用户多行各自可选中 */
+function rowKey(user: WebCCustomer): string {
+  return `${user.user_id}:${user.session_id || ''}`
+}
+const selectedRowKey = computed(() => (selectedUser.value ? rowKey(selectedUser.value) : ''))
+
 async function selectUser(user: WebCCustomer) {
-  if (selectedUserId.value === user.user_id) return
+  if (selectedRowKey.value === rowKey(user)) return
   selectedUser.value = user
   messageList.value = []
   messageTotal.value = 0
   messagePage.value = 1
+  if (user.session_id) {
+    // 行即会话：直接展示该会话；仍拉取该用户会话列表供下拉切换其他会话
+    selectedSessionId.value = user.session_id
+    try {
+      const result = await listWebCCustomerSessions({ user_id: user.user_id, config_id: channelFilter.value || undefined, page: 1, page_size: 50 })
+      sessionList.value = result.sessions || []
+    } catch (e) {
+      console.error('前端日志：官网客户会话列表加载失败', e)
+      sessionList.value = []
+    }
+    await loadSessionMessages()
+    return
+  }
+  // 兜底：无 session_id 的行（理论不出现），沿用按用户取最新会话
   try {
     const result = await listWebCCustomerSessions({ user_id: user.user_id, config_id: channelFilter.value || undefined, page: 1, page_size: 50 })
     sessionList.value = result.sessions || []
@@ -607,6 +627,11 @@ function toAttachmentCard(att: Record<string, unknown>) {
 
 function formatSessionDateRange(user: WebCCustomer): string {
   if (!user.first_session_at && !user.last_session_at) return '暂无会话'
+  if (user.session_id) {
+    // 会话粒度行：显示该会话起止时间（含时分，精确到分钟）
+    if (user.first_session_at === user.last_session_at) return formatTime(user.first_session_at)
+    return `${formatTime(user.first_session_at)} ~ ${formatTime(user.last_session_at)}`
+  }
   if (user.first_session_at === user.last_session_at) return formatDate(user.first_session_at)
   return `${formatDate(user.first_session_at)} ~ ${formatDate(user.last_session_at)}`
 }

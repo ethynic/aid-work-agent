@@ -494,6 +494,7 @@ class UserDB:
         referral_end_date: str = None,
         keyword: str = None,
         group_by_subagent: bool = False,
+        group_by_session: bool = False,
         channel_config_id: str = None,
         channel_config_fallback_id: str = None,
         page: int = 1,
@@ -518,6 +519,9 @@ class UserDB:
             keyword: 组合搜索词（可选，办公软件会话页用）：用户名/昵称 OR 智能体名称/ID
             group_by_subagent: 按用户 × 渠道 × 智能体拆分组合（可选，办公软件会话页用），
                 返回行带 subagent_id 字段
+            group_by_session: 按用户 × 会话拆分组合（可选，官网接待页 web_c 用），
+                每条渠道会话一行，返回行带 session_id 字段；uid 模式每次进入
+                即新会话，按用户折叠会掩盖历史会话（2026-11-19 测试反馈）
             channel_config_id: 渠道配置归属筛选（可选，官网接待页 web_c 渠道下拉）：
                 只返回在该渠道有归属会话（channel_sessions.metadata.channel_config_id）的用户
             channel_config_fallback_id: 存量无归属会话的兜底渠道 config_id（可选，通常传租户
@@ -535,7 +539,20 @@ class UserDB:
             {"users": [...], "total": int, "page": int, "page_size": int}
         """
         offset = (page - 1) * page_size
-        if group_by_subagent:
+        if group_by_session:
+            # 官网接待页：按「用户 × 会话」拆分组合（first/last 即该会话起止时间）
+            cs_subquery = """
+                SELECT user_id,
+                       channel_type,
+                       session_id,
+                       '' AS channel_chat_id,
+                       MIN(created_at) AS first_session_at,
+                       MAX(updated_at) AS last_session_at
+                FROM channel_sessions
+                WHERE user_id IS NOT NULL
+                GROUP BY user_id, channel_type, session_id
+            """
+        elif group_by_subagent:
             # 办公软件会话页：按「用户 × 渠道 × 智能体」拆分组合
             # channel_chat_id 占位列：外层 SELECT/条件固定引用该列，拆智能体时不按客服账号拆分
             cs_subquery = """
@@ -683,6 +700,7 @@ class UserDB:
                 SELECT u.user_id, u.username, u.nickname, u.avatar_url, u.source, u.tenant_id, u.created_at,
                        cs.channel_type,
                        {'cs.subagent_id,' if group_by_subagent else ''}
+                       {'cs.session_id,' if group_by_session else ''}
                        cs.channel_chat_id,
                        cs.first_session_at,
                        cs.last_session_at,
