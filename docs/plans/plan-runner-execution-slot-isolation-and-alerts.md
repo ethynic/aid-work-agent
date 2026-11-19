@@ -4,7 +4,6 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
-| Phase 1 | 废弃 `browser_automation` 工具入口 | ✅ 完成（2026-11-06） | 目录/指引零残留，16 个 real_browser 套件显式下线+兜底用例；三轮评审通过；资源盘点结论见 Phase 1 完成记录 |
 | Phase 2 | 单并发 Worker 副本、独立租约监督与可扩槽部署 | ✅ 完成（2026-11-06） | 独立测试 92 通过；CR 无未解决 P0/P1/P2；agent3 双槽与空闲故障回收已验 |
 | Phase 3 | 执行计时、运行告警、平台飞书目标与 Portal 页面 | ✅ 完成（2026-11-06） | 独立测试 Runner 76、通知 64、前端 2 通过，构建通过；agent3 monitor 健康 |
 | Phase 4 | agent3 容量测试、旧客户端兼容及发布检查 | 🔧 进行中 | agent3 三档 8/8 真实任务完成结算；同步阻塞、告警、旧包及飞书仍待验 |
@@ -16,40 +15,10 @@
 1. 一个 Worker 在同步工具里持续运行时，其他空槽仍能领取、续租和完成其它 Runner；该 Worker 的监督进程仍可为其合法 attempt 补续租，不能因现有 30 秒租约误判合法长计算。每槽一个常驻、单并发 Worker，仍由 Worker 自行领取和核验恢复资格；本次执行连同原有 Trace、清理返回后才顺序复用进程。槽数与 CPU/内存上限可配置。
 2. 原有 checkpoint、会话占有、暂停/取消、持久休眠、恢复核验、结果上报和计费语义维持；执行进程异常退出不自动重放未知外部效果。已交付 Runtime/CLI 不因服务端升级失去原有能力。
 3. 从本次领取事务记录的起点起，业务执行达到平台默认 30 分钟或该租户数字员工覆盖阈值、且下一次 1 分钟扫描写入时仍在执行，监控以同一事务写入唯一告警及一条逻辑通知事件；两次扫描间越过阈值又结束的执行可能没有告警。Runner 提交完成或持久等待/休眠等本次执行结束状态时关闭告警。最多 2 分钟的本次收尾另由监督进程按精确忙碌身份处理。飞书投递结果不明后重试可能产生少量群消息重复。正常长任务只告警不被终止。Portal 能看当前/历史及最近已保存的模型返回，飞书发送失败不抹掉 Portal 告警。
-4. `browser_automation` 不再提供给新任务，标记废弃；其它浏览器、Runtime/CLI 能力不因本项被连带删除。
-
-## Phase 1：浏览器工具目录收敛
-
-- 从工具注册、发现及新任务可见清单移除 `browser_automation`，在相关文档标明废弃。该工具是当前 `create_browser_tools()` 提供的唯一服务端浏览器工具；移除后新任务不再获得这项能力，这是已确认的产品决定。用户确认该工具无历史使用，不增加存量迁移；不清理其它浏览器流程或已交付 Runtime/CLI 工具。
-- 清点 `src/skills/` 中引用该工具的运行时指引，更新或停用无法继续运行的指引；当前已知 `competitor-research-1.0.0/SKILL.md` 仍会提示调用它。核对 Worker 是否还有其它跨任务保留的进程内资源，作为 Phase 2 收尾超时回收的前置条件。
-- 验证新任务工具目录及运行时指引均不再暴露该名称，已交付 Runtime/CLI 浏览器能力仍可用。完成本阶段及资源归属核对后才能启用 Phase 2 的业务结束后进程回收。
-
-### Phase 1 完成记录（2026-11-06，待评审）
-
-改动：`BrowserAutomationTool` 设 `catalog=False` 退出自动发现（`src/tools/browser/automation_tool.py`）；删除包工厂 `create_browser_tools()`（`src/tools/browser/__init__.py`，类保留供恢复链路与生命周期测试）；黄金清单测试同步（`tests/unit/tools/test_tool_discovery.py`，仿 attraction_search/hotel_search 软下线先例）；竞品研究指引改用 `web_fetch`（`src/skills/competitor-research-1.0.0/SKILL.md`、`subagents/competitor-research/SUBAGENT.md`）；废弃标注（工具设计文档、工具 effect 清单、竞品子代理设计文档）。
-
-清点结论（超出计划点名范围的运行时指引）：引用 `browser_automation` 的运行时指引仅竞品研究一处（SKILL.md + SUBAGENT.md，同一流程两份文本）；两份文本中原有 `browser_get_content` 指引早已不可运行（旧版浏览器工具长期 `catalog=False`），本次一并改为 `web_fetch`。
-
-Worker 跨任务进程内资源盘点（Phase 2 收尾超时回收前置核对，结论：可启用）：
-
-1. `browser_process['retained_managers']`（`browser_owner.py:93`）：BrowserRunManager 集合，唯一新增入口是 `browser_automation` 执行绑定 run；正常关闭以 PG 与资源一致为条件移除（`browser_owner.py:152`），Worker 退出时 `close_worker_browser_managers(boot)` 全量关闭（`worker.py:83`）。本阶段后无新增入口，且确认无历史使用，不存在存量。
-2. `browser_process['human_commands']`：人工接管完成监视 asyncio 任务，仅该工具执行路径产生，`factory.close()` 等待/取消（`worker.py:76-81`）。同上无新增入口。
-3. `browser_process['sidecar']`：浏览器视图监听器，仅 `browser_owner.view_enabled` 时随 `factory.open()` 常驻，与单次业务执行无归属关系；Phase 2 回收实现须将其视为进程级资源、不参与每任务清理。
-4. 进程级配置型缓存（`runtime/resource_cache.py`）：仅不可变/签名校验的 skill 与子代理注册表，属既有 M0 隔离契约内的合法共享，不涉及外部句柄。
-
-验证：`tests/unit/tools/test_tool_discovery.py` 17 通过、`test_execution_lifecycle.py`+`test_tool_execution_cleanup.py` 41 通过；装配后 STANDALONE 目录无任何 `browser*` 工具、`web_fetch` 在册、本地代理工具（Runtime/CLI 侧 `boss_*`/`wecom_*`）未受影响；恢复链路模块 import 完整。独立测试与独立 CodeReview 复核均无 P0/P1。
-
-评审修正（2026-11-06 第二轮，P1+P2）：
-
-1. P1 指引去名：`SKILL.md` 与 `SUBAGENT.md` 中连"已下线说明"也一并移出，两份运行时文本现对已下线工具名零提及（`src/skills/`、`subagents/` grep 为 0）；废弃记录只保留在设计文档。
-2. P2 套件下线：16 个以 mock 回复 `browser_automation` 经真实 Worker 驱动的 `real_browser` 集成套件（`test_browser_continuation.py`、`test_worker_browser_authority.py` 等）在本阶段显式 skip（模块级 `pytest.mark.skip`，理由注明本计划；`pytest -m real_browser` 显示 skipped，不再出现按标记运行即失败的套件），Phase 2 按 Worker 新拓扑处置或重建。保留不受影响的用例（逐文件核对调用方式后归类）：直连实例化 `BrowserAutomationTool` 的生命周期测试（`test_execution_lifecycle.py`、helper `browser_observation_legacy_api.py`）；仅以工具名作 checkpoint 数据、不经注册表的 PG 存储契约用例（`test_browser_binding_storage.py`）；直接构造 `BrowserRunManager` 验证资源生命周期的 `test_browser_manager_lifetime.py`（关闭失败资源不被 GC 丢弃、重试关闭后释放——`retained_managers` 保留规则的行为基线，Phase 2 收尾超时回收依赖该语义）。
-3. P2 新增聚焦用例（`test_tool_discovery.py::TestRetiredBrowserToolNotDispatchable`）：全量装配后的新任务即使收到未声明的 `browser_automation` 调用，也只返回"工具不存在"软错误，且 `_ACTIVE_MANAGERS` 零增长（不创建浏览器运行资源）。
-
-修正后验证：黄金清单（含新用例）18 通过；抽测 `test_worker_browser_authority.py -m real_browser` → 2 skipped；上述 grep 与装配断言复核通过。第三轮评审修正：`test_browser_manager_lifetime.py` 初判误加 skip（实际直接构造 manager、不经 Worker 工具目录），已移除 skip 保留 `real_browser` 标记；其余 16 个 skip 套件逐一复核均为 `tool_reply('browser_automation')` Worker 派发、零直接构造，skip 范围正确。`test_browser_manager_lifetime.py` 真实执行需 PG/Redis helper/Chromium 环境（与改动前相同门槛），本环境未运行，收集验证通过。
 
 ## Phase 2：执行槽隔离
 
-- 将现有 `runner-worker` 调整为多个独立副本，每副本根 Runner 并发数为 1。Worker 自行执行 `_acquire_next()`、普通及恢复领取核验、浏览器 owner、Engine/工具、业务提交、计费和 Trace；同一进程顺序复用，不做每任务进程重建。不同 Runner 的上下文继续按现有方式逐次创建和清理。
+- 将现有 `runner-worker` 调整为多个独立副本，每副本根 Runner 并发数为 1。Worker 自行执行 `_acquire_next()`、普通及恢复领取核验、Engine/工具、业务提交、计费和 Trace；同一进程顺序复用，不做每任务进程重建。不同 Runner 的上下文继续按现有方式逐次创建和清理。
 - 每副本另设一个轻量监督进程。它启动 Worker 时给出本次唯一 `worker_id`，检查执行进程存活，仅查询数据库中仍归属于 `runner_id + attempt + worker_id` 的合法执行并补续租。Worker 领取事务提交后，监督进程即可查到 attempt，无需额外领取通知；每次补租仍核对数据库归属。Worker 原有心跳及暂停/取消读取、安全点处理保留；监督进程不领取任务、不迁移恢复核验、不把请求送达当成暂停/取消完成。父子不传活对象或完整上下文。
 - 增加仅供收尾回收判断的共享槽位状态：Worker 在执行前写 `BUSY(runner_id, attempt)`，本次 `execute()` 连同 Trace、清理全部返回后、下一次领取前写 `IDLE`。监督进程只在数据库显示同一 attempt 已提交结束状态而共享状态仍是对应 `BUSY` 时开始两分钟计时；`IDLE` 或新 attempt 的 `BUSY` 立即取消旧计时。共享状态更新和超时回收的最后身份核对使用同一跨进程锁，核对通过才结束旧进程；确认退出后监督进程退出本槽容器，由容器重启清理所有旧子进程并以新 `worker_id` 建槽，不在同一容器内直接复用旧进程命名空间。不能只凭数据库终态杀进程。执行进程异常退出时立即停止补续租并退出容器；旧 Runner 沿现有租约过期、中断和外部效果核验处理，不自动重放。监督进程作为 Linux 容器主进程，其自身退出不能留下无人续租但仍执行的孤儿工具。
 - 保持 Worker 先提交业务终态/等待状态，再在 `finally` 写 Trace、清理资源的原顺序，计费仍由原 finalizer 按用量记录结算。只有 Phase 1 已核对无跨任务保留资源，才启用两分钟收尾超时回收；不能证明资源归属时标记槽位不可用并告警，不以回收冒险中断其它业务。收尾超时可造成 Trace 或清理不完整，已提交的状态和费用不回退；仍在执行的长工具不因运行时长被终止。未来若引入会在等待期间保留进程内对象的工具，须先复核回收条件。Trace 数据库操作本身设置合理超时并记录失败，不改变原采集和计费路径。
@@ -108,7 +77,7 @@ Worker 跨任务进程内资源盘点（Phase 2 收尾超时回收前置核对�
 - `git diff --quiet HEAD -- clients src/local_tools src/api/agent_runner_web.py src/services/agent_runner/adapter_contract.py src/services/agent_runner/runtime_manifest.py src/services/agent_runner/recovery.py src/services/agent_runner/usage_repository.py src/services/agent_runner/usage_pricing.py src/core/agent_engine` 退出码 0；Device API/CLI 生产消费契约、恢复格式和计费实现未因本阶段改写。Worker 改动仅涉及单并发槽位状态、续租监督及已有执行事务的计时/告警；Phase 3 迁移只加可空 `execution_started_at` 与新表，没有修改旧客户端 wire。此为源码兼容核对，不等于已交付二进制验收。
 - 宿主 Python 定向运行 `test_master_upgrade_compatibility.py`、`test_runner_adapter_contract.py`、`test_boss_cli_recovery_ownership.py`、`test_boss_tool_billing.py`：**53 passed、0 failed、14 warnings**。额外纳入旧 `test_agent_local_tool_registration.py` 时共 **56 passed、4 failed**；四项均断言已过时的 master/BOSS/WeCom 工具可见集合，该测试、Agent 装配、工具清单及 recruiting-operator 配置相对 `HEAD` 无改动，`configs/config.yaml` 仅改 Runner 并发与 Browser view 注释，不影响这些断言；不把该组合记为全绿，也不借本任务改动旧测试。
 - 通过 WSL Docker Compose 对 agent2 主配置叠加 Runner overlay 做只读解析，临时传入 `AGENT_RUNNER_WORKER_SLOTS=2`、`AGENT_RUNNER_WORKER_MEMORY=1g`：解析结果 `worker.replicas=2`、每副本 `cpus=1`/`mem_limit=1073741824`、无固定 `container_name`，单个 monitor 服务 `mem_limit=268435456`。`bash -n` 检查 agent2/agent3/诺度更新脚本通过；未启动容器。
-- 已校正[部署清单](../guides/deployment/agent-runner-deploy-checklist.md)中 monitor 的数据库写入边界、Browser view 跨容器可达性与端口说明、agent2/agent3 当前拆库事实、默认单槽不能验收及回退记录。当前工作树没有已交付 Runtime＋CLI 的实际发行包；真实旧包组合、PostgreSQL 事务竞争、两槽业务阻塞与容量结论仍待验证。[Excel 事故复盘](../incidents/excel-process-shared-runner-blocking-20261105.md)已由远程 `master` 正式登记；主工作区另有未跟踪长版报告，未在本任务改写或覆盖。
+- 已校正[部署清单](../guides/deployment/agent-runner-deploy-checklist.md)中 monitor 的数据库写入边界、agent2/agent3 当前拆库事实、默认单槽不能验收及回退记录。当前工作树没有已交付 Runtime＋CLI 的实际发行包；真实旧包组合、PostgreSQL 事务竞争、两槽业务阻塞与容量结论仍待验证。[Excel 事故复盘](../incidents/excel-process-shared-runner-blocking-20261105.md)已由远程 `master` 正式登记；主工作区另有未跟踪长版报告，未在本任务改写或覆盖。
 
 ### Phase 4 agent3 部署与初验记录（2026-11-06）
 
@@ -136,7 +105,7 @@ Worker 跨任务进程内资源盘点（Phase 2 收尾超时回收前置核对�
 
 - 正式服为 4 逻辑 CPU、约 15.1 GiB 内存，检查时约 9.6 GiB available；仍运行旧的单 `aid-runner-worker`，没有部署本阶段多槽拓扑。业务库 `max_connections=80`、检查时约 20 个连接。近 7 天完成 502 个 Runner，最忙一小时接收 88 个；按接收至结束区间统计，峰值有 13 个未结束任务，**其中包含排队，不代表 13 个同时执行**。这些是一次只读快照及历史量，不能单独推断用户排队分位数或所需槽数。
 - agent3 的 2 槽只是 8 GiB 测试机的验证配置，正式服不继承此数。生产候选从 **4 个单并发 Worker 槽**做混合负载与大文件实测；若排队目标仍不满足且资源留有余量，再测 **6 槽**。8 槽只作为进一步扩容候选，不按 CPU 线程数直接设定。建议以业务可接受的高峰排队时长为验收指标，首轮暂以排队 p95 不超过 30 秒作测试目标，产品目标确认后替换。
-- 扩槽前须在生产同等配置下核对两个实际约束：一是内存，现有生产 overlay 每槽默认上限 6 GiB，4/6 槽时须按大文件、浏览器和多任务峰值重新设每槽上限，并核对同机 API、background、PostgreSQL 的余量；二是数据库，Worker 默认业务池上限 15 加监督进程最多 2 连接，4 槽理论上限 68，叠加当前约 20 个连接已超过数据库 80 连接上限。先对 Worker 单独试配较小 `DB_POOL_MAX` 并在混合负载下验证连接峰值与错误，再确定 4/6 槽配置；不能仅凭当前低连接数直接升档。模型服务限流、CPU 忙时与原 API 延迟也应纳入同一轮观测。
+- 扩槽前须在生产同等配置下核对两个实际约束：一是内存，现有生产 overlay 每槽默认上限 6 GiB，4/6 槽时须按大文件和多任务峰值重新设每槽上限，并核对同机 API、background、PostgreSQL 的余量；二是数据库，Worker 默认业务池上限 15 加监督进程最多 2 连接，4 槽理论上限 68，叠加当前约 20 个连接已超过数据库 80 连接上限。先对 Worker 单独试配较小 `DB_POOL_MAX` 并在混合负载下验证连接峰值与错误，再确定 4/6 槽配置；不能仅凭当前低连接数直接升档。模型服务限流、CPU 忙时与原 API 延迟也应纳入同一轮观测。
 - 本节是容量建议，不构成正式服部署或验收完成记录；Phase 4 仍须完成同步阻塞隔离、旧客户端组合、告警投递与正式环境容量验证。
 
 ### Phase 4 agent2 发布前迁移补齐（2026-11-10）

@@ -31,7 +31,6 @@
 | unit/services/x_to_image/test_browser_pool.py 截图占位类 | 只有无条件 skip，未实现测试 | 真实截图测试继续由 real_browser 套件提供 |
 | unit/api/test_subagent_extra.py 存在性占位及两项实现文本检查 | 占位不验证行为；新版 extra_md 已由 PromptSources 负责 | 同文件实际 PromptSources 参数、strip、miss 与异常行为 |
 | unit/test_mid_term/test_agent_integration_real.py 导入存在性检查 | 仅 hasattr / iscoroutinefunction | 同文件压缩后重载历史及 test_compress_session.py；保留上游已改成行为验证的调用顺序用例 |
-| unit/tools/browser/test_phase3_human_control.py 两项包装用例 | 仅再次调用已独立收集的 engine acceptance 测试，无新增断言或浏览器接线 | 保留原文件 unknown external effects 等待、兄弟任务暂停恢复的三个行为用例 |
 | frontend JsonNode 两项按钮存在性检查 | 后续点击复制用例已查找同一按钮、触发点击并校验内容 | Object/String 实际复制及阻止冒泡测试 |
 | BOSS detail-greet-executor.test.ts 视口常量断言 | 仅验证 fixture 常量，无执行器行为 | 保留 20 个执行器行为用例 |
 

@@ -181,6 +181,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261119-1534 | Runtime 浏览器 MCP 第一方插件 | ✅ 已完成开发，隔离 Runtime 签名导入和浏览器操作通过。 | [设计](tools/browser/browser_tool_rebuild_design.md) | [开发计划](plans/plan-browser-tool-rebuild.md) |
 | 20261118-1000 | 微信 CLI 单会话最新消息 | ✅ 已完成开发，UIA 增量写入本机加密时间线，Agent 可触发同步。 | [设计](design/weixin/weixin-cli-design.md#14-单会话最新消息与本机副本) | [计划](plans/plan-weixin-cli-latest-chat.md) |
 | 20261118-1051 | 微信 CLI 环境诊断与窗口恢复 | ✅ 已完成开发，后台、最小化和托盘窗口恢复通过真机验证。 | [设计](design/weixin/weixin-cli-design.md#15-环境诊断与窗口恢复) | [计划](plans/plan-weixin-cli-window-doctor.md) |
 | 20261117-1415 | 微信 CLI 移除本地 OCR | ✅ 已完成开发，原生名称定位复用发送搜索，签名包和便携包已清除 OCR 和内置 Python。 | [设计](design/weixin/weixin-cli-design.md#13-移除本地-ocr) | [计划](plans/plan-weixin-cli-remove-ocr.md) |
@@ -212,7 +213,6 @@
 | 20260630-1713 | 文件生成类工具入参语义拆分与路由健壮性 | ✅ 已完成开发。Word/PDF/Excel/PPT 通用 `context` 同时承载"用户目的 + 待处理正文 + 隐含参数"导致内部 LLM 路由不稳定、转换正文被工具指令污染。 | [设计](tools/tool-input-contract-redesign.md) | — |
 | 20260714-1911 | skill_complete 工具彻底删除 | ✅ 已完成开发。 | [设计](system/skill-complete-removal-design.md) | — |
 | 20260612-0940 | 文件工具四件套（read/write/edit/cp）v2 | ✅ 已完成开发。拆分旧 text_file_writer/file_reader/file_list 为四个原子工具，支持 SKILL.md `<SKILL_ROOT>` 占位符。 | [设计 v2](tools/text-file/file_tools_redesign_v2.md) | — |
-| 20260518-2225 | 浏览器自动化工具 | 网页自动化操作、数据采集、Markdown 转换 | [设计](tools/browser/browser_automation_design.md) | — |
 | 20260602-1649 | 知识库检索租户隔离 | 知识库检索工具添加 tenant_id 过滤，修复跨租户数据泄露 + 分块 overlap 修复。2026-06-02 | — | — |
 | 20260512-1711 | PPT 生成工具（基础版） | ✅ 已完成开发；初始架构决策已并入现行整合版设计文档（2026-10-09 文档整合）。 | [设计（整合版）](tools/ppt/ppt_tool_design.md) | — |
 | 20260630-2158 | PPT 工具增强与 HTML 转 PPTX 导出 | ✅ 已完成开发（Phase 0-8，2026-07-01）；设计与开发计划已并入整合版设计文档（2026-10-09 文档整合）。 | [设计（整合版）](tools/ppt/ppt_tool_design.md) | — |

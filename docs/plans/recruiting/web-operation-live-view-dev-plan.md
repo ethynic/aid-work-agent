@@ -237,7 +237,6 @@ npm --prefix clients/agent-tool-runtime test
 - 新增 `frontend/web/components/page-stream/LivePageView.vue`。
 - 新增 `PageViewConsentCard.vue`、`PageViewTray.vue`。
 - 修改 `frontend/web/components/ChatContainer.vue`，把 tray 放在 `MessageList.vue` 底部；不修改 `MessageItem.vue` 去伪造历史消息。
-- 小范围重构 `frontend/web/components/browser/BrowserView.vue`：抽共享 decoder/composable，保持原人工接管 API/UX 不变。
 
 ### 交互实现
 
@@ -266,7 +265,6 @@ npm --prefix frontend run build:desktop
 - mounted、历史恢复、SSE 重连断言 consent API 调用数为 0。
 - 刷新查到 active_stream 时只调用 viewer-ticket，不调用 consent；无 active_stream 才显示按钮。
 - 双击/请求重试只创建一个 stream；停止、hidden、过期、掉线路径均有确定 UI。
-- 原 `HumanAssistanceCard/BrowserView` 回归，证明控制模式未受影响。
 
 ## 8. Phase 5：Boss 登录辅助（2 天）
 
@@ -341,7 +339,7 @@ flag 默认 false，求值顺序固定为 global AND tenant AND user AND 场景�
 
 ## 11. 禁止开发者自行决定的事项
 
-- 不得把 ticket 放 query、把 JPEG 放 Redis/DB、复用 `BrowserViewHub`、让 LLM 调用 start stream。
+- 不得把 ticket 放 query、把 JPEG 放 Redis/DB、让 LLM 调用 start stream。
 - 不得把普通流绑定单 invocation 后要求用户反复同意；以 execution scope 聚合。
 - 不得把 consent 设为 offer 终态；允许有效期内重新观看，每次新 session。
 - 不得让登录 invocation 在 consent/offer 超时后继续 claim。

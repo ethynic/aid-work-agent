@@ -61,7 +61,6 @@ LLM token 用量共有三条计费通路：
 | `src/tools/word/word_router.py:131` | Word 生成路由 | `gateway.chat` 裸调用 | ✅ 真实缺失。`WordRouter.route()` 同上 |
 | `src/tools/ppt/planner.py:93` | PPT 规划器 | `gateway.chat` 裸调用 | ✅ 真实缺失。`PPTPlanner._call_llm()` 同上 |
 | `src/tools/file/write_tool.py:341` | 写文件内容生成 | `llm_gateway.chat` 裸调用 | ✅ 真实缺失。`_generate_content()` 是 `async def`，max_tokens=65536，单次消耗大 |
-| `src/tools/browser/orchestrator.py:205` | 浏览器自动化决策 | `llm_gateway.chat` 裸调用 | ✅ 真实缺失。每步决策一次调用，循环多步累计消耗大 |
 | `src/services/data_analysis/schema_extractor.py:142/189` | 数据模式提取/关系推断 | `gateway.chat` 裸调用（API 路由 + 主循环工具两条路径均缺失） | ✅ 真实缺失。两处均在 `async def` 中，两条调用路径：API 路由 `src/api/data_analysis.py:468/577/855`、主循环工具 `src/tools/data_analysis/upload_data_tool.py:85` |
 | `src/skills/followup-tracking-1.0.0/scripts/followup_manager.py:364` | 跟进评估 | `llm_gateway.chat` 裸调用 | ✅ 真实缺失。**附带 P1 bug**：`_evaluate_with_llm()` 是同步 `def`，但 `llm_gateway.chat()` 是 `async def`，`result = llm_gateway.chat(...)` 返回 coroutine 对象，`result.get("content", "")` 必抛 `AttributeError`，被 `except Exception` 捕获后返回默认评分。**LLM 实际从未执行**，故当前并无 token 消耗。修复计费时必须同时修复 async 调用（详见 §5.1.8） |
 | `src/skills/travel-quote/scripts/{attraction,hotel,vehicle}_excel_parser.py` | 行程 Excel 解析（×3 文件） | `gateway.chat` 裸调用 | ✅ 真实缺失。3 个文件各 1 处：`attraction_excel_parser.py:212`、`hotel_excel_parser.py:249`、`vehicle_excel_parser.py:151`，均在 `async def parse_sheet()` 中。max_tokens 高达 16384，单次解析消耗大 |
@@ -127,7 +126,6 @@ LLM token 用量共有三条计费通路：
 
 | 文件:行 | 场景 | 排除原因 |
 |---------|------|---------|
-| `src/tools/browser/semantic/natural_matcher.py:156` | 浏览器语义匹配 `_embedding_similarity` 调 `_get_embedding` | 使用本地 `sentence-transformers` 模型（`paraphrase-multilingual-MiniLM-L12-v2`），**不调用云端 embedding API**，不产生 token 消费 |
 
 ## 4. ⚠️ 存疑 / 潜在风险（2 处）
 
@@ -161,9 +159,6 @@ record_background_llm_usage(response.get("usage") if isinstance(response, dict) 
 
 #### 5.1.5 `src/tools/file/write_tool.py:341`
 同 5.1.1 模式。注意此处 `max_tokens=65536`，单次消耗大，修复优先级高。
-
-#### 5.1.6 `src/tools/browser/orchestrator.py:205`
-同 5.1.1 模式。浏览器自动化多步循环，累计消耗大。
 
 #### 5.1.7 `src/services/data_analysis/schema_extractor.py:142/189`
 两处均在 `async def` 中，分别补 `record_background_llm_usage`。注意两条调用路径：
@@ -396,7 +391,7 @@ if status_code == 20000000:
 
 | 优先级 | 缺口 | 修复理由 |
 |--------|------|---------|
-| P0 | 5.1.5 `write_tool` / 5.1.6 `browser orchestrator` / 5.1.9 `travel-quote 3 个 excel_parser` | 单次 token 消耗大（max_tokens 65536/16384），且为高频对话路径 |
+| P0 | 5.1.5 `write_tool` / 5.1.9 `travel-quote 3 个 excel_parser` | 单次 token 消耗大（max_tokens 65536/16384），且为高频对话路径 |
 | P0 | 5.1.8 `followup_manager` | 既有计费缺口又有 P1 bug（LLM 实际未执行），修复一举两得 |
 | P0 | 5.6.3 `speech_to_text_tool` ASR | 工具入口计费完全缺失，agent 调用 ASR 100% 漏计；修复时需同步删除 `channel_routes.py:2174` 外层计费避免双计 |
 | P1 | 5.1.1-5.1.4 `excel/pdf/word/ppt router+planner` / 5.1.7 `schema_extractor` | 文档生成路由高频，schema 提取影响数据分析准确性 |
@@ -407,7 +402,7 @@ if status_code == 20000000:
 
 修复完成后，按以下步骤验证：
 
-1. **基线对比**：修复前先跑一轮回归对话（覆盖 Excel/PDF/Word/PPT 生成、浏览器、知识库检索、数据分析），记录 `chat_records.total_token_count` 基线
+1. **基线对比**：修复前先跑一轮回归对话（覆盖 Excel/PDF/Word/PPT 生成、知识库检索、数据分析），记录 `chat_records.total_token_count` 基线
 2. **修复后回归**：同样对话再跑一轮，对比 `total_token_count` 是否提升（提升幅度 ≈ 工具内 LLM 调用消耗）
 3. **不双计验证**：检查 `usage_breakdown` JSON 字段，确认 `chat.calls` 与实际 LLM 调用次数一致，未出现翻倍
 4. **租户归属验证**：管理后台触发 3 处 API 路由，确认 `chat_records.tenant_id`/`user_id` 不为 NULL

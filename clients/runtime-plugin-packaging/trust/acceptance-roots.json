@@ -199,6 +199,14 @@
         "ai.aidwork.wecom"
       ],
       "test_only": true
+    },
+    {
+      "key_id": "aidwork-acceptance-browser-v1",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAJKMe9gP3GWGd0JiRUiWBYrEdxw8dMaJZyXJ3qkS+DKY=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.browser"
+      ],
+      "test_only": true
     }
   ],
   "profile": "acceptance"

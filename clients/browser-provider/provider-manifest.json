@@ -1,0 +1,9 @@
+{
+  "provider_id": "ai.aidwork.browser",
+  "protocol": "mcp",
+  "transport": "stdio",
+  "platforms": ["win32-x64"],
+  "entrypoint": ["dist/src/cli/index.js", "mcp", "--stdio"],
+  "execution_target": "local_required",
+  "min_mcp_protocol_version": "2024-11-05"
+}

@@ -12,7 +12,7 @@
 | M1 | 核心职责拆分、执行隔离与恢复边界 | ✅ 完成（2026-10-01） | 源码独立CR通过；53核心/装配、58关联及最终244项均有通过证据；不等于服务已交付 |
 | M2 | 独立服务：持久接单、执行与查询 | ✅ 完成（2026-10-01） | API37、仓储/计费38、执行/owner43项分别独立验收；最新源码CR通过，后续恢复/四入口待迁移 |
 | M3 | Web 接入：提交、轮询、刷新找回 | ✅ 完成（2026-10-02） | 普通Web/opt-in同步：后端32、前端44、原页面5步骤通过；24源CR/SHA/build验收，完整等待续接及默认切换依赖M4 |
-| M4 | 暂停、继续与进程中断恢复 | ✅ 完成（2026-10-02） | Web/Local/Browser服务端及原页面续接验收；卡片正式15＋开发1；v2 CR0，425源/102辅助封存；默认迁移及外部真机仍M7 |
+| M4 | 暂停、继续与进程中断恢复 | ✅ 完成（2026-10-02） | Web/Local 暂停、继续和恢复已验；默认迁移及外部真机见 M7 |
 | M5 | 实时事件订阅增强 | ✅ 完成（2026-10-03） | 事件账/代理已验收；前端26＋真实页面1、关联6、CR0/build0；552源/32辅助末核一致 |
 | M6a | 微信客服原渠道接通用 Runner HTTP | ✅ 完成（2026-10-08） | 原渠道恢复及独立 Runner 接入完成；agent2 发布与文本/语音/合并/取代真机验收见恢复计划 Phase 5 |
 
@@ -72,7 +72,7 @@ M2 建立 `agent_runners` 系统表：身份与会话引用、输入/配置引�
 - 创建去重唯一约束按 scope_key、主体、source、client_request_id 设置；runner_id 稳定，attempt 恢复后递增。
 - M2 同时建立 `agent_runner_session_claims`：通用仓储按 scope_key/kind/session 唯一保存逻辑 owner，与执行 lease 分开；paused/waiting/interrupted 保留位置，queued 不占有，resume 续原 owner，终态释放。KF 沿用原渠道队列，共用通用执行 claim 与 attempt/lease，finalizer 终态释放 claim；不再有 KF 专用接单或投递 gate。原队列取消确认终态后交接。其他渠道在其接入阶段单独核定。
 - M2 建立 `agent_runner_usage_receipts`：调用/用量事实与结算水位单独保存，迟到事实在原 record 补差，不借用公开事件的顺序或保留策略。
-- M4 建立 `agent_runner_controls`：持久保存控制请求、输入摘要与单次消费事实，和公开事件、费用账本分开。实际接口统一为 controls 资源，不再分别建立 pause/resume 路由；browser_complete 只允许受信完成端口，公共接口不接受自报工具完成。
+- M4 建立 `agent_runner_controls`：持久保存控制请求、输入摘要与单次消费事实，和公开事件、费用账本分开。实际接口统一为 controls 资源，不再分别建立 pause/resume 路由。
 - checkpoint 只保存 JSON 可序列化数据及稳定资源引用，不保存协程、连接或密钥；版本不兼容明确拒绝恢复。
 - Web/渠道会话及消息表保持分离。Runner 上下文不是新的公共聊天历史，不提供跨表 fallback。
 - M5 建立 `agent_runner_events`：tenant、runner、attempt、seq、类型、脱敏 payload、时间；runner/seq 唯一。序号分配、事件与相关状态/恢复点变化在同一事务提交。
@@ -112,7 +112,7 @@ M2 建立 `agent_runners` 系统表：身份与会话引用、输入/配置引�
 | 多轮模型、角色轮数、调用配对、等待/取消/轮数耗尽 | 唯一 Engine + RolePolicy + ExecutionOutcome |
 | use_skill/version/hook/full 指南、skill_execute/complete、plan | 工具控制适配 + SkillSession；Engine 不按工具名处理 |
 | 子任务并发/超时/上下文/图片/澄清与用量 | Child 适配复用 Engine，独立子 State、等待事实及父汇总 |
-| Browser ToolSuspension、兄弟调用结果配对、原调用续接、D1 defer | 等待/控制适配及持久 tool ledger；旧接口适配保持 |
+| 兄弟调用结果配对、原调用续接、D1 defer | 等待/控制适配及持久 tool ledger；旧接口适配保持 |
 | 本地 invocation、设备认证、写许可、进度/结果/取消/费用 | 既有 local-tools 协议 + 当前执行上下文的本地工具适配 |
 | 图片去重、下载产物、tool_messages、verbose | 执行产物/消息收集 + 公开投影 + 入口既有呈现策略 |
 | Trace、模型/技能/子任务真实用量、记录和取消轮次落库 | 应用 Lifecycle 的单一责任方及稳定调用水位 |
@@ -172,7 +172,7 @@ M1 实施者另外两批自测遗漏 `--isolated-db`（44 passed；56 passed / 1
 | 问题 | 本阶段要求 |
 |------|------------|
 | 澄清只写等待、不读取下一句补充 | 保持原澄清后续派行为，独立测试实际装配 |
-| Browser 等待未处理同轮 siblings、D1 静默只取首个 call | 保留旧配对和等待语义；D1 不支持的并行调用明确失败，已收到的模型用量仍记录 |
+| D1 静默只取首个 call | 保留旧配对和等待语义；D1 不支持的并行调用明确失败，已收到的模型用量仍记录 |
 | 正式回归发现 D1 续接缺原 tool 结果、有效 call 的 ID/过滤配对变化 | 保留旧公开协议与完整持久消息序列；原断言不变，修复后定向重验 |
 | strict 历史查询把越权等同于空历史；准备先压缩后校验 | 新路径在任何压缩、remember、模型或工具 IO 前授权会话；兼容容错策略单独明示 |
 | 续接的 runtime identity/profile 与 checkpoint 未核对 | 在工具上下文装配前拒绝身份、角色及配置不匹配 |
@@ -315,7 +315,7 @@ M3 开工只读审查提前发现 M2 公共 DTO 仍直接透传 result.messages 
 - 保留每 session 状态池、后台完成未读标记、附件草稿清理与目标会话 processing guard；toolCallId、displayName、quickOptions、图片位置、downloadableFiles、verbose eventId 和人工协助卡片由明确的用户展示投影提供，不直接公开私有事件原文。历史取消标记及无输出停止整轮记录与原行为对齐。
 - Web 同步旧接口作为兼容调用方等待结果，保持原 JSON 结构；等待连接结束不取消已接单任务，不修改其他旧调用方。
 
-M3 可先验证普通完成、轮询和刷新，完整 Web 无缝切换还依赖 M4 原 runner 等待输入/人工协助续接：waiting 保留 claim，补充消息不能只排一个新 runner 而永久堵在后面；既有 browser continuation callback 不能另启旧 Loop 或重复写历史。M3/M4 交叉门槛未闭合前不默认启用新 Web 入口，也不宣称澄清和人工协助已迁移。CLI、desktop D1、`client_routes` 与尚未切换渠道保持其既有职责，不能按共用 URL 粗略切换所有调用方。
+M3 可先验证普通完成、轮询和刷新，完整 Web 无缝切换还依赖 M4 原 runner 等待输入/人工协助续接：waiting 保留 claim，补充消息不能只排一个新 runner 而永久堵在后面。M3/M4 交叉门槛未闭合前不默认启用新 Web 入口，也不宣称澄清和人工协助已迁移。CLI、desktop D1、`client_routes` 与尚未切换渠道保持其既有职责，不能按共用 URL 粗略切换所有调用方。
 
 验收：浏览器关闭/刷新/切换会话后后台任务继续；重新进入能找回；提交响应丢失后不会重复任务；输出、图片、附件和最终消息不重复；计费和取消可核验；Runtime+BOSS CLI 原操作链兼容。运行前端定向测试和 build，并实际检查相关交互。
 
@@ -338,7 +338,6 @@ M3 可先验证普通完成、轮询和刷新，完整 Web 无缝切换还依赖
 - 恢复完整父/child 树及各自资源、真实配置 fingerprint、技能和 request_data，不重新做前序会话装配或取别的 runner 业务计划。父已完成但 owned child 未终结时须恢复 child/drain 或明确拒绝未知 leaf，不能直接完成父；缺可信 child 配置摘要的活跃旧状态不能猜配置继续。
 - 澄清回复进入原 child 的原 tool_call，先完成模型调用配对，再注入补充用户消息并持久写历史。不能借旧澄清协调器创建新 delegate；Redis 只做投影，先保存数据库消费事实再清理。
 - 本地工具已有 create→progress→checkpoint 断电窗口，需为每个物理子步骤使用现有 dedupe/business_ref 唯一路径，并在派发前核执行权。恢复只查询原可信 tenant/user/session/tool/参数/device 的 invocation；queued/running 继续观察，terminal 按原结果/费用规则处理。OverlayHeal 等多 invocation、VL、入库、专项费各阶段须有恢复事实；未支持或效果未知时等待核对，不能笼统重放整个工具。
-- Browser 通过应用恢复适配器绑定 owner_kind/runner_id、child execution、原 call/run/assistance；旧记录沿 legacy callback，新 Runner 只消费原 wait 的完成事实，不另启旧 Agent 或自行写历史。API 控制/截图/完成人工协助须路由到真实 browser runtime owner，复用现有 run/job lease；owner 丢失且资源不能安全重建时明确 BROWSER_RUNTIME_LOST/verification。Web 默认启用前必须验证活 owner 的人工接管→完成→同 runner 原调用继续及唯一历史/record，不承诺浏览器进程灾难后无损恢复。
 
 ### M4 开工审查（2026-10-02）
 
@@ -346,11 +345,8 @@ M3 可先验证普通完成、轮询和刷新，完整 Web 无缝切换还依赖
 
 用户请求暂停与 worker 内部停止分离。父执行及全部 owned child 到达可恢复安全点后才确认 paused 并释放 lease；取消优先，尚未确认暂停不能提前继续。RecoveryCoordinator 只编排仓储、授权、恢复装配和工具恢复端口，不重新收纳所有工具分支。已完成结果复用，未知派发默认等待核对，不开放调用方自称完成或强制重发写工具的通用开关。
 
-浏览器画面与输入目前归属具体执行进程，不能仅保存 complete 命令便宣称跨进程协助已可用。接口细审批准复用现有浏览器 IPC/frame，增加同事件循环、随 worker 停止的轻量内控端口，帧不入数据库或 Redis。API 依据受信配置 origin 核对 worker advertise URL，禁止客户端/数据库任意 URL 和 redirect；API 原子消费票据后重新核对 fresh 主体及 run/owner，内控端口再次核对原 runner/run/assistance/execution/call/owner epoch、真实 runtime 和 job lease。新 owner 不沿任意旧 BrowserResumeWorker 领取后永久失败的路径；观察 socket 断开不取消执行。
 
-Browser 后续只读接线盘点确认：复用 `BrowserAutomationTool.execute`、HumanControl 的 suspend/get_owned_runtime/complete、`LocalPlaywrightExecutor` 的帧循环与 ViewHub 的有界最新帧、`browser_runs.py` 的原接口及前端 BrowserView。现 HumanControl/BrowserResumeJob 的另一个 HTTP/job 任务没有已停驻 Runner 的 usage/fence 上下文，不能直接调用 orchestrator.resume_from_human：人工完成接口只存可信 run/assistance/原wait完成事实和内部 control，原 Runner 新 attempt 消费后才通过 Browser adapter 继续同 runtime，绑定本次 usage/fence。人工观察的 Browser owner epoch 与 Agent 执行 attempt 分开核验；Runner-owned 记录不能走旧 `_continue_browser_agent` 的新 Agent/历史路径。二次人工协助生成新 wait，owner 丢失明确核对，不自动新建浏览器重演动作。本段为源码预审与后续门槛，未实施/验收。
 
-一次精确源码盘点进一步确认：ToolSuspension 返回后原 Browser manager 仍续自己的 lease，不随 Runner park 自动失效；原 Browser 审计仅 tenant/user/session/child execution/call，缺少 root Runner/worker epoch 绑定，assistance 审计还可 best-effort。Runner 分支必须强制 PG 证明原 root→完整执行树 execution/call/wait 与 run/assistance，不以同 session 或 Redis 对象自证；legacy 审计策略不作为 Runner 授权。普通 WS 断开只关观察；用户取消和 worker 停止则回收对应 manager/runtime/monitor，关闭确认参与取消收尾。当前 Worker 退出并未回收 parked Browser，需随 sidecar 生命周期补齐；`--once` 进程退出后原 runtime 明确丢失，不承诺跨进程重建浏览器并重演动作。daemon 驻留、原帧/键鼠链、fresh 授权、取消回收与二次 wait 均是实际 Browser 分片门槛。
 
 本地子片同样通过接口细审：派发 fence、phase 意图与原 invocation 插入/关联使用同 PostgreSQL cursor 事务，不能仅做锁外 precheck 后插入设备可领取任务。逐阶段核对全部可信 owner、参数、设备、分支及 retry key；专项入库和费用仍由原 owner 收尾，缺事实则等待核对。M3 最终测试期间其24源保持冻结，先新增 M4 模块及 schema，不污染有效验证版本。
 
@@ -362,13 +358,13 @@ Local 实际源码预审补充：原 invocation.credit_cost 仅表示设备结�
 
 完整领域取消门槛还包括通知等非设备 HTTP：不能仅凭 local invocation 都已终态就放 claim，而原 HTTP 仍在途/效果未知。按原领域 started/ACK事实组合核对，取消后禁新 chunk/@/业务动作，但仍有效的原 owner 可记录已发生结果及用量；启动的派发许可与原结果的完成保存分别校验，不为避开取消把未知写入视为只读。独验使用 localhost 真实单请求/ACK屏障和原phase仓储证明，不能只替换 sender boolean。领域接线尚未验收。
 
-M3 最终放行后解除共享源码冻结。M4 首片现将 `control_contracts`、`control_repository`、`recovery_repository`、双 DDL 与系统表文档按 [6源清单](/private/tmp/aid-agent-runner-m4-controls-source-sha.json) 正式冻结，交独立 PG 测试与源码 CR 并行。变更号为 `2026-10-02 00:33:38`；静态 AST/pycompile 自验通过。迁移首自验1失败为旧 fixture 先 DROP agent_runners 被新 controls 外键阻止，fresh DDL 初始化实际成功；独立测试按正确表顺序调整 fixture 后复验，不移除生产约束。此片仅控制接收/原 claim 恢复事务，尚不证明实际 worker 安全暂停、执行树恢复或 Browser/Local 续接；实施继续其他模块，不改冻结6源。
+M3 最终放行后解除共享源码冻结。M4 首片现将 `control_contracts`、`control_repository`、`recovery_repository`、双 DDL 与系统表文档按 [6源清单](/private/tmp/aid-agent-runner-m4-controls-source-sha.json) 正式冻结，交独立 PG 测试与源码 CR 并行。变更号为 `2026-10-02 00:33:38`；静态 AST/pycompile 自验通过。迁移首自验1失败为旧 fixture 先 DROP agent_runners 被新 controls 外键阻止，fresh DDL 初始化实际成功；独立测试按正确表顺序调整 fixture 后复验，不移除生产约束。此片仅控制接收/原 claim 恢复事务，尚不证明实际 worker 安全暂停、执行树恢复或 Local 续接；实施继续其他模块，不改冻结6源。
 
-6源正式独立 CR 已通过，SHA 零漂移、双 DDL 内容等价，无未关闭 P1/P2；核对当前 owner 先幂等、wait 消费串行、单 resume pointer、默认拒绝自报 Browser 完成、锁后数据库时钟、原 claim gate、新 attempt/消费/checkpoint 同事务、取消/终态/新暂停竞争和私有字段白名单。外键级联符合私有表生命周期，fixture 按子表先删除，不降生产约束。独立真实 PG 测试继续；应用 ackpause 仍须验证全部 owned leaf 安全，仓储只认根 paused/unstarted 标记不能替代 worker 验收。
+6源正式独立 CR 已通过，SHA 零漂移、双 DDL 内容等价，无未关闭 P1/P2；核对当前 owner 先幂等、wait 消费串行、单 resume pointer、锁后数据库时钟、原 claim gate、新 attempt/消费/checkpoint 同事务、取消/终态/新暂停竞争和私有字段白名单。外键级联符合私有表生命周期，fixture 按子表先删除，不降生产约束。独立真实 PG 测试继续；应用 ackpause 仍须验证全部 owned leaf 安全，仓储只认根 paused/unstarted 标记不能替代 worker 验收。
 
 首批独立真实 PG 验证31 passed、exit0、0 skip（70.79s），命令 `bash ./scripts/dev_test.sh --isolated-db tests/integration/agent_runner_service/test_control_storage.py tests/integration/agent_runner_service/test_recovery_storage.py tests/integration/agent_runner_service/test_migrations.py -p no:cacheprovider -q --tb=short --disable-warnings`，[原始日志](/private/tmp/aid-agent-runner-m4-controls-b1.log)。真实双连接验证锁后过期拒旧 ack、控制/checkpoint 写失败整个事务回滚再重试、原 claim+新 attempt、wait 单消费、FIFO 和双 worker 竞争；开始6源 SHA 匹配，独立测试未改生产。reject_resume 边界与最终清理仍补验，不重复完整31项。当前不证明 fresh HTTP 执行授权、全树安全停稳、queued worker 零 IO 或实际进程恢复。
 
-**M4 控制/恢复仓储子片验收通过（2026-10-02）**：补验 reject_resume 两分支2 passed、exit0（6.03s），核对原 checkpoint/claim 保全及迟到拒绝不能改已消费/已收尾意图，最终33个唯一通过（controls18、恢复领取14、迁移1）。6源前后 SHA 全匹配，源码 CR 无剩余 P1/P2；原 fresh/incremental/replay 四表约束/default/index 门槛保留。主控已核对 [独立完整证据](/private/tmp/aid-agent-runner-m4-controls-independent-test-evidence.txt)、[最终6源](/private/tmp/aid-agent-runner-m4-controls-independent-source-final.json)、[最终7测试/运行源](/private/tmp/aid-agent-runner-m4-controls-independent-tests-final.json)，批准该子片并解除冻结供后续接线。两批专属隔离库/SQL fault trigger/fixture 已清理，无新增服务/worker/浏览器/资源目录，原不明库排除未删，master/Yohar 未动。仅直接 Principal 与真实 PG 仓储证明，fresh token/执行授权、全部 child 安全停止、queued 零 IO 和实际 tree/Local/Browser 恢复仍是后续独立门槛，完整 M4 继续实施。
+**M4 控制/恢复仓储子片验收通过（2026-10-02）**：补验 reject_resume 两分支2 passed、exit0（6.03s），核对原 checkpoint/claim 保全及迟到拒绝不能改已消费/已收尾意图，最终33个唯一通过（controls18、恢复领取14、迁移1）。6源前后 SHA 全匹配，源码 CR 无剩余 P1/P2；原 fresh/incremental/replay 四表约束/default/index 门槛保留。主控已核对 [独立完整证据](/private/tmp/aid-agent-runner-m4-controls-independent-test-evidence.txt)、[最终6源](/private/tmp/aid-agent-runner-m4-controls-independent-source-final.json)、[最终7测试/运行源](/private/tmp/aid-agent-runner-m4-controls-independent-tests-final.json)，批准该子片并解除冻结供后续接线。两批专属隔离库/SQL fault trigger/fixture 已清理，无新增服务/worker/浏览器/资源目录，原不明库排除未删，master/Yohar 未动。仅直接 Principal 与真实 PG 仓储证明，fresh token/执行授权、全部 child 安全停止、queued 零 IO 和实际 tree/Local 恢复仍是后续独立门槛，完整 M4 继续实施。
 
 应用/tree 接线现正在真实续接自验，未冻结或验收。首批实链3失败：queued 场景已经实际执行完成，但测试遗漏显式 augmentation 独立 user 的原行为；测试保留 augmentation 恰一次并仅过滤其 fixture 标记后核规范业务顺序。两项 child 续接首先处理原 taskrecord.clarifying 与恢复调度竞争，但将 record.start 提前仍不足，第二批两项实际超时失败继续保留，不能以 CLI exit0 或仓储33项冒认完整恢复通过。通过原 root/child/task/控制的状态、phase、计数、稳定错误码及栈位置诊断定位，不输出正文/参数/凭据；实施者串行修生产，测试保留原 ID、单消费、调用/费用和历史断言。完整 child 恢复闭合前不交成功冻结，不默认切换 Web。
 
@@ -376,7 +372,7 @@ M3 最终放行后解除共享源码冻结。M4 首片现将 `control_contracts`
 
 执行/用量归属拆分后的 B6 实际自验3 passed、exit0（111.39s），覆盖 queued 零 IO 与单/双澄清；最终工作区归属验证随后调整，不能把 B6 作为最终全源码证明，仍待独立验收。主控读代码又确认普通会话历史 GET 直返 `MessageDB.list_by_session`，而 Runner 收尾保存的内部工具消息、参数和推理未经过公共展示投影。已要求在公共历史读取边界隐藏内部工具行、对 Runner 可见元数据白名单投影，保留私有数据库与模型恢复事实，验证既有进度、附件、图片和补充用户稳定 ID；此项纳入本应用片冻结与实际 HTTP 检查门槛。
 
-M4 应用/执行树首片现按 [36源码清单](/private/tmp/aid-agent-runner-m4-application-source-sha.json) 正式冻结，主控核对无漂移，独立测试与只读 CR 并行启动。[开发证据](/private/tmp/aid-agent-runner-m4-application-developer-evidence.txt) 记录 B7 最终资源自验1 passed、exit0（27.86s）：queued 无准备 IO、原 inline 附件、可信工作区命名空间、终态清理及默认 CLI 续原 runner；之后仅公共历史 projector 调整，全36源 AST 检查通过，但实际 HTTP 展示仍待独立测试。普通 Web 历史统一隐藏内部 role/tool_call 行，与既有前端过滤一致；Runner 可见行 metadata 白名单，legacy 可见 metadata 保留原语义且深复制，不改私有 DAL/缓存对象。当前未知 Local/Browser/skill 已派发状态仍拒绝猜测恢复，待后续适配；不把本片冻结或自验称为完整 M4 完成。
+M4 应用/执行树首片现按 [36源码清单](/private/tmp/aid-agent-runner-m4-application-source-sha.json) 正式冻结，主控核对无漂移，独立测试与只读 CR 并行启动。[开发证据](/private/tmp/aid-agent-runner-m4-application-developer-evidence.txt) 记录 B7 最终资源自验1 passed、exit0（27.86s）：queued 无准备 IO、原 inline 附件、可信工作区命名空间、终态清理及默认 CLI 续原 runner；之后仅公共历史 projector 调整，全36源 AST 检查通过，但实际 HTTP 展示仍待独立测试。普通 Web 历史统一隐藏内部 role/tool_call 行，与既有前端过滤一致；Runner 可见行 metadata 白名单，legacy 可见 metadata 保留原语义且深复制，不改私有 DAL/缓存对象。当前未知 Local/skill 已派发状态仍拒绝猜测恢复，待后续适配；不把本片冻结或自验称为完整 M4 完成。
 
 首轮只读 CR 确认须在本应用片修复的边界：异步 child task 已停止不等于 child 执行终态，父完成但子仍 waiting/paused 时须保原 claim 和父完成事实；真实触发沿既有 delegate timeout/恢复，不存在公开 `wait_for_result=false` 参数，不新增该能力。完成父的补充用户事实仍须进入最终历史，不能为写历史再跑父模型。子/孙独立 PlanFacts 必须从各自 checkpoint 保存和恢复，不借根计划，旧活跃状态有 plan_ref 无完整事实则拒绝猜测。Trace 的原 span 保留已有保障，但普通 resume 会覆写摘要，须保累计实际执行耗时及所有已存 span 统计，不把暂停时长计为执行。终态工作区清理须逐执行核可信 namespace，非法路径跳过并脱敏记录，不能依据 checkpoint 任意目录直接删除。实施先保36源冻结，当前真实测试批保留完成后再定向解冻；本片仍未放行。
 
@@ -408,7 +404,7 @@ resume+input 现按 [9源清单](/private/tmp/aid-agent-runner-m4-resume-input-s
 
 新输入独验已得到9个实际形态的通过证据：首批5 passed/4 failed，失败为附件应由真实 ReadTool 读取的断言接线、补充正文放错案例，以及 FAILED 探针过期 SQL 未 commit；只修 fixture 后相关3通过、FAILED1定向通过（20.93s）。FAILED 来自真实外部 HTTP400，额外 owner checkpoint 保存由 DI 提供，验证既有 Failed 状态恢复收尾，不称为默认 Engine 自动保存 failed 的整链证明。财务补验2 passed（52.99s），逐次实际 receipt 唯一、原 record 精准 token/0.01 与租户一次扣费均成立；最终受影响 Runtime26/D1 seam5/统计1共32 passed（89.59s），替代旧版本兼容记录，不重复累计。tenantA 默认 CLI 的共享文件写入、复制及不同 cwd 的 main HTTP 下载本轮通过，原个别失败根因仍不倒推。
 
-原界面检查已通过同 Runner 补充正文/原上传附件以及关闭刷新找回2步骤，但拒绝反馈步骤失败：controls 已返回 rejected，useAgent 只更新 error ref，ChatContainer 未显示它，用户无可见提示。已列为迁移阻断项，由实现角色按现有错误反馈方式修复，随后定向重验页面、composable 与 build；不通过修改为内存断言掩盖问题。该页面全部 API 为拦截替身，真实 Worker/PG 链由前述独验分别证明；完整 M4 仍有 Local/Browser owner 接续待完成。
+原界面检查已通过同 Runner 补充正文/原上传附件以及关闭刷新找回2步骤，但拒绝反馈步骤失败：controls 已返回 rejected，useAgent 只更新 error ref，ChatContainer 未显示它，用户无可见提示。已列为迁移阻断项，由实现角色按现有错误反馈方式修复，随后定向重验页面、composable 与 build；不通过修改为内存断言掩盖问题。该页面全部 API 为拦截替身，真实 Worker/PG 链由前述独验分别证明；完整 M4 仍有 Local owner 接续待完成。
 
 Local 未接线6源已冻结：[源清单](/private/tmp/aid-agent-runner-m4-local-six-source-sha.json)、[开发证据](/private/tmp/aid-agent-runner-m4-local-six-developer-evidence.txt)。原 invocation cursor DAL、原 owner 阶段关联仓储、中性 lifecycle Protocol、领域阶段共事务仓储及招聘简历/沟通记录 cursor 入口不改变客户协议。旧招聘兼容63 passed（49.41s）及静态检查通过，只证明旧 wrapper 兼容；必须另经独立真实 PG 验证 invocation 与 checkpoint 原子关联、实际领域 writer 与阶段事实同事务、锁后过期全回滚，再接 Runtime/Proxy/Worker。当前不宣称多阶段恢复、专项费用或客户设备实链已完成。
 
@@ -416,11 +412,11 @@ Local 未接线6源已冻结：[源清单](/private/tmp/aid-agent-runner-m4-loca
 
 独立测试者另归档 [后端15源最终清单](/private/tmp/aid-agent-runner-m4-resume-input-backend-source-final.json) 与 [后端10测试源最终清单](/private/tmp/aid-agent-runner-m4-resume-input-backend-tests-final.json)，将原聚合清单的历史 useAgent 与后续页面叶修改区分。各隔离 wrapper 已退出并回收自己的数据库，本片后端子进程剩余0，页面资源 cleanup=true；旧不明测试库排除未删除，未操作 master/Yohar，未提交或部署。
 
-**Local 仓储/领域事务接口分片验收通过（2026-10-02）**：独立真实 PG 最终17 passed、exit0（62.69s），6源正式 CR 与开始/结束/最终 SHA 一致，主控核对 [独立证据](/private/tmp/aid-agent-runner-m4-local-six-independent-evidence.txt)、[源码清单](/private/tmp/aid-agent-runner-m4-local-six-independent-source-final.json)、[测试清单](/private/tmp/aid-agent-runner-m4-local-six-independent-tests-final.json)。原 root/child invocation关联、完整不可变意图、外属/撤销设备拒绝、设备真实行锁跨租约后的 invocation+CP 全回滚、简历及沟通记录真实 cursor 写入与 CP 同事务、失败重试一次均通过；未用 fake complete_phase 替代领域写入。首批15 passed/2 failed/17 teardown errors为隔离 fixture 未调用现有招聘领域建表函数，修 fixture 后原断言保留；失败和成功临时库均已从 catalog 消失，旧不明库保留。允许接普通原 invocation 实际恢复，专项费用、VL、批量及 heal 分阶段续接、Browser 仍待实现/验证，本片不代表客户设备或完整 Local 已交付。
+**Local 仓储/领域事务接口分片验收通过（2026-10-02）**：独立真实 PG 最终17 passed、exit0（62.69s），6源正式 CR 与开始/结束/最终 SHA 一致，主控核对 [独立证据](/private/tmp/aid-agent-runner-m4-local-six-independent-evidence.txt)、[源码清单](/private/tmp/aid-agent-runner-m4-local-six-independent-source-final.json)、[测试清单](/private/tmp/aid-agent-runner-m4-local-six-independent-tests-final.json)。原 root/child invocation关联、完整不可变意图、外属/撤销设备拒绝、设备真实行锁跨租约后的 invocation+CP 全回滚、简历及沟通记录真实 cursor 写入与 CP 同事务、失败重试一次均通过；未用 fake complete_phase 替代领域写入。首批15 passed/2 failed/17 teardown errors为隔离 fixture 未调用现有招聘领域建表函数，修 fixture 后原断言保留；失败和成功临时库均已从 catalog 消失，旧不明库保留。允许接普通原 invocation 实际恢复，专项费用、VL、批量及 heal 分阶段续接，本片不代表客户设备或完整 Local 已交付。
 
 **Web 补充输入与错误反馈分片验收通过（2026-10-02）**：三项提示/草稿 P2、响应丢失后首次 rejected 被误当历史的新窗口及可选 wait_id 类型均修复。当前原请求键在本次用户操作保存 live proof，服务快照找回后首个拒绝仍提示；历史首次装配不弹旧错，同轮轮询去重，新用户操作重新反馈。独立41个唯一有效用例（composable24、client13、未变 mapper4），首批23 passed/1个新增测试错误期待跨会话 canRestore=false，保真实 auth/generation 回调与页面独立 SID 守卫后定向1通过；新会话正文/附件及提示不污染断言保留。最终 build52069 exit0（5.82s，522模块），正式 CR 无 P1/P2；[前端最终6源](/private/tmp/aid-agent-runner-m4-feedback-independent-source-final.json) 与 [6测试源](/private/tmp/aid-agent-runner-m4-feedback-independent-tests-final.json) 经主控核对匹配。
 
-原页面4步骤通过：同 Runner 续正文/附件、关闭刷新找回一次、另一会话拒绝时正文和附件恢复并见安全中文提示、回原会话不串消息；主控实际查看截图。页面全部业务 API 拦截，newRunnerPOST/unknownAPI/外网逃逸为0，不称为页面直连真实 Worker 的 E2E；后端实际链由前述分片独验分别证明。[页面证据](/private/tmp/aid-agent-runner-m4-page-evidence.json)、[拒绝截图](/private/tmp/aid-agent-runner-m4-page-rejected-feedback.png)、[资源账本](/private/tmp/aid-agent-runner-m4-input-feedback-resource-ledger.json) 已归档，专属浏览器/Vite/临时目录已清；仅截图重复不加案例。保留原生产反馈缺陷、类型构建失败与 fixture 修正记录。完整 M4 继续 Local/Browser，不默认切换 Web，不提交或部署。
+原页面4步骤通过：同 Runner 续正文/附件、关闭刷新找回一次、另一会话拒绝时正文和附件恢复并见安全中文提示、回原会话不串消息；主控实际查看截图。页面全部业务 API 拦截，newRunnerPOST/unknownAPI/外网逃逸为0，不称为页面直连真实 Worker 的 E2E；后端实际链由前述分片独验分别证明。[页面证据](/private/tmp/aid-agent-runner-m4-page-evidence.json)、[拒绝截图](/private/tmp/aid-agent-runner-m4-page-rejected-feedback.png)、[资源账本](/private/tmp/aid-agent-runner-m4-input-feedback-resource-ledger.json) 已归档，专属浏览器/Vite/临时目录已清；仅截图重复不加案例。保留原生产反馈缺陷、类型构建失败与 fixture 修正记录。完整 M4 继续 Local，不默认切换 Web，不提交或部署。
 
 普通 Local 原 invocation 实际接线按 [16源清单](/private/tmp/aid-agent-runner-m4-local-ordinary-source-sha.json) 冻结：[开发证据](/private/tmp/aid-agent-runner-m4-local-ordinary-developer-evidence.txt) 为兼容95 passed（2.96s）及既有实际默认 CLI/Proxy/PG、桌面 IO 替身1 passed（23.78s），仅开发自验。首兼容9 passed/KeyboardInterrupt（103.23s）为新设备 helper 时区回归，独占批中断后修正：legacy naive 使用原本地时刻语义，锁定数据库 TIMESTAMP 的 last_seen 与同会话 clock_timestamp()::timestamp 比较。原日志保留，不称首批成功。新派发锁后复核 selected/active/在线/catalog，旧已完成 invocation 读取不重新选设备；原请求、期限及参数保持。仅普通继承 execute 的工具恢复，特殊工具初跑保旧后处理，恢复尚须 verification；专项多阶段另片推进。
 
@@ -436,7 +432,7 @@ Local 未接线6源已冻结：[源清单](/private/tmp/aid-agent-runner-m4-loca
 
 **普通 Local 原调用恢复与取消子片验收通过（2026-10-02）**：最终独验26个唯一集成场景（12默认CLI、14窄owner/真实PG时序/契约，含原Proxy短期限配置DI），另3项既有心跳关联复验和95项既有Local兼容通过；逐批计数不相加。最终持锁场景通过，晚到结果取消单例1 passed（30.46s），95兼容exit0（1.91s）。主控核对 [完整证据](/private/tmp/aid-agent-runner-m4-local-ordinary-independent-evidence.txt)、[逐项范围与复用依据](/private/tmp/aid-agent-runner-m4-local-ordinary-independent-inventory.json)、[最终17源](/private/tmp/aid-agent-runner-m4-local-ordinary-independent-source-final.json)、[18测试/运行源](/private/tmp/aid-agent-runner-m4-local-ordinary-independent-tests-final.json) 无漂移，正式CR无剩余P0/P1/P2。
 
-设备原ACK前保原claim/资源并阻止同会话后任务；原可信ACK后由同Runner新attempt只收尾，不重发工具/模型。未知效果、缺绑定和未实现heal续接明确核对、不消费继续命令；只读观察不阻其他会话领取。正常原调用结果复用、原工具费和取消时的实际费用按各自旧规则核验，不将取消费用伪填为成功工具费。SIGTERM提交竞争与原queued首失败分开记录，不倒推未知原因；首错误、夹具时点/attempt修正及相应loaded hash均保留。外部模型/桌面动作替身，真实PG/API/Worker/Runtime/Engine/原write_result及费用DAL；非全部真实客户Windows验证。所有专属DB连接/进程/临时资源树为0，[清理证据](/private/tmp/aid-agent-runner-m4-local-ordinary-independent-cleanup.json) 保旧不明库、master/Yohar不动。批准解除普通17源冻结，进入完整领域多阶段接线；特殊工具目前仅首调用取消权限通过，不宣称后处理恢复已完成。完整M4/默认Web切换、Browser、订阅及三个渠道继续开发，不提交或部署。
+设备原ACK前保原claim/资源并阻止同会话后任务；原可信ACK后由同Runner新attempt只收尾，不重发工具/模型。未知效果、缺绑定和未实现heal续接明确核对、不消费继续命令；只读观察不阻其他会话领取。正常原调用结果复用、原工具费和取消时的实际费用按各自旧规则核验，不将取消费用伪填为成功工具费。SIGTERM提交竞争与原queued首失败分开记录，不倒推未知原因；首错误、夹具时点/attempt修正及相应loaded hash均保留。外部模型/桌面动作替身，真实PG/API/Worker/Runtime/Engine/原write_result及费用DAL；非全部真实客户Windows验证。所有专属DB连接/进程/临时资源树为0，[清理证据](/private/tmp/aid-agent-runner-m4-local-ordinary-independent-cleanup.json) 保旧不明库、master/Yohar不动。批准解除普通17源冻结，进入完整领域多阶段接线；特殊工具目前仅首调用取消权限通过，不宣称后处理恢复已完成。完整M4/默认Web切换、订阅及三个渠道继续开发，不提交或部署。
 
 前端6源最终发送发现保护 CR 无 P1/P2、SHA 无漂移，独立 composable20项通过（840ms），复用未变 client13/mapper4，合计37个唯一案例；最终 build exit0，类型/依赖边界及522模块检查通过。发现未结束或失败时保输入与附件，不能先创建新 Runner 或回退旧路径；控制按原 ID 查询消费/拒绝。此片暂态拒绝普通 paused/interrupted 新输入，不等于完整继续交付，下一最小片必须把既有发送交互接到同一 Runner 的 resume+answer/attachments，并补原页面行为验证。
 
@@ -478,7 +474,7 @@ B1 v2后批独验9 passed、exit0（272.60s），56生产源及20测试/辅助�
 
 **Local专项 B1 v2分片正式验收通过（2026-10-02）**：17个不同新形态（12默认CLI、5实际领域提交返回时机探针及原CLI续接/取消），另28受影响关联（owner11、真实PG阶段仓储17），关联批28 passed、2 deselected、exit0（155.31s）；两项历史 A covered正向 fixture缺原截图/policy故明确排除，B真实producer代替其正向证明。主控核 [完整独立证据](/private/tmp/aid-agent-runner-m4-domain-b1-independent-evidence.txt)、[范围清单](/private/tmp/aid-agent-runner-m4-domain-b1-independent-inventory.json)、[最终56生产源](/private/tmp/aid-agent-runner-m4-domain-b1-independent-source-final.json) 与 [27测试/辅助源](/private/tmp/aid-agent-runner-m4-domain-b1-independent-tests-final.json) 零漂移，生产源完全匹配v2冻结，独立CR无剩余 P0/P1/P2。
 
-旧图片错误复现与两个启动快照捕获瑕疵如实保留，关联批按运行前既有见证/运行中和结束hash及唯一写入者事实核对，不补造启动记录，不机械重跑掩盖记录缺口。外部模型/桌面为localhost协议替身，内部API/CLI/Engine/Runtime/PG/费用owner实际运行；原opaque公开下载政策保持，外属拒绝证明限已鉴权Runner附件守卫。[实际清理](/private/tmp/aid-agent-runner-m4-domain-b1-independent-cleanup.json) 本片专属进程/fixture根0，不明旧库0连接明确排除，master/Yohar未动。批准解除共同56源冻结进入B2通知实接；B2/Browser/客户真机尚未认证，完整M4未完成，无默认Web切换、提交或部署。后续共用源改动按受影响范围重新核验，B1清单不冒充未来版本。
+旧图片错误复现与两个启动快照捕获瑕疵如实保留，关联批按运行前既有见证/运行中和结束hash及唯一写入者事实核对，不补造启动记录，不机械重跑掩盖记录缺口。外部模型/桌面为localhost协议替身，内部API/CLI/Engine/Runtime/PG/费用owner实际运行；原opaque公开下载政策保持，外属拒绝证明限已鉴权Runner附件守卫。[实际清理](/private/tmp/aid-agent-runner-m4-domain-b1-independent-cleanup.json) 本片专属进程/fixture根0，不明旧库0连接明确排除，master/Yohar未动。批准解除共同56源冻结进入B2通知实接；B2/客户真机尚未认证，完整M4未完成，无默认Web切换、提交或部署。后续共用源改动按受影响范围重新核验，B1清单不冒充未来版本。
 
 B2通知只读预审完成，尚未接线或验收：原 HTTP的 started/unknown事实须在root及全children取消证明中保claim/resources，不能凭设备调用列表为空或后来禁用配置宣布安全；低频扫尾只读原事实，不发新 POST。已知原 ACK可由有效原 attempt观察并在有限原事实证明下提交审计，取消阻断下一段、@及拒绝后重试；跨epoch不得借新owner权限。全部必需 markdown与@确认后才标 sent，缺段但已有 ACK只能记录部分/failed。冻结原 policy版本、内容/段数/@摘要、配置版本与简历绑定，凭据继续仅在现配置中。纯原已知 ACK审计不能被后来配置变更抹掉，新派发则必须校当前配置；Engine/Worker不增加业务名称，不引入通用通知编排。
 
@@ -502,259 +498,13 @@ B2 v2定向正式CR通过，P1关闭，无剩余 P0/P1/P2，61源起止零漂移
 
 首 binding前的已派发 Notify无domain事实仍按verification保守拒恢复/释放：现StopRequested的内存异常不能提供跨进程no-commit/no-HTTP证明，也无法与旧无phase活动CP区分；prepared及已完成binding/policy零HTTP已有安全路径。该限制已源读核对，不在本片添加通用admission框架，不将无证据窗口宣称可自动续接。
 
-Browser最小落地只读预审按四片推进：可信归属→跨进程观察→原调用续接→关闭确认。原 `run_db` 缺root Runner/worker/wait，create/suspend审计允许best-effort；Runner分支必须改为可信执行树/原call/wait/run/assistance/browser owner epoch的PG绑定。原API票据后直接订阅本进程、缓存身份不足，票据须带可由服务器fresh复验的登录授权参考，不能仅持subject字符串自证；消费票据后及sidecar实际owner均重核权限/归属。复用 `Controls.assert_completion_in_tx` 与 Recovery有限completion口，人工完成不入旧enqueue_resume→新Agent/重复history链；原Runner新attempt续同orchestrator。页面断开仅detach，显式取消须实际关闭证明；远端request_cancel成功不等于已关闭。Worker停服回收parked runtime/manager/monitor，owner丢失或 `--once`进程退出明确核对而不重建未知动作。具体最小DDL/配置/API开工另审，当前仅预审，未部署或运行浏览器验收。
-
-Browser公开卡片沿用现 `presentation.browserAssistance`→`runnerMessages`→HumanAssistanceCard。当前投影只设置 human_required，`useAgent.hasBlockingBrowserRequest`仍将pending/controlling/resume_queued视为阻塞；新分支在完成、取消、owner丢失及二次wait必须提交正确公开状态/ID，不能Runner终态而卡片仍pending。M4查询本身需足以刷新卡片，不依赖M5订阅；现MessageItem的旧continuation流会追加response，新Runner不得与累计轮询并行重复追加。安排原页面窄适配和对应刷新/二次wait/唯一输出验收，不换界面。
-
-页面接点已只读核实：HumanAssistanceCard挂载及完成成功都会查询旧continuation，MessageItem将其中response追加正文；Runner-owned消息按可信runnerID分流，只观察原Runner，legacy续接保原。取消接口接受后也不能直接沿旧卡片的本地cancelled状态宣称浏览器已关闭，须由实际关闭证明与公开查询状态更新。旧assistance/wait的迟到结果不得改写二次协助的新卡片，本段属于后续接线及页面验收门槛。
-
-Browser第一片精确盘点：run_db实际使用的 bs_browser_runs、bs_browser_assistance_requests、bs_browser_resume_jobs未在现双DDL定义；不假定线上已有或结构相同。补实际基础列及existing增量nullable Runner字段，legacyNULL保原，不凭CREATE IF NOT EXISTS认为旧表已补列。原root/execution/call→run唯一，mandatory启动行starting、原RunStore租约与executor启动后才live；二次wait保同run新assistance。原jobs只初始化兼容legacy，Runner不往旧恢复队列写。实际DDL/绑定/端口第一片稳定后正式审查和独验，后续sidecar/亲和/原调用完成/关闭/公开card分别接线。
-
-首片预审补充两个竞态门槛：原等待ID复用 `DurableControl.decorate_wait` 的root/execution/call/kind/assistance语义，PG绑定与Engine不能各造一套ID。人工完成或自动监测可能在Runner尚running、尚未park时到达；须先保留可重试的可信完成事实，再与原wait幂等桥接内部控制，或提供等价停驻协调证明。不得先将Redis标completed，再因现控制仓储要求parked而丢失完成机会；不能为此放宽所有普通控制的状态守卫。实际续接片独验覆盖完成早到、重复完成、park后消费及二次wait，当前仅预审，尚未验证。
-
-首片8生产源已实施至仓储/协议层，尚未装配Runtime/Manager：双DDL、系统表文档、Browser绑定仓储/受信endpoint/中性owner端口、共享wait身份和DurableControl复用。独验准备17个有界真实PG形态，涵盖fresh/增量/replay、legacyNULL原行、部分绑定拒绝、root/child原call与二次wait、跨身份拒绝、真实CAS回滚、锁等待跨租约到期及Browser lease独立于Runner park；native执行树fixture不冒真实Browser启动证明。开发首迁移1 failed、exit1（0.81s）在测试提前访问尚未由原migration runner升级的watermark列，未进入Browser增量断言；仅修测试tracker初始化并保失败版本，生产不为此改变，正式冻结/独验待完成。
-
-Browser storage v1正式按 [8源清单](/private/tmp/aid-agent-runner-m4-browser-storage-v1-source-sha.json) 和 [7依赖见证](/private/tmp/aid-agent-runner-m4-browser-storage-v1-dependency-witness-sha.json) 冻结，主控核对15源零漂移；开发迁移同1重验 passed、exit0（7.29s），8源起止一致，首失败保留。[交接边界](/private/tmp/aid-agent-runner-m4-browser-storage-v1-handoff.txt) 明示仍未装配实际Browser/Redis/runtime。正式CR与独立17 PG形态并行，类型及同名约束/索引旧结构兼容也纳入审查；编译/仓储activate状态转换不冒真实executor启动或Browser整体通过。
-
-独验首17实际PG形态 passed、exit0（56.92s），15生产/依赖及8测试辅助源统一首末零漂移；基础仓储正确性已有证据，尚未正式放行。CR发现P2旧结构缺口：错误fencing类型、同名非唯一/错误predicate索引或弱/未验证CHECK可被IF NOT EXISTS静默保留，安排旧版最小真实复现与有限修复。主控核原migration runner逐语句savepoint容错、失败只阻止水位而不回滚整个块；本Browser DDL及catalog检查须自具原子语句边界并在真实runner下验证不兼容时无部分应用，不为本片改造通用migration框架。
-
-v1正式CR起止8源及7依赖全匹配，P0/P1=0，剩余P2共3：上述旧结构及迁移原子性为一项；`bind_wait`在Browser lease检查后还可能等assistance锁/唯一插入，提交前须独立fresh复核原live epoch租约；currentAttempt.worker须等于原Browser owner，activate/wait还须核实际run完整tenant/user/session归属，不能借原CP引用换执行进程。安排旧版真实PG最小复现后只修该Browser仓储和本块DDL，首17通过不替代这三项门槛，不提前放行或接通生产入口。
-
-旧版DDL最小实际复现1 failed、exit1（7.13s），15源/9测试辅助源统一首末零漂移：将原owner租约列改成TIMESTAMP后调用实际migration runner，其报告82条成功并将水位从00:33:38推进到07:56:08，错误类型被静默认可；测试原拒绝断言失败，finally恢复原类型并实际replay至fresh结构。另3个native仓储旧版负向复现尚在运行；未改变受验生产源，不把旧缺陷复现计作通过形态。
-
-旧native负向3 failed、exit1（9.18s），15源/10测试辅助源首末零漂移：真实唯一INSERT锁等待跨Browser到期、有效current worker B借live A、实际run用户错归属的activate均未按原断言拒绝；foreignwait后续断言因activate先失败尚未执行，不补称已复现。原等待事务已rollback、线程join及fixture清理完成，旧日志/测试版本保留。主控仅释放双DDL与Browser绑定仓储供v2定向修复，必填当前受信boot/epoch并做原worker/完整run归属与提交前Browser租约检查，其余共有依赖不扩改；修复后的实际独验/CR待完成。
-
-v2有限DDL采用本块单一原子DO及实际catalog校验，两个事务内临时LIKE参考表显式解析预期CHECK后按各自relation规范化对比，结束DROP，不存业务数据；不比较含物理列序的raw conbin，也不改通用更新器。首开发fresh setup exit2为PL/pgSQL CASE条件括号SyntaxError，尚未进入pytest，原版本/日志保留；修正后实际fresh成功、同迁移1 passed（3.59s），随后原fact身份核对收口后的末版定向开发自验与25形态正式独验待完成。
-
-Browser storage v2 [8源码](/private/tmp/aid-agent-runner-m4-browser-storage-v2-source-sha.json)/[7依赖](/private/tmp/aid-agent-runner-m4-browser-storage-v2-dependency-witness-sha.json) 正式冻结，主控核15零漂移；[版本变化](/private/tmp/aid-agent-runner-m4-browser-storage-v2-delta.json) 限双DDL、绑定仓储及必要表文档，其余4源/7依赖与v1相同。末版定向开发5 passed、exit0（17.35s），8源真实首末一致；开发依赖7末版对比先前v1真实见证相同，不伪造新的developer依赖起始捕获。[v2交接](/private/tmp/aid-agent-runner-m4-browser-storage-v2-handoff.txt) 明示仍仅仓储/协议基础层。
-
-v2正式delta CR通过，旧3P2关闭，剩余 P0/P1/P2=0，8源及7依赖起止零漂移；单DO实际split一条、原子catalog验证/临时表回收、当前boot/epoch/worker与原完整归属及提交前独立Browser租约核对均经源码复审。独立25实际PG形态仍运行，15源/10测试辅助源统一capture成功才launch；正式放行须两道门共同完成，不以CR代替实际数据库证据。
-
-**Browser仓储v2基础片正式验收通过（2026-10-02）**：25个不同实际PG形态（8迁移/约束、17明示native原调用仓储契约），完整末批 passed、exit0（77.49s），不是旧17加新25累计42；旧DDL1及native3失败保原加载版本和日志，修后拒绝/回滚断言全部到末。主控核 [独立完整证据](/private/tmp/aid-agent-runner-m4-browser-storage-independent-evidence.txt)、[25范围清单](/private/tmp/aid-agent-runner-m4-browser-storage-independent-inventory.json)、[最终15生产/依赖](/private/tmp/aid-agent-runner-m4-browser-storage-independent-source-final.json) 与 [10测试/辅助源](/private/tmp/aid-agent-runner-m4-browser-storage-independent-tests-final.json) 零漂移且源完全匹配v2；正式CR无剩余 P0/P1/P2。
-
-实际fresh/增量/replay/legacyNULL及兼容旧ID/时间类型保持；不兼容catalog在真实更新器下水位不进、整schema及三表原行无部分改变，锁等待过期与错worker/boot/epoch/实际run归属拒绝均成立。[实际清理](/private/tmp/aid-agent-runner-m4-browser-storage-independent-cleanup.json) 自有进程/fixture根0、自有隔离库均不存在，session-local参考表随已删除测试库不存在，不补称曾查询保留会话tempcatalog；不明旧库0连接排除不删。批准释放15源进入真实producer接线，仍未启动Browser/Redis/helper、未证明实际executor启动/人工接管/跨进程续跑，完整M4与默认切换待后片，不提交/部署/master或Yohar重启。
-
-下一producer片保持中性工具owner端口由应用层实现；原Browser Manager强制PG starting先于公开注册，实际executor及原Redis fence成功才live，park保原runtime与独立Browser lease。当前旧Automation/Orchestrator的广泛catch Exception会把权限/CP失败转换普通工具失败，Runner owner权威异常必须透传到Runtime/Worker中断处理，不能由此释放未知效果claim。共享root锁内只接受原调用资源事实和必要child→祖先CP，不能用旧全树覆盖其他live子任务消息/模型/阶段；实际关闭证明、完成早到桥接、fresh票据/sidecar及原卡片传输继续逐片验收。
-
-producer预核补实际关闭基线缺口：原Manager先移除executor引用后吞close失败仍标终态，LocalExecutor force_reap二次wait超时仅log也可能返回closed=True；新Runner必须依据实际回收/CloseResult，未确认保原引用/claim并核对，不能以取消请求或乐观close返回当关闭。只回收本次确属资源，不全局清浏览器。权威异常穿透覆盖内部重试、fill Enter忽略异常及PageOps将fence错误转普通结果的路径，不只外层catch。临时producer能力未开启的durableRunner须任何Browser IO前明确不可用，不降到legacy人工恢复链；待完整Browser能力闭合，标准Runner自动使用原owner，不要求客户额外配置。
-
-后续真实续接还须核Agent动作scope与原FencedExecutor owner对象的一致性：有Agent scope却不匹配不能静默当human/frame跳过当前Attempt核验。新attempt有限重绑定原manager/原Browser epoch的control/state/UsageScope/ToolCtx，不新造Browser epoch；人工输入和帧继续独立Browser租约及fresh授权，不能被旧已park的Runner lease绑死。届时实际第二attempt命令与用量/fence共同验证，本段未称已接通续接。
-
-后片只读复核还确认：原人工确认sampler借用orchestrator.page_ops，而其executor已由Agent owner包装，停驻后旧Runner lease会拒绝快照。人工确认须通过原Browser租约的观察通道，保持同一个底层executor、命令序号及IO锁，不另造PageOps计数器或放宽Agent动作fence。原恢复候选全局LIMIT 1且Worker的RunnerError会reject_resume；Browser亲和必须在prepare/reject/消费前先筛，并在短领取事务中重核当前worker/boot/epoch/DB clock，非owner跳过仍活owner的控制，有界扫描不能阻塞其他会话。完成事实只标原leaf待恢复，实际原orchestrator续原call后配对结果，不把未经续跑的raw fact伪作工具completed。本段为源码确认及后片门槛，观察片仅复用Hub，不承担人工确认或恢复。
-
-跨进程鉴权提案已审：私有一次票据引用实际tokens.id，不保存bearer；消费后和sidecar分别fresh核原token行、当前用户/角色/tenant/会话及Runner/run/epoch，每input/complete/cancel都核，帧周期复验。完整内控endpoint路径由服务配置固定，不只核origin；非owner跳过候选而不消费/拒绝清掉活owner控制，领取事务前重复worker+boot亲和，无队头饥饿。原continuation task安装新UsageScope/ToolCtx/fence。
-
-本机仅找到缓存redis:7-alpine镜像、未有Redis服务/二进制，memory降级不能证明跨进程票据/lease。实际Browser验证阶段已启动task专属临时依赖helper，共享现测试容器网络、仅127.0.0.1独立端口，无publish/持久卷；测试角色管理准确资源清单并结束清除，不改现master/Yohar配置或重启。实际PING成立，缓存镜像无拉取、只读容器及tmpfs无持久数据卷，资源归属见[依赖账本](/private/tmp/aid-agent-runner-m4-browser-producer-redis-ledger.json)。此为本机隔离验证依赖，不是项目代码部署；真实Browser与票据/lease尚未认证。
-
-真实producer首次开发窗90671 exit 1（18.58s），18生产源首末一致；再次74973 exit 1（19.23s），19生产源及3测试辅助源首末一致。实际测试页面GET成立，但Browser行已FAILED/closed、原工具已completed，等待到的下一模型请求是主模型而非Browser决策，因此不把等待信号当实际Browser成功。保留各失败原源码与测试版本；原PageOps返回稳定错误码的只读观测继续定位，不放松live绑定、实际资源关闭与计费断言。单独实际Playwright/Chromium about:blank启动及关闭成立，仅证明依赖可启动，不代替原worker协议或producer验收。
-
-关闭预核再发现原worker_main先置closed=True再吞子资源关闭异常，会向父进程返回不真实ACK。有限修复要求实际page/context/browser/playwright关闭成功或原生可证已关闭后才清引用；失败返回CLOSE_UNCONFIRMED、保留待核资源，不能仅凭父进程退出推断子资源关闭。Worker只调用通用factory生命周期hook，具体Browser回收由应用组合根在任务drain后、PG pool关闭前按当前boot完成。本段为开发与审查门槛，实际严格关闭及legacy兼容仍待独立验证。
-
-第三诊断窗85637 exit 1（17.82s），原PageOps观测确认PG starting先于Redis公开、原executor启动成功、导航成功，但实际snapshot返回WORKER_COMMAND_FAILED；实际close ACK及resource_close_confirmed成立。故当前故障收窄到原BrowserWorker snapshot内部，不猜Browser权限或模型原因。独立只读审查另确认Linux dead worker leader的提前return会遗漏原owned PGID里仍存活的Chromium：须沿启动时实际确认的原进程组尽力有界回收，不能猜组或全局kill；即便强收成功也不代替原关闭ACK，资源回收与业务关闭证明分别判定。失败page/context在祖先实际成功关闭后只能据真实关闭事实清除，不能把任意TargetClosed异常文字当证明。
-
-进一步真实分层证明静态set_content后的body读取在semantic调用前已Target crashed，不能由单独launch成功或Semantic.generate的success/空元素推断页面可用。只读容器资源观测暂无OOM或pids/CPU限制证据，运行架构与renderer约束继续定位；不改master配置、重启或用简化快照隐藏失败。另冻结前CR发现P1：Runtime接ToolSuspension后的旧Redis get_assistance/bind_agent失败被转为普通工具结果，在mandatoryPG等待已绑定且Browser仍live时可错误释放claim；新durable路径须权威穿透或由原PG绑定明确承担归属，legacy政策保原。正式验证纳等待绑定后故障、无普通终态与claim保留。
-
-producer candidate v1有限19源冻结，主控与独立CR核首末SHA无漂移。关闭ACK/祖先实际关闭、ToolSuspension权威marker、通用factory生命周期hook、Agent scope匹配、内部catch穿透及禁用0IO失败源读闭合；但正式CR仍有1项P1：原组消失后保留的历史PGID可被其他组复用，延迟shutdown再signal不得凭数字认原归属。按原Local内存资源handle核当前leader或原成员PID/出生身份，观察组空即永久撤销signal权；缺实际证明只保核对，不杀未知组，不新增全局进程registry。当前candidate不放行，真实producer仍未通过，关闭关联独验待v2稳定。
-
-运行环境只读核实际aarch64容器/image/Chromium一致，未证架构混用；Playwright 1.62.0 / Chrome 151.0.7922.34，原stderr仅有限关键词分类见共享内存tmp目录EACCES，未输出原页面/日志。单变量实际诊断移除有效disable-dev-shm-usage（显式和Playwright默认）后静态页面读取与关闭成立；随后更有区分力的单变量保原flag、只改TMPDIR=/tmp，同样页面读取及关闭成功。实际ambient临时目录父非当前UID所有、祖先非全可遍历，service_processes另把TMPDIR设到pytest fixture.root。优先纠正测试专属Linux临时目录与renderer权限，主控撤回尚未实施的生产启动参数/compose修改指示，实施者确认两者未改。不因测试环境私有目录修改生产共享内存策略；默认CLI实际producer正向仍须通过。[Playwright官方容器说明](https://playwright.dev/python/docs/docker)仍作为容量门槛参考，现64MiB与一张测试页不构成复杂页面或并发容量证据，当前容器不重启/部署。
-
-candidate v2正式delta CR通过，P0/P1/P2=0；19源首末SHA一致，仅Local原生leader/member出生身份及signal撤权修复，其余18沿用原审查。测试Browser-only私有Linux/tmp目录0700保原启动flag实际页面读取/关闭/目录回收成立，通用Processes仅该fixture作用期换TMPDIR，其他既有测试行为保原。首次默认CLI正向45893 exit 0，1 passed（21.09s），实际Browser决策请求/PG live绑定/独立Redis lease与Chromium后代成立，末端实际关闭、PG closed/lease清除、claim释放、3物理receipt合计54 tokens与唯一0.01 record均通过。实际预捕及结束936路径为源码/测试依赖witness，不是936测试；当前只是开发验证，不代替独立producer验收。原authority两形态、park与新增关闭/等待故障边界继续有限验证，不开启sidecar/续接、不标完整M4。
-
-开发关联窗66454 exit 0，3 passed（57.21s），真实bind/activate PG故障穿透、wait先于suspension及park后独立Browser租约续期、SIGTERM实际关闭但原Runner claim保留到末，19生产及加载依赖首末一致。关闭窗61904 exit 1，5 passed / 1 failed（2.49s），失败在deadleader仍有活后代的前置，实际后代已自然退出、尚未调用close，不能冒生产reap失败。保原版本/结果；必要真实PID信号timing DI仅用于构造原组存活窗口，不替close/ACK/归属。独验准备14个唯一形态（原4、close6、等待后IO故障2、禁用/子执行2），实际CLI与原资源、真实PG触发器及有限IO/proc/timing DI口径分别登记，尚未称正式通过。
-
-deadleader定向开发64099 exit 1（7.25s），原close已按预期返回unknown verification，后置因fixture STOP了非原PGID的Chrome而超范围要求全部退出；保失败，不扩大生产kill权。只STOP实际原组成员的有界真实timing DI改正后78551 exit 0，1 passed（2.21s），close6开发至末，原19及加载witness无漂移。有效开发10形态与后续独立14分开，不累加重验充数。正式窗口尚未启动前又确认WeakSet生命周期缺口：native非Human runtime、renew失败结束后Manager↔Owner循环可被GC，未确认关闭的原句柄从Factory可见集合消失。按原process资源容器强持实际manager，confirmed close与PGclosed均成功才仅释放自身；不新业务registry、不在CP保存对象，legacy弱引用保原。单BrowserOwner v3后追加GC/重试/释放隔离窄验证，再冻结独验。
-
-下一观察sidecar片只读预审可开工但当前不写共享源：原hub帧/sendlock/latest可复用，原view_ws含输入不可整路拷贝；native只观察、明确拒input/complete/cancel，完整后片仍需恢复原交互。固定完整endpoint及专用gateway peer，单次票据持原tokens.id私有参考，消费/实际sidecar及无帧periodic均fresh校验，PG/native证明缺失不能回legacy。Factory通用open真实监听ready后才acquire，静态endpoint冲突failclosed；多worker按实际不同endpoint部署配置，不凭同URL猜owner。停服按tasks drain→停止新观察/关闭自有WS及资源→sidecar→PGpool，Browser独立租约支撑parked观察，不借已park的旧Runner Attempt授权。此为下一有限片门槛，非已接通sidecar或人工完成/续接。
-
-candidate v3强生命周期delta正式CR通过，P0/P1/P2=0；19起止零漂移，仅BrowserOwner变化，其余18复用v2。实际native一call一manager及PG原call唯一run约束成立，确认资源且PGclosed提交后仅discard自身，未知/PG异常保原句柄，boot cleanup可发现。最终生产19＋共用依赖145去重164冻结。独验B1 native6 exit 0，6 passed（3.37s），实际164生产及5加载测试辅助源预捕/结束无漂移；原组timing、原生close IO DI及proc观测DI按真实口径记录。GC开发首2在不存在from_checkpoint的fixture调用前置失败（3.73s），尚未进入Owner/Browser IO，仅修新测试使用真实restore。后段实际ProfileCatalog初始化读取14个既有SUBAGENT资源，正式启动前另捕14成为178；先前只算所选profile的165准备见证被更正，不回填B1及关联批原164窗口，也不把路径数作新增代码或用例。
-
-正式B2首批21214 exit 1，8 passed / 2 failed（169.69s），178源及27测试辅助源首末零漂移。禁用案例末断言错误地要求整个Redis命名空间为空，包含正常用户缓存；子任务在25秒期限前未达到末端断言，旧私有日志已随fixture清理，历史超时原因不补猜。定向B2r 49561 exit 1，1 passed / 1 failed（50.90s），原25秒诊断实际见5物理请求、两个child已完成、Browser已关闭、无owned Browser PID，随后CLI及Runner正常完成；末SQL误用不存在的agent_execution_id字段，尚未走完收据/claim断言。仅修测试使用真实runner_execution_id/runner_tool_call_id，保所有末端断言；原失败与加载字节保留，不改生产或加入兼容假列。
-
-**Browser实际启动与归属小片正式验收通过（2026-10-02）**：末定向61992 exit 0，2 passed（46.50s），178源/27测试首末零漂移，实际child绑定、root及已完成sibling保全、6物理收据applied/正确execution归属、原claim释放全部到末；禁用时Browser及原工具等待/续接键为0，正常用户缓存允许。最终16个唯一新形态=实际Worker8＋原生关闭6＋Manager GC2，另10项旧协议/存储/实际Local关联通过（83927 exit 0，1.68s），重验不重复计数。真实默认CLI、驻留原方法probe、实际PG触发器、Redis方法IO故障、原组时机/proc观察DI及原仓储契约GC fixture分别标明，外部模型/页面为loopback测试服务；不声称真实Redis网络故障、OS PID数字复用或客户站点通过。
-
-主控已读[完整独验](/private/tmp/aid-agent-runner-m4-browser-producer-independent-evidence.txt)、[唯一清单](/private/tmp/aid-agent-runner-m4-browser-producer-independent-inventory.json)，并实际核[最终178源/资源](/private/tmp/aid-agent-runner-m4-browser-producer-independent-final-source.json)和[35测试辅助源](/private/tmp/aid-agent-runner-m4-browser-producer-independent-final-tests.json)当前SHA全部匹配，复用正式v3 CR无P0/P1/P2。[实际清理](/private/tmp/aid-agent-runner-m4-browser-producer-independent-cleanup.json)自有Browser/Chrome/pytest进程、四类实际临时目录、fixture Redis键及自有隔离库/连接均0；不明旧库排除未删。唯一精确Redis helper按授权保留供下一片复用，不称所有资源归零，测试角色台账负责最终清除。批准解除源码冻结，唯一实施者进入跨进程只观察sidecar，独立测试/CR分工继续；人工接管、完成桥、同Runner原Browser续接及卡片仍未验收，完整M4/default Web切换不提前完成，不提交或部署。
-
-观察片已进入实施：应用侧BrowserWebAuth/ViewTickets/Sidecar/ViewGateway与薄API分流，Factory中性open/close及实际ready检查；无新增DDL，不接人工输入或完成桥。固定内部端点本片仅支持直连HTTP，实际bind端口必须相符，HTTPS/TLS代理不冒充已实现；握手整体5秒有界，撤权先有界关闭外侧观察，再回收上游WS。单独真实监听/端口冲突/关闭自检通过只证明生命周期，不作为Browser画面证据。首实际park→独立API→sidecar→原Hub双观察开发窗95071已结束，189源/资源及39测试辅助源预捕；独立风险矩阵与测试仅准备，尚未正式验收。producer与view临时guard在完整Browser接管/续接/取消/card闭合时一起收口，不给客户遗留额外功能开关，服务端endpoint/内部凭据配置按实际部署保留。
-
-首开发95071 exit 0，1 passed（24.99s），189源/资源及39测试辅助源首末零漂移，原Browser等待后的真实JPEG跨进程、双观察者单方断开与另一方继续、Browser lease/Runner claim保留及停Worker实际PGclosed均到末。本窗只证明正常查看，不算授权负向或正式独验。随后只读CR确认HTTP票据接口P2：原草稿先PG判别，再认证，匿名可凭404/503/401区分记录和配置；仅修薄API先fresh登录、native先完整归属授权再禁用状态/出票。前版通过保原source，后版定向happy与真实HTTP反向须重验。正常legacy PG行runnerNULL保原路径，旧best-effort审计缺行现在明确404 failclosed，不声称Redis-only故障行为全不变。
-
-后版82540 exit 0，2 passed（47.70s），189源/资源及40测试辅助源首末零漂移；匿名及warm缓存后实际删除token的native/legacy/missing三路径均401，foreign不能先取得disabled状态，原owner才可见disabled503。主控已核[观察v1交接](/private/tmp/aid-agent-runner-m4-browser-observation-v1-handoff.txt)、[10变源](/private/tmp/aid-agent-runner-m4-browser-observation-v1-source-sha.json)及[189组合清单](/private/tmp/aid-agent-runner-m4-browser-observation-v1-combined-source-sha.json)当前SHA全匹配，10变源=9 Python＋YAML，共用code去重175＋实际SUBAGENT资源14。生产正式冻结，独立源码CR与真实授权/票据/无帧/传输/监听/关联独验已分派并行；未把两项开发通过或准备AST作为正式通过，不提前放行观察片或完整M4。
-
-观察v1正式CR完成，189源/资源首末零漂移，P0/P1=0、P2=1：observe在await授权后才登记views，停服关闭快照可能漏掉在途握手，其后仍accept/subscribe。最小修法在首await前纳入原views，并在accept前再核accepting，沿原集合cancel/gather，不新增registry。当前独验3433实际8项窗口仍运行（189源/43测试预捕），先保持v1不改；原sandbox wrapper exit127未进pytest的启动环境失败单列保留。等真实退出与结束捕获，再单sidecar更新及delta CR，并补真实socket/原授权时机探针，不能以正常关闭案例代替在途停止竞态。
-
-独验B1 3433已真实退出，exit 1，6 passed / 2 failed（165.40s），189源/43测试首末一致；正常双观察/HTTP先鉴权、warm-cache后真实token撤销/改绑/过期3、实际删除PG行而原Redis/Hub仍在时拒绝1分别到末。两个失败源核为测试期望/调度：平台管理员NULLtenant正向已收到真帧，降为普通角色后WS也及时断开，最后HTTP按既有TenantMiddleware确为400而非fixture预期403；无帧case在订阅前等待capture报告，但原frame_loop仅有observer才capture，尚未进入WS/撤权末断言。只修测试400与真实订阅后等capture次序，保无JPEG/撤权/lease要求及旧版本。主控授权先在v1做仅在途授权停止的真实socket时机反例，原Browser仍live以免资源关闭掩盖lateaccept；该窗口退出后才释放单sidecar修v2，正式观察仍未验收。
-
-旧v1停服时机单例36324 exit 1（21.60s），189源/42测试首末零漂移：真实stop_observations已返回，释放原授权后仍WS accepted并收到原JPEG，而断言要求denied。原Browser保持live，故不是资源关闭、超时或假Hub结果掩盖，P2因果实际成立。原反例/源码/加载测试及finally清理保留，真实结束后主控只释放browser_sidecar.py最小v2修，其余188源/资源冻结；修后沿同一个反例和准确的两项fixture末断言验证，不扩大Worker/Engine或新增registry。
-
-观察v2已单源修并冻结，主控实际比较[189 v2清单](/private/tmp/aid-agent-runner-m4-browser-observation-v2-combined-source-sha.json)与v1，只有browser_sidecar.py变化，其余188完全相同，当前所有SHA匹配；原生单源编译exit 0。连接登记前移至首await前，accept前再检查停止状态，原finally discard及原views关闭集合沿用。[单源交接](/private/tmp/aid-agent-runner-m4-browser-observation-v2-handoff.txt)交定向CR，正式独验原停服反例及两修正fixture和剩余风险边界继续；旧v1任何通过/失败按实际加载版本保留，不冒充统一末版通过，当前尚未验收观察片。
-
-观察v2关闭竞态定向CR通过，189首末SHA一致。独验B2 46864 exit 0，3 passed（74.31s），189源/45测试首末一致：同停服反例如今真实拒绝但原Browser仍live/claim保留；NULLtenant平台管理员正向画面及降权后WS断开、原HTTP400到末；无帧case真实订阅后原capture调度被时机gate暂停，尚无JPEG时删除真实token仍5秒内断开，Browser租约继续。
-
-独验B3 99430 exit 1，7 passed / 2 failed（139.01s），189源/48测试首末一致：实际一次性票据竞争、专用peer/完整proof、Redis出票IO失败、默认CLI监听冲突/HTTPS/端口不符、JPEG发送等待时撤权均到末。两传输失败是测试包裹路由缺WebSocket类型注解，框架在原探针前拒绝；保加载测试与失败证据，只修注解。B3r 55625 exit 0，2 passed（44.90s）；补完整末断言后B3r2 95980 exit 0，2 passed（44.71s），原5秒整体握手实际4至8秒内失败、重定向目标0请求，原claim/live/未来lease保全。相同两唯一案例不重复计数。
-
-B4 86042 exit 0，7 passed（149.81s），189源/47测试首末一致：真实用户停用/改租户/会话改绑三种撤权，以及原同步授权方法在独立线程等待时PG浏览器租约继续，新增4项；实际旧Browser工具→原API/Hub/JPEG及原默认CLI完成/驻留park三项关联到末。模型/页面为loopback，capture/send/授权/握手时机或IO DI逐项登记，不声称实际数据库锁或客户站点验收。[v1/v2清单](/private/tmp/aid-agent-runner-m4-browser-observation-independent-inventory.json)共22个新唯一＋3个关联，6个v1有效案例按单sidecar差异复用，未称全量加载v2。最终189源/资源及58测试见证捕获，实际Chrome/driver/API与自有Worker/pytest/临时目录/Redis键/隔离库均0；未知旧库未删，唯一Redis helper继续按精确台账保留。
-
-最终范围复核新增selected-tenant P2：NULL租户平台管理员拥有A/B真实会话时，HTTP选A仍能为B native run出票或获知disabled状态。主控仅放开browser_runs.py/browser_web_auth.py两源，v3在原fresh subject及完整实际binding后要求显式非空选定租户与actual tenant一致，先于disabled/Redis NX；无header原管理员正向及内部WS真实身份不变。主控实际核[189 v3源](/private/tmp/aid-agent-runner-m4-browser-observation-v3-combined-source-sha.json)零漂移，187项与v2相同；两源编译exit 0，独立delta CR新P2闭合且P0/P1/P2=0。受影响实际租户边界/原正向/HTTP顺序独验已分派，结果未返回前不验收观察片，不冒称先前22项加载v3。
-
-**跨进程只读观察片正式验收通过（2026-10-02）**：v3定向10445实际exit 0，3 passed（79.92s），新增所选租户边界1及既有管理员/HTTP顺序2重验；无header/匹配header收到原JPEG，错header在enabled与disabled均403、Redis无票据新增，原waiting/claim/live/lease续租保全。主控已读[版本汇总与唯一清单](/private/tmp/aid-agent-runner-m4-browser-observation-independent-v3-inventory.json)、[独验记录](/private/tmp/aid-agent-runner-m4-browser-observation-independent-v3-evidence.txt)，并实际核最终189源/资源及59测试见证SHA全部匹配。共23个新唯一＋3个关联，重验不累加、历史v1/v2加载版本和全部失败未覆盖，187项未受v3两源影响按明确边界复用；独立CR P0/P1/P2=0。实际自有进程/隔离库/键/临时目录0，未知旧库排除，唯一Redis按精确台账保留。仅验收查看，不包含人工输入、完成桥、原Browser续接或完整M4。
-
-下一段范围经只读讨论收窄并批准实施：先服务端原call续接（原PG completion事实、park后幂等control桥、亲和先于prepare/reject及consume事务重核、新Attempt重绑定原owner、原sampler/原orchestrator真实恢复），再单独native人工HTTP/WS动作与现卡片/页面接线。前段受信内部完成端口验证真实Browser/PG/新Attempt/用量/兄弟保全，不拿仓储fixture冒actual resume，也不声称用户操作已贯通；原Epoch、页面、IO锁及命令序号保持，无新Agent/恢复队列/DDL。观察验收清单封存，解除下一片相关生产源冻结，继续唯一实施者、独立测试、只读CR三角色；默认Web切换、提交和部署未授权。
-
-服务端续接预审确认五项实现门槛：Browser与既有Local恢复证明组合，核心Engine不分工具业务；活owner的worker/boot亲和筛选在authorize/prepare/reject之前，有界候选页继续寻找其他可执行任务，claim消费事务再核原run/wait/epoch/独立lease；完成事实允许早于ToolSuspension真正park，只有park提交后才同cursor生成稳定幂等control并更新事实水位，回调丢失由本boot强保留manager的有限扫描补桥；新Attempt在原root锁内重绑同owner/manager/orchestrator，并安装当前ToolCtx/UsageScope，保原PageOps序号、页面及已完成兄弟；human快照仅复用已核原raw Browserlease能力，不放开任意executor或输入。原resume_from_human会追加确认步骤并行动，调用前须持久标记continuation-started；重复recover及结果未知不再调用，owner丢失也不清原control/claim/resources，公开核对态。内部完成口独立于legacy的Redis completed→旧job队列及其finalize/clear失败分支，仅共享纯采样与predicate逻辑。以上为下片验收条件，尚未声称实现。
-
-续接首开发窗已启动31210，191源/资源＋61测试family见证03:52:26UTC预捕成功，运行中生产及已加载辅助源冻结，尚未有退出结果。12个Python源（2新私有completion/recovery＋10现有接线）逐项编译及现有容器相关模块import实际exit 0；源码组合为观察175实际路径重新核SHA＋2新模块＝177 code，加原14 profile资源＝191，主控实际核当前12/191全部匹配。准备7组独立风险矩阵及首真实resident原call fixture，准备AST不算运行通过。新树预flight类型错误安全化、单资源错误不退出Worker、相同verification投影幂等、终态/取消桥接竞态及已保存结果不重执行均待实际验证。主控要求本窗结束后将Browser＋Local恢复安装收口到RuntimeFactory应用装配，Worker只取得中性端口，保显式注入/customFactory；该有限装配delta另记版本，不把本窗结果冒后版认证。原12源范围无DDL、用户HTTP人控、卡片或默认切换。
-
-首开发31210实际exit 1，1 failed（70.80s），191源/61辅助源首末零漂移。真实末诊断为原Runner waiting/attempt1、Browser live、2个observed收据，没有completion fact/control/trigger report，未进入完成方法；测试源码定位import worker后runpy以__main__重新定义RuntimeFactory，使原patch不作用于实际类。原加载probe字节、失败日志与首末捕获保留，仅修fixture直接调用原worker.main，所有续接末断言保留，不能把未触发路径称生产通过。窗口结束后仅worker文件收口默认恢复组合到Factory中性端口，编译及development-2新版清单后再跑同一实际happy；本时点续接仍未验证。
-
-后开发82640实际exit 0，1 passed（29.05s），191源/61测试辅助源03:56:42→03:57:27UTC首末零漂移，主控实际读加载测试与捕获并核当前SHA全匹配。原owner真实完成采样后进入Attempt2，保同manager/orchestrator/PageOps/raw executor、业务seq增长且确认步骤只增1；原run/boot/epoch、起始页面仅1次GET、browser_complete consumed_attempt2、4个物理收据applied/72token、原费用0.01与1记录、claim释放、原Browser实际closed/自有PID0全部到末。单Worker装配delta将默认Browser＋Local组合移RuntimeFactory中性recovery_port，显式注入优先/customFactory无端口保既有Local；不声称前版本加载此收口。12源再次compile及相关import exit 0，正式191生产冻结，独立7组有限风险与相关回归、12源只读CR开始。仅开发正常链路通过，早完成/重复/第二wait/亲和竞争/已开始未知/结果缓存故障及正式首段验收仍待。
-
-续接v1交接[范围与契约](/private/tmp/aid-agent-runner-m4-browser-continuation-v1-handoff.md)及12源字节已封存。正式B1 52313实际exit 0，1 passed（28.54s），191源/61测试首末零漂移，原正常续接全部末断言到末，不复述开发结果充独验。完整CR首末191一致，P0=0、P1=1组、P2=2，尚未通过：已有合法resume/reply竞争或单owner坏CP可从桥接hook退出整个Worker；wait有效性使用FOR UPDATE前求值的时钟；pause撤销未消费内部control后，observed fact永久挂旧ID不能续接。
-
-旧v1真实过期锁反例52913实际exit 1，1 failed（4.77s），191源/62测试首末零漂移。原native PG声明/绑定仓储契约fixture，不冒真实Browser或采样；真实assistance锁等待在到期前已由pg_stat_activity观察，跨数据库时钟原expiry后释放，record_fact仍成功写completion_ref/observed且Browserlease仍future，期望拒绝未发生。主控实际读原断言、首末捕获及安全日志事实；未走到期望异常后的CP/control末断言，不称其通过。锁rollback/线程join、自有库/进程/键/目录清理实际0，Redis精确helper继续保留，原反例日志与测试版本保存。窗口全结束后批准有限v2：桥接正常竞争保fact返回、坏CP有限形状安全化，锁后及提交前fresh wait/Browser lease核；旧observed未消费fact因pause被拒时，只有后续合法显式resume实际消费且重新park、pause/cancel已解除才稳定重新关联，保旧控制历史，不借pause前resume或另一child reply自动继续。started/效果未知不重放，无新DDL/队列/框架；源冻结后定向CR与原反例、真实控制竞争/pause回归继续。control已消费但尚未start的暂停窗另列待核，不冒称本修覆盖完整Browser暂停。
-
-续接v2已封存[定向交接](/private/tmp/aid-agent-runner-m4-browser-continuation-v2-handoff.md)：191项仅completion仓储1源改变，12源编译exit 0，尚无v2运行验证，不能把v1正常通过换称v2通过。追加只读CR确认第三个P2：原browser_complete已在Attempt2消费，但原动作的started尚未写入时发生合法暂停，后续Attempt3会被旧消费编号挡住；Engine恢复入口已清waiting，暂停保存后原completion/wait资源仍在，claim证明只取node.waiting也会在start之前挡住恢复。该窗口目前是源码确认，尚无实际复现结果。
-
-独立测试明确当前实际pytest 0、无v2源码加载窗口，主控批准v3只修completion/recovery两源。保原browser_complete唯一消费历史；仅真实PG仍observed、原root/leaf/call/wait/ref全吻合且当前checkpoint.applied_control_id为同Runner当前Attempt实际consumed的显式resume，才许可首次started。claim定位仅凭合法observed completion及精确原browser_waits资源找回原assistance；现有wait冲突拒绝，无completion仍强要求原wait，started未知不重放，completed第二wait不得借旧assistance通行。无新control、二次消费、Engine业务分支或DDL。独立测试准备真实Engine已清waiting、原adapter start前暂停再resume3的窗口，与未消费control被pause撤销的场景分开；冻结后与原过期锁反例、控制竞争、坏CP及有界既定矩阵一并独验，避免明知缺门槛仍重复v2批次。完整Browser服务及M4仍未验收。
-
-续接v3已正式冻结[交接](/private/tmp/aid-agent-runner-m4-browser-continuation-v3-handoff.md)，12源编译exit 0；主控实际读v1→v3完整diff并核当前191项零漂移，同路径仅completion/recovery两源改变、其余189不变，组合清单SHA为`7a59d298f6157ffa791252ca9eba4dd13b87f490891ade1ca6a7aa5472b95978`。已批准独立测试原过期锁反例及真实控制/暂停/第二wait风险组，与只读CR并行；尚未得到v3运行结果或CR通过。实施者仅准备下一人工动作接口方案，不提前改公共入口或解除生产冻结。
-
-续接v3定向独立CR完成，P0/P1/P2=0，191源首末均与冻结组合清单一致。原v1 P1组、过期锁/未消费pause两个P2及追加已消费但start前pause P2在真实Engine→claim→start源码路径闭合；只复用其余189未变源既有审查，不冒已运行v3竞态。原等待行锁后及提交前fresh DBclock、当前合法resume与原唯一消费历史分离、清waiting后精确资源定位、started未知拒重派、第二wait不借旧assistance均已只读核验。独立运行证据仍待，不验收完整服务片或M4。
-
-续接v3独验B2 67435实际exit 0，3 passed（15.36s），191源/64辅助源04:31:49→04:33:15UTC首末零漂移，主控已实际核清单、退出见证、日志通过行及原过期锁完整断言。原52913失败同强反例现拒绝`BROWSER_COMPLETION_WAIT_EXPIRED`，fact/ref仍NULL、checkpoint/revision原样、control0；坏CP类型守卫及claim事务锁等待跨Browser lease到期也拒绝并保原控制/claim/attempt。均为真实PG声明仓储契约，不冒真实Browser采样或恢复。后续真实resident控制竞争、两种pause窗口、第二wait与started未知组仍待，整片未验收。
-
-续接v3独验B3 41920实际exit 1，3 passed/2 failed（153.08s），191源/64辅助源04:33:43→04:38:08UTC首末零漂移，主控实际核捕获/退出记录及加载测试。未消费桥被pause撤销后显式resume/repark、真实Engine清waiting后已消费但start前pause再resume3、started未知关原Worker后不重派三项全部末断言通过。pending竞争在pytest查询新PG连接时遇OperationalError，失败安全事实为Attempt3/running、resume2和browser_complete3已消费、fact仍observed、Browser live、原resume0、收据2；不能判生产已成功或自动归为暂态，原私日志清理后不重构历史原因。第二wait到Attempt3、两completed事实/两确认、5物理收据/90token、Browser closed/PID0，固定费用断言期望0.01实际0.02失败，真实定价核查及定向重验待，不删除收费断言或改生产压平费用。原失败加载字节封存，三个有效通过不机械重跑，整片未验收。
-
-续接v3定向B3r 73358实际exit 0，2 passed（67.26s），191源/64辅助源04:42:11→04:45:16UTC首末零漂移，主控实际核清单/通过日志及加载helper。pending同源单次重验原竞争/延后桥接到末通过，原OperationalError未归因仍保失败；未加自动吞错重试。secondwait实际每收据冻结价格input1/output2、factor100、原model/main boundary符合fixture，独立Decimal计算每次`100*(11*1+7*2)/1e6`，5次0.0125按原向上取整到分应0.02；记录1/扣费一次、两确认、原页面/对象、Browser关闭、claim释放到末通过。仅测试费用期望按真实规则校正，生产191未变；新价格断言只这两条实际执行，不冒原B3三个旧加载用例也执行了新增断言。剩早完成重复、owner丢失/缓存故障、公平分页/真实child+sibling及关联组待。
-
-续接v3独验B4 35212实际exit 0，3 passed（82.56s），191源/64辅助源04:46:20→04:49:52UTC首末零漂移，主控实际读退出见证/定向命令/通过日志及完整三条测试。早完成并重复实际采样两次在原park前保同fact、无control，park后唯一consume/确认到末；原owner真实shutdown后新CLI不消费原accepted control/不增Attempt/不重开Browser，保claim核对；原finish已提交后原Redis清理方法IO注入故障，原Workerinterrupted，显式resume的新CLI复用原knownresult，不重复原确认/Browser动作，实际结果/4物理收据/费用/关闭/claim末断言通过。已明确缓存故障为外部方法IO注入，不称真实Redis宕机。公平分页、真实child+sibling及坏CP实际Worker隔离/必要关联仍待，源码继续冻结。
-
-续接v3独验B5 63535实际exit 0，2 passed（122.92s），191源/67辅助源04:50:26→04:54:50UTC首末零漂移，主控实际核退出见证/清单及完整两测试。16个foreign boot仅真实PG native仓储契约，不冒16个Chromium；后面的1个真实resident Browser由原Worker keyset跨poll越过页界处理，foreign原checkpoint/控制/claim不变、收据0。真实Browser child完成保同child/task/call绑定，已完成兄弟model/messages/tools/output/resources完全保留、父工具结果正确配对，7物理收据归root2/兄弟1/Browser child4，126token、单记录0.02、原页面仅1GET、原对象/确认、Browser关闭/PID0/claim释放到末。坏CP真实Worker隔离及Local/legacy Browser必要关联待，新增唯一暂14（含明确v1正常1及v3不同组13），失败与开发重复不累加。
-
-下一人工动作片取消预审进一步沿完整调用链纠正主控初步判断：Worker虽调用Local命名的取消组合口，`local_recovery`实际已合入`browser_facts.cancellation_facts`，原Browser live不会因Local列表空被判ready；现缺口是仅观察PG关闭证明，没有主动关闭原Browser的动作能力。服务端取消须经应用层中性能力请求原Browser实际关闭，由既有证明核资源关闭与PGclosed后才释放claim；原boot丢失或关闭效果未知仍保claim核对，不能仅发cancel或写closed冒关闭成功。本时点只登记待实现边界，不扩当前v3冻结。
-
-下一片只读方案已收窄：现take/complete/extend/cancel HTTP格式及同view WS输入格式保持，当前主体/所选租户/原PG绑定与每条action权限重新核验；复用原PageOps序号、raw executor及IO锁，不建第二Runtime/队列。延长采用原assistance单nullable `extended_at`与`expires_at`同事务水位，Redis后提交投影，不把期限镜像散放祖先/叶CP。人工权限拒绝独立普通错误，只拒绝输入/断观察，不Runner故障或强制回收；IO锁内写IPC前再核，已写frame后的页面断开由原owner有界收ACK，不取消原命令。真正Browser lease/协议/派发后超时保既有安全处理。自动完成只原owner `complete_owned`/双采样/PG事实桥，不走旧resume job；后续前端独立片按Runner快照更新现卡片，native旧continuation轮询/append不得与快照重复，取消接受不冒实际closed。本时点仅方案，未批准191源解冻实施。
-
-人工动作权限方案另明确：take/input/extend/complete复用当前Runner执行许可及实际leaf许可，动作开始沿原恢复口径核余额，逐IPC写前至少复验当前执行许可、pause/cancel与原资源权限；不把观察权代替执行权、不另创main许可或逐IO余额政策。自动监测由原owner基于当前持久主体执行，不依赖旧页面票据/Bearer有效性，登出/关闭页面不取消Runner。原已派发ACK/result/费用/完成事实仍可保存；cancel按当前本人归属/read许可，不因订阅或余额阻止停任务。
-
-坏CP真实隔离测试的只读契约进一步明确：owner桥接hook须有限typed失败隔离，不退出整个Worker；后续候选preflight发现`CHECKPOINT_TREE_INVALID`可按既有规则拒绝本次resume。此路径会改变control状态/清待恢复指针，不能称控制完全未变；须不消费、不增Attempt、不改原CP/wait/completionFact、不释放claim、不派发或收费，并继续处理其他健康任务。已确认具体Browser owner/resource丢失的preserve_control分支仍保原accepted控制核对，不能与损坏CP拒绝混同。本时点为只读复核，实际B6待。
-
-续接v3 B6 64048实际exit 1，legacy关联1通过/坏CP隔离1失败（50.64s），191源/69辅助源首末零漂移。失败未观察到scope typed守卫，实际末Attempt2、Browser closed、typed计数0及AttributeError类；未到control末断言，不将其解释为accepted/rejected预期问题，也不从已清私日志猜历史AttributeError根因。源码核当前fixture的after_park等待期间调度器仍可能提前consume，测试时序没有限定在预期Attempt1窗口。保原69加载字节后，仅测试延迟原_acquire_next并加真实park/Attempt1/无lease/控制未consume前置断言，不造领取结果或Browser异常。
-
-续接v3 B6r 60659实际exit 0，1 passed（29.01s），191源/69辅助源05:07:39→05:08:56UTC首末零漂移，主控实际核捕获/通过日志及前置和完整末断言。真实原scope typed错误被原owner扫描隔离，后续恢复合法reject `CHECKPOINT_TREE_INVALID`、consumed_attempt NULL，坏CP/原wait/fact不变、Attempt1/claim保留、无新Browser动作/费用；原Worker仍alive并完成另一合法会话。损坏CP未洗回健康以放行后续动作，生产191无改。Local原终态freshCLI兼容关联B7运行中，明确补捕实际device协议叶`src/local_tools/security.py`，源码见证192不冒原191已涵盖该叶。当前新唯一15及已过legacy关联1，最后Local关联/汇总/清理待。
-
-**Browser服务端原call续接正式验收通过（2026-10-02）**：最后Local关联B7 36372实际exit 0，1 passed（31.98s），192源/69辅助源首末零漂移。主控已实际读[唯一清单与版本边界](/private/tmp/aid-agent-runner-m4-browser-continuation-final-inventory.json)、[完整独验](/private/tmp/aid-agent-runner-m4-browser-continuation-independent-evidence.txt)，并核10正式窗口各自源/测试首末一致、真实退出记录及最终192源/69测试当前SHA全匹配。冻结v3的191均包含且一致，额外Local实际security叶1独立注明。新增15唯一＝历史v1正常1（改动正常路径由v3真实链路直接覆盖，不冒B1加载v3）＋v3仓储3/真实resident8/公平1/child1/Worker隔离1；legacy及Local关联2，失败/开发/重验不累加。复用v3只读CR P0/P1/P2=0。所有历史失败、费用断言校正、时序/缓存IO注入和未知历史错误仍保留。
-
-[实际清理](/private/tmp/aid-agent-runner-m4-browser-continuation-final-cleanup.json)自有隔离DB/UUID键/Runner与Browser/API/pytest/Chrome/driver/临时目录均0，未知旧DB0连接排除未删；精确Redis helper继续按测试台账保留，未新增helper或称所有资源归零。批准解除下一片有限生产源冻结，唯一实施者接native人工take/input/complete/extend/cancel及同owner自动完成监测，独立测试与CR继续。复用上述有限动作/权限/关闭证明方案，延长单PG水位，IPC写前拒绝与可能已写分开，断观察不取消命令；无第二Agent/Browser/队列、核心Engine工具业务分支或客户Runtime协议变更。前端现卡片/停止/核对状态独立后片，完整M4、M5订阅、渠道、默认切换仍待，不提交或部署。
-
-native人控片实施范围已明确：纯PG action/once-extension仓储与同owner命令/权限应用编排分模块，工具只中性Protocol/错误/scope；API、sidecar及gateway薄接线，Factory安装中性资源取消能力，Worker不识别Browser业务。root追加实际序列门：原worker `last_seq+1`严格连续，原PageOps `_fields`先递增；正常拒绝若在DTO构造后不写IPC会烧号。优先原Local IO锁内先Browserlease与fresh human guard，再同步deferred原PageOps字段/命令构造、write_started、完整frame/ACK；输入及手工/自动sampler共用原序列/cache，无scope旧路径保持，不放宽wire或加counter。动作参数须预验证，builder不能await，确定未write的取消/到期不耗号不reap，部分write后不rollback。已派发task由原owner强持/shield收ACK，bootshutdown有界排水；强门验证拒绝一次后合法input、completion采样、原resume仍连续成功。本段为已授权实施/准备门槛，尚无新版源码冻结或行为通过结论。
-
-人工动作片当前实际进度（2026-10-02）：实施者报告15个Python文件编译及隔离容器内有限Actions/Repository/Sidecar/原路由导入均exit 0；生产仍在开发态，未冻结、未启动真实动作验收，不将编译视为行为通过。已收口native action以PG期限授权、Redis同原assistance CAS投影不将queued/resumed倒退controlling、complete保原bac响应标识。独立测试准备7组矩阵及真实HTTP/WS人工正常链路，旧续接69辅助源和历史证据封存。
-
-取消关闭新增有限门槛：Factory捕获本次immutable Attempt及原boot/fullbinding，通过中性scope在Local原IO锁内首次Close写入与原序号分配前复核；普通拒绝不强reap、不清handle/token、不释放claim、不永久锁住关闭状态，不退出整个Worker，保未知核对证明。boot清理仍按原owned handle证明。PG已commit延长而Redis投影失败时，重复native extend可重投同一已存期限，只延一次；已完成不得重新取得输入或延长权限。上述是实现及验收要求，尚无真实竞争通过结论。
-
-开发态只读审查又确认两处需本片修复：旧API按run挑当前pending/controlling wait、sidecar及Actions先做live观察授权，导致原wait已resume_queued或进入第二wait后重复complete读不到原PG完成事实。幂等响应须以URL原assistance精确读取持久fullbinding/fact，fresh身份/所选租户/原owned会话核验独立于新动作许可，不重采样或操作第二wait，也不弱化view/input授权。native request_cancel提前写旧Redis取消flag后，原renew任务可能绕过IO锁内拒绝另行close；native取消须仅沿当前Runner取消授权和实际Close证明收口，legacy及真实lease丢失/boot清理保原证明。
-
-Redis投影修复有实际边界：原raw assistance与session gate已完全TTL过期时，PG单期限仍不足以可信重建bac/predicates，当前片不猜造事实，只支持原raw/gate存续窗口修复。M7稳定原bac/挂起投影事实后补自然过期恢复验收；native人工采样不能以Redis旧期限否定PG合法延长，普通拒绝不能升级owner故障。投影需核实际读回，不能将底层吞掉写错误当成功。本时点仅开发态发现，尚未修复验收。
-
-人工片有限修复接线报告：关闭旁路涉及原run_manager，实际范围增为16 Python＋双DDL＋表文档；native request_cancel不预写旧Redis取消flag，原Close scope取得真实证明后走原FINALIZING。重复complete加入精确原assistance完成事实的独立只读授权；native采样去除Redis旧期限裁权，投影同CAS并核读回。原raw/gate/bac遗失仍明确projection unavailable，待M7持久事实收口。当前等待新compile/import及源码开发窗冻结，未运行行为测试。独立测试正常链路已准备：真实WebAPI/WS接管、原IPC键鼠/页面事件、原采样、原call Attempt2、唯一费用与实际关闭；不替换Owner/DAL/结果。
-
-人控v1开发窗已冻结并交sole测试角色：[自包含交接](/private/tmp/aid-agent-runner-m4-browser-human-v1-handoff.md)，19实际delta＝16 Python＋双DDL＋表文档；combined195＝原最终192＋新仓储/动作2模块＋表文档，含原14运行时资源。实施者16编译/有限容器导入实际exit 0，主控实际核195当前SHA零漂移，combined清单SHA为`ca4966ceedcb733ec84c102c8d60e85550e6977adecbfdec25817dde1a74b55a`。正常真实HTTP/WS人工链路单项开发测试已调度，源码及加载辅助冻结到实际exit/end；尚无行为结果，完整7组独验与正式CR待。
-
-人控v1正常开发链路48591实际exit 0，1 passed（38.77s）；195源/72辅助06:01:50→06:03:24UTC首末及主控当前SHA均零漂移。主控实际读[退出证据](/private/tmp/aid-agent-runner-m4-browser-human-development-1-run-evidence.json)、[链路证据](/private/tmp/aid-agent-runner-m4-browser-human-development-1-evidence.txt)、[清理核验](/private/tmp/aid-agent-runner-m4-browser-human-development-1-cleanup.json)及pytest末通过行，并读原测试末断言：viewonly拒绝不消耗fields，同WS真实take后3合法键鼠触发虚拟本地页面实际输入/ready事件；原manual sampler与同orchestrator/PageOps/rawexecutor/原call续接Attempt2，confirmation/control各1，4实际applied receipt72 tokens/.01 record1/claim释放/原PG closed/PID0。虚拟模型和页面IO，不冒真实客户系统验收。自有隔离资源实际核0，未知旧DB排除，原精确Redis有意保留。仅开发协助正常1，不计已完成正式7组；批准复用此事实并开展余6风险组/必要关联及同195正式CR，前端/M5/M6仍待。
-
-人控v1正式源码CR P0/P1/P2=0，主控实际读[报告](/private/tmp/aid-agent-runner-m4-browser-human-v1-architecture-cr-report.md)、meta及历史工具结果转录，并核当前195/归档字节；报告诚实区分先前首末工具核验与06:10:53UTC后补交文件，未伪称历史逐文件预捕。仅源码门通过，独验未完成。正式B1 41454实际exit 0，2 passed（7.23s），195/73首末及主控当前SHA零漂移；主控实际读新增迁移测试/退出证据，真实fresh nullable TIMESTAMPTZ、原legacy NULL行增量/跳过/强制重放全等、水位推进，以及错误TIMESTAMP真实updater回滚/不推进水位/不改行均到末。测试字节保存发生在launch后、观测exit poll前，匹配真实pre哈希，保存时点另录，不冒预捕。其余人控风险组与页面仍待。
-
-下一M4页面片安全状态先决已由主控/实施者实际读源确认：当前`project_user_event`仅初始required写browserAssistance，take/extend/complete/hold/finish/cancel未持续投影；native Card不能只停旧pending或靠HTTP ACK猜终态。下片须以原PG wait/fact/run与Runner状态作有限安全展示投影：原查询一致读取派生，或原root锁同cursor materialize并推进view_revision，具体小方案先只读核定，不能散落写JSON或被parked DurableControl旧快照覆盖。M5事件/公开状态同cursor留接点，不现在扩events/schema。现卡片只传可信message.runnerId后读原Runner快照，native不旧bac轮询/append，legacy保持；当前195正式窗不改，待人控风险验收后实施。
-
-下一片只读版本门补充：仅query derive而不推进公开水位时，两次相同view_revision的迟到get/list会把controlling退回pending，不能凭前端接受equal认为安全。实施者/独立审查有限比较：统一safe projector在原root锁同cursor物化并变化时view_revision++，或保一致derive但全部相关PG领域writer同cursor推进公开版本、共享有限projector；两者须覆盖take/extend/fact/start/finish/closed/hold/newwait/terminal、防旧snapshot/aid回退，M5挂同cursor事件。最终只选一种，不新增framework/DDL/核心Engine工具分支；当前仍只读方案，195正式测试冻结。
-
-下一页面片最终选择A（方案通过，未编码）：统一纯安全card projector＋cursor helper，复用public_snapshot.browserAssistance与view_revision，不新增DDL/events/执行状态。原root锁同cursor按将保存的实际CP/当前PG完整原wait/fact/run证明投影；take/extend/fact/start/finish/hold/newwait/closed/terminal，以及generic save/park/stage/ack/finalizer共用有限口，旧aid不盖合法第二wait，display确变化才推进独立view水位，generic已有view++保留，不改执行revision。record_runtime_state先root再run/assist，禁止末helper补root形成逆锁。Engine仍不识别Browser业务，公开只原allowlist；M5后续同cursor挂事件。当前195正式风险窗不解冻，不再并行实现两套方案。
-
-人控B2 34408实际exit 1，1 failed（38.50s），195/75首末零漂移。主控实际读退出证据及旧loaded测试/原probe：resume_calls在内存入口增加，但原报告仅finally发布；真实provider决定已held，重复complete后断言读取旧报告resume_calls=0，末释放后观察到原resume1/success/confirmation1。终态末断言未到，不冒通过或已确认生产缺陷。保原loaded75/日志，只tests修入口发布并等实际入口；B2r 81942同node已启动，新195/75真实pre首字节冻结。正式其它风险组继续准备，当前CR与生产195不变。
-
-人控B2r 81942实际exit 0，1 passed（42.93s），195/75首末及主控当前SHA零漂移，主控实际核退出证据及pytest末行。旧aid在原control已消费、真实provider决定held的窗口重复complete返回原bac，采样/complete/resume各原次数、原control1、confirmation1、4实际receipt72tokens/.01 record1/claim释放/PID回收末断言到末；首B2失败照存，不补写成当时已观察入口。角色NULL→非admin的400仅身份/middleware证据，不冒执行许可。正式B3单真实组合已启动：tenant执行状态撤销/余额0时原ticket/query/WS仍读，新动作0IO拒绝，最后本人read取消必须沿真实关闭证明收尾；195/76加载冻结。独验仍部分进行。
-
-人控B3首40315 exit 1（29.30s），195/76零漂移；仅测试误把原Browser HTTPException的detail.error_code当顶层KeyError，保旧bytes，只修错误读取。B3r 6000真实exit 1（59.04s），观察ticket/Runner GET/JPEG仍读、take/complete/input真实TENANT_UNAVAILABLE零fields/sample/resume及原claim/live均到，但read cancel接受后30s仍finalizing Attempt2/revision18，PG Browser仍live/未closed，实际收尾未通过。不得继续归因于错误形状、租户停用或延长等待冒通过。
-
-主控暂停其它新批与下一片编码，唯一因果B3d 24888真实exit 1（59.77s），195/77首末零漂移；实际读[安全阶段](/private/tmp/aid-agent-runner-m4-browser-human-independent-B3d-safe-cancel-phases.json)/退出记录：原Factory进入、PGguard3次成功、真实Close ACK closed/OK/write_started/frame_written全真、原reap进入返回process_live=false，但Local.close未返回/抛出，Manager.finalize/Owner.close未进入。观察器仅原方法透传、threading.Lock只自身报告IO，不改结果。无历史私日志或等待栈证明时不猜根因；CR确认取消链无execute/credit，finalizing也可能来自错误保留，单末行不足证hang。当前原Task get_stack/cr_await函数/行号＋done/cancelling有限诊断B3s 35863已启动，195/77冻结，无locals/参数/正文；重点证伪或证实画面task取消被stderr cleanup吞掉、死进程画面循环与close gather的等待关系。原源码CR0只代表之前源审门，不代取消运行验收。
-
-人控B3s 35863实际exit 1（62.28s），195/77首末零漂移；主控实际读[原Task等待链](/private/tmp/aid-agent-runner-m4-browser-human-independent-B3s-safe-cancel-phases.json)/退出记录，10s时关闭调用在Local.close:332等待frame_task gather，原frameTask未完成/cancelling_count=1、仍在_frame_loop:358→sleep；process已死，stderrTask已done、ACK闭合true，finishstderr/reap已返回。源码对应_finish_stderr吞当前取消，frameLoop仅引用非NULL而不看process退出，形成实际收尾循环等待。此为实证运行缺口，不将历史源码CR0当解除。
-
-已准唯一实施者只释放Local两个叶做v2：死进程画面循环退出、stderr清理正确传播调用方取消并区分子stderr自身已取消；其他194冻结，保v1原字节。不得提前closed、跳ACK/reap/PG关闭/claim门或扩kill范围。新v2编译/manifest/归档与CR后，同原权限撤销＋read cancel实际节点优先复验，原30s不放宽，再恢复其它风险批。自有隔离资源06:55:30实际核0，未知旧库排除、精确Redis仍有意保留；新IO/自动监测/Close拒绝测试只准备未运行，不冒通过。
-
-人控v2仅Local两个叶，195项manifest SHA `f624c39a07ffb9bd9c4a3a542ca1b083d0ee7d394af84e91fff7695c2b505e91`；主控实际读交接/精确v1→v2 diff并核当前195零漂移，其余194字节不变。单源编译/import/diffcheck实际0；独立定向CR P0/P1/P2=0，两次195/current与loaded校验07:00:17及07:00:32 UTC均0，报告登记时间与历史工具校验时间分开。关闭证明与PGclosed/claim门未弱化。
-
-v2正式B1 71549实际exit 0，1 passed（31.71s），195/77首末0、pre实际测试bytes封存；主控实际读run-evidence及当前测试末断言。原tenant停用/余额0时读仍可用、take/input/首次complete零IO拒绝，本人read cancel沿原关闭链完成；原30s不放宽，真实Browser PGclosed/lease清除/PID0/claim释放、2receipt36tokens/.01 record1且无新模型全部到末。v1 B3r/d/s失败原证据保留，不据此宣称整个接管片验收；v2 B2已启动接管延期＋IO排队/断开风险，195/81冻结，自动监测、部分写入未知及关闭拒绝等剩余边界待验。
-
-v2 B2 69033实际exit 1，1 passed/1 failed（82.16s），195/81首末0。主控实际读退出证据与IO测试定义：无效DTO/原IOlock排队中执行权限撤销零fields/序号拒绝，恢复后真实pointer/keyboard；原完整帧写入后hold ACK、断开WS，原强任务接收ACK，同PageOps采样/原续接及计费/claim/PID末完整通过。该完整帧hold不冒部分写入证明。延期测试原PG只延期一次、真实Redis CAS投影失败及相同expiry重试已到；测试先等后续模型再释放投影gate导致自身超时，最终投影未覆盖，未证生产缺陷。保失败bytes，独验只修gate观察释放顺序单跑B2r，不延长gate或改源。自动任务当前权限的负向、真实2字节部分帧未知及关闭拒绝跨原续租仍待实跑。
-
-延期B2r 79018实际exit 1，1 failed（37.33s），195/81首末0，gate仍自身超时，末状态未验。主控读原complete_owned/owner.record_completion与ResumeStore确认native仅提交PG完成事实/bridge，不像legacy切Redis resume_queued；因此等待该Redis状态并非有效native观察点，不将测试超时归生产挂起。要求测试改等真实PG/原resume入口后释放原9s gate，再核单完成事实/控制消费、原expiry与计费资源末；若单验Redis已queued投影不回退则须明示实际Redis状态契约DI，不能冒native自然状态推进。A页面继续从PG导出唯一公开快照，不为通过测试新增缓存状态机。
-
-延期B2rr 36571实际exit 1（34.85s），195/81首末0，原9s gate释放、延迟HTTP200/同expiry/完成事实保留已到；测试把consumed Attempt2错误等同已started，而实际合法phase仍observed，终态未到。仅测试改phase单调及原ref后B2rrr 5752实际exit 0，1 passed（39.33s），195/81首末0；主控实际读退出证据、末行与测试断言：真实PG一次延期/Redis CAS失败后的同expiry重试、原完成ref/phase不回退，真正completed/4receipts72tokens/.01 record/claim0/PGclosed/PID0到末。正常推进不被误判回退，旧失败保持原scope。
-
-v2 B3 69608实际exit 1，3 passed/2 failed（102.58s），195/89首末0。旧Attempt在原IOlock内拒绝关闭、零seq/原handle-token保留、10.5s真实续租推进/无旧Redis旁路取消/另一SID健康到末通过；原stderr子task单独取消与调用者取消两契约通过。自动已核真实PG停用时多次guard拒绝且无新增采样/完成/control，但测试错误读取尚未发布的base报告，token失效及终态未到；仅修独立观察器，单auto B3r已启动。
-
-部分帧真实向原stdin写2bytes+drain后故障，write_started=true/frame_written=false，原cancel持久blocked/waiting、PGlive/未closed、ownerPID0已到，但bootcleanup汇总BROWSER_CLOSE_VERIFICATION_REQUIRED使CLI exit1，测试原clean_exit断言失败，FIFO/费用末未到。主控、实施者及独立CR实际读关闭链：Manager逐key、worker逐同bootManager捕获继续最后汇总抛错；Factory finally仍关sidecar，run_worker finally仍关logs/PG pool。不存在此case跳过其余关闭的源码证据，也不把nonzero当执行期崩溃。保持原未知关闭故障汇总契约与195源；批准测试明确核exact typed退出1及实际listener/pool清理，并验原PG/claim/FIFO/费用/无重放末，不能仅放宽退出码冒通过，尚待实跑。
-
-自动B3r 63032实际exit 0，1 passed（45.71s），195/89首末0；主控实际读退出证据/观察器：当前PG执行权限撤销时多次原guard拒绝，零新增fields/sample/fact/control，恢复后真实DOM操作；页面token失效401，原持久任务仍按双采样继续，同原call/PageOps、automatic confirmation0与真正终态/4receipts72tokens/.01/claim0/PGclosed/PID0全到末。
-
-部分帧B4 60257实际pytest exit 0，1 passed（34.65s），195/90首末0；原被测Worker仍明确expected exit1，新增透传观察器实际核exact BrowserOwnerFailure/BROWSER_CLOSE_VERIFICATION_REQUIRED、sidecar socket/task关闭及logs/PG pool原关闭返回。PG保持live/未closed、原blocked/claim保留，PIDs0，原会话下一任务被默认新CLI阻塞且无模型IO/重放，2observed receipt36tokens/无chatrecord/余额不变全部到末。生产195未改变；首B3未知收尾失败范围照存。
-
-正式新风险11 unique均到末（v1 DDL2/权限重复完成1；v2读取消/IO/延期/自动/Close拒绝/部分帧各1＋stderr2），开发辅助原正常1另记角色，不将重试重复计数。关联B5 68599实际collect exit2/0.41s，198/91首末0：旧phase3顶部import已移除的Agent私helper，尚未执行业务；关联额外Agent/User/SaaScontext三源码仅新窗捕获，不回填此前195。批准仅测试将旧源码/私helper断言迁为新Engine/LegacyRuntime实际暂停/已执行siblings不重复及pending延后行为，公共continue_tool_call兼容节点保留，旧有效HumanControl/ResumeStore/API关联待验，不为collect加生产假helper或skip。
-
-现并行放行A片前端8源及尚未import的新增projector准备，均不属于活关联Python198；既有后端/导入口/配置/DDL仍冻结，关联实际退出后才释放后端写口。人控完整兼容验收与A片独立测试/CR均未提前完成，前端继续原界面及用法，无默认开关/部署/提交。
-
-人控最终关联B5r 59388实际exit 0，41 passed/0 skipped（4.31s），198/92首末0；主控实际读run-evidence并现场核198源码及92测试当前字节均零漂移，无前端路径。close6、executor3及legacy人控32（含原公共continue_tool_call）通过；两旧Agent源码/私helper测试仅迁为现真实Engine暂停/siblings/等待恢复行为，没有伪造生产helper或skip。正式新11＋关联41及v1全源/v2唯一Local独立CR0构成人控服务端验收，原开发辅助正常1不混正式计数，v1运行失败和所有测试观察点失败保持原范围。源码198为195人控＋关联新捕三既有依赖，不冒此前窗已含三叶；最后清理汇总待独验整理，精确Redis继续留给后续片。
-
-主控已读[人控最终清单](/private/tmp/aid-agent-runner-m4-browser-human-final-inventory.json)/证据与清理汇总：实际07:45:49 UTC封198/92，07:45:55自有DB/API/Runner/Browser/Chrome/driver/pytest/namespace/tmp均0，未知旧DB排除0连接，精确既有Redis意留；源CR、各历史版本和18运行窗的通过/失败范围及role独立登记。global diffcheck实际2仅本任务models.py EOF空行，交唯一实施者在A片删除该空行并登记纯空白delta，不据此重跑已验业务。
-
-主控已释放A片后端写口，实施者完成已开始的前端8与有限后端projector/写口；旧198验收只对应封存历史，不用新合法A片修改误称漂移。A片新快照/版本/终态metadata/第二wait及页面交互需要独立新冻结测试和CR，无默认切换或部署。
-
-A片实际职责门补充：通用Runner仓储/执行/恢复/控制/Finalizer写口仅调用同cursor中性公开状态投影口，不能各自import Browser projector、查询Browser表或按Browser phase分支。有限application_public_projection组合已安装应用能力，唯一Browser projector负责完整原绑定/PG事实/白名单；新增工具只扩应用投影组合，不逐个修改核心写口，无注册表或新框架。实际边界预计20源（原18＋中性组合1＋models纯EOF空白1），以正式冻结清单为准，尚未测试/CR。
-
-A片v1正式冻结（2026-10-02）：[交接](/private/tmp/aid-agent-runner-m4-card-v1-handoff.md)及20修改源、268有限源码/依赖/资源见证已核；组合清单SHA为`53706509a542d0b29565f8aa7eb40186da88b4db10a96be414d2feeae57ddb5d`，主控现场核当前字节和封存loaded-source均零漂移。20源为12 Python（含中性组合及Browser projector两个新增模块、models EOF纯空白）和原前端8源；268不是一次测试实际导入全部项的声明，也不是全仓库递归冻结。人控198基线之外的前端/新增模块不虚构历史pre。12编译/最小容器导入及global diffcheck实际exit0；最终前端build会话96917实际exit0，日志[build4](/private/tmp/aid-agent-runner-m4-card-development-build-4.log)。早期build1/2为测试fixture类型问题，唯一测试者修复；build3早于末次mapper/reactivity修改，不作最终依据。没有业务/交互通过声明。
-
-主控已调度同268的独立源码CR及唯一测试者真实resident Browser卡开发协助用例，先核domain take/extend/complete、原Worker终态、Web get/list与PG历史同一权威投影；实际运行结果待登记。随后独立前端11节点、后端3存储形态及原页面交互验证，不重复已验人控11＋41。继续复用唯一精确Redis helper；无新容器/重启、DDL、事件框架、默认开关、提交或部署。完整M4待此片和其余门槛闭合。
-
-A片开发综合用例实际会话10769已启动，实际pre在08:28:26 UTC捕268源/资源及26有限测试/辅助见证，[pre元数据](/private/tmp/aid-agent-runner-m4-card-v1-development-1-meta-start.json)。该角色仍是唯一开发协助，正式独立节点另计；结果与清理待实际退出登记，不将启动称为通过。
-
-开发10769实际exit1，1 failed（22.54s），268/26首末零漂移，[退出证据](/private/tmp/aid-agent-runner-m4-card-v1-development-1-run-evidence.json)。首次Web query/list与PG snapshot/view三项一致已到；随后fixture误将既有公开revision列为禁项失败，接管/延长/完成/终态未到。主控实际核public_runner既有allowlist，批准唯一测试者仅修期待；未到的result.assistant_metadata期待同样不存在于既有四字段public_result，不扩生产契约来迎合测试。末验保真实history metadata与terminal snapshot一致、private pending_finalization意图原样。该次[清理](/private/tmp/aid-agent-runner-m4-card-v1-development-1-cleanup.json)自有进程/DB/namespace/tmp均0，未知旧DB仍排除，唯一Redis按账保留；修正后重抓tests/pre再验。
-
-开发2会话92433已实际启动，同268源、27测试/辅助pre，prefix `/private/tmp/aid-agent-runner-m4-card-v1-development-2`；新增有限hash-only原Finalizer前后观察器核pending_finalization意图不变，明确观察DI，不替事务/结果或输出私有正文。修正只在测试，业务运行/终态与清理待实际退出登记。
-
-开发2会话92433实际exit0，1 passed（45.14s），[退出证据](/private/tmp/aid-agent-runner-m4-card-v1-development-2-run-evidence.json)及[清理](/private/tmp/aid-agent-runner-m4-card-v1-development-2-cleanup.json)已实际核；主控现场268源/27辅助首末及当前字节均零漂移。真实原resident Worker/Browser/PG/Redis下take、单次PG延长及重复原expiry、completion原Attempt2继续、finish/PG closed，Web get/list/PG snapshot及终态history metadata一致到末；原Finalizer hash-only透传观察DI证明pending intent未变，4原applied receipt72 tokens/.01 record1/claim0/owned PID0通过。虚构loopback模型/页面，非客户外部系统或UI端到端验收。仅developer正常1，原10769失败范围不改；批准正式前端11＋PG存储3与原页面交互、同268独立CR，完整A片/M4待验。该次自有DB/进程/namespace/tmp0，未知旧DB排除，唯一Redis有意复用。
-
-正式B1存储3实际会话22126（268源/30辅助pre）及B2前端4文件11节点实际会话7857（268源/15辅助pre）已启动，prefix分别`/private/tmp/aid-agent-runner-m4-card-v1-independent-B1`与`-B2`；源码与已加载辅助冻结到各自实际退出，结果待登记。两窗资源独立，不重跑旧人控或默认启用。
-
-B1 22126实际exit0，3 passed（11.61s），268/30首末0：实际PG声明native root/call绑定核领域显示同事务回滚、合法第二wait旧save/park不覆盖且sibling保全、坏证明安全核对状态；不冒真实Browser激活。B2 7857实际exit1，10 passed/1 failed（1.11s），268/15首末0：原Vue/API/composable/mapper受控网络；aid/auth flushsync产生多票据，fixture错把中间票据当最新并取未创建socket失败，后续旧binary callback断言未到。批准唯一测试者修fixture选最新并核中间票据不建WS，原10已到末事实保留，不称11全过；无生产生命周期修复或UI/Worker端到端声明。
-
-独立源码20与268 current/loaded首末零漂移，初报告后[补审](/private/tmp/aid-agent-runner-m4-card-v1-architecture-cr-addendum.md)确认P0/P1=0、P2=1：通用Finalizer仍直接pop/替换browserAssistance专用元数据，未来工具展示规则会继续修改核心收尾口，未完全兑现中性组合边界。初CR0被补审结论替代，原报告/核验时点保留；08:27首工具结果事后转录但未预存全maps，元数据诚实注明，不伪造pre。B1/B2退出、无活pytest后，主控仅释放Browser projector/application_public_projection/Finalizer三源，唯一实施者将原纯deepcopy领域元数据规则移回Browser，经统一中性派生终态入口返回snapshot/result；保意图/DTO/锁/费用/历史同事务，余265不改，无注册表/框架。新v2须封同268、三源实际delta、定向CR及真实终态链复验；不重复不变存储/前端矩阵，页面验收仍待。
-
-A片v2 08:43:54 UTC实际封同268源/资源，SHA`bfefcff662cfd595fdfd5f1ca5ca9ef0140ade1871c457839884ebe5d71a22e2`；主控实际读[三源delta](/private/tmp/aid-agent-runner-m4-card-v2-delta.diff)并现场核current/loaded均0、对v1恰上述三处，其余265不变。编译3/原容器最小导入3/global diffcheck实际exit0；Finalizer已只调用中性project_terminal_public_state，领域project_terminal_result保原pure deepcopy与专用元数据规则。v1前端源码/依赖没变可复用build4，但新测试fixture最终类型检查另核。已调独立三源CR及真实终态链定向回归，未称P2已最终验收；无业务矩阵重跑、DDL/事件/默认切换/提交或部署。
-
-v2定向独立CR已关闭该P2，剩余P0/P1/P2=0；[审查报告](/private/tmp/aid-agent-runner-m4-card-v2-architecture-cr-report.md)实际08:45:10→08:46:06 UTC首末268 current/loaded maps零漂移，其他265同v1。源gate通过，运行/页面待；原v1补审保历史。独立v2 B1终态链28681（268/27pre）和B2失败前端单项54040（268/15pre）已实际启动，结果待。下一M5首片仅只读审查准备，不提前修改当前加载源码。
-
-v2 B1 28681实际exit0，1 passed（44.96s），268/27首末0，改后真实终态历史/snapshot及原pendingintent透传观察一致到末；是正常开发形态的定向关联回归，不重复计new unique。B2 54040实际exit0，失败票据单项1 passed，268/15首末0；同文件另2只被`-t`未选，不冒业务skip。fixture现释放全部中间票据确认0 socket，再最新票据核原旧binary callback/对象URL释放/取消0。正式合计前端11 unique（v1有效10＋v2补1）、存储3 unique（v1）及正常开发1形态/v2末回归，重试不叠加。两个实际退出证据分别[v2 B1](/private/tmp/aid-agent-runner-m4-card-v2-independent-B1-run-evidence.json)/[v2 B2](/private/tmp/aid-agent-runner-m4-card-v2-independent-B2-run-evidence.json)，自有资源只读核0，唯一Redis按账保留。原页面/builtassets真实入口、键盘/窄屏及末版build继续，A片整体仍待。
-
-末版build84040实际exit0（6.35s/522 bundled modules），268源＋69测试类型见证首末0，新增票据fixture类型有效，[构建退出证据](/private/tmp/aid-agent-runner-m4-card-v2-build-run-evidence.json)。真实built UI尝试63059 actualexit1（24.56s），425源/依赖/资产见证＝268＋23原bootstrap静态依赖＋134实际built assets，测试29，pre/end0；[退出证据](/private/tmp/aid-agent-runner-m4-card-v2-real-ui-run-evidence.json)。未拦HTTP/WS或stub身份，原真实PG用户/token/订阅经原tenant_auth/permissions/billing/content_sync与WebRunner/browser路由，没启动src.main/scheduler。实际页面Enter→POST202接受一条queued/Attempt0已到，fixture按预建SID找Runner失败，Worker未启动，后链未到。仅测试改为取实际accepted Runner SID并核PG owned session，原身份/生产不改，重抓测试pre再验；该次资源cleanup0、唯一Redis保持，未知旧DB排除。
-
-真实UI第二窗60500 actualexit1（65.94s），425/29首末0及自有清理0，[证据](/private/tmp/aid-agent-runner-m4-card-v2-real-ui-r-run-evidence.json)。正确owned SID后Enter202→原Worker park→原WS/JPEG→take→真实页面F输入/ready事件已到，窄屏无横向溢出；缩至窄屏时原开启sidebar及backdrop挡住完成按钮，测试未走现有收起操作即点击失败，complete请求/终态未到。主控实际看[截图](/private/tmp/aid-agent-runner-m4-card-v2-real-ui-r-sidebar.png)确认正常侧栏遮挡，批准只fixture用原收起按钮，不force或改布局。第三原node29651已pre425/29启动，prefix `/private/tmp/aid-agent-runner-m4-card-v2-real-ui-final`，补同confirm_only原wait真实PG余额0否决complete且无fact/保claim、恢复原1000后原完整末验；source/资产不改。结果/键盘拒绝反馈/窄屏完成/终态待实际退出。
-
-第三UI 29651实际exit1（39.64s），425/29首末0、自有清理0；正常窄屏收起sidebar到末，余额0 complete实际HTTP402，测试误期待403失败。原RunnerAuthorizer CREDIT_BLOCKED明确402，主控读源码及[退出证据](/private/tmp/aid-agent-runner-m4-card-v2-real-ui-final-run-evidence.json)，只批准fixture精确改402，不放宽任意4xx，不改生产。可见反馈/无fact/保claim/恢复本金后终态此窗尚未到，不因观察了402提前算通过；原窗字节/日志保留，新pre后末复验。
-
-UI第四窗33901实际exit1（50.33s），425/29首末0、自有清理0；真实402可见安全反馈/无completion/claim保、恢复本金manual complete后原Worker completed/Attempt2、原tool fact/PGclosed/control一次/claim0/PID0/page1至末。新value fixture漏原helper必需marker，provider/receipt/fee及最终UI断言未到；仅补原marker，不改生产或费用期待，原失败范围保留。
-
-**A片及M4阶段验收通过（2026-10-02）**：第五同UI node29136 actualexit0，1 passed（53.45s），[完整退出证据](/private/tmp/aid-agent-runner-m4-card-v2-real-ui-r3-run-evidence.json)425/29首末0。原真实PG主体/token/订阅许可、built UI键盘Enter→WebRunner202→原Worker→parked Browser→WS/JPEG→take及真实键鼠F/ready→余额0 complete402可见拒绝/no fact/claim保→恢复本金manual complete→同call/Attempt2→原tool结果/PGclosed/claim0/ownedPID0，全链到末。4原observed/applied receipt72 tokens/.01 record1；最终UI输出一次/无帧/textarea可用/0 BAC请求。主控实际看[窄屏拒绝](/private/tmp/aid-agent-runner-m4-card-real-ui-rejected.png)/[终态](/private/tmp/aid-agent-runner-m4-card-real-ui-terminal.png)及现场核425/29首末/current0；模型/业务网页仅虚构localhost，没拦HTTP/WS或stub身份，没启动main/scheduler，不冒客户外部操作验收。
-
-主控已读[最终清单](/private/tmp/aid-agent-runner-m4-card-final-inventory.json)/[证据](/private/tmp/aid-agent-runner-m4-card-final-evidence.txt)：11实际测试运行窗＝2开发＋v1存储/前端2＋v2终态/单项2＋UI5；build84040另列。正式15 unique（前端11/真实PG3/真实built UI1）＋开发正常1独立角色；v2同node定向回归不重复加数，所有失败窗保原时点/字节/未到范围。v1全20源审查＋v2三源收口CR剩余0，末build实际0。最终09:22:51 UTC封425源/资产与102实际测试/类型见证有限union，主控当前核全部0；268生产子集单列，其余23bootstrap依赖/134资产不是全仓库冻结或一次全导入声明。[清理](/private/tmp/aid-agent-runner-m4-card-final-cleanup.json)自有DB/namespace/API/Runner/Browser/Chrome/driver/临时目录均0，未知旧DB0连接仍排除，exact Redis无持久mount/发布端口并按账有意保留后续使用。M4完成指本地代码/接口及相关风险验收，默认旧缓存协议迁移、事件/三渠道、容量/真实外部/部署继续M5–M7，不提前声称生产切换。
-
 主控正式释放M5①既有写口：原公开DTO/纯row codec单向迁移、事件账/全部公开commit尾点、短一致fresh授权读取、bounded retention/双DDL；SSE/Web stream/frontend/channels/默认开关仍不在首片，不提交或部署。合法新源码变更不以旧M4 sealed证据判断漂移；历史清单/已捕maps保留。
 
 ### M4 最终 Web 核对状态门槛（2026-10-02）
 
-只读复核确认两项待修 P2，安排完整 Local/Browser 接线后的独立页面小片，不扰动当前领域源码冻结。`useAgent.isProcessing` 不包含 waiting/paused/interrupted，而 ChatInput 仅处理中显示原 Stop；verification waiting 的 Send 又被拒绝，普通用户因此不能到达已有 nonterminal cancel 接口。复用现有停止操作，用独立停止可用性区分不可回复的等待与澄清回复，不能把所有 waiting 都设为 processing 禁掉既有 Send。中文核对原因目前只进入 debug 执行详情，普通正文为空或保留旧输出；将公开 `waiting.question` 以稳定 Runner/wait 标识映到现有可见消息说明，保留原输出与澄清，不展示私有 checkpoint。
+只读复核确认两项待修 P2，安排完整 Local 接线后的独立页面小片，不扰动当前领域源码冻结。`useAgent.isProcessing` 不包含 waiting/paused/interrupted，而 ChatInput 仅处理中显示原 Stop；verification waiting 的 Send 又被拒绝，普通用户因此不能到达已有 nonterminal cancel 接口。复用现有停止操作，用独立停止可用性区分不可回复的等待与澄清回复，不能把所有 waiting 都设为 processing 禁掉既有 Send。中文核对原因目前只进入 debug 执行详情，普通正文为空或保留旧输出；将公开 `waiting.question` 以稳定 Runner/wait 标识映到现有可见消息说明，保留原输出与澄清，不展示私有 checkpoint。
 
-验收覆盖刷新找回后的核对说明及原停止操作、澄清仍可发送、切换会话不串状态、重复轮询不重复说明。停止接受后若原动作仍未知，页面仍须明确等待核对，不能虚报已取消或已释放会话。Browser第二wait沿用同run但换assistance/wait，native观察凭据绑定原wait须重新建立现组件连接，不能只更新controlling状态而让旧已撤连接永久停在“正在连接”；沿现组件key/生命周期处理，无新用户操作。票据请求尚未返回时关闭页面/切会话，返回后不得创建已销毁组件的孤立WS，需验证观察资源清理且Runner不中断。当前为源码确认和后续门槛，尚未修改或通过页面验收。
+验收覆盖刷新找回后的核对说明及原停止操作、澄清仍可发送、切换会话不串状态、重复轮询不重复说明。停止接受后若原动作仍未知，页面仍须明确等待核对，不能虚报已取消或已释放会话。
 
 ## 8. M5：实时事件增强
 
@@ -931,10 +681,8 @@ KF 共用通用 `agent_runner_session_claims` 执行 claim 及每个任务的 at
 - **compression-cap（压缩阈值绝对上限）**：改——settings.py:268 新增 `token_threshold_absolute=60000`（0/负禁用）+config.yaml:169 同步；mid_term.py:516-531 抽 `_effective_token_threshold=min(比例,绝对)`，三消费点统一（:601 阈值、:1769 后台扫描、:1498-1499 经济闸门 near_limit 改 0.8×有效阈值防 60k 封顶被误降级硬截断），新增 8 用例；验——grep 比例公式仅存 helper（:527）无分叉，实跑 test_check_threshold.py 19 passed，create_settings 实测 absolute=60000 生效、旧配置缺键可启动；遗——diff 四文件混有他人未提交 hunk，本轮仅评审阈值相关改动。
 - **submit-failure-ui（前端提交失败明确提示）**：改——POST /api/chat/runners 失败给乐观消息挂内存态 submitFailure（definitive 403/4xx=错误态+重试钮、网络/5xx=自动重试），🚀 progress 行原地替换文案，重试复用原 client_request_id 幂等重放，本轮补 retryRunnerSubmit 互斥 guard（useAgent.ts:352-354）+竞态回归测试；restoreInput 复用 ChatContainer.vue:538-541 既有消费零改动；后端零改动；验——3 测试文件 47/47+vue-tsc 0 错+build 通过（前端构建退出码 0）；遗——state.submitSelecting=false（useAgent.ts:356）恒 false 冗余赋值，防御性无害。
 - **fk-migration（controls FK 与库规则收口）**：改——init-postgres.sql:3070 撤 REFERENCES；db_update.yaml:3410 增量块 2026-10-04 02:00:00（to_regclass 守卫+contype='f' 全删，幂等）；4 处 fixture controls 先删；迁移测试断言按 datetime 定位（改动系接手前已落盘，本轮逐点核验+复跑）；验——应用层无 FK 级联依赖（src/ 无 DELETE FROM agent_runners，lock_owned_runner→ownership.py:26-29 FOR UPDATE，INSERT 均在同事务其后）；三迁移/存储测试实跑 20 passed；遗——无（历史 2026-10-02 块 append-only 保留正确，范围外 FK 未触碰）。
-- **auth-boundary（共享登录校验收口中性认证服务）**：改——verify_token/_verify_qb_token/fresh_web_subject 三原语落 src/services/auth_service.py（AST 对比与原 api/auth.py 逐行一致，缓存/auto_refresh/租期语义不动）；api/auth.py 再导出保可 patch；web_subject 薄适配同状态码；RunnerAuthorizer 懒导入换源；BrowserWebAuth 直连转 USER_UNAUTHORIZED(401)；agent_runner 包认证链路零 src.api 引用（web_sync.py:16 惰性导入为应用边缘刻意保留）（改动系前序会话落盘，本轮核对+自测）；验——AST verbatim identical=True，7 定向测试实跑 137 passed（253.12s），缓存命中后仍权威行二验 fail-closed；遗——原 patch src.api.auth.get_db_connection/get_cached 拦截内部的测试会失效（唯一实例已登记 P2-1，不阻塞）。
 - **adapter-version（adapter 契约版本）**：改/验——机制详见本节「M7 整改④」，独立复核逐点核实（常量/写点唯一 executor.py:294/coordinator 门先于 fingerprint/篡改矩阵），复核实跑 40 passed 1 skip（438.49s，skip 为既有）；遗——无 P0/P1，checkpoint_version 死列不启用。
 - **checkpoint-refs（图片可信引用+持久化字节上限）**：改——durable 装配点只存 runner_image 引用（登记 resources.image_artifacts、sha256 幂等落 owner workspace），ModelAdapter._resolve_image_references 按包含性+登记+尺寸/哈希复查深拷贝装配 wire、不回写 state；AgentRunnerLimitsConfig（request 2M/checkpoint 8M/snapshot 2M+env 覆盖）入口 413 闸（幂等重放不受限）+capped dumps 超限走既有失败终态；验——复核 grep 写点 checkpoint 17/snapshot 12 处全覆盖，定向实跑 44+4+31 passed（开发者全量 9 文件 136 passed）；遗——usage_repository.py:60 计费列不在范围未改；cleanup/resolve symlink 检查不对称由哈希复查兜底。
-- **legacy-web-compat（旧页面迁移桥测试基建）**：改——dev_test.sh 仅容器模式+显式 -m real_browser 时自动起一次性 sidecar aid-test-browser-redis（参数与 browser_io.py:91-95 断言一致，ping 探测复用外部 helper 不接管清理，退出码保真），普通路径不变，生产代码与断言零改动，不重启任何既有容器；验——两条门禁路径端到端实测（-m real_browser → exit=4 透传+无容器残留；无 -m → 零供给日志），主容器全程 Up 未动；遗——shellcheck 不可用未跑，完整套件以门禁路径验证替代复跑。
 - **deploy-config（分进程部署配置准备）**：通用 Runner API/worker 使用同一制品和共享产物路径；主 API 的 KF 原入口调用通用服务，不配置独立 KF 拉取、接单或投递容器。当前部署说明以 deploy 目录现行配置为准；未启动或部署任何服务。
 - **容量测量（落实本节测量门槛）**：本地容器真实 API/worker+假 LLM（延迟≈0）+一次性隔离库（脚本在 /tmp 未入仓）：吞吐 1.30 runner/s（concurrency=4 打满）、每执行占槽≈3.1s 纯机器开销、≈60 次远程 DB 事务/执行（瓶颈在事务数而非并发上限，真实承载≈4/(模型时长+3.1s)）；空闲轮询 3.8 语句/s；checkpoint 逻辑 15.6KB/落盘 7.4KB（上限 8MB 余量充足）；真实 cost12 bcrypt 173ms/验（fixture cost4 相差 258×，verify_service authorization.py:24 无缓存，单进程串行≈5.8 验/s）；结论——模型延迟 0+远程测试库+单轮尺寸，不可外推生产承载，建议 service token 校验加进程内缓存后真机复测。
 
@@ -948,14 +696,12 @@ KF 共用通用 `agent_runner_session_claims` 执行 claim 及每个任务的 at
 - 实际源码已确认图片 data URL 被放入 state.messages 后进入 asdict checkpoint，旧“仅内存”注释不符；M7 应将持久消息改为可信产物引用，ModelAdapter 按 owner 读取并装配 provider wire。单请求/控制输入、checkpoint/公开快照总字节及队列拒绝背压须有配置与实测，不能只凭图片单张上限或执行并发认为持久体量已受控。
 - 当前配置 fingerprint 覆盖 profile/settings/prompts，工具及恢复适配器没有独立兼容契约版本。M7 核定派发时持久的有界 adapter 契约版本及兼容策略，未知版本拒恢复；不能用全源码 hash 让文案/格式修改导致所有任务不可继续，也不能默默用改变语义的新适配器执行旧阶段。
 - 内部服务凭据与登录校验的 CPU/数据库成本按实际部署参数测量。M2a 的 101 请求功能 fixture 为提速使用随机凭据的 bcrypt cost 4，不是生产鉴权开销或容量证据；M7 不沿用该低成本参数作承载结论。
-- 最终依赖复核须收口共享登录校验的层次：当前RunnerAuthorizer默认懒加载api.auth.verify_token，BrowserWebAuth复用api.web_subject，又加载登录路由模块；现`src/services/auth_service.py`自身亦顶层反向导入api.auth的管理员校验函数，不能简单迁入该文件就称服务边界中性。现api包已惰性加载且独立进程启动成立，不称启动故障；共享token/current-subject校验应移至现有认证服务边界，由Web薄适配转HTTP错误，Runner及Browser应用只依赖中性身份结果/错误。保持原缓存、auto_refresh=False、真实token行二验及角色/owned-session规则，不借此重写登录/SMS或加另一套认证；正式调整后重验受影响身份与启动边界。
 - 配置与停止清理有界：服务停止接单后按策略安全停在恢复点；异常退出明确中断；测试产生的容器、卷和文件用命名清单清理，不动 master/Yohar 资源。
-- 独立 API/worker 已有各自 `bootstrap`/`worker` 可运行入口，但当前部署 compose 未接 AgentRunner。M7补同一代码制品下分进程的部署配置、共享数据库/产物路径及 Browser owner 拓扑说明；只准备配置与隔离启动验证，不自行启动或更新用户环境。
+- 独立 API/worker 已有各自 `bootstrap`/`worker` 可运行入口，但当前部署 compose 未接 AgentRunner。M7补同一代码制品下分进程的部署配置、共享数据库/产物路径；只准备配置与隔离启动验证，不自行启动或更新用户环境。
 - 清理 schema 时核对已有 `agent_runner_controls.runner_id` 的 SQL FK/ON DELETE CASCADE：它与当前“引用完整性由 Python 检查”的数据库规则不一致。以新增量迁移同步 fresh DDL 收口，先验原应用写口完整性与同事务有序清理；不能让终态 root 删除隐式清掉仍需核对的控制或投递事实。
 - 回退只影响新提交的路由，已经被接受的 runner 仍由 AgentRunner 排空、暂停或显式取消；不能关闭服务后把未完成任务直接交旧 Agent 从头重跑。
 - 新表和已接单任务回退时保留，不做破坏性降级。入口开关不能让同一请求同时进入两条路径。
 - 默认Web切换还须处理旧已打开页面：现旧前端仍直接POST `/api/chat/stream`，该接口仍执行legacy反馈流程，仅同步JSON入口显式Runner header转接。新页面走Runner时不能让旧页面在同一现有会话绕过持久claim并行执行；按实际调用者和可信认证边界提供原协议兼容转接或等价占有协调，不能依靠客户端自报header或强制用户刷新作为完整迁移证明。当前默认未切，属于源码发现的M7门槛，非已验证线上故障；未迁移的D1/Runtime/其他入口须保其授权范围。
-- 旧缓存Browser卡片也属于上述透明迁移：HumanAssistanceCard成功complete及初次挂载会轮询原continuation events，MessageItem把response直接append。原随机bac目前仅Redis/事件展示，native PG原wait未持稳定映射；终态清Redis后不能依赖Redis或最后一个presentation event辨认归属。M7将原bac→Runner/execution/call/wait/assistance同native mandatory wait持久关联（原私有JSON或稳定资源事实可用，独立于completion相位且每新wait保原映射），原events薄读桥复验当前owner/selectedtenant并返回稳定未投递文本增量及停止事件，不入旧jobs/newAgent。不得把每次累计全文给旧append消费者，或新页replace同时又append。验收包括旧缓存卡片真实接管/完成/poll、终态clear后补读、断线游标/重复完成/第二wait及Stop；当前人控服务片不提前扩大旧events实现。
 - 旧Stop仅取消旧SSE manager，服务端转接stream后也须按fresh主体/原Web会话取消其activeRunner，不能返回假成功。默认切换前协调已在运行的legacy owner，原SSE断线同样detach；兼容stream只转换安全公开投影，不再执行/写历史/结费用。旧payload无稳定请求键，不能按正文hash合并两次同文案发送；明确每HTTP提交键，现代稳定键保原。验收旧已打开页与新页同SID并发Send/Stop/断线、单执行/历史/费用及未迁移CLI/D1保持。仓库未发现CLI/Runtime直接调用stream只属有限检索，不据此推断仓库外客户不存在；按fresh登录、实际ownedWebSession及服务端迁移策略分流，不按User-Agent猜入口。
 - 未迁移入口保留旧方法；Runner 跨进程可启动不是生产部署完成，真机部署和真实外部写操作按用户授权执行。
 
