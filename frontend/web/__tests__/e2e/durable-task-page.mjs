@@ -51,8 +51,9 @@ try {
     assert.equal(await page.locator('time').count(),0)
     await page.evaluate(() => window.fixtureUpdate({ status:'waiting',sleep_blocked:undefined,
       snapshot:{ waiting:{ kind:'clarification', wait_id:'recovery-wait', target_execution_id:'root' } } }))
-    await page.getByText('等待你的回复',{ exact:true }).waitFor()
-    assert.equal(await page.getByRole('button',{ name:/继续/ }).count(),0)
+    await page.locator('[aria-label="任务状态"]').waitFor({ state:'detached' })
+    await page.evaluate(() => window.fixtureUpdate({ cancel_requested:true }))
+    await page.getByText('正在停止任务',{ exact:true }).waitFor()
     assert(await page.getByRole('button',{ name:'停止任务',exact:true }).isVisible())
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
     await page.screenshot({ path:join(directory,`clarification-${width}.png`) })
