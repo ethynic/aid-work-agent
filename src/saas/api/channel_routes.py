@@ -149,6 +149,79 @@ def _try_start_kf_pull_task(tenant_id: str, config_id: str, open_kfid: str, adap
     asyncio.create_task(_kf_pull_task_wrapper(tenant_id, config_id, open_kfid, adapter, lock_token))
 
 
+# ===== 启动自愈（2026-11-19 聊易事故修复） =====
+# 事故：部署重启杀掉正在处理的拉取任务，finally 释放锁与 pending 补偿均未执行
+# -> Redis 拉取锁残留至 TTL（15 分钟内该 open_kfid 所有回调只置 pending、不拉取）
+# -> pending 补偿永远不触发，已取走未回复的消息丢失、后续消息最长 15 分钟无响应。
+# 启动时清理残留锁并对 pending 标记触发补偿拉取，把重启盲区从 TTL 900s 压到秒级。
+_KF_PULL_LOCK_STALE_MIN_AGE = 30  # 仅清理持有超过该秒数的锁（锁年龄 = TTL 满值 - 剩余 TTL）
+
+
+async def recover_wecom_kf_pull_state() -> None:
+    """启动自愈：清理崩溃/重启遗留的 wecom_kf 拉取锁，并对残留 pending 标记补偿拉取。
+
+    须在事件循环内调用（补偿拉取经 _try_start_kf_pull_task 起异步任务）。
+    非关键路径：任何异常只记日志，不阻断启动（调用方 lifespan 已有 try/except 兜底）。
+    """
+    # 1) 清理残留锁：仅清理持有超过 _KF_PULL_LOCK_STALE_MIN_AGE 的锁。
+    #    gunicorn 多 worker 并行启动时都会执行本函数，刚被另一 worker 持有的在跑锁
+    #    年龄接近 0，不清理，避免误删造成并发 sync_msg 撞 45009。
+    cleared_locks = 0
+    skipped_locks = 0
+    try:
+        cursor = 0
+        while True:
+            cursor, keys = redis_client.scan(cursor, redis_client.make_key(CacheKeys.WECOM_KF_PULL_LOCK, "*"), 100)
+            for key in keys:
+                try:
+                    ttl_remaining = redis_client.ttl(key)
+                    if ttl_remaining > 0 and (_KF_PULL_LOCK_TTL - ttl_remaining) < _KF_PULL_LOCK_STALE_MIN_AGE:
+                        skipped_locks += 1
+                        continue
+                    redis_client.delete(key)
+                    cleared_locks += 1
+                except Exception as e:
+                    logger.warning(f"[wecom_kf] 启动自愈: 清理锁失败 [{key}]: {e}")
+            if cursor == 0:
+                break
+    except Exception as e:
+        logger.warning(f"[wecom_kf] 启动自愈: 扫描残留拉取锁失败（跳过锁清理）: {e}")
+
+    # 2) 残留 pending 标记 -> 补偿拉取（把崩溃期间积压在微信队列的消息拉回来）
+    compensated = 0
+    try:
+        cursor = 0
+        while True:
+            cursor, keys = redis_client.scan(cursor, redis_client.make_key(CacheKeys.WECOM_KF_PULL_PENDING, "*"), 100)
+            for key in keys:
+                # 键形如 {全局前缀}:wecom_kf_pull_pending:{tenant_id}:{open_kfid}，取末两段
+                parts = key.rsplit(":", 2)
+                if len(parts) < 3:
+                    continue
+                tenant_id, open_kfid = parts[-2], parts[-1]
+                if not tenant_id or not open_kfid:
+                    continue
+                logger.info(
+                    f"[wecom_kf] 启动自愈: 发现残留 pending 标记，补偿拉取: tenant={tenant_id}, open_kfid={open_kfid}"
+                )
+                try:
+                    await _compensate_kf_pull(tenant_id, open_kfid)
+                    compensated += 1
+                except Exception as e:
+                    logger.opt(exception=True).warning(
+                        f"[wecom_kf] 启动自愈: 补偿拉取失败: tenant={tenant_id}, open_kfid={open_kfid}, error={e}"
+                    )
+            if cursor == 0:
+                break
+    except Exception as e:
+        logger.warning(f"[wecom_kf] 启动自愈: 扫描残留 pending 标记失败: {e}")
+
+    if cleared_locks or skipped_locks or compensated:
+        logger.info(
+            f"[wecom_kf] 启动自愈完成: 清理残留锁={cleared_locks}, 跳过在跑锁={skipped_locks}, 补偿拉取={compensated}"
+        )
+
+
 def _has_successful_transfer_to_human(tool_messages: list) -> bool:
     """检查本轮 tool 消息序列中是否包含成功的 transfer_to_human 调用。
 
