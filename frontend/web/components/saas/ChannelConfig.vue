@@ -251,7 +251,8 @@
               <p v-if="form.config.identity_mode !== 'ext'" class="mt-1 text-xs text-muted">可下载一个极简官网演示页（含 iframe 悬浮客服窗与「AI问答」按钮），链接已按当前渠道生成，可直接交给官网开发人员参考集成</p>
               <p class="mt-1 text-xs text-muted">三种单一身份模式：匿名：浏览器本地保留，换浏览器丢失；userid 链接：官网仅改前端嵌入带 userid 的链接，无需后端签名，但不验签故无跨访问历史（每次进入为新会话，管理员可在官网接待客户页查看全部）；签名：官网服务端按密钥生成，同一官网用户跨设备可见历史。Safari 对第三方 iframe 的本地存储约 7 天不活跃清除（浏览器策略，非缺陷）。</p>
             </div>
-            <div v-if="editingId">
+            <!-- 签名密钥仅签名链接模式需要（anon/uid 不签名，隐藏避免误导） -->
+            <div v-if="editingId && form.config.identity_mode === 'ext'">
               <label class="text-sm text-muted mb-1 block">签名密钥</label>
               <div class="flex items-center gap-2">
                 <code class="text-xs bg-canvas rounded px-2 py-2 flex-1 truncate font-mono break-all whitespace-normal">{{ form.config.channel_secret || '保存后由服务端生成' }}</code>
@@ -274,17 +275,18 @@
             <p class="text-xs text-muted">默认关闭，聊天页仅支持纯文字；开启后访客可上传文件/图片（单次最多 10 个，单个 20MB）</p>
           </div>
 
-          <!-- 历史会话入口开关（默认关；uid 模式服务端强制关闭，此处禁用置灰让管理员可见该约束） -->
+          <!-- 历史会话入口开关（默认关；仅签名链接模式可开，anon/uid 服务端强制关闭，
+               此处禁用置灰让管理员可见该约束） -->
           <div class="flex items-start gap-2">
             <input
               id="webc-show-history"
               type="checkbox"
               v-model="form.config.show_history"
-              :disabled="form.config.identity_mode === 'uid'"
+              :disabled="form.config.identity_mode !== 'ext'"
               class="mt-1 w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
             />
-            <label for="webc-show-history" class="text-sm text-default cursor-pointer" :class="form.config.identity_mode === 'uid' ? 'text-muted' : ''">显示历史会话入口</label>
-            <p class="text-xs text-muted">默认关闭，聊天页右上角不显示「历史会话」按钮；开启后匿名身份可查看本浏览器历史会话（仅匿名模式生效）{{ form.config.identity_mode === 'uid' ? '；userid 链接模式不验签无跨访问历史，该入口强制关闭' : '' }}</p>
+            <label for="webc-show-history" class="text-sm text-default cursor-pointer" :class="form.config.identity_mode !== 'ext' ? 'text-muted' : ''">显示历史会话入口</label>
+            <p class="text-xs text-muted">默认关闭，聊天页右上角不显示「历史会话」按钮；开启后签名身份可跨设备查看历史会话（仅签名链接模式生效）{{ form.config.identity_mode === 'uid' ? '；userid 链接模式不验签无跨访问历史，该入口强制关闭' : (form.config.identity_mode === 'anon' ? '；匿名模式无签名身份，该入口强制关闭' : '') }}</p>
           </div>
 
           <!-- 集成代码 -->
@@ -322,8 +324,8 @@
             </div>
           </details>
 
-          <!-- 签名算法说明（ext 模式；uid 模式不使用签名故隐藏） -->
-          <details v-if="form.config.identity_mode !== 'uid'" class="bg-canvas rounded-lg p-3">
+          <!-- 签名算法说明（仅 ext 模式；anon/uid 不使用签名故隐藏） -->
+          <details v-if="form.config.identity_mode === 'ext'" class="bg-canvas rounded-lg p-3">
             <summary class="flex items-center justify-between cursor-pointer text-sm font-medium text-default">
               <span>签名链接算法说明（官网有登录体系时必读）</span>
               <BaseButton size="sm" intent="ghost" @click.stop.prevent="copyWebCSignDoc">复制MD</BaseButton>
@@ -1416,12 +1418,16 @@ function selectChannelType(type: string) {
   }
 }
 
-// web_c 身份模式切换到 uid 时强制关闭历史会话入口（与服务端 bootstrap 强制 False 同口径）
-watch(() => form.value.config.identity_mode, (mode) => {
-  if (form.value.channel_type === 'web_c' && mode === 'uid' && form.value.config.show_history) {
-    form.value.config.show_history = false
+// web_c 历史会话入口仅签名链接模式可用：anon/uid 模式强制 false（含装载存量
+// anon+true 配置的场景；与服务端 bootstrap 强制 False 同口径）
+watch(
+  () => [form.value.channel_type, form.value.config.identity_mode, form.value.config.show_history] as const,
+  ([type, mode, sh]) => {
+    if (type === 'web_c' && mode !== 'ext' && sh) {
+      form.value.config.show_history = false
+    }
   }
-})
+)
 
 // ==================== 配置指引（简短版，弹窗内） ====================
 
