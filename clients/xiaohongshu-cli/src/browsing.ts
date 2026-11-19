@@ -229,8 +229,28 @@ export async function listComments(page: Page, target: ProfileTarget, id: string
   return { ...collectionState(target, 'load_limit'), note_id: id, comments: Array.from(comments.values()).slice(0, limit) }
 }
 
-export async function openConversation(page: Page, context: BrowserContext, target: ProfileTarget, signal?: AbortSignal) {
+export async function readSenderId(page: Page): Promise<string> {
+  const ownProfile = page.locator(SIGNED_IN).filter({ visible: true })
+  if (await ownProfile.count() !== 1) throw new BrowserFailure('XHS_SENDER_UNCONFIRMED', '无法确认当前小红书账号')
+  const href = await ownProfile.getAttribute('href')
+  if (!href) throw new BrowserFailure('XHS_SENDER_UNCONFIRMED', '无法确认当前小红书账号')
+  return profileTarget(new URL(href, ORIGIN).href).id
+}
+
+export async function assertConversationTarget(chat: Page, targetId: string): Promise<void> {
+  const url = new URL(chat.url())
+  const active = chat.locator('.xhs-im-conv-item--active[data-conv-id]').filter({ visible: true })
+  if (url.origin !== ORIGIN || url.pathname !== '/chat'
+    || url.searchParams.get('openUid')?.toLowerCase() !== targetId
+    || await active.count() !== 1
+    || (await active.getAttribute('data-conv-id'))?.toLowerCase() !== targetId) {
+    throw new BrowserFailure('XHS_TARGET_MISMATCH', '会话目标与主页用户不一致')
+  }
+}
+
+export async function openNativeConversation(page: Page, context: BrowserContext, target: ProfileTarget, signal?: AbortSignal) {
   await openProfile(page, target, signal)
+  const senderId = await readSenderId(page)
   const nickname = (await page.locator('.user-info .user-name').first().innerText()).trim()
   const redId = (await page.locator('.user-info .user-redId').first().innerText()).trim()
   const button = page.locator('button.xhs-user-im-btn[title="发消息"]')
@@ -246,16 +266,16 @@ export async function openConversation(page: Page, context: BrowserContext, targ
   await chat.waitForFunction(() => Boolean(document.querySelector('.xhs-im-chat-window__header-name')?.textContent?.trim()),
     undefined, { timeout: PAGE_TIMEOUT })
   signal?.throwIfAborted()
-  const activeConversation = chat.locator('.xhs-im-conv-item--active[data-conv-id]').filter({ visible: true })
-  if (await activeConversation.count() !== 1
-    || (await activeConversation.getAttribute('data-conv-id'))?.toLowerCase() !== target.id) {
-    throw new BrowserFailure('XHS_TARGET_MISMATCH', '会话目标与主页用户不一致')
-  }
+  await assertConversationTarget(chat, target.id)
   signal?.throwIfAborted()
   if (!context.pages().includes(chat)) throw new BrowserFailure('XHS_PAGE_UNCONFIRMED', '会话窗口已关闭')
   const editor = chat.locator('.xhs-im-input-bar-editor[contenteditable="true"]').first()
   const editable = await editor.isVisible() && await editor.isEditable()
   await chat.bringToFront()
-  return { schema_version: 1, status: 'conversation_opened', target_id: target.id,
-    profile_url: target.url, nickname, red_id: redId, editable }
+  return { chat, data: { schema_version: 1, status: 'conversation_opened', target_id: target.id,
+    sender_id: senderId, profile_url: target.url, nickname, red_id: redId, editable } }
+}
+
+export async function openConversation(page: Page, context: BrowserContext, target: ProfileTarget, signal?: AbortSignal) {
+  return (await openNativeConversation(page, context, target, signal)).data
 }

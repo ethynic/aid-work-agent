@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { chromium, type BrowserContext, type Page } from 'playwright-core'
 import { BrowserFailure } from './errors.js'
 import { collectionLimit, listComments, listNotes, noteId, openConversation, profileTarget } from './browsing.js'
+import { sendFirstMessage, validateFirstMessage, type FirstMessageInput } from './firstMessage.js'
+import { FirstMessageStore } from './firstMessageStore.js'
 
 export { BrowserFailure } from './errors.js'
 
@@ -48,7 +50,8 @@ export class XiaohongshuBrowser {
   private readonly contexts = new Map<string, BrowserContext>()
   private busy = false
 
-  constructor(private readonly launch: LaunchProfile = launchProfile) {}
+  constructor(private readonly launch: LaunchProfile = launchProfile,
+    private readonly firstMessages = new FirstMessageStore()) {}
 
   async run(action: BrowserAction, profileKey: string, signal?: AbortSignal): Promise<BrowserStatus> {
     return this.execute(profileKey, page => this.openPage(page, action, signal), signal)
@@ -72,8 +75,15 @@ export class XiaohongshuBrowser {
     return this.execute(profileKey, (page, context) => openConversation(page, context, target, signal), signal)
   }
 
+  async sendFirstMessage(profileKey: string, input: FirstMessageInput, signal?: AbortSignal) {
+    const validated = validateFirstMessage(input)
+    return this.execute(profileKey, (page, context) =>
+      sendFirstMessage(page, context, profileKey, validated, this.firstMessages, signal), signal, false)
+  }
+
   private async execute<T>(
     profileKey: string, action: (page: Page, context: BrowserContext) => Promise<T>, signal?: AbortSignal,
+    checkCancellationAfter = true,
   ): Promise<T> {
     if (!PROFILE_KEY.test(profileKey)) throw new BrowserFailure('XHS_INVALID_INPUT', '连接资料无效')
     if (this.busy) throw new BrowserFailure('XHS_BUSY', '设备正在打开小红书，请稍后重试')
@@ -94,7 +104,7 @@ export class XiaohongshuBrowser {
       })
       const page = existing ?? await context.newPage()
       const result = await action(page, context)
-      signal?.throwIfAborted()
+      if (checkCancellationAfter) signal?.throwIfAborted()
       return result
     } catch (error) {
       if (error instanceof BrowserFailure) throw error

@@ -125,6 +125,7 @@ fixtureTest('会话以活动收件人 ID 核对，同昵称错目标拒绝，编
   const { api, context } = await fixture(t, profile, '', chat)
   const ready = await api.openConversation(key, ownerUrl)
   assert.equal(ready.target_id, ownerId)
+  assert.equal(ready.sender_id, actorId)
   assert.equal(ready.editable, true)
   const chatPage = context.pages().find(page => page.url().includes('/chat?'))
   assert.equal(await chatPage.locator('[contenteditable]').innerText(), '')

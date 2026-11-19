@@ -4,6 +4,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { BrowserFailure, chromeExecutable, PROFILE_KEY, XiaohongshuBrowser } from '../browser.js'
+import type { FirstMessageInput } from '../firstMessage.js'
 
 const packageRoot = new URL('../../../', import.meta.url)
 const { version } = JSON.parse(readFileSync(new URL('package.json', packageRoot), 'utf8'))
@@ -43,7 +44,25 @@ const browsingTools = [
   annotations: { readOnlyHint: tool.name !== 'xiaohongshu_open_conversation',
     destructiveHint: false, openWorldHint: true },
 }))
-const allTools = [...tools, ...browsingTools]
+const sendTool = {
+  name: 'xiaohongshu_send_first_message',
+  description: '按核实的双方账号发送一次首条私信，保留来源与本机占用；结果未确认时禁止自动重发',
+  inputSchema: {
+    type: 'object' as const, additionalProperties: false,
+    required: ['profile_key', 'profile_url', 'sender_id', 'source_profile_url', 'note_id', 'comment_id', 'reason', 'message'],
+    properties: {
+      profile_key: { type: 'string', pattern: PROFILE_KEY.source },
+      profile_url: profileUrlSchema, source_profile_url: profileUrlSchema,
+      sender_id: { type: 'string', pattern: '^[0-9a-fA-F]{24}$' },
+      note_id: { type: 'string', pattern: '^[0-9a-fA-F]{24}$' },
+      comment_id: { type: 'string', pattern: '^[a-zA-Z0-9_-]{1,128}$' },
+      reason: { type: 'string', minLength: 1, maxLength: 2000 },
+      message: { type: 'string', minLength: 1, maxLength: 2000 },
+    },
+  },
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+}
+const allTools = [...tools, ...browsingTools, sendTool]
 
 function manifest() {
   return {
@@ -78,6 +97,12 @@ async function serve() {
         result = { ...common, success: true, code: 'OK', retryable: false,
           message: status === 'qr_ready' ? '请在 Chrome 窗口扫码登录' : '已用登录会话打开小红书',
           data: { schema_version: 1, status } }
+      } else if (params.name === sendTool.name) {
+        if (sendTool.inputSchema.required.some(key => typeof args[key] !== 'string')) {
+          throw new BrowserFailure('XHS_INVALID_INPUT', '首联需要明确的账号、来源、理由和正文')
+        }
+        result = { run_id: common.run_id,
+          ...await browser.sendFirstMessage(args.profile_key, args as unknown as FirstMessageInput, extra.signal) }
       } else {
         if (typeof args.profile_url !== 'string' || args.profile_url.length > 2048
           || (args.limit !== undefined && typeof args.limit !== 'number')) {
@@ -99,7 +124,7 @@ async function serve() {
       const failure = error instanceof BrowserFailure
         ? error : new BrowserFailure('XHS_BROWSER_UNAVAILABLE', '小红书连接器暂时无法执行')
       result = { ...common, success: false, code: failure.code, message: failure.message,
-        retryable: failure.code !== 'XHS_INVALID_INPUT' }
+        retryable: params.name !== sendTool.name && failure.code !== 'XHS_INVALID_INPUT' }
     }
     return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result }
   })

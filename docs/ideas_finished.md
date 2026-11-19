@@ -70,6 +70,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20261119-1112 | 小红书指定主页与首条私信插件 | ✅ 已完成开发，提供笔记、评论、会话和首条私信 CLI 能力。 | [设计](design/xiaohongshu-local-connector-design.md#指定主页线索与首条私信) | [开发计划](plans/plan-xiaohongshu-local-connector.md#2026-11-19-指定主页线索场景) |
 | 20261116-1636 | 小红书本机连接器 | ✅ 已完成开发，可在本机扫码并于浏览器重开后复用登录态。 | [设计](design/xiaohongshu-local-connector-design.md) | [开发计划](plans/plan-xiaohongshu-local-connector.md) |
 | 20261113-1443 | Runner 检查点恢复 | ✅ 已完成开发（待发版验收），按原检查点续跑并支持会话内补传及核对。 | [设计](system/agent-application-architecture-design.md#58-runner-按检查点继续执行2026-11-13已实现) | [开发计划](plans/plan-runner-server-skill-interruption-recovery.md) |
 | 20261109-1440 | 任务计划提示词展示与管理对话中断 | ✅ 已完成开发。隐藏计划提示词，修复列表和详情查询导致的对话中断。 | [设计](system/scheduled-task-runner-refactor-design.md) | [计划](plans/plan-scheduled-task-result-management.md) |
