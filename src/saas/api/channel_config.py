@@ -153,7 +153,7 @@ def _generate_web_c_secret() -> str:
     return _secrets.token_hex(32)
 
 
-_WEB_C_IDENTITY_MODES = ("ext", "anon", "both", "uid")
+_WEB_C_IDENTITY_MODES = ("ext", "anon", "uid")
 # web_c config 缺省值（create 时补齐；identity_mode 非法值 400）
 _WEB_C_DEFAULT_GREETING = "您好，我是本公司的智能助手，有什么可以帮您？"
 
@@ -165,7 +165,8 @@ def _normalize_web_c_config(config: dict, existing: Optional[dict] = None) -> No
       create 时无旧值则自动生成；伪造防线密钥不由租户表单提供。
     - enabled：缺省 True；greeting：缺省通用文案；allow_attachment：缺省 False
       （纯文字聊天）；show_history：缺省 False（聊天页不显示历史会话入口）；
-      identity_mode：缺省 both，
+      identity_mode：缺省 anon（2026-11-19 起下线「签名 + 匿名」组合模式，
+      仅保留匿名 / 签名 / userid 三种单一模式），
       非法值 400（表单单选来源，出现非法值即为异常调用，不静默纠正）。
     """
     config["enabled"] = bool(config.get("enabled", True))
@@ -174,9 +175,9 @@ def _normalize_web_c_config(config: dict, existing: Optional[dict] = None) -> No
     config["allow_attachment"] = bool(config.get("allow_attachment", False))
     # 历史会话入口开关：默认关闭（聊天页右上角不显示「历史会话」按钮）
     config["show_history"] = bool(config.get("show_history", False))
-    mode = str(config.get("identity_mode") or "both").strip()
+    mode = str(config.get("identity_mode") or "anon").strip()
     if mode not in _WEB_C_IDENTITY_MODES:
-        raise HTTPException(status_code=400, detail="身份模式取值应为 ext / anon / both / uid")
+        raise HTTPException(status_code=400, detail="身份模式取值应为 ext / anon / uid")
     config["identity_mode"] = mode
 
     secret = str(config.get("channel_secret") or "").strip()

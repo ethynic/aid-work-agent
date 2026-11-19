@@ -28,13 +28,13 @@ class WebCAdapter(ChannelAdapter):
         enabled: bool = True,
         greeting: str = "",
         channel_secret: str = "",
-        identity_mode: str = "both",
+        identity_mode: str = "anon",
         **kwargs,
     ):
         self.enabled = bool(enabled)
         self.greeting = greeting or ""
         self.channel_secret = channel_secret or ""
-        self.identity_mode = identity_mode or "both"
+        self.identity_mode = identity_mode or "anon"
 
     @property
     def channel_type(self) -> str:

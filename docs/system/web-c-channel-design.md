@@ -123,7 +123,7 @@ session_id 自动生成为 `{tenant_id}_web_c_{channel_user_id}_{subagent_id}`�
   "enabled": true,
   "greeting": "您好，我是XX公司的智能助手...",
   "channel_secret": "<自动生成的32字节hex>",
-  "identity_mode": "both"        // ext / anon / both，控制页面是否显示历史入口等
+  "identity_mode": "anon"        // ext / anon / uid（2026-11-19 起下线 both 组合模式，缺省 anon），控制页面是否显示历史入口等
 }
 ```
 

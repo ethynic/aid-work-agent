@@ -256,7 +256,7 @@ class TestChannelRegistration:
 
         assert ChannelFactory._ADAPTER_CLASSES["web_c"].endswith("WebCAdapter")
         adapter = ChannelFactory.create_adapter("web_c", {
-            "enabled": True, "greeting": "欢迎", "channel_secret": SECRET, "identity_mode": "both",
+            "enabled": True, "greeting": "欢迎", "channel_secret": SECRET, "identity_mode": "ext",
         })
         assert isinstance(adapter, WebCAdapter)
         assert adapter.channel_type == "web_c"
@@ -393,7 +393,7 @@ class TestUidIdentityMode:
     def test_ext_mode_rejects_unsigned_userid(self):
         # 非 uid 渠道：u 无签名仍 403（既有安全语义不回归）
         with pytest.raises(HTTPException) as exc:
-            self._resolve({"identity_mode": "both", "channel_secret": SECRET}, {"u": "u1001"})
+            self._resolve({"identity_mode": "ext", "channel_secret": SECRET}, {"u": "u1001"})
         assert exc.value.status_code == 403
 
     def test_anon_mode_rejects_userid(self):
@@ -436,3 +436,29 @@ class TestUidIdentityMode:
         match = _UID_SESSION_SUFFIX_RE.search(session["session_id"])
         assert match, f"随机后缀缺失: {session['session_id']}"
         assert len(match.group(0)) - 2 >= 12  # 去掉 _s 前缀，熵 ≥ 48bit
+
+
+class TestIdentityModeConfigNormalize:
+    """身份模式规整：both 组合模式 2026-11-19 下线，缺省 anon，非法值 400。"""
+
+    def test_normalize_defaults_to_anon(self):
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {}
+        _normalize_web_c_config(config)
+        assert config["identity_mode"] == "anon"
+
+    def test_normalize_rejects_both_combo_mode(self):
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        with pytest.raises(HTTPException) as exc:
+            _normalize_web_c_config({"identity_mode": "both"})
+        assert exc.value.status_code == 400
+
+    def test_normalize_accepts_three_single_modes(self):
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        for mode in ("ext", "anon", "uid"):
+            config = {"identity_mode": mode}
+            _normalize_web_c_config(config)
+            assert config["identity_mode"] == mode

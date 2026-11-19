@@ -188,7 +188,9 @@ def _load_web_c_config(tenant_id: str, config_id: str):
 def _resolve_identity(request: Request, tenant_id: str, config_id: str) -> WebCIdentity:
     """验签并构建 C 端身份（ext 签名优先，uid 模式免签名，其次匿名 uid）。"""
     cfg, conf = _load_web_c_config(tenant_id, config_id)
-    mode_cfg = str(conf.get("identity_mode") or "both")
+    # identity_mode 缺省 anon（2026-11-19 起下线 both 组合模式，新配置三选一；
+    # 存量 both 行为走既有分支不变，由管理员改配置收敛为单一模式）
+    mode_cfg = str(conf.get("identity_mode") or "anon")
 
     userid = _param(request, "u").strip()
     if userid:

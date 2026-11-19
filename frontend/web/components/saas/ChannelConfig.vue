@@ -215,12 +215,11 @@
             <div>
               <label class="text-sm text-muted mb-1 block">身份模式</label>
               <BaseSelect v-model="form.config.identity_mode">
-                <option value="both">签名 + 匿名（默认）</option>
-                <option value="ext">仅签名链接</option>
-                <option value="anon">仅匿名</option>
-                <option value="uid">仅 userid 链接（免签名）</option>
+                <option value="anon">匿名（默认）</option>
+                <option value="ext">签名链接</option>
+                <option value="uid">userid 链接（免签名）</option>
               </BaseSelect>
-              <p class="mt-1 text-xs text-muted">签名：官网服务端按密钥生成，同一官网用户跨设备可见历史；匿名：浏览器本地保留，换浏览器丢失；userid 链接：官网仅改前端嵌入带 userid 的链接，无需后端签名，但不验签故无跨访问历史（每次进入为新会话，管理员可在官网接待客户页查看全部）。Safari 对第三方 iframe 的本地存储约 7 天不活跃清除（浏览器策略，非缺陷）。</p>
+              <p class="mt-1 text-xs text-muted">三种单一身份模式：匿名：浏览器本地保留，换浏览器丢失；签名：官网服务端按密钥生成，同一官网用户跨设备可见历史；userid 链接：官网仅改前端嵌入带 userid 的链接，无需后端签名，但不验签故无跨访问历史（每次进入为新会话，管理员可在官网接待客户页查看全部）。Safari 对第三方 iframe 的本地存储约 7 天不活跃清除（浏览器策略，非缺陷）。</p>
             </div>
             <div v-if="editingId">
               <label class="text-sm text-muted mb-1 block">签名密钥</label>
@@ -1350,9 +1349,9 @@ function selectChannelType(type: string) {
   if (type === 'wechat_mp' && form.value.config.enabled === undefined) {
     form.value.config.enabled = true
   }
-  // web_c：身份模式缺省 both；channel_secret 由服务端生成不进表单
+  // web_c：身份模式缺省 anon（both 组合模式已下线）；channel_secret 由服务端生成不进表单
   if (type === 'web_c') {
-    if (!form.value.config.identity_mode) form.value.config.identity_mode = 'both'
+    if (!form.value.config.identity_mode || form.value.config.identity_mode === 'both') form.value.config.identity_mode = 'anon'
     if (form.value.config.channel_secret === undefined) form.value.config.channel_secret = ''
     if (form.value.config.enabled === undefined) form.value.config.enabled = true
     // 附件上传开关：checkbox 绑定需显式初值（默认关，纯文字聊天）
