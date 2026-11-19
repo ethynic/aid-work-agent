@@ -1944,7 +1944,7 @@ const webCChatUrl = computed(() => {
 const webCIframeCode = computed(() => {
   if (!editingId.value) return ''
   const sep = webCChatUrl.value.includes('?') ? '&' : '?'
-  return `<iframe src="${webCChatUrl.value}${sep}embed=1" style="width:420px;height:640px;border:0" allow="clipboard-write"></iframe>`
+  return `<iframe src="${webCChatUrl.value}${sep}embed=1" style="width:min(420px,100%);height:min(640px,90vh);border:0" allow="clipboard-write"></iframe>`
 })
 
 function copyText(text: string, label: string) {
