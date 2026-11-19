@@ -36,6 +36,7 @@
 | 抖音本地生活订单→门店微信群推送系统 私有化部署可行性评估 | [douyin-lifeservice-order-wechat-group-dispatch-research.md](research/douyin-lifeservice-order-wechat-group-dispatch-research.md) | 竞品（TkTok Sys）视频还原；抖音生活服务开放能力接入路径（商家自研 vs 服务商）、微信/企微推送通道选型、功能模块与工作量（一期约 8~10 人月）、预开通账号清单、… |
 | 抖音来客订单同步与门店微信播报系统 解决方案（含开发计划与报价，面向客户） | [design/douyin-lifeservice-dispatch/solution-proposal.md](design/douyin-lifeservice-dispatch/solution-proposal.md) | 一期打包价 ¥29.8 万/203 人日/约 14 周交付；通道矩阵（企微内部群 webhook 全自动合规 / 企微客户群群发限频 / RPA 播报为可选项）；抖店发货提醒等为二期可选包 |
 | 小红书客服接入 Agent 可行性调研 | [xiaohongshu-agent-customer-service-integration-research.md](research/xiaohongshu-agent-customer-service-integration-research.md) | 小红书电商客服、专业号私信、小程序客服、Agent 自动接待与转人工 |
+| 小红书商机雷达：附件拆解与接入调研 | [调研](research/xiaohongshu-social-lead-radar-research.md) | 附件取舍、数据源选型、商机证据及跨平台复用 |
 | AI 智能体行业产品体验提升调研与「工作日报」方案设计 | [ai-agent-experience-daily-report-research.md](research/ai-agent-experience-daily-report-research.md) | 工作日报（个人日报 + 团队日报）、AI 价值证明、续费驱动 |
 | 从个人经验到组织能力：AI 智能体组织知识沉淀调研与方案设计 | [org-knowledge-sedimentation-research.md](research/org-knowledge-sedimentation-research.md) | 组织知识沉淀（三层知识架构 + 专家识别 + 自动抽取 + 主动推荐）、个人经验转组织资产、续费护城河 |
 | 微信公众号文章搜索「不依赖微信 App」可行性调研 | [wechat-article-search-without-app-feasibility.md](research/wechat-article-search-without-app-feasibility.md) | 搜一搜无 App 外通道；不依赖 App 全域关键词搜文章只能在「搜狗(免费不稳)/商业聚合API(付费稳)/回退App内搜一搜」间三角取舍，无完美解 |
