@@ -532,8 +532,14 @@ async function cancel() {
 
 function applySnapshot(runner: RunnerSnapshot) {
   if (runner.waiting_text) {
+    // ask_user 停车等用户回复：主动结束本轮观察。SSE 事件流对 waiting（非终态）
+    // 不关闭，不主动断开将令 submitting 恒为 true、输入框永久禁用（测试反馈 2026-11-19）。
+    // 反问经 finally 落入消息流，用户回复走新一轮 /chat，由后端应答等待中的澄清
     waitingText.value = runner.waiting_text
     streamingText.value = ''
+    isTerminal.value = true
+    streamFailed.value = false
+    observeAbort.abort()
     return
   }
   waitingText.value = ''
@@ -640,6 +646,9 @@ async function observeRunner(runnerId: string) {
     }
     if (streamFailed.value === false && streamingText.value) {
       messages.value.push({ role: 'assistant', content: streamingText.value, created_at: nowIso(), attachments: [], images: [], files: [] })
+    } else if (waitingText.value) {
+      // ask_user 反问作为 assistant 消息入列（服务端按 wait_id 幂等落库，reload 权威校准去重）
+      messages.value.push({ role: 'assistant', content: waitingText.value, created_at: nowIso(), attachments: [], images: [], files: [] })
     }
     streamingText.value = ''
     waitingText.value = ''

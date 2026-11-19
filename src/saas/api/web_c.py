@@ -377,7 +377,11 @@ async def _persist_runner_result(identity: WebCIdentity, session_id: str, row: d
 
 
 async def _backfill_terminal_runners(identity: WebCIdentity, session_id: str) -> int:
-    """SSE 断开兜底：会话下未落库的终态 runner 补写检查（设计 §4.3 步骤 3）。"""
+    """SSE 断开兜底：会话下未落库的终态 runner 补写 + 等待中反问补写（设计 §4.3 步骤 3/4）。
+
+    终态 completed 补最终回复；waiting（ask_user 停车）补澄清反问——访客在
+    反问后关闭页面时，无人再轮询 get_runner，靠下次拉取历史补齐。
+    """
     page = await _runner_client().request(
         "GET", "/v1/sessions/channel/" + quote(session_id, safe="") + "/runners",
         authorization=None, channel_source="web_c", channel_user=identity.channel_user_id,
@@ -394,22 +398,87 @@ async def _backfill_terminal_runners(identity: WebCIdentity, session_id: str) ->
         persisted = {row["runner_id"] for row in cursor.fetchall()}
     count = 0
     for row in (page.get("runners") or []):
-        if row.get("status") != "completed" or row.get("runner_id") in persisted:
-            continue
-        await _persist_runner_result(identity, session_id, row)
-        count += 1
+        runner_id = row.get("runner_id") or ""
+        if row.get("status") == "completed":
+            if not runner_id or runner_id in persisted:
+                continue
+            await _persist_runner_result(identity, session_id, row)
+            count += 1
+        elif row.get("status") == "waiting":
+            question, wait_id = _clarification_question(row)
+            if await asyncio.to_thread(
+                _persist_clarification_message, identity.tenant_id, session_id,
+                runner_id, question, wait_id,
+            ):
+                count += 1
     return count
+
+
+def _clarification_question(row: dict) -> tuple:
+    """从 runner 行提取澄清反问文本与 wait_id（无反问返回空串二元组）。"""
+    wait = _clarification_wait((row.get("snapshot") or {}).get("waiting")) or {}
+    if wait.get("kind") != "clarification":
+        return "", ""
+    wait_id = wait.get("wait_id") or ""
+    form = wait.get("form")
+    if isinstance(form, dict) and form.get("questions") and wait_id:
+        return ask_render.render_single_message(form, ask_render.source_segment_limit("web_c")), wait_id
+    return wait.get("question") or "", wait_id
 
 
 def _waiting_text(row: dict) -> str:
     """提问等待的渠道文本化口径（web_c 归入 single 渠道组，设计 §4.3 步骤 4）。"""
-    wait = _clarification_wait((row.get("snapshot") or {}).get("waiting")) or {}
-    if wait.get("kind") != "clarification":
-        return ""
-    form = wait.get("form")
-    if isinstance(form, dict) and form.get("questions") and wait.get("wait_id"):
-        return ask_render.render_single_message(form, ask_render.source_segment_limit("web_c"))
-    return wait.get("question") or ""
+    return _clarification_question(row)[0]
+
+
+def _persist_clarification_message(tenant_id: str, session_id: str, runner_id: str,
+                                   question: str, wait_id: str) -> bool:
+    """澄清反问落库（接待页/历史可见，设计 §4.3 步骤 4 的代理层落库半边）。
+
+    幂等：metadata.client_request_id = clarify_{wait_id}，命中
+    uq_web_c_messages_client_request 唯一部分索引 + ON CONFLICT 原子拦截；
+    先 SELECT 存在检查避免高频轮询路径反复空写。同一 runner 多次 ask_user
+    按 wait_id 各自落库，互不吞并。
+    """
+    if not question or not wait_id:
+        return False
+    dedup_key = f"clarify_{wait_id}"
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM channel_messages WHERE session_id = %s "
+            "AND metadata->>'client_request_id' = %s LIMIT 1",
+            (session_id, dedup_key),
+        )
+        if cursor.fetchone() is not None:
+            return False
+        message_id = f"msg_{uuid.uuid4().hex[:16]}"
+        metadata = {"runner_id": runner_id, "kind": "clarification",
+                    "client_request_id": dedup_key}
+        cursor.execute(
+            """
+            INSERT INTO channel_messages
+            (message_id, session_id, tenant_id, role, content, message_type, attachments, metadata)
+            VALUES (%s, %s, %s, 'assistant', %s, 'text', NULL, %s::jsonb)
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                message_id, session_id, tenant_id, question,
+                json.dumps(metadata, ensure_ascii=False),
+            ),
+        )
+        inserted = cursor.rowcount > 0
+        if inserted:
+            from datetime import datetime
+
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute(
+                "UPDATE channel_sessions SET last_message_at = %s, updated_at = %s "
+                "WHERE session_id = %s",
+                (now, now, session_id),
+            )
+        conn.commit()
+        return inserted
 
 
 # ============== SSE 透传（事件流在 terminal+settled 时由上游关闭） ==============
@@ -709,11 +778,11 @@ async def chat(tenant_id: str, config_id: str, body: WebCChatRequest, request: R
     response = {"success": True, "session_id": session_id, "runner_id": runner_id,
                 "status": row.get("status"), "direct_reply": None}
     if row.get("status") == "waiting":
-        question = _waiting_text(row)
+        question, wait_id = _clarification_question(row)
         if question:
             await asyncio.to_thread(
-                _persist_assistant_message, tenant_id, session_id, runner_id,
-                question, [], "clarification")
+                _persist_clarification_message, tenant_id, session_id,
+                runner_id, question, wait_id)
         response["waiting_text"] = question
     return response
 
@@ -726,6 +795,13 @@ async def get_runner(tenant_id: str, config_id: str, runner_id: str, request: Re
     row = await _get_owned_runner(identity, runner_id)
     waiting = _waiting_text(row)
     if waiting:
+        # 中途 ask_user 反问落库（幂等 by wait_id）：SSE 对 waiting 不关闭，
+        # 终态落库覆盖不到，C 端轮询本端点时补写，保证接待页与历史可见
+        session_id = ((row.get("session") or {}).get("session_id")) or ""
+        _, wait_id = _clarification_question(row)
+        await asyncio.to_thread(
+            _persist_clarification_message, tenant_id, session_id,
+            runner_id, waiting, wait_id)
         row = dict(row)
         row["waiting_text"] = waiting
     return {"success": True, "runner": row}
