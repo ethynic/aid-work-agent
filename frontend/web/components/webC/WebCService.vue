@@ -79,10 +79,10 @@
                     <span
                       v-if="user.channel_user_id"
                       class="text-xs px-2 py-0.5 rounded-full shrink-0"
-                      :class="String(user.channel_user_id).startsWith('ext_') ? 'bg-primary-50 text-primary-600' : 'bg-gray-100 text-muted'"
+                      :class="isIdentifiedWebCUser(user.channel_user_id) ? 'bg-primary-50 text-primary-600' : 'bg-gray-100 text-muted'"
                       :title="user.channel_user_id"
                     >
-                      {{ String(user.channel_user_id).startsWith('ext_') ? '官网用户' : '匿名访客' }}
+                      {{ isIdentifiedWebCUser(user.channel_user_id) ? '官网用户' : '匿名访客' }}
                     </span>
                   </div>
                   <div class="text-xs text-muted mt-1">{{ formatSessionDateRange(user) }}</div>
@@ -414,6 +414,12 @@ const messageContainerRef = ref<HTMLElement | null>(null)
 const defaultAvatar = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2JkYmRiZCI+PHBhdGggZD0iTTEyIDEyYTIyIDIyIDAgMSAwIDAtNCAyIDIgMCAwIDAgMCA0em0tNyA3YTcgNyAwIDAgMSAxNCAwIi8+PC9zdmc+'
 
 const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)
+
+/** 实名身份（ext_ 签名链接 / uid_ userid 链接），anon_ 为匿名访客（与后端 _resolve_identity 三种前缀对齐） */
+function isIdentifiedWebCUser(channelUserId: unknown): boolean {
+  const uid = String(channelUserId || '')
+  return uid.startsWith('ext_') || uid.startsWith('uid_')
+}
 const effectiveUser = computed(() => {
   return tenantAdmin.value ? {
     user_id: tenantAdmin.value.user_id,
