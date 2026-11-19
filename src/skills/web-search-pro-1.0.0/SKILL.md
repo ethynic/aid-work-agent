@@ -121,7 +121,7 @@ python scripts/web_search.py batch sites.txt               # 批量：默认抽�
 
 ```bash
 # 采集模式：检索 + 抓取 + 结构化字段（零 LLM 依赖，获客挖掘用这个）
-python scripts/pipeline.py search "爱定义（上海）科技有限公司" --top 3 --extract
+python scripts/pipeline.py search "示例品牌（上海）科技有限公司" --top 3 --extract
 
 # 直接给 URL，跳过检索
 python scripts/pipeline.py urls "https://a.com,https://b.com" --extract
@@ -139,18 +139,18 @@ python scripts/pipeline.py urls "https://a.com,https://b.com" --extract
 
 **反分词漂移（默认行为）**：中文公司名常被引擎切碎误命中无关公司。处理方式：
 - 保留查询原文（含全角括号）直发引擎，不改写；
-- 品牌核（如「爱定义」）作为必含项硬过滤；
+- 品牌核（如「某某品牌」）作为必含项硬过滤；
 - 同引擎漂移自动重试（最多 4 次尝试）；
 - 全部漂移时返回 0 条而非错误公司——**宁可空、绝不假**。
 
 **掩码号码还原（`recovered_phones`，`--extract` 时启用）**：企业信息平台不同页面
-打码窗口不同（`1391680****` / `139****7580` / `139******80`），管线自动按位合并
+打码窗口不同（`1380013****` / `138****8000` / `138******00`），管线自动按位合并
 多页掩码还原完整号码，给出 `confidence` 与合并来源；位冲突判为不同号码，
 信息不足不下结论。
 
 > ⚠️ **合并结果是推断值，必须人工核对。** 算法只校验「长度一致 + 已知位不冲突」，
 > 无法证明两个掩码来自同一个号码——两个**不同**号码只要掩码窗口互补
-> （如 `139****7580` + `1391234****`），会拼出看似完整、实际不存在的号码且仍标
+> （如 `138****8000` + `1381234****`），会拼出看似完整、实际不存在的号码且仍标
 > `confidence=high`。输出已带 `basis: "mask_merge_inference"` 与 `verification`
 > 提醒字段；**下游请勿把 `recovered_phones` 当作已确认事实直接写入客户库或外发**。
 

@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""官网全站爬取：抓首页 → 抽取站内链接 → 逐页抓取 → 汇总邮箱/电话/联系人。"""
+"""官网全站爬取：抓首页 → 抽取站内链接 → 逐页抓取 → 汇总邮箱/电话/联系人。
+
+用法：python test_site_crawl.py <站点首页 URL>
+例：  python test_site_crawl.py https://example.com/
+"""
 import os
 import re
 import sys
@@ -8,7 +12,10 @@ import urllib.parse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import web_search
 
-BASE = "https://www.aidingyi.cn"
+if len(sys.argv) < 2:
+    sys.exit("用法：python test_site_crawl.py <站点首页 URL>")
+
+BASE = sys.argv[1].rstrip("/")
 START = BASE + "/"
 
 html = web_search.fetch_raw(START)
