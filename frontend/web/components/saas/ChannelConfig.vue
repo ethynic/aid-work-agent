@@ -1927,9 +1927,9 @@ async function downloadWebCDemo() {
   }
   const base = `${window.location.origin}/c/${tenantId.value}/${editingId.value}`
   const mode = form.value.config.identity_mode || 'anon'
-  // uid 模式保留 {官网userid} 占位符（与集成代码口径一致），由官网开发人员替换实际值；匿名模式为纯链接
+  // uid 模式预填示例常量 u=0011 / name=张三，使 demo 页开箱即可聊天（见下载函数注释）；匿名模式为纯链接
   const chatUrl = mode === 'uid'
-    ? `${base}?u={官网userid}&name={urlencode(可选显示名称)}`
+    ? `${base}?u=0011&name=张三`
     : base
   const iframeSrc = `${chatUrl}${chatUrl.includes('?') ? '&' : '?'}embed=1`
   try {

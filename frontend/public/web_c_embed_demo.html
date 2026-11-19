@@ -7,8 +7,9 @@
 <!--
   官网客服嵌入演示页（userid 链接模式）
   使用方法：
-  1. 将本文件中所有 __WEB_C_CHAT_URL__ 替换为渠道配置页提供的「聊天页地址」，并把
-     {官网userid} 与 {urlencode(可选显示名称)} 替换为当前登录用户的实际值
+  1. 将本文件中所有 __WEB_C_CHAT_URL__ 替换为渠道配置页提供的「聊天页地址」；
+     链接中的 u=0011 与 name=张三 为示例常量，需替换为当前登录用户的实际
+     官网userid 与显示名称（name 为可选显示名称，中文已可直接使用，无需手动编码）
      （匿名模式链接无 u/name 参数，直接替换即可）
   2. 用浏览器打开本文件即可看到：右下角 💬 悬浮按钮弹出 iframe 客服窗口，
      导航栏与首屏的「AI问答」按钮新标签页打开完整聊天页
@@ -90,6 +91,7 @@
     <a href="#home">首页</a>
     <a href="#products">产品</a>
     <a href="#about">关于我们</a>
+    <!-- 聊天页链接：u=0011 为示例官网userid、name=张三 为示例显示名称，集成时请替换为实际值 -->
     <a class="btn-ai" href="__WEB_C_CHAT_URL__" target="_blank" rel="noopener">AI问答</a>
   </nav>
 </header>
@@ -121,6 +123,7 @@
 
 <!-- 客服悬浮窗（iframe 嵌入聊天页；embed=1 隐藏聊天页页头） -->
 <div id="chat-panel">
+  <!-- iframe 地址与导航栏链接同源（含 embed=1），u=0011 / name=张三 同样需替换为实际值 -->
   <iframe
     src="__WEB_C_IFRAME_SRC__"
     allow="microphone; clipboard-read; clipboard-write">
