@@ -334,7 +334,8 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **存储**：Redis + 内存降级（锁经 `acquire_lock`/`release_lock`，pending 经 set/getdel）
 **键模式**：`wecom_kf_pull_lock:{tenant_id}:{open_kfid}`、`wecom_kf_pull_pending:{tenant_id}:{open_kfid}`
 **TTL**：锁 900s（单任务最长执行时间兜底，worker 崩溃时靠超时自动释放）；pending 900s（须 >= 锁 TTL：任务实际时长可能接近锁上限，过期会让补偿拉取静默丢失）
-**失效时机**：拉取任务结束时主动 `release_lock` + `getdel` 消费 pending；TTL 自动过期兜底
+**失效时机**：拉取任务结束时主动 `release_lock` + `getdel` 消费 pending；TTL 自动过期兜底；API 启动自愈（见下）
+**启动自愈**（2026-11-19 聊易事故修复）：部署重启/崩溃杀掉在跑拉取任务时 `finally` 未执行，锁残留至 TTL 且 pending 补偿永不触发（该客服号最长 15 分钟盲区）。API 启动时（`main.py` lifespan）调用 `recover_wecom_kf_pull_state` 清理持有超过 30s 的残留锁（年龄保护，避免误删并行启动 worker 刚持有的在跑锁）并对残留 pending 标记触发补偿拉取
 **关键约束**：防止同一 `open_kfid` 并发起多个 `sync_msg` 拉取任务撞微信 45009 限频（2026-10-11 演示事故）。新回调在任务进行中只置 pending，任务结束后补偿拉取一次。Redis 不可用时降级为进程内锁（仅单 worker 去重）
 **源文件**：`src/saas/api/channel_routes.py`（`_try_start_kf_pull_task` / `_kf_pull_task_wrapper`）
 

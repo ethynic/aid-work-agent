@@ -492,6 +492,16 @@ async def lifespan(app: FastAPI):
     # 已迁移至独立后台运行时（SERVER_MODE=background，见
     # src/background_runner.py）。HTTP worker 不再承载任何后台任务。
 
+    # wecom_kf 拉取状态启动自愈（2026-11-19 聊易事故修复）：部署重启/崩溃杀掉在跑
+    # 拉取任务时 finally 未执行，Redis 拉取锁残留至 TTL（900s 内该客服号只置 pending
+    # 不拉取）且 pending 补偿永不触发。启动时清理残留锁 + 对 pending 标记补偿拉取。
+    # 非关键：失败不影响启动
+    try:
+        from src.saas.api.channel_routes import recover_wecom_kf_pull_state
+        await recover_wecom_kf_pull_state()
+    except Exception as e:
+        logger.warning(f"wecom_kf 拉取状态启动自愈失败（不影响启动）: {e}")
+
     _browser_reaper = None
     _browser_reaper_manager = None
     _browser_resume_worker = None

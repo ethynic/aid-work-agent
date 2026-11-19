@@ -13,6 +13,10 @@
    - 45009 限频 -> 指数退避重试后成功
    - 限频超过最大重试次数 -> 放弃且不更新 cursor
    - 非限频错误 -> 立即失败不重试
+5. recover_wecom_kf_pull_state 启动自愈（2026-11-19 聊易事故修复）：
+   - 残留锁（持有超 30s）清理 + pending 触发补偿拉取
+   - 刚持有的在跑锁不误删
+   - 单个补偿失败不抛异常
 """
 
 import asyncio
@@ -171,6 +175,63 @@ async def test_compensate_config_not_found(monkeypatch):
 
     factory.create_from_tenant_config.assert_not_awaited()
     start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recover_clears_stale_lock_and_compensates_pending(monkeypatch):
+    """启动自愈：残留锁（持有超过 30s）被清理，pending 触发补偿拉取"""
+    redis = _fake_redis()
+    redis.scan.side_effect = [
+        (0, ["wecom_kf_pull_lock:tenant_a:kf1"]),
+        (0, ["wecom_kf_pull_pending:tenant_a:kf1"]),
+    ]
+    redis.ttl.return_value = 600  # 锁年龄 = 900 - 600 = 300s，视为残留
+    monkeypatch.setattr(cr_module, "redis_client", redis)
+    compensate = AsyncMock()
+    monkeypatch.setattr(cr_module, "_compensate_kf_pull", compensate)
+
+    await cr_module.recover_wecom_kf_pull_state()
+
+    redis.delete.assert_called_once_with("wecom_kf_pull_lock:tenant_a:kf1")
+    compensate.assert_awaited_once_with("tenant_a", "kf1")
+
+
+@pytest.mark.asyncio
+async def test_recover_skips_fresh_in_run_lock(monkeypatch):
+    """启动自愈：刚持有（年龄 < 30s）的在跑锁不误删，避免并发 sync_msg"""
+    redis = _fake_redis()
+    redis.scan.side_effect = [
+        (0, ["wecom_kf_pull_lock:tenant_a:kf1"]),
+        (0, []),
+    ]
+    redis.ttl.return_value = 895  # 锁年龄 = 5s，可能是并行启动 worker 的在跑锁
+    monkeypatch.setattr(cr_module, "redis_client", redis)
+    compensate = AsyncMock()
+    monkeypatch.setattr(cr_module, "_compensate_kf_pull", compensate)
+
+    await cr_module.recover_wecom_kf_pull_state()
+
+    redis.delete.assert_not_called()
+    compensate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recover_pending_compensation_failure_does_not_raise(monkeypatch):
+    """启动自愈：单个 pending 补偿失败不影响其余扫描，不向 lifespan 抛异常"""
+    redis = _fake_redis()
+    redis.scan.side_effect = [
+        (0, []),
+        (0, ["wecom_kf_pull_pending:tenant_a:kf1", "wecom_kf_pull_pending:tenant_b:kf2", "bad_key"]),
+    ]
+    monkeypatch.setattr(cr_module, "redis_client", redis)
+    compensate = AsyncMock(side_effect=[RuntimeError("db down"), None])
+    monkeypatch.setattr(cr_module, "_compensate_kf_pull", compensate)
+
+    await cr_module.recover_wecom_kf_pull_state()
+
+    assert compensate.await_count == 2
+    compensate.assert_any_await("tenant_a", "kf1")
+    compensate.assert_any_await("tenant_b", "kf2")
 
 
 @pytest.mark.asyncio
