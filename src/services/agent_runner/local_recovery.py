@@ -356,8 +356,6 @@ def _cancel_facts(cursor, row, *, request):
             **{key:invocation.get(key) for key in ('id','state','effect','deadline_at')}})
     from .notify_audit import cancellation_facts
     facts.extend(cancellation_facts(row))
-    from .browser_facts import cancellation_facts as browser_cancellation_facts
-    facts.extend(browser_cancellation_facts(cursor,row))
     return facts
 
 

@@ -510,10 +510,8 @@ def notify_suppressed(observer: Optional[VerboseFeedbackObserver], *, reason: st
 # ============== 事件包装器（设计 §6.3） ==============
 
 # 用户可见的终止事件：到达即视为本轮结束（EMITTED → CLOSED，状态机图）。
-# browser_human_required 属用户可见交互终态：其后 response_started 置位，
-# state 与 dispatcher 都不再放行/投递任何后续 verbose（policy 发射守卫）。
 _TERMINAL_EVENT_TYPES = frozenset({
-    "response", "clarification", "browser_human_required",
+    "response", "clarification",
     "complete", "error", "cancelled",
 })
 
@@ -550,7 +548,7 @@ async def iter_with_verbose_feedback(
     - producer task 消费原始事件写入内部 queue，消费端逐条透传，绝不取消 producer；
     - 「非 state.event 本体的 verbose 一律丢弃」：迟到的重复 / 外部伪造事件在
       此被防御性拦截，确保「每轮最多一条」不依赖 producer 自觉；
-    - 终态事件（response / clarification / browser_human_required 等）到达即
+    - 终态事件（response / clarification 等）到达即
       mark_response_started，其后 state 拒绝再发；
     - 正常 / 异常 / 取消路径都必须 cancel 并 await producer，不留遗留 task；
     - 配置未生效时纯透传（不启动 producer task）。

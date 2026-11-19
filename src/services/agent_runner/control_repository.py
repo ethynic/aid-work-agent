@@ -54,9 +54,8 @@ def execution_waits(checkpoint):
 
 
 class ControlRepository:
-    def __init__(self, connection_factory=get_db_connection, *, browser_completions=None):
+    def __init__(self, connection_factory=get_db_connection):
         self.connection_factory = connection_factory
-        self.browser_completions = browser_completions
 
     @staticmethod
     def waiting_for(row, request):
@@ -71,8 +70,7 @@ class ControlRepository:
         waiting = ControlRepository.waiting_for(row, request)
         if waiting is None:
             raise RunnerError('CONTROL_WAIT_STALE',409)
-        expected = ({'clarification'} if request.action == 'reply' else
-                    {'timer','continuous_guard'} if request.action == 'resume' else {'human_assistance'})
+        expected = {'clarification'} if request.action == 'reply' else {'timer', 'continuous_guard'}
         if waiting.get('kind') not in expected:
             raise RunnerError('CONTROL_WAIT_KIND_MISMATCH',409)
 
@@ -103,49 +101,6 @@ class ControlRepository:
             raise RunnerError(errors[0]['code'], 422, errors=errors)
         return {'text': ask_form.canonical_text(form, normalized, skip=request.skip),
                 'answers': normalized, 'form': copy.deepcopy(form)}
-
-    def accept_completion_in_tx(self, cursor, row, request):
-        """Internal Browser fact bridge under an already locked original owner.
-
-        This accepts only browser_complete and never relaxes the parked guard.
-        The caller commits its completion watermark in this same transaction.
-        """
-        if request.action != 'browser_complete' or self.browser_completions is None:
-            raise RunnerError('CONTROL_COMPLETION_FORBIDDEN',403)
-        if (row['cancel_requested'] or row['status'] not in {'paused','waiting','interrupted'}
-                or row.get('lease_valid')):
-            raise RunnerError('RUNNER_NOT_PARKED',409)
-        cursor.execute('''SELECT * FROM agent_runner_controls WHERE runner_id=%s
-            AND client_request_id=%s''',(row['runner_id'],request.client_request_id))
-        previous = decoded(cursor.fetchone())
-        if previous:
-            if previous['intent_digest'] != request.digest():
-                raise RunnerError('IDEMPOTENCY_INPUT_MISMATCH',409)
-            return previous
-        if row.get('resume_control_id'):
-            raise RunnerError('RUNNER_RESUME_PENDING',409)
-        self.assert_wait(row,request)
-        cursor.execute('''SELECT 1 FROM agent_runner_controls WHERE runner_id=%s
-            AND status='consumed' AND action='browser_complete'
-            AND payload->>'wait_id'=%s AND payload->>'target_execution_id'=%s''',
-            (row['runner_id'],request.wait_id,request.target_execution_id))
-        if cursor.fetchone():
-            raise RunnerError('CONTROL_WAIT_CONSUMED',409)
-        self.browser_completions.assert_completion_in_tx(cursor,row,request)
-        control_id = 'control_' + uuid.uuid4().hex
-        cursor.execute('''INSERT INTO agent_runner_controls
-            (control_id,runner_id,tenant_id,scope_key,action,client_request_id,intent_digest,payload,status)
-            VALUES (%s,%s,%s,%s,'browser_complete',%s,%s,%s::jsonb,'accepted') RETURNING *''',
-            (control_id,row['runner_id'],row['tenant_id'],row['scope_key'],request.client_request_id,
-             request.digest(),json.dumps(request.intent(),ensure_ascii=False)))
-        control = decoded(cursor.fetchone())
-        cursor.execute('''UPDATE agent_runners SET resume_control_id=%s,
-            control_revision=control_revision+1,view_revision=view_revision+1,
-            updated_at=clock_timestamp() WHERE runner_id=%s''',(control_id,row['runner_id']))
-        from .application_public_projection import sync_public_display
-        cursor.execute('SELECT * FROM agent_runners WHERE runner_id=%s',(row['runner_id'],))
-        sync_public_display(cursor,decoded(cursor.fetchone()),advance_view=False)
-        return control
 
     def submit(self, principal, runner_id, request, *, expected_revision=None):
         with self.connection_factory() as connection:
@@ -185,30 +140,24 @@ class ControlRepository:
                 guard_wait = any(wait.get('kind') == 'continuous_guard' for wait in waits)
                 if guard_wait or (row.get('checkpoint',{}).get('durable_sleep') or {}).get('phase')=='armed':
                     self.assert_wait(row,request)
-            if request.action in ('reply','browser_complete'):
+            if request.action == 'reply':
                 self.assert_wait(row,request)
                 cursor.execute('''SELECT 1 FROM agent_runner_controls WHERE runner_id=%s
-                    AND status='consumed' AND action IN ('reply','browser_complete')
+                    AND status='consumed' AND action='reply'
                     AND payload->>'wait_id'=%s AND payload->>'target_execution_id'=%s''',
                     (runner_id, request.wait_id, request.target_execution_id))
                 if cursor.fetchone():
                     raise RunnerError('CONTROL_WAIT_CONSUMED',409)
                 # 结构化提问受理（设计 §5.4）：失败同步 422 + errors，不落库；
                 # 成功生成 canonical 与 form 快照。旧 clarify 原路径不受影响。
-                structured = (self._accept_ask_form(row, request)
-                              if request.action == 'reply'
-                              and (request.answers is not None or request.skip) else None)
-                if request.action == 'reply':
-                    waiting = self.waiting_for(row, request)
-                    if recovery_wait(waiting):
-                        payload = request.intent()
-                        if structured is not None:
-                            payload['answers'] = structured['answers']
-                        recovery_reply = validate_reply(cursor,row,waiting,payload)
-            if request.action == 'browser_complete':
-                if self.browser_completions is None:
-                    raise RunnerError('CONTROL_COMPLETION_FORBIDDEN',403)
-                self.browser_completions.assert_completion_in_tx(cursor,row,request)
+                if request.answers is not None or request.skip:
+                    structured = self._accept_ask_form(row, request)
+                waiting = self.waiting_for(row, request)
+                if recovery_wait(waiting):
+                    payload = request.intent()
+                    if structured is not None:
+                        payload['answers'] = structured['answers']
+                    recovery_reply = validate_reply(cursor,row,waiting,payload)
         control_id = 'control_' + uuid.uuid4().hex
         acknowledged_pause = request.action == 'pause' and row['status'] in ('paused','waiting','interrupted')
         status = 'consumed' if acknowledged_pause else 'accepted'
@@ -262,9 +211,6 @@ class ControlRepository:
                 control_revision=control_revision+1,view_revision=view_revision+1,
                 updated_at=clock_timestamp() WHERE runner_id=%s''',
                 (control_id,capped_snapshot_dumps(snapshot),runner_id))
-        from .application_public_projection import sync_public_display
-        cursor.execute('SELECT * FROM agent_runners WHERE runner_id=%s',(runner_id,))
-        sync_public_display(cursor,decoded(cursor.fetchone()),advance_view=False)
         EventRepository.notify_in_tx(cursor,row)
         return control,True
 

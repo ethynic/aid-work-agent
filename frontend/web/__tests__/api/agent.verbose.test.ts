@@ -54,7 +54,7 @@ describe('SSEManager verbose 帧解析', () => {
     await new SSEManager().connect(
       '测试消息', 'session_test', undefined, {},
       onProgress, onResponse, () => {}, () => {},
-      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
       onVerbose,
     )
 
@@ -79,7 +79,7 @@ describe('SSEManager verbose 帧解析', () => {
     await new SSEManager().connect(
       '测试消息', 'session_test', undefined, {},
       () => {}, () => {}, () => {}, () => {},
-      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
       onVerbose,
     )
 

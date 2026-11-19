@@ -1,8 +1,11 @@
 """Public display projection preserves visible fields and private source rows."""
 from copy import deepcopy
 import json
+from types import SimpleNamespace
 
 from src.api.message_projection import public_conversation_messages
+from src.services.agent_runner.public_view import _public_waiting
+from src.services.agent_runner.runtime.history_projection import waiting_messages
 
 
 def test_public_history_filters_internal_rows_and_keeps_legacy_and_runner_display_without_mutating_dal():
@@ -41,3 +44,24 @@ def test_public_history_filters_internal_rows_and_keeps_legacy_and_runner_displa
     assert rows == original
     result[0]["metadata"]["legacy_display_extension"]["original"] = "mutated caller copy"
     assert rows == original
+
+
+def test_continuous_guard_public_wait_keeps_its_identifier():
+    waiting = {"kind": "continuous_guard", "assistance_id": "continuous_guard:20"}
+    assert _public_waiting(waiting) == waiting
+
+
+def test_clarification_history_pairs_deferred_sibling_without_changing_execution():
+    state = SimpleNamespace(messages=[{"role": "assistant", "tool_calls": [
+        {"id": "delegate"}, {"id": "sibling"}]}], initial_len=0,
+        pending=[SimpleNamespace(id="delegate"), SimpleNamespace(id="sibling")])
+
+    projection = waiting_messages(state)
+
+    assert projection[0] == state.messages[0]
+    assert [entry["tool_call_id"] for entry in projection[1:]] == ["sibling"]
+    assert json.loads(projection[1]["content"]) == {
+        "success": False, "error_code": "TOOL_DEFERRED_BY_CLARIFICATION",
+        "error": "收到澄清回复后由 Agent 重新决定是否执行",
+    }
+    assert len(state.messages) == 1 and [call.id for call in state.pending] == ["delegate", "sibling"]

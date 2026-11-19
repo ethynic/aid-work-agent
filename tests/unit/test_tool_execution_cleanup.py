@@ -15,7 +15,6 @@ ORDINARY_TOOL_NAMES = {
     "web_search",
     "email_process",
     "read",
-    "browser_automation",
     "excel_process",
     "pdf_process",
 }

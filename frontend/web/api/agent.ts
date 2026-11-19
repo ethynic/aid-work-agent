@@ -108,7 +108,6 @@ export class SSEManager {
     onThinking?: (data: string) => void,
     onClarification?: (subagentName: string, question: string, form?: AskForm) => void,
     onImages?: (images: any[], placement: string) => void,
-    onBrowserHumanRequired?: (event: Extract<MessageStreamEvent, { type: 'browser_human_required' }>) => void,
     onVerbose?: (message: VerboseMessage) => void,
     subagent?: string | null,
     instance_id?: string | null,
@@ -182,7 +181,7 @@ export class SSEManager {
         if (done) {
           // 处理缓冲区中剩余的数据
           if (buffer.trim()) {
-            this.parseSSELine(buffer, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification, onImages, onBrowserHumanRequired, onVerbose })
+            this.parseSSELine(buffer, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification, onImages, onVerbose })
           }
           break
         }
@@ -195,7 +194,7 @@ export class SSEManager {
         buffer = messages.pop() || '' // 保留最后一条不完整的消息
 
         for (const msg of messages) {
-          this.parseSSELine(msg, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification, onImages, onBrowserHumanRequired, onVerbose })
+          this.parseSSELine(msg, { onProgress, onResponse, onComplete, onError, onToolStart, onToolResult, onThinking, onClarification, onImages, onVerbose })
         }
       }
     } catch (error) {
@@ -222,7 +221,6 @@ export class SSEManager {
       onThinking?: (data: string) => void
       onClarification?: (subagentName: string, question: string, form?: AskForm) => void
       onImages?: (images: any[], placement: string) => void
-      onBrowserHumanRequired?: (event: Extract<MessageStreamEvent, { type: 'browser_human_required' }>) => void
       onVerbose?: (message: VerboseMessage) => void
     }
   ) {
@@ -284,12 +282,6 @@ export class SSEManager {
             // Phase 2 P2.5：Agent 推送的图片资产事件
             callbacks.onImages?.(event.images || [], event.placement || 'after_text')
             break
-          case 'browser_human_required':
-            callbacks.onBrowserHumanRequired?.(event)
-            break
-          case 'cancelled':
-            // 保留扩展能力，暂不触发 UI 回调
-            break
         }
       } catch {
         // 非JSON数据，当作响应处理
@@ -303,41 +295,6 @@ export class SSEManager {
   disconnect(): void {
     this.abortController?.abort()
   }
-}
-
-function apiBase(): string {
-  return import.meta.env.VITE_API_BASE_URL || '/api'
-}
-
-async function browserPost(path: string, authHeaders: Record<string, string>): Promise<any> {
-  const response = await fetch(`${apiBase()}${path}`, { method: 'POST', headers: authHeaders })
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(data?.detail?.error_code || data?.error_code || 'BROWSER_REQUEST_FAILED')
-  return data
-}
-
-export const browserApi = {
-  takeControl: (runId: string, assistanceId: string, headers: Record<string, string>) =>
-    browserPost(`/browser/runs/${encodeURIComponent(runId)}/take_control?assistance_id=${encodeURIComponent(assistanceId)}`, headers),
-  complete: (runId: string, assistanceId: string, headers: Record<string, string>) =>
-    browserPost(`/browser/runs/${encodeURIComponent(runId)}/assistance/${encodeURIComponent(assistanceId)}/complete`, headers),
-  extend: (runId: string, assistanceId: string, headers: Record<string, string>) =>
-    browserPost(`/browser/runs/${encodeURIComponent(runId)}/assistance/${encodeURIComponent(assistanceId)}/extend`, headers),
-  cancel: (runId: string, assistanceId: string, headers: Record<string, string>) =>
-    browserPost(`/browser/runs/${encodeURIComponent(runId)}/cancel?assistance_id=${encodeURIComponent(assistanceId)}`, headers),
-  viewTicket: (runId: string, headers: Record<string, string>) =>
-    browserPost(`/browser/runs/${encodeURIComponent(runId)}/view_ticket`, headers),
-  continuationEvents: async (continuationId: string, afterSeq: number, headers: Record<string, string>) => {
-    const response = await fetch(`${apiBase()}/agent/continuations/${encodeURIComponent(continuationId)}/events?after_seq=${afterSeq}`, { headers })
-    if (!response.ok) throw new Error('CONTINUATION_FETCH_FAILED')
-    return response.json()
-  },
-  viewWebSocketUrl(runId: string, ticket: string): string {
-    const base = apiBase()
-    const origin = base.startsWith('http') ? new URL(base).origin : window.location.origin
-    const wsOrigin = origin.replace(/^http/, 'ws')
-    return `${wsOrigin}${base.startsWith('http') ? new URL(base).pathname : base}/browser/runs/${encodeURIComponent(runId)}/view_ws?ticket=${encodeURIComponent(ticket)}`
-  },
 }
 
 export default SSEManager

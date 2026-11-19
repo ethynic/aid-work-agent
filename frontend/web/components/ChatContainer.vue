@@ -74,7 +74,7 @@
               @remove="handleRemoveFile"
               @stop="abortStreaming"
               @resume="resumeResumableTask"
-              :disabled="isProcessing || isWaitingHuman || existingSessionLoading || !!existingSessionError"
+              :disabled="isProcessing || existingSessionLoading || !!existingSessionError"
               :is-processing="isProcessing"
               :files="currentFiles"
               :can-stop="canStop"
@@ -158,7 +158,6 @@ const {
   abortStreaming,
   sessionId: agentSessionId,
   inputHintState,
-  isWaitingHuman,
   runnerFeedback,
   durableTask,
   durableTaskBusy,

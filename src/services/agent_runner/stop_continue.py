@@ -13,7 +13,6 @@ import uuid
 
 from .contracts import canonical_json
 from .ownership import lock_runner
-from .repository import decoded
 
 
 def dispatch_continue_resume_in_tx(cursor, runner, checkpoint, *, automatic_key=None):
@@ -83,9 +82,6 @@ def dispatch_continue_resume_in_tx(cursor, runner, checkpoint, *, automatic_key=
     cursor.execute('''UPDATE agent_runners SET resume_control_id=%s,
         control_revision=control_revision+1,view_revision=view_revision+1,
         updated_at=clock_timestamp() WHERE runner_id=%s''', (control_id, row['runner_id']))
-    from .application_public_projection import sync_public_display
-    cursor.execute('SELECT * FROM agent_runners WHERE runner_id=%s', (row['runner_id'],))
-    sync_public_display(cursor, decoded(cursor.fetchone()), advance_view=False)
     from .event_repository import EventRepository
     EventRepository.notify_in_tx(cursor, row)
     return True

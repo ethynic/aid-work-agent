@@ -3,7 +3,7 @@
 import copy
 
 from src.services.agent_runner.presentation import (
-    browser_display, progress_display, scalar_fields,
+    progress_display, scalar_fields,
 )
 
 
@@ -40,8 +40,6 @@ def public_conversation_messages(messages):
                 display[key] = _items(metadata[key], fields)
         if isinstance(metadata.get('progressMessages'), list):
             display['progressMessages'] = [progress_display(item) for item in metadata['progressMessages'] if isinstance(item, dict)]
-        if isinstance(metadata.get('browserAssistance'), dict):
-            display['browserAssistance'] = browser_display(metadata['browserAssistance'])
         projected['metadata'] = display
         result.append(projected)
     return result

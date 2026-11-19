@@ -24,8 +24,7 @@ from src.services.agent_runner.slot_capacity import (
 def _runner_config(slot_concurrency=4):
     return SimpleNamespace(enabled=True, slot_concurrency=slot_concurrency,
         watchdog_threshold=15, heartbeat_seconds=10, lease_seconds=30,
-        poll_seconds=0.05, durable_sleep_enabled=False, concurrency=1,
-        browser_owner=None)
+        poll_seconds=0.05, durable_sleep_enabled=False, concurrency=1)
 
 
 class TestResolveSlotConcurrency:

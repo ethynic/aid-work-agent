@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.core.agent_engine.contracts import AgentMode, CheckpointFailure, ExecutionState, Identity, ToolCall, ToolFact
-from src.services.agent_runner.browser_recovery import ApplicationToolRecovery
+from src.services.agent_runner.application_tool_recovery import ApplicationToolRecovery
 from src.services.agent_runner.contracts import RunnerError
 from src.services.agent_runner.recovery import RecoveryCoordinator
 from src.services.agent_runner.runtime_manifest import configuration_fingerprint
@@ -235,7 +235,7 @@ def recovery_fixture(call, workspace=None):
     authorizer = SimpleNamespace(authorize_persisted=lambda row: SimpleNamespace(identity=identity),
                                  assert_credit=lambda principal: None)
     profiles = SimpleNamespace(resolve=lambda profile, tenant=None: (None, 'fixture-main'))
-    recovery = RecoveryCoordinator(authorizer, profiles, tool_recovery=ApplicationToolRecovery(None, None, profiles))
+    recovery = RecoveryCoordinator(authorizer, profiles, tool_recovery=ApplicationToolRecovery(None, profiles))
     return recovery, row, {'control_id': 'fixture-resume', 'action': 'resume', 'payload': {}}
 
 

@@ -45,20 +45,6 @@ def progress_display(value):
     return result
 
 
-def browser_display(value):
-    result = scalar_fields(value, ('assistance_id','run_id','continuation_id','reason_code','surface',
-                                  'title','completion_mode','completion_status','expires_at','state'))
-    if isinstance(value, dict) and type(value.get('view_available')) is bool:
-        result['view_available'] = value['view_available']
-    if isinstance(value, dict):
-        for key in ('steps','missing_conditions'):
-            if isinstance(value.get(key),list):
-                result[key] = [item for item in value[key] if isinstance(item,str)]
-    return result
-
-
 def project_user_event(snapshot, event):
-    if event.get('type') == 'browser_human_required':
-        snapshot['browserAssistance'] = browser_display(event)
-    elif event.get('type') == 'images':
+    if event.get('type') == 'images':
         snapshot['imagesPlacement'] = event.get('placement','after_text')

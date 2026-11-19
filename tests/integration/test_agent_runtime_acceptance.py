@@ -365,65 +365,6 @@ async def test_child_usage_is_recorded_once_without_incrementing_top_level_itera
 
 
 @pytest.mark.asyncio
-async def test_browser_wait_projects_sibling_pairs_and_public_continuation_does_not_replay(boundaries, monkeypatch):
-    from src.core.agent import Agent
-    from src.core.tool_suspension import ToolSuspension
-    from src.services.agent_runner.runtime.executor import RuntimeExecution
-    from src.services.agent_runner.runtime.profile import RuntimeResources
-
-    class SuspendTool(ProbeTool):
-        name = "acceptance_suspended"
-
-        async def execute(self, **kwargs):
-            context = current_tool_execution_context()
-            self.contexts.append(context)
-            return ToolSuspension(tenant_id=context.tenant_id, user_id=context.user_id,
-                session_id=context.session_id, agent_execution_id=context.agent_execution_id,
-                tool_call_id=context.tool_call_id, run_id="browser-run", assistance_id="assistance",
-                continuation_id="continuation", event={"type": "human_assistance", "assistanceId": "assistance"})
-
-    class UntouchedTool(ProbeTool):
-        name = "acceptance_untouched"
-
-    registry = ToolRegistry()
-    first, suspended, untouched = ProbeTool(), SuspendTool(), UntouchedTool()
-    for tool in (first, suspended, untouched):
-        registry.register(tool)
-    store = SimpleNamespace(get_assistance=AsyncMock(return_value={"id": "assistance"}),
-                            bind_agent=AsyncMock(return_value=True))
-    monkeypatch.setattr("src.tools.browser.resume_store.ResumeStore", lambda: store)
-    resources = RuntimeResources(mode=AgentMode.STANDALONE, subagent_config=config())
-    resources.tool_registry, resources.tool_executor = registry, ToolExecutor(registry)
-    resources.llm = Gateway(response("", [tool_call(identifier="A"),
-        tool_call("acceptance_suspended", "B"), tool_call("acceptance_untouched", "C")]))
-    runtime = RuntimeExecution(resources, Identity("tenant-a", "user-a", "session-a"), history_reader=Reader())
-    events = [event async for event in runtime.run("browser task")]
-    projected = [event for event in events if event["type"] == "tool_messages" and event.get("suspended")][-1]["messages"]
-    paired = {message["tool_call_id"]: message for message in projected if message["role"] == "tool"}
-    assert set(paired) == {"A", "C"}, "Legacy storage must preserve A and explicit unexecuted C while B waits"
-    deferred = paired["C"]["content"]
-    assert "deferred" in (deferred if isinstance(deferred, str) else json.dumps(deferred)).lower()
-    assert runtime.state.tools["C"].phase == "prepared"
-    assert [item.id for item in runtime.state.pending] == ["B", "C"]
-    assert len(first.contexts) == 1 and len(suspended.contexts) == 1 and untouched.contexts == []
-
-    rows = [{"role": "user", "content": "browser task", "metadata": {}}]
-    for message in projected:
-        metadata = {key: message[key] for key in ("tool_calls", "tool_call_id") if key in message}
-        rows.append({"role": message["role"], "content": message["content"], "metadata": metadata})
-    monkeypatch.setattr("src.db.models.MessageDB.list_by_session", lambda *args, **kwargs: deepcopy(rows))
-    agent = Agent(mode=AgentMode.STANDALONE, subagent_config=config())
-    gateway = Gateway(response("continued"))
-    agent.llm, agent.tool_registry, agent.tool_executor = gateway, registry, ToolExecutor(registry)
-    user = SimpleNamespace(tenant_id="tenant-a", user_id="user-a", name="A", phone=None)
-    continued = [event async for event in agent.continue_tool_call(
-        session_id="session-a", tool_call_id="B", result={"success": True, "data": "browser result"}, user=user)]
-    assert any(event.get("data") == "continued" for event in continued)
-    assert [m["tool_call_id"] for m in gateway.requests[0]["messages"] if m["role"] == "tool"] == ["A", "B", "C"]
-    assert len(first.contexts) == 1 and len(suspended.contexts) == 1 and untouched.contexts == []
-
-
-@pytest.mark.asyncio
 async def test_user_answer_resumes_pending_child_clarification_instead_of_starting_main_model(boundaries, monkeypatch):
     from src.services.agent_runner.runtime.executor import RuntimeExecution
     from src.services.agent_runner.runtime.profile import RuntimeResources

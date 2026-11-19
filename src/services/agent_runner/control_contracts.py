@@ -28,12 +28,13 @@ class AnswerItem(BaseModel):
 
 class RunnerControl(BaseModel):
     client_request_id: str = Field(min_length=1, max_length=128)
-    action: Literal['pause','resume','reply','browser_complete']
+    action: Literal['pause','resume','reply']
     target_execution_id: str | None = Field(default=None, max_length=256)
     wait_id: str | None = Field(default=None, max_length=256)
     answer: str = Field(default='', max_length=1_000_000)
     attachments: list[AttachmentRef] = Field(default_factory=list, max_length=100)
-    completion_ref: str | None = Field(default=None, max_length=256)
+    # Older gateways send null. Preserve ordinary control wire and digest compatibility.
+    completion_ref: None = None
     # Structured answers for an ask_user form. None means not supplied; an
     # explicit [] is a legitimate all-unanswered submission. skip is the
     # explicit whole-form skip, reply-only.
@@ -45,7 +46,7 @@ class RunnerControl(BaseModel):
 
     @model_validator(mode='after')
     def consistent_action(self):
-        if self.action in ('reply','browser_complete') and (not self.wait_id or not self.target_execution_id):
+        if self.action == 'reply' and (not self.wait_id or not self.target_execution_id):
             raise ValueError('CONTROL_WAIT_REQUIRED')
         if self.action == 'reply' and not (self.answer.strip() or self.attachments
                 or self.answers is not None or self.skip):
@@ -58,10 +59,6 @@ class RunnerControl(BaseModel):
             raise ValueError('CONTROL_ANSWER_CONFLICT')
         if self.skip and self.answers is not None:
             raise ValueError('CONTROL_SKIP_CONFLICT')
-        if self.action == 'browser_complete' and not self.completion_ref:
-            raise ValueError('CONTROL_COMPLETION_REQUIRED')
-        if self.action != 'browser_complete' and self.completion_ref:
-            raise ValueError('CONTROL_COMPLETION_UNEXPECTED')
         return self
 
     def intent(self):

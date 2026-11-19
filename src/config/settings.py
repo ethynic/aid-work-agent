@@ -262,19 +262,6 @@ class WebFetchToolConfig(BaseModel):
     total_timeout_seconds: float = Field(90.0, gt=0, le=180)
 
 
-class BrowserToolConfig(BaseModel):
-    """浏览器工具配置"""
-    headless: bool = True  # 是否无头模式
-    timeout: int = 30000  # 默认超时时间（毫秒）
-    task_timeout: float = 300.0  # 单次工具总超时（秒）
-    command_timeout: float = 30.0  # worker 单命令超时（秒）
-    owner_lease_ttl: int = 30  # owner lease TTL（秒）
-    owner_renew_interval: float = 10.0  # owner lease 续租间隔（秒）
-    reaper_interval: float = 15.0  # 过期 run 回收周期（秒）
-    viewport_width: int = 1920  # 视口宽度
-    viewport_height: int = 1080  # 视口高度
-
-
 class MapsToolConfig(BaseModel):
     """地图工具配置"""
     amap_api_key: str = ""
@@ -295,7 +282,6 @@ class ToolsConfig(BaseModel):
     ocr: OCRToolConfig = Field(default_factory=OCRToolConfig)
     search: SearchToolConfig = Field(default_factory=SearchToolConfig)
     fetch: WebFetchToolConfig = Field(default_factory=WebFetchToolConfig)
-    browser: BrowserToolConfig = Field(default_factory=BrowserToolConfig)
     maps: MapsToolConfig = Field(default_factory=MapsToolConfig)
     asr: ASRToolConfig = Field(default_factory=ASRToolConfig)
 
@@ -739,25 +725,6 @@ class AgentRunnerPeerConfig(BaseModel):
     sources: List[str] = Field(default_factory=lambda: ["chat"])
 
 
-class BrowserGatewayPeerConfig(BaseModel):
-    """Dedicated Browser observer gateway; channel peers grant no view access."""
-    token_hash: str = ""
-
-
-class AgentRunnerBrowserOwnerConfig(BaseModel):
-    """Temporary producer admission while the owner sidecar is being wired."""
-    enabled: bool = False
-    endpoint: str = "http://127.0.0.1:8092/internal/runner-browser"
-    allowed_endpoints: List[str] = Field(default_factory=lambda: ["http://127.0.0.1:8092/internal/runner-browser"])
-    view_enabled: bool = False
-    bind_host: str = Field(default='127.0.0.1',min_length=1,max_length=253)
-    bind_port: int = Field(default=8092,ge=1,le=65535)
-    gateway_service_id: str = Field(default='browser-web',min_length=1,max_length=128)
-    gateway_peers: Dict[str, BrowserGatewayPeerConfig] = Field(default_factory=dict)
-
-
-
-
 class AgentRunnerLimitsConfig(BaseModel):
     """Byte ceilings for durable persistence and single-input admission.
 
@@ -801,7 +768,6 @@ class AgentRunnerConfig(BaseModel):
     # HEAVY_TOOLS_MODE=remote 时清单内工具经代理/处理器远程派发到重工具服务；
     # 按工具注册 name 匹配。清单移除某项即该工具回退轻容器本地执行。
     heavy_tools: List[str] = Field(default_factory=list)
-    browser_owner: AgentRunnerBrowserOwnerConfig = Field(default_factory=AgentRunnerBrowserOwnerConfig)
     limits: AgentRunnerLimitsConfig = Field(default_factory=AgentRunnerLimitsConfig)
 
     @validator("heartbeat_seconds")
@@ -1125,31 +1091,13 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
             runner_cfg['watchdog_threshold'] = int(os.environ['AGENT_RUNNER_WATCHDOG_THRESHOLD'])
         except ValueError:
             pass
-    browser_owner = runner_cfg.setdefault('browser_owner', {})
-    if os.getenv('AGENT_RUNNER_BROWSER_OWNER_ENABLED') is not None:
-        browser_owner['enabled'] = os.environ['AGENT_RUNNER_BROWSER_OWNER_ENABLED'].lower() in ('true','1','yes')
-    if os.getenv('AGENT_RUNNER_BROWSER_OWNER_ENDPOINT') is not None:
-        browser_owner['endpoint'] = os.environ['AGENT_RUNNER_BROWSER_OWNER_ENDPOINT']
-    if os.getenv('AGENT_RUNNER_BROWSER_ALLOWED_ENDPOINTS') is not None:
-        browser_owner['allowed_endpoints'] = [value.strip() for value in os.environ['AGENT_RUNNER_BROWSER_ALLOWED_ENDPOINTS'].split(',') if value.strip()]
-    if os.getenv('AGENT_RUNNER_BROWSER_VIEW_ENABLED') is not None:
-        browser_owner['view_enabled'] = os.environ['AGENT_RUNNER_BROWSER_VIEW_ENABLED'].lower() in ('true','1','yes')
-    if os.getenv('AGENT_RUNNER_BROWSER_BIND_HOST') is not None:
-        browser_owner['bind_host'] = os.environ['AGENT_RUNNER_BROWSER_BIND_HOST']
-    if os.getenv('AGENT_RUNNER_BROWSER_BIND_PORT') is not None:
-        browser_owner['bind_port'] = int(os.environ['AGENT_RUNNER_BROWSER_BIND_PORT'])
-    if os.getenv('AGENT_RUNNER_BROWSER_GATEWAY_SERVICE_ID') is not None:
-        browser_owner['gateway_service_id'] = os.environ['AGENT_RUNNER_BROWSER_GATEWAY_SERVICE_ID']
-    if os.getenv('AGENT_RUNNER_BROWSER_GATEWAY_TOKEN_HASH') is not None:
-        peer = browser_owner.setdefault('gateway_peers',{}).setdefault(browser_owner.get('gateway_service_id','browser-web'),{})
-        peer['token_hash'] = os.environ['AGENT_RUNNER_BROWSER_GATEWAY_TOKEN_HASH']
     if os.getenv("AGENT_RUNNER_WEB_SERVICE_TOKEN"):
         runner_cfg["web_service_token"] = os.environ["AGENT_RUNNER_WEB_SERVICE_TOKEN"]
     if os.getenv("AGENT_RUNNER_SERVICE_ID"):
         peer = runner_cfg.setdefault("peers", {}).setdefault(os.environ["AGENT_RUNNER_SERVICE_ID"], {})
         peer["sources"] = [value.strip() for value in os.getenv("AGENT_RUNNER_SERVICE_SOURCES", "chat").split(",") if value.strip()]
     # Byte ceilings for persistence admission/serialization; AGENT_RUNNER_LIMITS_*
-    # follows the same explicit-env override pattern as the KF/browser nodes.
+    # follows the same explicit-env override pattern as the KF node.
     limits_cfg = runner_cfg.setdefault("limits", {})
     for name in ("request_bytes", "checkpoint_bytes", "snapshot_bytes"):
         value = os.getenv("AGENT_RUNNER_LIMITS_" + name.upper())
