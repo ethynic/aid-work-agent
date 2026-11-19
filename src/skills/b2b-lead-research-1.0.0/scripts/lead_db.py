@@ -54,17 +54,26 @@ VALID_EMAIL_STATUS = {"draft", "approved", "sending", "sent", "failed", "bounced
 VALID_CAMPAIGN_STATUS = {"draft", "searching", "drafting", "awaiting_review",
                          "sending", "paused", "completed", "failed"}
 
-# 多渠道坐标（Outreach Pack 渠道枚举，b2b-lead-research 上游 v1.0.0 口径）
+# 多渠道坐标（Outreach Pack 渠道枚举，b2b-lead-research 上游 v1.1.0 口径：
+# 新增国内社媒 weixin_channels/weibo/douyin/xiaohongshu/zhihu/bilibili 与 qq）
 # email 渠道的落点是 contacts.email（不进 contact_channels 表）
 VALID_CHANNELS = {"email", "sms", "call", "whatsapp", "telegram", "wechat",
-                  "line", "kakao", "linkedin", "x", "facebook", "instagram"}
+                  "line", "kakao", "linkedin", "x", "facebook", "instagram",
+                  "qq", "weixin_channels", "weibo", "douyin", "xiaohongshu",
+                  "zhihu", "bilibili"}
 CHANNEL_FAMILY = {
     "sms": "phone", "call": "phone",
     "whatsapp": "messaging", "telegram": "messaging", "wechat": "messaging",
-    "line": "messaging", "kakao": "messaging",
+    "line": "messaging", "kakao": "messaging", "qq": "messaging",
     "linkedin": "social", "x": "social", "facebook": "social",
     "instagram": "social",
+    # 国内社媒：企业号 / 个人号统一用同一 channel，靠联系人维度区分企业级与个人级
+    "weixin_channels": "social", "weibo": "social", "douyin": "social",
+    "xiaohongshu": "social", "zhihu": "social", "bilibili": "social",
 }
+QQ_RE = re.compile(r"^\d{5,12}$")
+# 国内社媒 + 视频号：@handle 允许非 ASCII（视频号/抖音等平台 handle 可含中文）
+CN_SOCIAL = {"weixin_channels", "weibo", "douyin", "xiaohongshu", "zhihu", "bilibili"}
 E164_RE = re.compile(r"^\+[1-9]\d{7,14}$")
 SOCIAL_HANDLE_RE = re.compile(r"^@[A-Za-z0-9_.-]{1,60}$")
 
@@ -1082,8 +1091,21 @@ def _validate_channel_value(channel, value):
             return f"channel={channel} 的坐标必须是 E.164 形态（如 +493012345678），收到: {value}"
         return None
     if family == "social":
+        if channel in CN_SOCIAL:
+            # 国内社媒：主页 URL 或 @handle（handle 允许中文等非 ASCII 字符）
+            if not ((value.startswith(("http://", "https://")) or value.startswith("@"))
+                    and len(value) > 1):
+                return (f"channel={channel} 的坐标必须是最终落地主页 URL 或 @handle，"
+                        f"收到: {value}")
+            return None
         if not (value.startswith(("http://", "https://")) or SOCIAL_HANDLE_RE.match(value)):
             return (f"channel={channel} 的坐标必须是最终落地主页 URL 或 @handle，"
+                    f"收到: {value}")
+        return None
+    if channel == "qq":
+        if not (QQ_RE.match(value) or value.endswith("@qq.com")
+                or value.startswith(("http://", "https://"))):
+            return (f"channel=qq 的坐标必须是 QQ 号(5-12 位) / xxx@qq.com / 主页 URL，"
                     f"收到: {value}")
         return None
     if not value.strip():

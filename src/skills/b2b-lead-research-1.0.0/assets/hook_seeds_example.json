@@ -1,0 +1,70 @@
+{
+  "business_key": "example",
+  "name": "<填写你的业务名>",
+  "product": "<填写你的产品/服务一句话>",
+  "icp": "<填写你的目标客户画像，如：行业 / 规模 / 角色>",
+  "lang": "zh",
+  "_readme": "种子话术格式示例。仅为结构演示，所有花括号槽位在发送时必须从收件人真实情报（官网/社媒/招聘 JD）填入，不得编造。请用你自己的业务重新 seed；示例中的数字与事实均为占位符，不是战绩。",
+  "seeds": [
+    {
+      "pattern": "peer",
+      "segment": "<客群A>",
+      "subject": "你们这行已有几家在用了",
+      "hook": "你们这个细分里已有 {n} 家同行改用 {topic} 的新方式，省下的时间都投到了 {result} 上。",
+      "cta": "我先发一份同行业 {topic} 的效果拆解，还是直接开 15 分钟看你的情况怎么优化？你选。",
+      "note": "同侪拉动；{n}/{topic}/{result} 必须是可查事实，不可编造",
+      "lang": "zh",
+      "market": ""
+    },
+    {
+      "pattern": "number",
+      "segment": "<客群A>",
+      "subject": "{result} —— 来自 {size} 团队的实测",
+      "hook": "一家 {size} 规模的同类团队用我们的方案做 {topic}，在 {n} 天内拿到 {result}，没有增加人手。",
+      "cta": "要那份 {topic} 的测算/对照表吗？我直接发你。",
+      "note": "量化结果；{n}/{result}/{size} 必须有真实出处",
+      "lang": "zh",
+      "market": ""
+    },
+    {
+      "pattern": "cost",
+      "segment": "<客群A>",
+      "subject": "{pain} 一年要吃掉你 {metric}",
+      "hook": "按你当前的量，{pain} 每年大概要花掉 {metric}——这部分往往没人算过。",
+      "cta": "我先发一份同行业的成本拆解，还是直接开 15 分钟对着你的数据看？你选。",
+      "note": "成本浪费角度；金额必须来自对方可查事实或软表达",
+      "lang": "zh",
+      "market": ""
+    },
+    {
+      "pattern": "number",
+      "segment": "<客群B>",
+      "subject": "{n} 天拿到 {result}",
+      "hook": "给同规模客户做过 {topic}，{n} 天内 {result}，没加人。",
+      "cta": "我把那份 {topic} 的拆解发你，你对照着看能不能套用。",
+      "note": "同规模客户结果，最具体；数字必须真实",
+      "lang": "zh",
+      "market": ""
+    },
+    {
+      "pattern": "question",
+      "segment": "<客群B>",
+      "subject": "一个关于 {pain} 的问题",
+      "hook": "贵司现在有多少时间花在 {pain} 上？这块通常是团队里最贵的隐性成本。",
+      "cta": "你回我一个数字就行，我按那个数给方案。",
+      "note": "提问型，降低回信门槛，让对方回具体信息",
+      "lang": "zh",
+      "market": ""
+    },
+    {
+      "pattern": "pain",
+      "segment": "<客群C>",
+      "subject": "{topic} 还在手工做？",
+      "hook": "看到贵司仍在手工处理 {topic}，同一批事情反复做，这部分时间本来是可以省下来的。",
+      "cta": "要不要我先针对 {topic} 跑一个小样例给你看效果？",
+      "note": "直击手工操作；{topic} 要具体到对方流程名，不是泛泛的「运营」",
+      "lang": "zh",
+      "market": ""
+    }
+  ]
+}

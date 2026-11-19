@@ -194,6 +194,8 @@ export const channelMap: Record<string, string> = {
   email: '邮箱', sms: '短信', call: '电话', whatsapp: 'WhatsApp',
   telegram: 'Telegram', wechat: '微信', line: 'LINE', kakao: 'KakaoTalk',
   linkedin: 'LinkedIn', x: 'X', facebook: 'Facebook', instagram: 'Instagram',
+  qq: 'QQ', weixin_channels: '视频号', weibo: '微博', douyin: '抖音',
+  xiaohongshu: '小红书', zhihu: '知乎', bilibili: 'B站',
 }
 
 export function channelSummary(channels?: ContactChannel[] | null): string {
