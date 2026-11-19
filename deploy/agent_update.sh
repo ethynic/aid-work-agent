@@ -13,9 +13,13 @@ fi
 # ==============================================================================
 # AI 数字员工系统 - 快速更新脚本（不重建 Docker 镜像）
 # 用途: 仅更新代码，快速重启服务
-# 用法: ./agent_update.sh [git版本号]
+# 用法: ./agent_update.sh [recreate|git版本号]
 #       不带参数 -> 更新到 origin/master 最新
 #       带参数   -> 停留在指定提交（如 ./agent_update.sh c43c65e）
+#       recreate -> 仅重建容器使修改后的 .env 生效（不拉代码、不编译前端、
+#                   不装依赖；只做 PG 连通自检 + 后端/runner 容器重建 +
+#                   CPU 限制 + /tmp 权限兜底）。docker restart 不会重读 env，
+#                   必须 force-recreate 重建
 # ==============================================================================
 # 变更记录：
 #   1. 前端编译输出到 dist.new，编译期间 nginx 继续服务旧 dist，build 完成后
@@ -50,12 +54,22 @@ echo "=========================================="
 echo "  AI 数字员工系统 - 快速更新"
 echo "=========================================="
 
+# 模式参数：recreate = 仅重建容器使 .env 生效（不拉代码、不编译前端）
+RECREATE_ONLY=0
+if [ "${1:-}" = "recreate" ]; then
+    RECREATE_ONLY=1
+    echo "[模式] recreate：仅重建容器使 .env 生效（跳过拉代码/前端编译/依赖安装）"
+fi
+
 FRONTEND_DIR="/var/www/agent/frontend"
 DIST_DIR="$FRONTEND_DIR/dist"
 BUILD_LOG="/var/www/agent/log/frontend-build.log"
 
 # 配置 Git 安全目录（避免所有权检查错误）
 git config --global --add safe.directory /var/www/agent 2>/dev/null || true
+
+# ── 以下凭据自愈/拉代码/前端编译段仅在标准更新模式执行（recreate 模式跳到第 4.5 步）──
+if [ "$RECREATE_ONLY" -eq 0 ]; then
 
 # 0. 自愈 git 凭据（见变更记录 7）
 CREDS_FILE="/home/ubuntu/.git-credentials"
@@ -163,6 +177,8 @@ mkdir -p "$(dirname "$BUILD_LOG")"
 ) > "$BUILD_LOG" 2>&1 &
 FRONTEND_PID=$!
 
+fi  # 结束：标准更新模式专属段（凭据自愈/快照/拉代码/前端编译）
+
 # 4.5 发布前自检：容器间数据库连通性（2026-10-23 诺度同型事故）。
 #    服务器重启后 dockerd 偶发未能编程 iptables（FORWARD 空、DOCKER nat 链缺失），
 #    容器访问 postgres:5432 全超时——此时重建 aid-agent-api 必然起不来，全站 404。
@@ -244,6 +260,9 @@ if ! docker exec -u root aid-agent-api chmod 1777 /tmp 2>/dev/null; then
 fi
 docker exec -u root aid-agent-api ls -ld /tmp || true
 
+# ── 以下前端切换/依赖安装段仅在标准更新模式执行 ──
+if [ "$RECREATE_ONLY" -eq 0 ]; then
+
 # 8. 等待前端编译完成
 echo "[8] 等待前端编译完成..."
 if ! wait "$FRONTEND_PID"; then
@@ -274,9 +293,15 @@ docker exec -u root aid-agent-api \
     -i https://mirrors.cloud.tencent.com/pypi/simple \
     --quiet || echo "  警告：依赖安装失败，部分新功能可能不可用"
 
+fi  # 结束：标准更新模式专属段（前端切换/依赖安装）
+
 echo ""
 echo "=========================================="
+if [ "$RECREATE_ONLY" -eq 1 ]; then
+echo "  容器重建完成（.env 已生效，代码未更新）"
+else
 echo "  更新完成！"
+fi
 echo "=========================================="
 ELAPSED=$(( $(date +%s) - START_TS ))
 echo "总耗时: $(( ELAPSED / 60 )) 分 $(( ELAPSED % 60 )) 秒"

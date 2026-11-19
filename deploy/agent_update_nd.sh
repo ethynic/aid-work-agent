@@ -14,6 +14,12 @@
 #   6. npm 缓存卷名 agent_npm_cache（243 为 agent2_npm_cache）
 # 其余流程（dist.new 原子切换、前后端并行、凭据自愈、/tmp 修复、增量 pip）
 # 与 243 版保持一致，变更记录见 deploy/agent_update.sh。
+#
+# 用法：bash agent_update_nd.sh [recreate|提交哈希]
+#   recreate = 仅重建容器使修改后的 .env 生效（不拉代码、不编译前端、不装依赖；
+#              只做 PG 连通自检 + 后端/runner 容器重建 + CPU 限制 + /tmp 权限兜底）。
+#              docker restart 不会重读 env，必须 force-recreate 重建
+#   提交哈希 = 更新到指定版本；不传 = 更新到 origin/master 最新
 # ==============================================================================
 
 # 禁止以 root/sudo 运行：root 身份的 git/写文件操作会把仓库 .git 内部文件改成
@@ -32,6 +38,13 @@ echo "=========================================="
 echo "  AI 数字员工系统 - 快速更新（济南诺度）"
 echo "=========================================="
 
+# 模式参数：recreate = 仅重建容器使 .env 生效（不拉代码、不编译前端）
+RECREATE_ONLY=0
+if [ "${1:-}" = "recreate" ]; then
+    RECREATE_ONLY=1
+    echo "[模式] recreate：仅重建容器使 .env 生效（跳过拉代码/前端编译/依赖安装）"
+fi
+
 REPO_DIR="/var/www/agent/app"
 FRONTEND_DIR="$REPO_DIR/frontend"
 DIST_DIR="$FRONTEND_DIR/dist"
@@ -40,6 +53,9 @@ RUN_USER="ady"
 
 # 配置 Git 安全目录（避免所有权检查错误）
 git config --global --add safe.directory "$REPO_DIR" 2>/dev/null || true
+
+# ── 以下凭据自愈/拉代码/前端编译段仅在标准更新模式执行（recreate 模式跳到第 4.5 步）──
+if [ "$RECREATE_ONLY" -eq 0 ]; then
 
 # 0. 自愈 git 凭据（机制同 243 版：/root 下 root:root 600 备份件，防连带被改）
 CREDS_FILE="/home/ady/.git-credentials"
@@ -139,6 +155,8 @@ mkdir -p "$(dirname "$BUILD_LOG")"
 ) > "$BUILD_LOG" 2>&1 &
 FRONTEND_PID=$!
 
+fi  # 结束：标准更新模式专属段（凭据自愈/快照/拉代码/前端编译）
+
 # 4.5 发布前自检：容器间数据库连通性（2026-10-23 事故）。
 #    服务器重启后 dockerd 偶发未能编程 iptables（FORWARD 空、DOCKER nat 链缺失），
 #    容器访问 postgres:5432 全超时——此时重建 aid-agent-api 必然起不来，全站 404。
@@ -216,6 +234,9 @@ if ! sudo docker exec -u root aid-agent-api chmod 1777 /tmp 2>/dev/null; then
 fi
 sudo docker exec -u root aid-agent-api ls -ld /tmp || true
 
+# ── 以下前端切换/依赖安装段仅在标准更新模式执行 ──
+if [ "$RECREATE_ONLY" -eq 0 ]; then
+
 # 8. 等待前端编译完成
 echo "[8] 等待前端编译完成..."
 if ! wait "$FRONTEND_PID"; then
@@ -244,9 +265,15 @@ sudo docker exec -u root aid-agent-api \
     -i https://mirrors.cloud.tencent.com/pypi/simple \
     --quiet || echo "  警告：依赖安装失败，部分新功能可能不可用"
 
+fi  # 结束：标准更新模式专属段（前端切换/依赖安装）
+
 echo ""
 echo "=========================================="
+if [ "$RECREATE_ONLY" -eq 1 ]; then
+echo "  容器重建完成（.env 已生效，代码未更新）"
+else
 echo "  更新完成！"
+fi
 echo "=========================================="
 ELAPSED=$(( $(date +%s) - START_TS ))
 echo "总耗时: $(( ELAPSED / 60 )) 分 $(( ELAPSED % 60 )) 秒"
