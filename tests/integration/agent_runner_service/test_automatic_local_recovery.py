@@ -6,6 +6,7 @@ import uuid
 import pytest
 
 from src.local_tools import repository as devices
+from src.local_tools.catalog import EXECUTION_RECEIPT_CAPABILITY
 from src.notifications.repository import unprotect
 from src.services.agent_runner.auto_local_recovery import CHECKPOINT_KEY
 from .conftest import wait_for
@@ -29,7 +30,8 @@ def _accept_local(workers, actor, profile):
     return accept(workers.api, actor, prompt, profile_id=profile)['runner_id']
 
 
-def _deliver(workers, database, identifier, actor, device, *, code=None, effect='none', retryable=False):
+def _deliver(workers, database, identifier, actor, device, *, code=None, effect='none', retryable=False,
+             tool_name=None, data=None):
     try:
         queued = wait_for(lambda: next(iter(database.rows(
             "SELECT id FROM local_tool_invocations WHERE tenant_id=%s AND user_id=%s AND state='queued'",
@@ -48,10 +50,13 @@ def _deliver(workers, database, identifier, actor, device, *, code=None, effect=
         raise AssertionError(diagnosis) from None
     identifier = str(queued['id'])
     token = uuid.uuid4().hex
-    assert devices.claim_next(device, actor.tenant_id, token, 60, expected_invocation_id=identifier)
+    claimed = devices.claim_next(device, actor.tenant_id, token, 60, expected_invocation_id=identifier)
+    assert claimed
+    if tool_name:
+        assert claimed['tool_name'] == tool_name
     assert devices.mark_started(identifier, actor.tenant_id, token)['state'] == 'running'
     first = devices.write_runtime_result(identifier, actor.tenant_id, token, code is None,
-        code=code, effect=effect, retryable=retryable, device_id=device)
+        code=code, effect=effect, retryable=retryable, device_id=device, data=data)
     assert first and first['effect'] == effect
     return identifier
 
@@ -113,6 +118,58 @@ def test_configured_real_worker_retries_only_safe_local_failures(workers, ordina
         second, _ = workers.start()
         assert terminal(service_database, followup['runner_id'])['result']['output'] == 'same-session-new-task'
         workers.assert_clean_exit(second)
+
+
+@pytest.mark.parametrize(('tool_name', 'arguments', 'failure_code', 'followup', 'recovered'), [
+    ('boss_list_jobs', {}, 'WRONG_PAGE', {}, True),
+    ('boss_list_jobs', {}, 'WRONG_PAGE', None, False),
+    ('boss_resume_batch', {'limit': 3}, 'WRONG_PAGE', {'limit': 3}, True),
+    ('boss_resume_batch', {'limit': 3}, 'WRONG_PAGE', {'limit': 2}, False),
+    ('boss_list_jobs', {}, 'NOT_LOGGED_IN', {}, True),
+], ids=['list-jobs-recovered', 'navigation-alone', 'resume-batch-recovered', 'different-batch-limit', 'login-resolved'])
+def test_agent2_recovery_summary_needs_a_later_success_for_the_same_request(
+        workers, ordinary_local, service_database, tool_name, arguments, failure_code, followup, recovered):
+    _enable(workers)
+    actor, profile, folder, _ = ordinary_local
+    device = json.loads((folder/'device-ready.json').read_text())['device_id']
+    assert devices.touch_device_seen(device, capabilities={'provider_id': 'ai.aidwork.boss-recruiting',
+        'capabilities': [EXECUTION_RECEIPT_CAPABILITY]})
+    later_calls = [('boss_goto', {'target': 'recommend'}, 'return-to-recommend', 'none', None),
+        ('boss_filter', {'experience': '3-5年'}, 'apply-filters', 'applied', {'applied': True, 'filter_count': 1})]
+    if followup is not None and tool_name == 'boss_list_jobs':
+        later_calls.insert(1, (tool_name, followup, 'after-page-ready', 'none', {'jobs': [{'name': 'Fixture exact job'}]}))
+    if followup is not None and tool_name == 'boss_resume_batch':
+        later_calls.append((tool_name, followup, 'after-page-ready', 'none',
+                            {'resumes': [], 'failures': [], 'stop_reason': 'no_progress'}))
+    replies = [tool_reply(tool_name, arguments, call_id='before-page-ready')]
+    replies.extend(tool_reply(name, args, call_id=call_id) for name, args, call_id, _, _ in later_calls)
+    replies.append(Reply(content='已应用筛选条件'))
+    identifier = accept(workers.api, actor, workers.provider.register(*replies), profile_id=profile)['runner_id']
+    child, _ = workers.start()
+    for _ in range(3 if failure_code == 'WRONG_PAGE' else 1):
+        _deliver(workers, service_database, identifier, actor, device, tool_name=tool_name,
+                 code=failure_code, retryable=failure_code == 'WRONG_PAGE',
+                 data={'receipt_version': '1.1', 'step': 'execute', 'known_effect': 'none',
+                       'reason': {'code': failure_code, 'message': '未找到筛选按钮' if failure_code == 'WRONG_PAGE'
+                                  else '已进入登录页'}})
+    for name, _, _, effect, data in later_calls:
+        _deliver(workers, service_database, identifier, actor, device, tool_name=name, effect=effect, data=data)
+    finished = terminal(service_database, identifier, timeout=25)
+    workers.assert_clean_exit(child)
+    assert finished['checkpoint']['execution']['outcome'] == 'completed'
+    notices = _notifications(service_database, identifier)
+    if recovered:
+        assert finished['status'] == 'completed'
+        assert finished['result']['output'] == '已应用筛选条件'
+        assert not notices
+    else:
+        assert finished['status'] == 'failed'
+        assert finished['result']['error_code'] == 'LOCAL_RECOVERY_EXHAUSTED'
+        assert tool_name in finished['result']['output']
+        assert 'execute' in finished['result']['output']
+        assert 'WRONG_PAGE' in finished['result']['output']
+        assert len(notices) == 1
+        assert tool_name in unprotect(notices[0]['parameters_encrypted'])['recovery_summary']
 
 
 def test_expired_parked_unknown_ends_and_keeps_only_original_device_hold(workers, ordinary_local, service_database):

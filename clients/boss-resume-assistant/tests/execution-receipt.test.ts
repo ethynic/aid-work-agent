@@ -17,6 +17,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { buildReceipt1_1, attachReceipt1_1, MAX_SCREENSHOT_BYTES } from '../src/main/operations/receipt.js'
 import { runBossOperation } from '../src/main/operations/bossContext.js'
 import { createBossFilterOperation, createBossClearFilterOperation } from '../src/main/operations/bossFilter.js'
+import { createBossGotoOperation } from '../src/main/operations/bossGoto.js'
 import { CodedOperationError, type OperationResult, type OpContext } from '../src/main/operations/types.js'
 import { encodeOperationResult, negotiatedReceiptVersion, registerBossTools } from '../src/mcp/server.js'
 import type { BossSession } from '../src/main/operations/bossContext.js'
@@ -188,14 +189,10 @@ test('boss_filter 零输入回执与 1.1 共存：INVALID_ARGUMENT/none 语义�
   assert.equal(legacy.data['step'], undefined)
 })
 
-test('登录失效：既有 NOT_LOGGED_IN 映射经 reason.code 透出，known_effect=none', async () => {
-  const result = await runBossOperation(
-    { kind: 'readonly', name: 'boss_read_chat' },
-    ctx({ executionReceipt: '1.1' }),
-    factoryOf(fakeSession({ capture: async () => Buffer.from('login-page') })),
-    () => null,
-    async () => { throw new Error('打开页面失败：请确认已登录 BOSS 直聘') },
-  )
+test('确认真实登录页：NOT_LOGGED_IN 经 reason.code 透出，known_effect=none', async () => {
+  const session = fakeSession({ url: 'https://www.zhipin.com/web/user/login', capture: async () => Buffer.from('login-page') })
+  const op = createBossGotoOperation(factoryOf(session))
+  const result = await op.execute({ target: 'chat' }, ctx({ executionReceipt: '1.1' }))
   assert.equal(result.code, 'NOT_LOGGED_IN')
   assert.equal(result.data['receipt_version'], '1.1')
   assert.equal(result.data['known_effect'], 'none')

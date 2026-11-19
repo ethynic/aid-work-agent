@@ -56,9 +56,6 @@ const CHROME_UNAVAILABLE_MARKERS = [
   'socket closed',
 ]
 
-/** 未登录/未打开 BOSS 页面标记 */
-const NOT_LOGGED_IN_MARKERS = ['请确认已登录']
-
 /** 参数类 FilterSetError 标记（规格 §3） */
 const FILTER_ARG_MARKERS = ['行为单选', '未提供任何筛选条件']
 
@@ -117,12 +114,6 @@ export function mapExecutorError(err: unknown): MappedError {
     return {
       code: 'CHROME_UNAVAILABLE',
       message: `无法连接 Chrome 调试端口：${message}。请确认 Chrome 已带 --remote-debugging-port 启动`,
-    }
-  }
-  if (NOT_LOGGED_IN_MARKERS.some((m) => message.includes(m))) {
-    return {
-      code: 'NOT_LOGGED_IN',
-      message: `未找到已登录的 BOSS 页面：${message}。请确认已在该 Chrome 登录 BOSS 直聘并打开页面`,
     }
   }
   // 付费墙（GreetExecutor 列表页 / DetailGreetExecutor 详情页 2026-09-28 同款文案）：PAYWALL

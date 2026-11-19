@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { PageNavigator, NavError } from '../src/main/boss/PageNavigator.js'
 import { WinClickError } from '../src/main/input/WinMouseClicker.js'
+import { mapExecutorError } from '../src/main/operations/errorMapping.js'
 import type { DomSnapshot, ClickPoint } from '../src/main/boss/domSnapshot.js'
 
 /**
@@ -97,15 +98,42 @@ test('页面没有菜单文案 → 直接报错交共用恢复，零普通重试
   assert.deepEqual(navigatedTo, [])
 })
 
-test('菜单找不到且直跳后仍未到达（未登录被重定向登录页）→ NavError 报登录提示', async () => {
-  const LOGIN_URL = 'https://www.zhipin.com/web/user/?ka=header-login'
-  const { deps: d } = deps([navSnap([])], [CHAT_URL, CHAT_URL], { navigateUrls: [LOGIN_URL] })
-  const nav = new PageNavigator(d)
-  await assert.rejects(nav.navigate('recommend'), (e: unknown) => {
-    assert.ok(e instanceof NavError)
-    assert.match(e.message, /登录/)
-    return true
+test('agent2：已登录推荐页的真实侧栏入口是「消息」，应进入沟通页', async () => {
+  const { clicks, navigatedTo, deps: d } = deps([navSnap([
+    { text: '消息', bounds: [42, 280, 42, 32] },
+    { text: '继续沟通', bounds: [1400, 240, 90, 32] },
+  ])], [RECOMMEND_URL, CHAT_URL])
+  assert.deepEqual(await new PageNavigator(d).navigate('chat'), { clicked: true, via: 'menu' })
+  assert.deepEqual(clicks, [{ x: 63, y: 296 }])
+  assert.deepEqual(navigatedTo, [])
+})
+
+test('已登录但侧栏菜单缺失 → UI_CHANGED，保留共用恢复入口', async () => {
+  const { clicks, navigatedTo, deps: d } = deps([navSnap([])], [RECOMMEND_URL])
+  await assert.rejects(new PageNavigator(d).navigate('chat'), error => {
+    const mapped = mapExecutorError(error)
+    return mapped.code === 'UI_CHANGED' && mapped.message.includes('消息') && !mapped.message.includes('登录')
   })
+  assert.deepEqual(clicks, [])
+  assert.deepEqual(navigatedTo, [])
+})
+
+test('进入明确的 BOSS 登录页 → NOT_LOGGED_IN，无菜单操作', async () => {
+  for (const url of ['https://www.zhipin.com/web/user/login', 'https://www.zhipin.com/web/user/?ka=header-login',
+    'https://passport.zhipin.com/login']) {
+    const { clicks, navigatedTo, deps: d } = deps([navSnap([])], [url])
+    await assert.rejects(new PageNavigator(d).navigate('chat'), error => mapExecutorError(error).code === 'NOT_LOGGED_IN')
+    assert.deepEqual(clicks, [])
+    assert.deepEqual(navigatedTo, [])
+  }
+})
+
+test('点击后实际跳到登录页 → NOT_LOGGED_IN，不重复导航', async () => {
+  const { clicks, navigatedTo, deps: d } = deps([navSnap([MENU_RECOMMEND])],
+    [CHAT_URL, 'https://www.zhipin.com/web/user/login'])
+  await assert.rejects(new PageNavigator(d).navigate('recommend'), error => mapExecutorError(error).code === 'NOT_LOGGED_IN')
+  assert.equal(clicks.length, 1)
+  assert.deepEqual(navigatedTo, [])
 })
 
 test('侧栏区命中多个同文案但 x 分散 → 取最左命中（2026-09-01 相对化：诱饵/真菜单共存是宽窗口常态，最左恒为真菜单）', async () => {
@@ -227,9 +255,18 @@ test('兜底导航后 URL 仍未变 → fail-loud 报当前 URL', async () => {
   await assert.rejects(nav.navigate('chat'), (e: unknown) => {
     assert.ok(e instanceof PagePostconditionError)
     assert.match(e.message, /直跳/)
+    assert.equal(mapExecutorError(e).code, 'UI_CHANGED')
+    assert.doesNotMatch(e.message, /登录/)
     return true
   })
   assert.equal(navigatedTo.length, 1)
+})
+
+test('直跳后实际进入登录页 → NOT_LOGGED_IN', async () => {
+  const { navigatedTo, deps: d } = deps([navSnap([MENU_RECOMMEND])], [CHAT_URL, CHAT_URL],
+    { navigateUrls: ['https://www.zhipin.com/web/user/login'] })
+  await assert.rejects(new PageNavigator(d).navigate('recommend'), error => mapExecutorError(error).code === 'NOT_LOGGED_IN')
+  assert.deepEqual(navigatedTo, [RECOMMEND_URL])
 })
 
 test('不在 /web/chat 区（职位详情页）点击未生效 → 直跳兜底成功（2026-09-18 扩展，此前 fail-loud）', async () => {
