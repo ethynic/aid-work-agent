@@ -186,7 +186,7 @@ def _load_web_c_config(tenant_id: str, config_id: str):
 
 
 def _resolve_identity(request: Request, tenant_id: str, config_id: str) -> WebCIdentity:
-    """验签并构建 C 端身份（ext 签名优先，其次匿名 uid）。"""
+    """验签并构建 C 端身份（ext 签名优先，uid 模式免签名，其次匿名 uid）。"""
     cfg, conf = _load_web_c_config(tenant_id, config_id)
     mode_cfg = str(conf.get("identity_mode") or "both")
 
@@ -194,10 +194,18 @@ def _resolve_identity(request: Request, tenant_id: str, config_id: str) -> WebCI
     if userid:
         if mode_cfg == "anon":
             raise HTTPException(status_code=403, detail=_RUNNER_HEADER_DESC)
-        ts = _param(request, "ts")
-        sig = _param(request, "sig")
         # name 参与签名但可缺省（缺省时签名串用空串）；URL decode 由框架完成
         name = _param(request, "name")
+        # uid 模式（仅 userid 链接免签名，设计 §3.5）：userid 不验签，只做归属
+        # 不做会话读取凭据；会话闸门见 _assert_session_owned 与 bootstrap/sessions
+        # 服务端置空。签名参数（ts/sig）在本模式被忽略，不做「验签通过升级 ext」混合语义。
+        if mode_cfg == "uid":
+            if not _EXT_USERID_RE.match(userid):
+                raise HTTPException(status_code=403, detail=_RUNNER_HEADER_DESC)
+            return WebCIdentity(tenant_id, config_id, "uid", f"uid_{userid}", name,
+                                cfg.get("subagent_type"), conf.get("greeting") or "")
+        ts = _param(request, "ts")
+        sig = _param(request, "sig")
         if not _EXT_USERID_RE.match(userid):
             raise HTTPException(status_code=403, detail=_RUNNER_HEADER_DESC)
         if not _verify_ext_signature(str(conf.get("channel_secret") or ""), userid, ts, name, sig):
@@ -207,7 +215,8 @@ def _resolve_identity(request: Request, tenant_id: str, config_id: str) -> WebCI
 
     uid = _param(request, "uid").strip()
     if uid:
-        if mode_cfg == "ext":
+        # ext（仅签名）与 uid（仅 userid 链接）均为单一身份路径，匿名不放行
+        if mode_cfg in ("ext", "uid"):
             raise HTTPException(status_code=403, detail=_RUNNER_HEADER_DESC)
         if not _ANON_UID_RE.match(uid):
             raise HTTPException(status_code=403, detail=_RUNNER_HEADER_DESC)
@@ -217,9 +226,20 @@ def _resolve_identity(request: Request, tenant_id: str, config_id: str) -> WebCI
     raise HTTPException(status_code=403, detail=_RUNNER_HEADER_DESC)
 
 
+# uid 模式会话 id 随机后缀（_s + 至少 8 位 hex）：确定性派生的会话 id 可由 userid
+# 推算，在 uid 模式（userid 不验签）下一律不可寻址（设计 §3.5）
+_UID_SESSION_SUFFIX_RE = re.compile(r"_s[0-9a-f]{8,}$", re.IGNORECASE)
+
+
 def _assert_session_owned(identity: WebCIdentity, session_id: str) -> dict:
-    """session_id 归属校验：前缀（租户+渠道+身份）+ DB 租户双重过滤。"""
+    """session_id 归属校验：前缀（租户+渠道+身份）+ DB 租户双重过滤。
+
+    uid 模式（仅 userid 链接免签名）额外要求随机后缀：userid 可伪造，
+    任何按 userid 确定性派生的会话 id 在该模式下一律拒绝。
+    """
     if not session_id or not session_id.startswith(identity.session_prefix):
+        raise HTTPException(status_code=403, detail="会话不存在")
+    if identity.mode == "uid" and not _UID_SESSION_SUFFIX_RE.search(session_id):
         raise HTTPException(status_code=403, detail="会话不存在")
     session = channel_session_manager.get_session_by_id(session_id)
     if not session or session.get("tenant_id") != identity.tenant_id:
@@ -477,13 +497,15 @@ def _create_extra_session_sync(identity: WebCIdentity, user_id: str) -> dict:
     """创建 web_c 身份的额外会话（「新会话」按钮，首条消息发送时惰性创建）。
 
     session_id 须满足归属前缀 {tenant}_web_c_{uid}_（_assert_session_owned 校验），
-    以 _s{8hex} 后缀与默认会话区分；channel_chat_id 用唯一 token 使
-    get_or_create_session 默认查找（按 chat_id 为空过滤）与缓存 key 均不冲突。
+    以 _s{12hex} 随机后缀与默认会话区分；uid 模式（仅 userid 链接）依赖该随机
+    后缀保证会话 id 不可由 userid 推算（48bit 熵，设计 §3.5）。channel_chat_id
+    用唯一 token 使 get_or_create_session 默认查找（按 chat_id 为空过滤）与缓存
+    key 均不冲突。
     """
-    token = f"n_{uuid.uuid4().hex[:8]}"
+    token = f"n_{uuid.uuid4().hex[:12]}"
     session_id = (
         f"{identity.tenant_id}_web_c_{identity.channel_user_id}_"
-        f"{identity.subagent_type or ''}_s{uuid.uuid4().hex[:8]}"
+        f"{identity.subagent_type or ''}_s{uuid.uuid4().hex[:12]}"
     )
     return channel_session_manager.create_session(
         session_id=session_id,
@@ -545,12 +567,21 @@ async def bootstrap(tenant_id: str, config_id: str, request: Request):
             "success": False, "error": "请求过于频繁，请稍后再试", "code": "RATE_LIMITED"})
     from src.saas.services.agent_name_resolver import resolve_agent_names
 
-    _, sessions = await _ensure_user_and_session(identity)
-    recent = await asyncio.to_thread(
-        channel_session_manager.list_sessions,
-        "web_c", None, identity.tenant_id, None, None, identity.channel_user_id, 10,
-    )
-    recent.sort(key=lambda x: x.get("updated_at") or x.get("created_at") or "", reverse=True)
+    # uid 模式（设计 §3.5）：userid 不验签，只登记归属不派生默认会话；
+    # 最近会话摘要与历史入口在服务端强制置空（开关只挡 UI 不挡 API）
+    if identity.mode == "uid":
+        await _ensure_web_c_user(identity)
+        await asyncio.to_thread(_backfill_session_channel_config, identity)
+        recent = []
+        show_history = False
+    else:
+        _, sessions = await _ensure_user_and_session(identity)
+        recent = await asyncio.to_thread(
+            channel_session_manager.list_sessions,
+            "web_c", None, identity.tenant_id, None, None, identity.channel_user_id, 10,
+        )
+        recent.sort(key=lambda x: x.get("updated_at") or x.get("created_at") or "", reverse=True)
+        show_history = bool(conf.get("show_history", False))
     subagent = None
     if identity.subagent_type:
         names = resolve_agent_names(tenant_id, [identity.subagent_type])
@@ -563,8 +594,9 @@ async def bootstrap(tenant_id: str, config_id: str, request: Request):
         "greeting": identity.greeting or "您好，我是本公司的智能助手，有什么可以帮您？",
         # 附件上传开关（渠道 config，默认 False：隐藏附件按钮 + 服务端拒绝上传）
         "allow_attachment": bool(conf.get("allow_attachment", False)),
-        # 历史会话入口开关（渠道 config，默认 False：不显示右上角「历史会话」按钮）
-        "show_history": bool(conf.get("show_history", False)),
+        # 历史会话入口开关（渠道 config，默认 False：不显示右上角「历史会话」按钮；
+        # uid 模式服务端强制 False，见 §3.5）
+        "show_history": show_history,
         "identity": {
             "mode": identity.mode,
             "channel_user_id": identity.channel_user_id,
@@ -627,10 +659,12 @@ async def chat(tenant_id: str, config_id: str, body: WebCChatRequest, request: R
 
     user_id = await _ensure_web_c_user(identity)
     # 会话解析：显式 session_id 续聊（归属校验）> new_session 惰性建新会话 > 默认会话
-    # （多会话模型：一个身份可有多条会话；旧客户端不传两参时行为不变）
+    # （多会话模型：一个身份可有多条会话；旧客户端不传两参时行为不变）。
+    # uid 模式（设计 §3.5）：userid 不验签，无确定性默认会话，未带 session_id 一律
+    # 惰性创建随机后缀会话（随机会话由前端 sessionStorage 持有）。
     if body.session_id:
         session = _assert_session_owned(identity, body.session_id)
-    elif body.new_session:
+    elif body.new_session or identity.mode == "uid":
         session = await asyncio.to_thread(_create_extra_session_sync, identity, user_id)
     else:
         _, session = await _ensure_user_and_session(identity)
@@ -745,8 +779,11 @@ async def cancel_runner(tenant_id: str, config_id: str, runner_id: str, request:
 @router.get("/{tenant_id}/{config_id}/sessions")
 async def list_sessions(tenant_id: str, config_id: str, request: Request,
                         limit: int = Query(default=50, ge=1, le=100)):
-    """当前验签身份的历史会话列表（updated_at DESC）。"""
+    """当前验签身份的历史会话列表（updated_at DESC）；uid 模式恒空（设计 §3.5）。"""
     identity = _resolve_identity(request, tenant_id, config_id)
+    if identity.mode == "uid":
+        # userid 不验签：按 userid 列会话 = 允许伪造者枚举他人历史，服务端直接置空
+        return {"success": True, "sessions": []}
     sessions = await asyncio.to_thread(
         channel_session_manager.list_sessions,
         "web_c", None, identity.tenant_id, None, None, identity.channel_user_id, limit,

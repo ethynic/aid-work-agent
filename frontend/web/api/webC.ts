@@ -70,6 +70,43 @@ export function resolveAnonUid(configId: string): string {
   return uid
 }
 
+// ============== uid 模式当前会话持有（sessionStorage，标签页生命周期） ==============
+// 仅 userid 链接（uid 模式）下 userid 不验签，会话 id 不可由 userid 派生；
+// 当前会话由前端 sessionStorage 持有：同标签页刷新保持、关标签页即新会话，
+// 伪造 userid 者读不到他人 session_id（设计 §3.5）。sessionStorage 不可用
+// （隐私模式/第三方 iframe 存储限制）降级为内存持有：刷新即新会话，只损失
+// 连续性不损失安全性。
+
+function sessionStorageKey(configId: string): string {
+  return `web_c_sess_${configId}`
+}
+
+export function readStoredSessionId(configId: string): string {
+  try {
+    const value = sessionStorage.getItem(sessionStorageKey(configId)) || ''
+    return value.length <= 200 ? value : ''
+  } catch {
+    return ''
+  }
+}
+
+export function writeStoredSessionId(configId: string, sessionId: string): void {
+  if (!sessionId || sessionId.length > 200) return
+  try {
+    sessionStorage.setItem(sessionStorageKey(configId), sessionId)
+  } catch {
+    /* 降级内存持有，刷新即新会话 */
+  }
+}
+
+export function clearStoredSessionId(configId: string): void {
+  try {
+    sessionStorage.removeItem(sessionStorageKey(configId))
+  } catch {
+    /* ignore */
+  }
+}
+
 // ============== 身份凭证构建 ==============
 
 export interface IdentityQuery {
@@ -81,18 +118,17 @@ export interface IdentityQuery {
 }
 
 /**
- * 从 URL query 提取 ext 签名身份；无签名参数时回退匿名 uid（受后端
- * identity_mode 门控：ext-only 渠道匿名会被 403 拒绝，由前端提示）。
+ * 从 URL query 提取身份凭证：签名三元组齐备走 ext；仅有 u（无/不全签名）按
+ * 「仅 userid 链接」透传，可用性由后端渠道 identity_mode 门控（uid 模式接受，
+ * 其余模式 403，由前端提示）；无 u 回退匿名 uid（同样受后端门控）。
  */
 export function buildIdentityQuery(configId: string, routeQuery: Record<string, unknown>): IdentityQuery {
   const u = typeof routeQuery.u === 'string' ? routeQuery.u : ''
-  const ts = typeof routeQuery.ts === 'string' ? routeQuery.ts : ''
-  const sig = typeof routeQuery.sig === 'string' ? routeQuery.sig : ''
-  if (u && ts && sig) {
+  if (u) {
     return {
       u,
-      ts,
-      sig,
+      ts: typeof routeQuery.ts === 'string' ? routeQuery.ts : '',
+      sig: typeof routeQuery.sig === 'string' ? routeQuery.sig : '',
       name: typeof routeQuery.name === 'string' ? routeQuery.name : ''
     }
   }

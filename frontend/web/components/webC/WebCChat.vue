@@ -12,7 +12,14 @@
         <div class="text-xs text-muted">智能助手 · 官网客服</div>
       </div>
       <button
-        v-if="showHistoryEnabled && identityMode !== 'ext'"
+        v-if="isUidMode"
+        class="text-xs text-muted hover:text-default border border-default rounded-md px-2 py-1"
+        @click="startNewSession"
+      >
+        新会话
+      </button>
+      <button
+        v-else-if="showHistoryEnabled && identityMode === 'anon'"
         class="text-xs text-muted hover:text-default border border-default rounded-md px-2 py-1"
         @click="toggleHistory"
       >
@@ -21,8 +28,8 @@
     </header>
 
     <div class="flex-1 flex min-h-0">
-      <!-- 历史会话侧栏（anon 模式本浏览器历史；入口开关关闭时不渲染） -->
-      <aside v-if="showHistoryEnabled && showHistory && identityMode !== 'ext'" class="w-64 border-r border-default bg-surface flex flex-col max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-10">
+      <!-- 历史会话侧栏（仅 anon 模式本浏览器历史；uid 模式服务端强制无历史，ext 按userid跨设备续聊无本地历史侧栏） -->
+      <aside v-if="showHistoryEnabled && showHistory && identityMode === 'anon'" class="w-64 border-r border-default bg-surface flex flex-col max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-10">
         <div class="px-3 py-2 border-b border-default flex items-center justify-between gap-2">
           <span class="text-xs text-muted">本浏览器历史会话</span>
           <button
@@ -157,6 +164,7 @@ import { useRoute } from 'vue-router'
 import {
   buildIdentityQuery, getBootstrap, postChat, uploadFile, cancelRunner,
   getRunner, getSessionMessages, listSessions, webCFileUrl, runnerEventsUrl,
+  readStoredSessionId, writeStoredSessionId, clearStoredSessionId,
   type IdentityQuery, type UploadRef, type RunnerSnapshot, type SessionSummary,
   type ChannelMessage
 } from '@/api/webC'
@@ -216,6 +224,8 @@ onBeforeUnmount(() => {
 })
 
 const canSubmit = computed(() => (inputText.value.trim().length > 0 || pendingAttachments.value.length > 0))
+// uid 模式（仅 userid 链接）：会话 id 由 sessionStorage 持有，无历史入口（设计 §3.5）
+const isUidMode = computed(() => identityMode.value === 'uid')
 
 onMounted(async () => {
   identity.value = buildIdentityQuery(configId.value, route.query as Record<string, unknown>)
@@ -229,7 +239,9 @@ onMounted(async () => {
     showHistoryEnabled.value = data.show_history === true
     headerTitle.value = subagentName.value ? `${subagentName.value}` : '官网客服'
     sessions.value = data.sessions || []
-    if (sessions.value.length) {
+    if (isUidMode.value) {
+      await restoreStoredSession()
+    } else if (sessions.value.length) {
       await openSession(sessions.value[0].session_id)
     } else {
       isLoading.value = false
@@ -241,6 +253,30 @@ onMounted(async () => {
     if (!identity.value.u && !identity.value.uid) errorMessage.value = '请从官网聊天入口进入'
   }
 })
+
+/** uid 模式进入页面：恢复 sessionStorage 持有的当前会话；会话已被清理/无权访问
+ * 时清存储进入空白聊天（不读 bootstrap sessions——uid 模式服务端恒空） */
+async function restoreStoredSession() {
+  const stored = readStoredSessionId(configId.value)
+  if (!stored) {
+    isLoading.value = false
+    return
+  }
+  currentSessionId.value = stored
+  try {
+    const data = await getSessionMessages(tenantId.value, configId.value, identity.value, stored, 1, 200)
+    messages.value = (data.messages || []).map(toChatMessage)
+      .sort((a, b) => msgTimeValue(a) - msgTimeValue(b))
+    await nextTick()
+    scrollToBottom()
+  } catch {
+    // 会话不存在/归属校验失败：清存储重新开始，不阻断输入
+    clearStoredSessionId(configId.value)
+    currentSessionId.value = ''
+    messages.value = []
+  }
+  isLoading.value = false
+}
 
 function sessionTitle(s: SessionSummary): string {
   const prefix = subagentName.value ? `[${subagentName.value}] ` : ''
@@ -289,10 +325,12 @@ async function switchSession(sessionId: string) {
   await openSession(sessionId)
 }
 
-/** 新会话：本地进入空白聊天，首条消息发送时才调后端惰性创建（避免空会话垃圾数据） */
+/** 新会话：本地进入空白聊天，首条消息发送时才调后端惰性创建（避免空会话垃圾数据）；
+ * uid 模式同步清掉 sessionStorage 持有的当前会话 */
 function startNewSession() {
   showHistory.value = false
   resetStreamState()
+  if (isUidMode.value) clearStoredSessionId(configId.value)
   currentSessionId.value = ''
   messages.value = []
   isLoading.value = false
@@ -452,6 +490,7 @@ async function submit() {
       new_session: isNewSession || undefined
     })
     currentSessionId.value = reply.session_id
+    if (isUidMode.value) writeStoredSessionId(configId.value, reply.session_id)
     if (isNewSession) void refreshSessions()
     if (reply.direct_reply) {
       messages.value.push({ role: 'assistant', content: reply.direct_reply, created_at: nowIso(), attachments: [], images: [], files: [] })
