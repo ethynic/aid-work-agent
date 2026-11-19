@@ -21,7 +21,7 @@ import {
   boundsCenter,
 } from './domSnapshot.js'
 import { viewportOf } from './FilterSetter.js'
-import { CancelledError } from '../operations/types.js'
+import { CancelledError, CodedOperationError } from '../operations/types.js'
 import { PagePostconditionError } from '../operations/pageOperation.js'
 
 export class NavError extends Error {
@@ -41,9 +41,9 @@ export interface NavResult {
   via: NavVia
 }
 
-const TARGETS: Record<NavTarget, { menuText: string; urlPattern: string; label: string }> = {
-  recommend: { menuText: '推荐牛人', urlPattern: '/web/chat/recommend', label: '推荐牛人' },
-  chat: { menuText: '沟通', urlPattern: '/web/chat/index', label: '沟通' },
+const TARGETS: Record<NavTarget, { menuTexts: readonly [string, ...string[]]; urlPattern: string }> = {
+  recommend: { menuTexts: ['推荐牛人'], urlPattern: '/web/chat/recommend' },
+  chat: { menuTexts: ['消息', '沟通'], urlPattern: '/web/chat/index' },
 }
 
 export function isBossPage(url: string, target: NavTarget): boolean {
@@ -52,6 +52,18 @@ export function isBossPage(url: string, target: NavTarget): boolean {
     return page.protocol === 'https:' && ['www.zhipin.com', 'zhipin.com'].includes(page.hostname)
       && page.pathname === TARGETS[target].urlPattern
   } catch { return false }
+}
+
+export function assertNotBossLoginPage(url: string): void {
+  let page: URL
+  try { page = new URL(url) } catch { return }
+  if (page.protocol !== 'https:') return
+  const route = page.pathname.replace(/\/$/, '')
+  const isLogin = (page.hostname === 'passport.zhipin.com' && route === '/login')
+    || (['www.zhipin.com', 'zhipin.com'].includes(page.hostname)
+      && (route === '/login' || route === '/web/user/login'
+        || (route === '/web/user' && page.searchParams.get('ka') === 'header-login')))
+  if (isLogin) throw new CodedOperationError('NOT_LOGGED_IN', 'BOSS 页面要求登录，请在原浏览器完成 BOSS 登录')
 }
 
 /**
@@ -91,16 +103,19 @@ export class PageNavigator {
   async navigate(target: NavTarget): Promise<NavResult> {
     if (this.deps.signal?.aborted) throw new CancelledError()
     const spec = TARGETS[target]
+    const [menuText] = spec.menuTexts
     const urlBefore = await this.deps.getUrl()
+    assertNotBossLoginPage(urlBefore)
     if (isBossPage(urlBefore, target)) {
       return { clicked: false, via: 'already' }
     }
 
     const snap = await this.deps.snapshot()
-    const point = this.locateMenuItem(snap, spec.menuText)
+    const point = this.locateMenuItem(snap, spec.menuTexts)
     await this.deps.click(point, viewportOf(snap))
     await this.sleep(1500)
     let url = await this.deps.getUrl()
+    assertNotBossLoginPage(url)
     if (isBossPage(url, target)) {
       return { clicked: true, via: 'menu' }
     }
@@ -112,55 +127,52 @@ export class PageNavigator {
       await this.deps.pageNavigate(`https://www.zhipin.com${spec.urlPattern}`)
       await this.sleep(1500)
       url = await this.deps.getUrl()
+      assertNotBossLoginPage(url)
       if (isBossPage(url, target)) {
         return { clicked: true, via: 'url-jump' }
       }
       throw new PagePostconditionError(
-        `点击菜单与直跳 ${spec.urlPattern} 后都未到达「${spec.menuText}」页（当前 URL: ${url}）：` +
-          '通常是被重定向到登录页（BOSS 登录态已失效），请确认已登录 BOSS 后重试；' +
-          '若已登录仍复现，页面结构可能已变，请人工查看',
+        `点击菜单与直跳 ${spec.urlPattern} 后都未到达「${menuText}」页（当前 URL: ${url}），请检查页面状态`,
         { status: 'unmet', evidence: [`直跳后可读URL为${url}，仍非${spec.urlPattern}`] },
       )
     }
 
     // 无导航能力（旧测试替身/精简会话）：保持原 fail-loud 语义
     throw new PagePostconditionError(
-      `点击左侧菜单「${spec.menuText}」后页面未跳转（当前 URL: ${url}）：` +
+      `点击左侧菜单「${menuText}」后页面未跳转（当前 URL: ${url}）：` +
         '点击可能被拦截或页面结构已变，请人工查看',
       { status: 'unmet', evidence: [`点击后可读URL为${url}，仍非${spec.urlPattern}`] },
     )
   }
 
   /** 左侧菜单项唯一定位：仅主文档、精确文案、侧栏候选区内、视口内，取 x 最小命中 */
-  private locateMenuItem(snap: DomSnapshot, menuText: string): ClickPoint {
+  private locateMenuItem(snap: DomSnapshot, menuTexts: readonly string[]): ClickPoint {
     const viewport = viewportOf(snap)
-    const stringIndex = snap.strings.findIndex((s) => s.trim() === menuText)
-    if (stringIndex < 0) {
-      throw new NavError(`页面上找不到菜单文案「${menuText}」（不在 DOM 文本表中），请确认已登录 BOSS`)
+    const doc = snap.documents[0]!
+    for (const menuText of menuTexts) {
+      const stringIndex = snap.strings.findIndex((s) => s.trim() === menuText)
+      if (stringIndex < 0) continue
+      const hits: ClickPoint[] = []
+      for (const { bounds } of findNodesByString(doc, stringIndex)) {
+        if (bounds[2] <= 0 || bounds[3] <= 0) continue
+        const c = boundsCenter(bounds)
+        const x = c.x - (doc.scrollOffsetX ?? 0)
+        const y = c.y - (doc.scrollOffsetY ?? 0)
+        if (x <= 0 || x >= viewport.width * SIDEBAR_RELATIVE_MAX || y <= 0 || y >= viewport.height) continue
+        hits.push({ x, y })
+      }
+      if (hits.length === 0) continue
+      // 真菜单在侧栏最左，排除相同文案的顶部命中。
+      hits.sort((a, b) => a.x - b.x)
+      const best = hits[0]!
+      const ambiguous = hits.filter((p) => p.x - best.x < 5)
+      if (ambiguous.length > 1) {
+        throw new NavError(
+          `左侧导航栏中「${menuText}」最左命中不唯一（${ambiguous.map((p) => `(${Math.round(p.x)},${Math.round(p.y)})`).join(' ')}），无法确定，已停止`,
+        )
+      }
+      return best
     }
-    const hits: ClickPoint[] = []
-    for (const { bounds } of findNodesByString(snap.documents[0]!, stringIndex)) {
-      if (bounds[2] <= 0 || bounds[3] <= 0) continue
-      const c = boundsCenter(bounds)
-      const x = c.x - (snap.documents[0]!.scrollOffsetX ?? 0)
-      const y = c.y - (snap.documents[0]!.scrollOffsetY ?? 0)
-      if (x <= 0 || x >= viewport.width * SIDEBAR_RELATIVE_MAX || y <= 0 || y >= viewport.height) continue
-      hits.push({ x, y })
-    }
-    if (hits.length === 0) {
-      throw new NavError(
-        `左侧导航栏中找不到「${menuText}」菜单项（视口左 35% 区域无命中），页面布局可能已变`,
-      )
-    }
-    // 取 x 最小命中：真菜单在侧栏最左，顶部/其他区域同文案诱饵恒在其右侧被排除
-    hits.sort((a, b) => a.x - b.x)
-    const best = hits[0]!
-    const ambiguous = hits.filter((p) => p.x - best.x < 5)
-    if (ambiguous.length > 1) {
-      throw new NavError(
-        `左侧导航栏中「${menuText}」最左命中不唯一（${ambiguous.map((p) => `(${Math.round(p.x)},${Math.round(p.y)})`).join(' ')}），无法确定，已停止`,
-      )
-    }
-    return best
+    throw new NavError(`左侧导航栏中找不到菜单文案 ${menuTexts.map((text) => `「${text}」`).join('或')} 的可点击位置，页面布局可能已变`)
   }
 }

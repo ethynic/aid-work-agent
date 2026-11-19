@@ -418,6 +418,8 @@ Win32 通道实现要点：
 
 沟通页「搜索找人 + 输入 + 发送」链路，封装为两个 CLI 子命令（`send-to` / `send-current`）与同名 MCP tool（`boss_send_to` / `boss_send_current`）。默认**真发送**；`--dry-run`（`dry_run=true`）只输入不点发送，用于测试链路。
 
+2026-11-19 agent2 验收确认，新版 BOSS 侧栏进入沟通页的入口为「消息」。`boss_goto chat` 优先定位「消息」，仍支持旧页面的「沟通」，并以绑定标签的 `/web/chat/index` 路由确认到达。菜单缺失或未到目标页属于页面状态异常。实际观测到 BOSS 登录页时才返回 `NOT_LOGGED_IN`。
+
 真机校准（2026-08-13，窗口 1249x1277）：
 
 - **搜索框定位范式（2026-08-27 真机诊断重写，v0.2.3 的 diff 范式已废弃）**：搜索框现为**原生 <input>**——点搜索入口后左栏收缩条**原位变形**为 INPUT（真机 @(198,124,339,34)，与点击前 DIV 几乎重合），没有「新增节点」可 diff。现行定位：单快照直接识别（①INPUT+形态（cx<68%/cy<45%/w>max(150,8%)/h≤60）唯一；②多 INPUT 取与入口 |Δy|≤80 邻近唯一；③0 INPUT 回退 contenteditable DIV 唯一且 cx<44% 防聊天气泡容器误命中）。输入落地校验失败（聚焦竞态）→ clearInput（CDP ctrl+a modifiers=2 + Delete 清空）→ 300ms → fresh 重定位 → 再输入 → 再校验，仍败 fail-loud。

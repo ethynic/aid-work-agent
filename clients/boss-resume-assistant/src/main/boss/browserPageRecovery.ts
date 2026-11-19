@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { membershipAccountKey } from './MembershipInspector.js'
 import { FilterSetter, FILTER_SNAPSHOT_OPTIONS } from './FilterSetter.js'
 import { JobSwitcher, JobSwitchError, FILTER_BUTTON_PATTERN } from './JobSwitcher.js'
-import { PageNavigator, NavError, isBossPage } from './PageNavigator.js'
+import { PageNavigator, NavError, assertNotBossLoginPage, isBossPage } from './PageNavigator.js'
 import { type BrowserPageContext, resolveBrowserTarget, updateBrowserTarget } from './browserTargetBinding.js'
 
 export async function captureBrowserPageContext(session: BossSession, prior?: BrowserPageContext): Promise<BrowserPageContext | undefined> {
@@ -34,9 +34,7 @@ export async function restoreBrowserPageContext(session: BossSession, saved: Bro
   const check = async () => {
     if (ctx.signal.aborted) throw new CancelledError()
     const url = await session.getUrl()
-    if (/\/(?:web\/user\/)?login(?:[/?#]|$)|passport\.zhipin\.com/.test(url)) {
-      throw new CodedOperationError('NOT_LOGGED_IN', 'BOSS 页面要求登录，请完成原账号登录后在原会话接续')
-    }
+    assertNotBossLoginPage(url)
     const snapshot = await session.snapshot()
     const account = membershipAccountKey(snapshot)
     if (account && saved.account_ref && account !== saved.account_ref) {

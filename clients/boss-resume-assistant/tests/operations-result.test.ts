@@ -554,9 +554,9 @@ test('errorMapping：连接失败与命令回执未知必须分开', () => {
   assert.equal(mapExecutorError(new Error('CDP request timed out after 10000ms')).code, 'EXECUTION_UNKNOWN')
 })
 
-test('errorMapping：无业务标签不代表已经核验未登录', () => {
+test('errorMapping：无业务标签或导航异常文案不能确认未登录', () => {
   assert.equal(mapExecutorError(new Error('no BOSS page target found among 5 targets')).code, 'WRONG_PAGE')
-  assert.equal(mapExecutorError(new NavError('页面上找不到菜单文案「沟通」（不在 DOM 文本表中），请确认已登录 BOSS')).code, 'NOT_LOGGED_IN')
+  assert.equal(mapExecutorError(new NavError('页面上找不到菜单文案「沟通」（不在 DOM 文本表中），请确认已登录 BOSS')).code, 'UI_CHANGED')
 })
 
 test('errorMapping：付费墙与参数类', () => {

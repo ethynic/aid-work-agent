@@ -193,8 +193,62 @@ async def poll_owned(proxy, operation, invocation, tenant_id, progress_queue):
 
 
 def active_failure(checkpoint):
-    return next((item for item in (checkpoint.get(CHECKPOINT_KEY) or {}).values()
-                 if item.get('status') == 'failed'), None)
+    episodes = checkpoint.get(CHECKPOINT_KEY) or {}
+    failures = [(key, item) for key, item in episodes.items() if item.get('status') == 'failed']
+    if not failures:
+        return None
+    executions = {}
+    pending = [checkpoint.get('execution') or {}]
+    while pending:
+        node = pending.pop()
+        executions[node.get('execution_id')] = node
+        pending.extend(child['checkpoint'] for child in (node.get('children') or {}).values()
+                       if child.get('checkpoint'))
+    for key, failure in failures:
+        node = executions.get(failure.get('execution_id')) or {}
+        if not _succeeded_after_failure(node, key, failure, episodes):
+            return failure
+    return None
+
+
+def _succeeded_after_failure(node, key, failure, episodes):
+    """Only a proven no-effect failure and the same bound request can match."""
+    bindings = (node.get('resources') or {}).get('local_invocations') or {}
+    digest = (bindings.get(key) or {}).get('intent_digest')
+    order = {message['tool_call_id']: index for index, message in enumerate(node.get('messages') or [])
+             if message.get('role') == 'tool' and message.get('tool_call_id')}
+    failed_at = order.get(failure.get('tool_call_id'))
+    code = failure.get('code')
+    if not digest or failed_at is None or code in _UNKNOWN_CODES or code == 'LOCAL_RECOVERY_DEADLINE':
+        return False
+    tools = node.get('tools') or {}
+    if code != 'LOCAL_RECOVERY_EXHAUSTED':
+        # Exhaustion already proves a stopped, no-effect invocation in poll_owned.
+        fact = tools.get(failure.get('tool_call_id')) or {}
+        result = fact.get('result')
+        if (fact.get('phase') != 'completed' or fact.get('success') is not False or not isinstance(result, dict)
+                or result.get('success') is not False or not failure.get('invocation_id')
+                or result.get('invocation_id') != failure['invocation_id'] or result.get('effect') != 'none'
+                or has_receipt_effect_conflict(result)
+                or not repository.result_proves_completion(False, result.get('code'), 'none', result.get('data'))):
+            return False
+    for candidate_key, binding in bindings.items():
+        if (binding.get('intent_digest') != digest or binding.get('branch') != failure.get('branch')
+                or binding.get('ordinal') != failure.get('ordinal')):
+            continue
+        later = episodes.get(candidate_key) or {}
+        call_id = binding.get('tool_call_id')
+        if (later.get('status') != 'recovered' or later.get('provider') != failure.get('provider')
+                or order.get(call_id, -1) <= failed_at):
+            continue
+        fact = tools.get(call_id) or {}
+        result = fact.get('result')
+        if (fact.get('phase') == 'completed' and fact.get('success') is True and isinstance(result, dict)
+                and result.get('success') is True and later.get('invocation_id')
+                and result.get('invocation_id') == later['invocation_id']
+                and result.get('effect') in {'none', 'applied'} and not has_receipt_effect_conflict(result)):
+            return True
+    return False
 
 
 def failure_summary(failure, checkpoint):
@@ -208,18 +262,25 @@ def failure_summary(failure, checkpoint):
     root = checkpoint.get('execution') or {}
     pending = [root]
     completed = 0
+    tool_name = None
     while pending:
         node = pending.pop()
-        completed += sum(item.get('phase') == 'completed' and item.get('success') is True
-                         for item in (node.get('tools') or {}).values())
+        tools = node.get('tools') or {}
+        completed += sum(item.get('phase') == 'completed' and item.get('success') is True for item in tools.values())
+        if node.get('execution_id') == failure.get('execution_id'):
+            call = (tools.get(failure.get('tool_call_id')) or {}).get('call') or {}
+            tool_name = _public_token(call.get('name'))
         pending.extend(child['checkpoint'] for child in (node.get('children') or {}).values()
                        if child.get('checkpoint'))
-    step = failure.get('step') or '本机操作'
+    step = failure.get('step')
+    label = f'工具「{tool_name}」' if tool_name else f'步骤「{step or "本机操作"}」'
+    if tool_name and step and step != tool_name:
+        label += f'的「{step}」阶段'
     cause = failure.get('cause') or code
     if cause:
         reason += f'（{cause}）'
     items = f'该步骤已完成 {failure["known_items"]} 项。' if failure.get('known_items') else ''
-    return f'步骤「{step}」未完成。{reason} 已完成 {completed} 个工具步骤，记录已保留。{items}{action}'
+    return f'{label}未完成。{reason} 已完成 {completed} 个工具步骤，记录已保留。{items}{action}'
 
 
 def _parked_episode_key(row, episodes, providers):
