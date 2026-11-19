@@ -39,6 +39,7 @@ const tenantIsLoggedIn = ref(false)
 const tenantAdmin = ref<any>(null)
 const tenant = ref<any>(null)
 const privateCloud = ref(false)
+const hiddenMenus = ref<Set<string>>(new Set())
 vi.mock('@/composables/useTenantAuth', () => ({
   useTenantAuth: () => ({
     admin: tenantAdmin,
@@ -46,6 +47,7 @@ vi.mock('@/composables/useTenantAuth', () => ({
     isLoggedIn: tenantIsLoggedIn,
     logout: vi.fn(),
     privateCloud,
+    hiddenMenus,
   }),
 }))
 
@@ -327,6 +329,7 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     tenantIsLoggedIn.value = false
     tenantAdmin.value = null
     tenant.value = null
+    hiddenMenus.value = new Set()
     routeState.path = '/'
     routeState.params = {}
     routeState.query = {}
@@ -629,7 +632,7 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     windowOpenSpy.mockRestore()
   })
 
-  it('连接中心：普通租户用户可进入企微会话、每日总结和代理任务，管理项隐藏', async () => {
+  it('连接中心：普通租户用户可进入企微Agent合并入口和本地工具，管理项隐藏', async () => {
     // 普通用户（非管理员）
     routeState.path = '/t/test-tenant/chat'
     tenantIsLoggedIn.value = true
@@ -650,9 +653,7 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(flyout).not.toBeNull()
     const flyoutText = flyout!.textContent || ''
     expect(flyoutText).toContain('本地工具')
-    expect(flyoutText).toContain('企业微信会话')
-    expect(flyoutText).toContain('企业微信每日总结')
-    expect(flyoutText).toContain('企业微信代理任务')
+    expect(flyoutText).toContain('企业微信Agent')
     // 管理项对普通用户隐藏
     expect(flyoutText).not.toContain('API配置')
     expect(flyoutText).not.toContain('渠道配置')
@@ -673,27 +674,57 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(flyoutText).toContain('API配置')
     expect(flyoutText).toContain('渠道配置')
     expect(flyoutText).toContain('本地工具')
-    expect(flyoutText).toContain('企业微信每日总结')
-    expect(flyoutText).toContain('企业微信代理任务')
+    expect(flyoutText).toContain('企业微信Agent')
   })
 
-  it('连接中心：每日总结和代理任务入口跳转到各自页面', async () => {
+  it('部署开关：hiddenMenus 下发后对应连接中心与管理菜单项隐藏', async () => {
+    hiddenMenus.value = new Set([
+      'api_config', 'wechat_mp', 'local_tools', 'wecom_agent', 'external_systems',
+      'token_usage', 'reply_styles', 'behavior_logs',
+    ])
+    const wrapper = mountTenantSidebar()
+    await flushPromises()
+
+    // 连接中心：隐藏项不出现，未列入开关的渠道配置不受影响
+    const trigger = findButtonByText(wrapper, '连接中心')
+    expect(trigger).toBeTruthy()
+    await trigger.trigger('mouseenter')
+    await flushPromises()
+    const flyout = findFlyout()
+    const flyoutText = flyout!.textContent || ''
+    expect(flyoutText).toContain('渠道配置')
+    expect(flyoutText).not.toContain('API配置')
+    expect(flyoutText).not.toContain('公众号内容')
+    expect(flyoutText).not.toContain('本地工具')
+    expect(flyoutText).not.toContain('企业微信Agent')
+    expect(flyoutText).not.toContain('外部系统')
+
+    // 管理菜单：隐藏项不出现
+    const adminTrigger = findButtonByText(wrapper, '管理菜单')
+    expect(adminTrigger).toBeTruthy()
+    await adminTrigger.trigger('mouseenter')
+    await flushPromises()
+    const adminFlyout = findFlyout()
+    const adminText = adminFlyout!.textContent || ''
+    expect(adminText).toContain('用户管理')
+    expect(adminText).not.toContain('Token 用量')
+    expect(adminText).not.toContain('积分用量')
+    expect(adminText).not.toContain('回复风格')
+    expect(adminText).not.toContain('行为日志')
+  })
+
+  it('连接中心：企微Agent合并入口点击跳转 /wecom-agent', async () => {
     const wrapper = mountTenantSidebar()
     await flushPromises()
     const trigger = findButtonByText(wrapper, '连接中心')
-    for (const [label, path] of [
-      ['企业微信每日总结', '/t/test-tenant/wecom-conversations/daily'],
-      ['企业微信代理任务', '/t/test-tenant/wecom-conversations/proxy'],
-    ]) {
-      await trigger.trigger('mouseenter')
-      await flushPromises()
-      const item = Array.from(findFlyout()!.querySelectorAll('button'))
-        .find(button => button.textContent?.trim() === label)
-      expect(item).toBeTruthy()
-      item!.click()
-      await nextTick()
-      expect(routerPush).toHaveBeenLastCalledWith(path)
-    }
+    await trigger.trigger('mouseenter')
+    await flushPromises()
+    const item = Array.from(findFlyout()!.querySelectorAll('button'))
+      .find(button => button.textContent?.trim() === '企业微信Agent')
+    expect(item).toBeTruthy()
+    item!.click()
+    await nextTick()
+    expect(routerPush).toHaveBeenLastCalledWith('/t/test-tenant/wecom-agent')
   })
 
   it('数据源门控：默认（未开通任何数据源）管理员子菜单不含「商城产品同步」', async () => {

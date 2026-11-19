@@ -37,6 +37,8 @@ const tenant = ref<TenantInfo | null>(null)
 const saasToken = ref<string | null>(null)
 // 私有云部署标志（/me 返回，部署级标志与租户无关）：隐藏积分/充值相关 UI
 const privateCloud = ref(false)
+// 部署形态：租户前台侧边栏隐藏菜单键（后端 .env TENANT_HIDDEN_MENUS 经 /saas/auth/me 下发）
+const hiddenMenus = ref<Set<string>>(new Set())
 const isLoading = ref(false)
 const isInitialized = ref(false)
 
@@ -116,6 +118,7 @@ export function useTenantAuth() {
             admin.value = info.user
             tenant.value = info.tenant ? { ...info.tenant, status: info.tenant.status } : null
             privateCloud.value = !!info.private_cloud
+            hiddenMenus.value = new Set(Array.isArray(info.hidden_menus) ? info.hidden_menus : [])
 
             // 检查租户状态和到期日期（仅对租户管理员和普通用户）
             if (tenant.value && admin.value!.role !== 'platform_admin') {
@@ -221,6 +224,7 @@ export function useTenantAuth() {
       admin.value = null
       tenant.value = null
       privateCloud.value = false
+      hiddenMenus.value = new Set()
       // 清空数字员工列表缓存，防止换账号登录后命中上一用户的缓存
       useSubagentList().clearCache()
     }
@@ -267,6 +271,7 @@ export function useTenantAuth() {
     tenant,
     saasToken,
     privateCloud,
+    hiddenMenus,
     isLoggedIn,
     isLoading,
     isInitialized,

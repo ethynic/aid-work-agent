@@ -376,8 +376,12 @@ billing:
 
 # 部署形态配置：private_cloud 为 true 表示私有云部署（客户自购 API key/短信通道，费用自行承担），
 # 前台隐藏"积分"概念（用量页改显 token 分项、隐藏充值记录入口、跳过余额提醒），短信发送不扣费
+# tenant_hidden_menus：租户前台侧边栏隐藏菜单键列表（.env TENANT_HIDDEN_MENUS 逗号分隔），
+# 私有云按客户需要裁剪菜单。合法键：api_config/wechat_mp/local_tools/wecom_agent/external_systems/
+# token_usage/reply_styles/behavior_logs；仅控制菜单显示，页面直链由后端 404 兜底
 deployment:
   private_cloud: ${PRIVATE_CLOUD:-false}
+  tenant_hidden_menus: ${TENANT_HIDDEN_MENUS:-}
 
 # recap 任务推送配置（docs/subagent/recap-mechanism-design.md）
 external_push:

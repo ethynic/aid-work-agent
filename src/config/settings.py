@@ -541,8 +541,23 @@ class DeploymentConfig(BaseModel):
     - private_cloud: 私有云部署（客户自购 API key/短信通道，费用自行承担）。
       True 时隐藏/简化公有云专属能力：前台不展示"积分"概念（用量页改显 token 分项、
       隐藏充值记录入口、跳过余额提醒），短信发送不扣费
+    - tenant_hidden_menus: 租户前台侧边栏隐藏菜单键列表（.env TENANT_HIDDEN_MENUS，
+      逗号分隔）。私有云按客户需要裁剪菜单，仅控制显示，页面直链由后端 404 兜底。
+      合法键：api_config(API配置) / wechat_mp(公众号内容) / local_tools(本地工具) /
+      wecom_agent(企业微信Agent) / external_systems(外部系统) / token_usage(Token用量) /
+      reply_styles(回复风格) / behavior_logs(行为日志)；未识别的键忽略
     """
     private_cloud: bool = False
+    tenant_hidden_menus: List[str] = Field(default_factory=list)
+
+    @validator("tenant_hidden_menus", pre=True)
+    def _parse_tenant_hidden_menus(cls, v):
+        """兼容 config.yaml 空占位符（${TENANT_HIDDEN_MENUS:-} 替换为空串）与逗号分隔字符串"""
+        if v is None or v == "":
+            return []
+        if isinstance(v, str):
+            return [m.strip() for m in v.split(",") if m.strip()]
+        return v
 
 
 class PreSalesPushConfig(BaseModel):
@@ -1304,6 +1319,13 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         yaml_config.setdefault("deployment", {})["private_cloud"] = (
             os.getenv("PRIVATE_CLOUD", "").strip().lower() in ("true", "1", "yes", "on")
         )
+
+    # 部署形态：租户前台隐藏菜单（.env TENANT_HIDDEN_MENUS，逗号分隔菜单键，
+    # 如 api_config,wechat_mp,local_tools；键名见 DeploymentConfig.tenant_hidden_menus 文档）
+    if os.getenv("TENANT_HIDDEN_MENUS") is not None:
+        yaml_config.setdefault("deployment", {})["tenant_hidden_menus"] = [
+            m.strip() for m in os.getenv("TENANT_HIDDEN_MENUS", "").split(",") if m.strip()
+        ]
 
     s = Settings(**yaml_config)
 

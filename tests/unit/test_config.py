@@ -98,6 +98,31 @@ def test_private_cloud_default_false(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 租户前台隐藏菜单（TENANT_HIDDEN_MENUS）
+# ---------------------------------------------------------------------------
+
+def test_tenant_hidden_menus_env_override(monkeypatch):
+    """TENANT_HIDDEN_MENUS env 逗号分隔解析，剔除空段与首尾空白"""
+    monkeypatch.setenv("TENANT_HIDDEN_MENUS", "api_config, wechat_mp ,,local_tools")
+    settings = create_settings()
+    assert settings.deployment.tenant_hidden_menus == ["api_config", "wechat_mp", "local_tools"]
+
+
+def test_tenant_hidden_menus_default_empty(monkeypatch):
+    """未设置 TENANT_HIDDEN_MENUS 时不隐藏任何菜单"""
+    monkeypatch.delenv("TENANT_HIDDEN_MENUS", raising=False)
+    settings = create_settings()
+    assert settings.deployment.tenant_hidden_menus == []
+
+
+def test_tenant_hidden_menus_empty_env(monkeypatch):
+    """TENANT_HIDDEN_MENUS 置空串/纯逗号时不隐藏任何菜单"""
+    monkeypatch.setenv("TENANT_HIDDEN_MENUS", ",,")
+    settings = create_settings()
+    assert settings.deployment.tenant_hidden_menus == []
+
+
+# ---------------------------------------------------------------------------
 # LLM_PROVIDER 链式写法（"a/b/c" 完整优先级链）
 # ---------------------------------------------------------------------------
 

@@ -150,9 +150,9 @@
           </svg>
         </button>
 
-        <!-- 连接中心入口：一级菜单 flyout trigger（全体租户用户可见，手机端隐藏） -->
+        <!-- 连接中心入口：一级菜单 flyout trigger（全体租户用户可见，手机端隐藏；子菜单全被部署开关隐藏时一并隐藏） -->
         <button
-          v-if="isTenantMode && !props.isMobile"
+          v-if="isTenantMode && !props.isMobile && connectionSubMenuItems.length > 0"
           :ref="el => setTriggerRef('connection', el)"
           @mouseenter="openFlyout('connection')"
           @mouseleave="scheduleClose()"
@@ -903,7 +903,10 @@ const emit = defineEmits<{
 const router = useRouter()
 const route = useRoute()
 const isDesktopNotificationsUnavailable = import.meta.env.VITE_DESKTOP_TARGET === 'true'
-const { admin: tenantAdmin, tenant, logout: tenantLogout, isLoggedIn: tenantIsLoggedIn, privateCloud } = useTenantAuth()
+const { admin: tenantAdmin, tenant, logout: tenantLogout, isLoggedIn: tenantIsLoggedIn, privateCloud, hiddenMenus } = useTenantAuth()
+
+// 部署形态：租户前台菜单隐藏开关（后端 .env TENANT_HIDDEN_MENUS 经 /saas/auth/me 下发）
+const isMenuHidden = (key: string) => hiddenMenus.value.has(key)
 const { currentTheme, setTheme, getAvailableThemes } = useTheme()
 
 const showUserMenu = ref(false)
@@ -1063,18 +1066,18 @@ const adminSubMenuItems = computed(() => {
     // 企业设置：齿轮（简化版）
     { path: `${base}/settings`, label: '企业设置', icon: 'M12 8a4 4 0 100 8 4 4 0 000-8zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3h0a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5h0a1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8v0a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z' },
     // 用量：柱状图（私有云不展示积分概念，标签改 Token 用量）
-    { path: `${base}/token-usage`, label: privateCloud.value ? 'Token 用量' : '积分用量', icon: 'M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7' },
+    { key: 'token_usage', path: `${base}/token-usage`, label: privateCloud.value ? 'Token 用量' : '积分用量', icon: 'M3 21h18M6 17V9M11 17V5M16 17v-4M21 17v-7' },
     // 充值记录：钱包/硬币（私有云客户自购 key 充值，无此页）
     ...(privateCloud.value ? [] : [{ path: `${base}/recharge-records`, label: '充值记录', icon: 'M21 12a9 9 0 11-18 0 9 9 0 0118 0zM12 7v10M9 10h4.5a1.5 1.5 0 010 3H9' }]),
     // 回复风格：对话气泡
-    { path: `${base}/reply-styles`, label: '回复风格', icon: 'M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z' },
+    { key: 'reply_styles', path: `${base}/reply-styles`, label: '回复风格', icon: 'M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z' },
     // 行为日志：清单/审计剪贴板
-    { path: `${base}/behavior-logs`, label: '行为日志', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4' },
+    { key: 'behavior_logs', path: `${base}/behavior-logs`, label: '行为日志', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4' },
     // 防滥用中心：盾牌+对勾
     { path: `${base}/abuse-center`, label: '防滥用中心', icon: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10zM9 12l2 2 4-4' },
     // 通知规则：铃铛
     { path: `${base}/notification-rules`, label: '通知规则', icon: 'M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 01-3.4 0' },
-  ]
+  ].filter(item => !('key' in item && item.key && isMenuHidden(item.key)))
 })
 
 // 连接中心子菜单项（全体租户用户可见；adminOnly 项仅租户管理员可见）
@@ -1112,17 +1115,17 @@ const connectionSubMenuItems = computed(() => {
   const base = `/t/${tenantId.value}`
   const all = [
     // API配置：插头（原有连接中心页面）
-    { path: `${base}/connections`, label: 'API配置', icon: 'M9 7V3M15 7V3M9 21v-4M15 21v-4M5 12H3M21 12h-2M7 9h10a2 2 0 012 2v2a2 2 0 01-2 2H7a2 2 0 01-2-2v-2a2 2 0 012-2z', adminOnly: true },
+    { key: 'api_config', path: `${base}/connections`, label: 'API配置', icon: 'M9 7V3M15 7V3M9 21v-4M15 21v-4M5 12H3M21 12h-2M7 9h10a2 2 0 012 2v2a2 2 0 01-2 2H7a2 2 0 01-2-2v-2a2 2 0 012-2z', adminOnly: true },
     // 渠道配置：信号波
     { path: `${base}/channels`, label: '渠道配置', icon: 'M5 12.55a11 11 0 0114 0M1.42 9a16 16 0 0121.16 0M8.53 16.11a6 6 0 016.95 0M12 20h.01', adminOnly: true },
     // 公众号内容：文档/文章页
-    { path: `${base}/wechat-mp`, label: '公众号内容', icon: 'M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 9h8M8 13h8M8 17h5', adminOnly: true },
+    { key: 'wechat_mp', path: `${base}/wechat-mp`, label: '公众号内容', icon: 'M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 9h8M8 13h8M8 17h5', adminOnly: true },
     // 本地工具：电脑
-    { path: `${base}/local-tools`, label: '本地工具', icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z', adminOnly: false },
+    { key: 'local_tools', path: `${base}/local-tools`, label: '本地工具', icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z', adminOnly: false },
     // 企业微信Agent：三入口合并（会话记录/每日总结/代理任务，页内 Tab 切换）
-    { path: `${base}/wecom-agent`, label: '企业微信Agent', icon: 'M12 3a8 8 0 018 8v6H4v-6a8 8 0 018-8zM9 21h6M9 11h6', adminOnly: false },
+    { key: 'wecom_agent', path: `${base}/wecom-agent`, label: '企业微信Agent', icon: 'M12 3a8 8 0 018 8v6H4v-6a8 8 0 018-8zM9 21h6M9 11h6', adminOnly: false },
     // 外部系统：链接（管理员与普通员工均可见）
-    { path: `${base}/connections/external-systems`, label: '外部系统', icon: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71', adminOnly: false },
+    { key: 'external_systems', path: `${base}/connections/external-systems`, label: '外部系统', icon: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71', adminOnly: false },
   ]
   // 数据源授权门控：「商城产品同步」仅对已开通租户显示（portal 授权记录，见 GET /api/saas/connection-sources）
   if (grantedModules.value.has('hongtao_shop')) {
@@ -1135,7 +1138,8 @@ const connectionSubMenuItems = computed(() => {
   if (grantedModules.value.has('sccy_policy')) {
     all.push({ path: `${base}/sccy-policy`, label: '创业政策同步', icon: 'M9 12h6m-6 4h6M9 8h6M5 21h14a1 1 0 001-1V4a1 1 0 00-1-1H5a1 1 0 00-1 1v16a1 1 0 001 1z', adminOnly: true })
   }
-  return all.filter(item => !item.adminOnly || isTenantAdmin.value)
+  return all.filter(item => (!item.adminOnly || isTenantAdmin.value)
+    && !('key' in item && item.key && isMenuHidden(item.key)))
 })
 
 // 知识中心任一子页面是否激活（用于一级菜单 trigger 高亮）
