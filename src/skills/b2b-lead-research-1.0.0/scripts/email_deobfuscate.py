@@ -7,12 +7,12 @@
 德国 / DACH 制造业官网大量使用 WordPress 的邮箱保护插件，把地址做 ROT13 后
 塞进 ``data-enc-email`` 等自定义属性，页面里没有 ``mailto:`` 也没有明文：
 
-    <a href="#" data-enc-email="vasb[ng]nsg-tebhc.qr">E-Mail</a>
-                                  -> info@aft-group.de
+    <a href="#" data-enc-email="vasb[ng]orvfcvry.qr">E-Mail</a>
+                                  -> info@beispiel.de
 
 连 ``[at]`` / ``[dot]`` 也可能一起被 ROT13 成 ``[ng]`` / ``[qbg]``。
-只跑「mailto: + 纯文本正则」的抽取器会整批落空（实测 200 家德国制造企业里
-43 家因此被误判为「无邮箱」）。
+只跑「mailto: + 纯文本正则」的抽取器会在这类站点上整批落空，
+把大量只给编码邮箱的网站误判为「无邮箱」。
 
 覆盖形态
 --------------------------------------------------------------------
@@ -183,15 +183,15 @@ def deobfuscate_emails(page_html: str, page_url: str = ""):
 def _selftest():
     cases = [
         # (原始文本, 期望地址, 期望方法关键词)
-        ('vasb[ng]nsg-tebhc.qr', 'info@aft-group.de', 'rot13'),
-        ('vasb[at]nsg-tebhc.qr', 'info@aft-group.de', 'rot13'),
-        ('info@aft-group.de', 'info@aft-group.de', 'plain'),
-        ('max.mustermann(at)firma.de', 'max.mustermann@firma.de', ''),
-        ('vorname.nachname&#64;firma.de', 'vorname.nachname@firma.de', ''),
-        ('a[dot]b@firma.de', 'a.b@firma.de', ''),
+        ('vasb[ng]orvfcvry.qr', 'info@beispiel.de', 'rot13'),
+        ('vasb[at]orvfcvry.qr', 'info@beispiel.de', 'rot13'),
+        ('info@beispiel.de', 'info@beispiel.de', 'plain'),
+        ('max.mustermann(at)beispiel.de', 'max.mustermann@beispiel.de', ''),
+        ('vorname.nachname&#64;beispiel.de', 'vorname.nachname@beispiel.de', ''),
+        ('a[dot]b@beispiel.de', 'a.b@beispiel.de', ''),
     ]
-    html = ('<a href="#" data-enc-email="vasb[ng]nsg-tebhc.qr">Mail</a>'
-            '<a href="mailto:vertrieb@firma.de?subject=Hi">Vertrieb</a>'
+    html = ('<a href="#" data-enc-email="vasb[ng]orvfcvry.qr">Mail</a>'
+            '<a href="mailto:vertrieb@beispiel.de?subject=Hi">Vertrieb</a>'
             '<span class="__cf_email__" data-cfemail="5e3b333f"></span>')
     ok = True
     for raw, want, method in cases:
@@ -200,9 +200,9 @@ def _selftest():
         if flag == "FAIL":
             ok = False
         print(f"  [{flag}] {raw!r:42} -> {got!r:32} ({how})")
-    found = extract_emails(html, "https://aft-group.de/impressum")
+    found = extract_emails(html, "https://beispiel.de/impressum")
     print("  extract_emails:", {k: v[0] for k, v in found.items()})
-    if "info@aft-group.de" not in found or "vertrieb@firma.de" not in found:
+    if "info@beispiel.de" not in found or "vertrieb@beispiel.de" not in found:
         ok = False
         print("  [FAIL] data-enc-email / mailto 未全部命中")
     print("SELFTEST", "PASS" if ok else "FAIL")

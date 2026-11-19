@@ -5,8 +5,10 @@ description: >
   联系方式采集、话术素材与分渠道成品产出。只挖不发——不碰 SMTP、不做投递、
   不写 emails 发送状态。产出终点是数据库内的企业 + 联系人 + 多渠道坐标 +
   综述 + 话术成品，即使没有找到邮箱也可独立交付。
-  适用于外贸开发、客户线索挖掘、lead generation、市场摸底等场景。
-version: 1.0.0
+  适用于外贸开发、客户线索挖掘、lead generation、市场摸底等场景，
+  覆盖海外市场（LinkedIn/X/WhatsApp 等）与国内市场（微博/抖音/小红书/知乎/B站/
+  视频号/QQ 等企业号与关键人个人号）。
+version: 1.1.0
 init_script: lead_db.py
 requires_tools: [web_search, web_fetch]
 metadata:
@@ -94,8 +96,9 @@ metadata:
    明示的企业商务入口；不推断、不拼装、不把私人账号当商务坐标。采集口径与
    置信度判定见 `references/multi-channel-discovery.md`。
 10. **社媒 / IM / 手机类坐标本轮只记录不触达**。sms/call/whatsapp/telegram/
-    wechat/line/kakao/linkedin/x/facebook/instagram 仅入库供后续人工或后续
-    技能消费；本轮不做任何私信、连接请求、电话等触达动作（EU/EEA/UK/CA 市场
+    wechat/line/kakao/qq/linkedin/x/facebook/instagram/weixin_channels/weibo/
+    douyin/xiaohongshu/zhihu/bilibili 仅入库供后续人工或后续技能消费；
+    本轮不做任何私信、连接请求、电话等触达动作（EU/EEA/UK/CA 市场
     一律如此，其他市场同样默认不触达）。
 
 ## 脚本清单（经 skill_execute 调用）
@@ -195,7 +198,7 @@ python lead_db.py score / export / list-leads / list-contacts / show-campaign ..
    读进上下文；每个 turn 只加载「本块 facts + 本块已有产物 + 一份 style-card.md
    速查卡」。速查卡是**索引不是替身**：对模板/渲染规则有疑问时，定点打开
    对应 reference 的一小节（一次），不全文重读。
-7. **静态资料只读一次、产物只生成一次**：`brief.md`、`email-copybook.md`、
+7. **静态资料只读一次、产物只生成一次**：`brief.md`、`talk-track-playbook.md`、
    合规要点等与具体客户无关的资料，在**分块前一次性读完**并压成
    `style-card.md`（2-4KB，**必须完整保留**七段式结构、主题行硬规则
    ≤35 字符/无公司名/有具体数字、本地化要点、80-150 词长度、合规与退订要素；
@@ -245,7 +248,14 @@ python scripts/facts_builder.py --probe <campaign>/probe \
 1. **需求澄清（brief）**：问卷只**必问两项**——目标国家/地区、目标行业；
    企业规模、决策人职位等其余字段默认「不限」并按上下文合理默认填写，
    不发起连环追问（用户主动描述了规模/决策人/CTA 等信息时照常落 brief）。
-   回显格式与确认方式见「用户沟通口径」。产出 brief.md 后
+   目标国家确定后，追加一句「要找哪些信息类型/渠道」：基础维度
+   （企业清单 / 决策链联系人 / 业务综述 / 联系话术）默认全要；
+   渠道维度按该国偏好裁剪列出（目标=中国列微博/抖音/小红书/知乎/B站/视频号/QQ/微信；
+   目标=德国列 email/Impressum 电话/LinkedIn/X；目标=日本列 LINE；
+   目标=韩国列 Kakao；中东/拉美/东南亚列 WhatsApp/Telegram），默认「全部」。
+   用户的选择写进 brief 的「本次范围」一节（可单点调整），第 6/7 步只为
+   被选中的渠道入库与生成话术，未选中的不浪费检索。回显格式与确认方式见
+   「用户沟通口径」。产出 brief.md 后
    `lead_db.py init` 建 campaign 并存 brief。
    `init` 会**前置校验发件邮箱**（个人邮箱或租户邮箱任一已配置）：未配置时拒绝创建
    并提示先去配置——这是刻意的 fail-fast，不要绕过，先引导用户/管理员配好邮箱再重跑
@@ -271,9 +281,10 @@ python scripts/facts_builder.py --probe <campaign>/probe \
 
    > **⛔ 官网巡检必须支持邮箱反混淆（本步必做）**：德国 / DACH 制造业官网
    > 普遍用 WordPress 插件把邮箱做 ROT13 后塞进 `data-enc-email`
-   > （`vasb[ng]nsg-tebhc.qr` -> `info@aft-group.de`，连 `[at]` / `[dot]` 都可能被
+   > （`vasb[ng]orvfcvry.qr` -> `info@beispiel.de`，连 `[at]` / `[dot]` 都可能被
    > 编码成 `[ng]` / `[qbg]`），页面里既无 `mailto:` 也无明文。只跑 mailto +
-   > 纯文本正则会**整批判成「无邮箱」**（实测 200 家德国制造企业有 43 家如此）。
+   > 纯文本正则会**整批判成「无邮箱」**（不少德国 / DACH 制造企业只以编码形态
+   > 给出邮箱，跳过反混淆会整批误判）。
    > - **标准实现**：`scripts/email_deobfuscate.py`（纯标准库，自带 `--selftest`），
    >   批量抓取抽取邮箱时接入其 `extract_emails`；`web-search-pro` 管线仅做
    >   mailto + 明文抽取，**未接反混淆前不得把「管线没抽到」直接判为无邮箱**，
@@ -290,9 +301,12 @@ python scripts/facts_builder.py --probe <campaign>/probe \
 6. **联系人 + 多渠道坐标**：从巡检结果抽联系人，`add-contact` 入库
    （闸门自动拒收：无关职能/公开窗口/guessed 低置信）；同一份抓取结果里的
    电话（E.164）/ 社媒 / IM 坐标用 `add-channel` 入库（渠道枚举校验 + 去重；
-   source/source_url/confidence/evidence 必填可回溯）。采集口径、渠道偏好与
-   置信度判定见 `references/multi-channel-discovery.md`。**没有可用邮箱的企业
-   照常交付坐标与综述，不阻塞**。
+   source/source_url/confidence/evidence 必填可回溯）。**国内市场额外采集**：
+   微博/抖音/小红书/知乎/B站 的企业官方账号（建一条 name=「官方账号」的
+   contact 行挂企业坐标，不占决策链联系人口径）与对口联系人个人账号（挂在
+   真实联系人下）；视频号主页、公众号/企业微信 ID 一并记录。采集口径、渠道偏好、
+   企业号 vs 个人号区分与置信度判定见 `references/multi-channel-discovery.md`。
+   **没有可用邮箱的企业照常交付坐标与综述，不阻塞**。
 7. **话术素材 + 分渠道成品**：先 `hook_library.py recommend --business <key>
    --market <码>` 查钩子库（战绩排名 + 可复用实例 + 结构骨架，见
    `references/hook-library.md`），再按 `references/talk-track-playbook.md`

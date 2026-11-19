@@ -41,7 +41,7 @@
 storage/tenants/{tenant_id}/lead-gen/hook_library/   # 租户级，跨 campaign 复用，技能升级不覆盖
 ├── index.json                          # 业务清单
 └── businesses/
-    └── ai-marketing-agent.json          # 一个业务 = 一个分区
+    └── <business-key>.json          # 一个业务 = 一个分区
         ├── business_key / name / product / icp / lang
         ├── segments[]                   # 该业务下的客群
         ├── markets[]                    # 该业务已知的目标市场（国家码）
@@ -60,25 +60,25 @@ storage/tenants/{tenant_id}/lead-gen/hook_library/   # 租户级，跨 campaign 
 
 ```bash
 python scripts/hook_library.py register \
-  --key ai-marketing-agent \
+  --key <business-key> \
   --name "AI 营销智能体" \
   --product "AI 营销智能体（营销自动化代理）" \
   --icp "海外营销代理 / 电商 / B2B SaaS" \
   --lang zh \
   --segment agency --segment ecommerce --segment b2bsaas
 
-python scripts/hook_library.py add-market --business ai-marketing-agent --market DE
+python scripts/hook_library.py add-market --business <business-key> --market DE
 ```
 
 `--key` 是分区标识，**同一业务的所有任务必须用同一个 key**，战绩才会累积。
-建议用小写英文短横线（如 `ai-marketing-agent`）。seed 批量导入时也必须
+建议用小写英文短横线（如 `your-business`、`seals-export`）。seed 批量导入时也必须
 `--business <key>` 显式指定（缺省按 name 派生 key，容易分裂分区）。
 
 ### 步骤 2 · 写邮件前先查库（话术步骤）
 
 ```bash
 python scripts/hook_library.py recommend \
-  --business ai-marketing-agent --market DE --segment agency
+  --business <business-key> --market DE --segment agency
 ```
 
 `--market` 用**本次任务问答确定的国家码**。输出按优先级分层：
@@ -122,7 +122,7 @@ python scripts/lead_db.py hook-stats --campaign-id 12 > /tmp/hook_stats.json
 
 # ② 回写（幂等：同一 campaign 重跑覆盖不叠加）
 python scripts/hook_library.py record \
-  --business ai-marketing-agent --market DE \
+  --business <business-key> --market DE \
   --stats-file /tmp/hook_stats.json
 ```
 
@@ -213,18 +213,18 @@ python scripts/hook_library.py add --business <key> --pattern cost \
 python scripts/hook_library.py list
 
 # 查某业务在某市场的有效钩子
-python scripts/hook_library.py recommend --business ai-marketing-agent --market DE --segment agency
+python scripts/hook_library.py recommend --business <business-key> --market DE --segment agency
 
 # 登记目标市场
-python scripts/hook_library.py add-market --business ai-marketing-agent --market FR
+python scripts/hook_library.py add-market --business <business-key> --market FR
 
 # 手工录入一条钩子实例（还没发、或来自别处的灵感）
-python scripts/hook_library.py add --business ai-marketing-agent --pattern cost \
+python scripts/hook_library.py add --business <business-key> --pattern cost \
   --market DE --lang de --subject "..." --hook "..." --segment agency --note "来源：某次通话"
 
 # 批量导入种子实例
-python scripts/hook_library.py seed --business ai-marketing-agent \
-  --file assets/hook_seeds_ai-marketing-agent.json
+python scripts/hook_library.py seed --business <business-key> \
+  --file assets/hook_seeds_example.json
 
 # 战绩聚合（发送侧调用，输出 JSON）
 python scripts/lead_db.py hook-stats --campaign-id 12
