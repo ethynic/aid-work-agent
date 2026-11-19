@@ -74,12 +74,14 @@ class TestDocLayoutCloneSkillRegistry(unittest.TestCase):
         self.assertIn("doc-layout-clone", registry.list_skills())
         skill = registry.get("doc-layout-clone")
         self.assertIsNotNone(skill)
-        self.assertEqual(skill.version, "1.0.0")
+        # 2026-11-19 合并上游 1.2.0 -> 1.3.0（分轮问答 + 信息采集表）
+        self.assertEqual(skill.version, "1.3.0")
         self.assertIn("cp", skill.requires_tools)
 
     def test_required_scripts_exist(self):
         for name in ("prep.py", "fill_doc.py", "dump_template.py",
-                     "pdf_to_docx.py", "scan_templates.py"):
+                     "pdf_to_docx.py", "scan_templates.py",
+                     "probe.py", "make_intake.py"):
             self.assertTrue((SCRIPTS / name).is_file(), name)
 
 
@@ -219,6 +221,202 @@ class TestDocLayoutCloneFill(unittest.TestCase):
             self.assertEqual(rep["missing_required"], ["party_a"])
             self.assertIn("skipped", rep["analysis_cached"])
             self.assertFalse(list(cache_dir.glob("*.analysis.json")))
+
+    def test_fill_default_fallback_avoids_missing(self):
+        # 上游 1.2.1：required + default 字段无显式答案时用默认值兜底，不误报缺失
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            prep = self._prep(tmp)
+            work = Path(prep["work"])
+            analysis = {
+                "fields": [
+                    {"key": "party_a", "label": "甲方", "required": True,
+                     "default": "甲方：默认主体有限公司",
+                     "locators": [{"kind": "literal",
+                                   "text": "甲方：样例科技有限公司"}]},
+                ],
+            }
+            (work / "analysis.json").write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            r = _run(
+                ["fill_doc.py", prep["working_template"], work / "analysis.json",
+                 "-", work / "output.docx", "--report", work / "fill_report.json"],
+                stdin="{}")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            rep = json.loads(r.stdout)
+            self.assertTrue(rep["ok"], rep["summary"])
+            self.assertEqual(rep["missing_required"], [])
+            self.assertEqual(rep["defaults"][0]["field"], "party_a")
+            self.assertEqual(rep["verification"]["fields"]["party_a"],
+                             "甲方：默认主体有限公司")
+
+    def test_fill_deferred_by_dependency_not_missing(self):
+        # 上游 1.2.0：被 depends_on 挡住的必填字段记 deferred，不算 missing_required
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            prep = self._prep(tmp)
+            work = Path(prep["work"])
+            analysis = {
+                "fields": [
+                    {"key": "party_a", "label": "甲方", "required": True,
+                     "locators": [{"kind": "literal",
+                                   "text": "甲方：样例科技有限公司"}]},
+                    {"key": "installment_count", "label": "分期期数",
+                     "required": True,
+                     "depends_on": {"key": "settle_mode", "equals": "分期付款"},
+                     "locators": [{"kind": "literal",
+                                   "text": "签订日期：2026 年 1 月 1 日"}]},
+                ],
+            }
+            (work / "analysis.json").write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            r = _run(
+                ["fill_doc.py", prep["working_template"], work / "analysis.json",
+                 "-", work / "output.docx", "--report", work / "fill_report.json"],
+                stdin=json.dumps({"party_a": "甲方：测试股份有限公司",
+                                  "settle_mode": "一次性付款"},
+                                 ensure_ascii=False))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            rep = json.loads(r.stdout)
+            self.assertTrue(rep["ok"], rep["summary"])
+            self.assertEqual(rep["missing_required"], [])
+            self.assertEqual(len(rep["deferred"]), 1)
+            self.assertEqual(rep["deferred"][0]["field"], "installment_count")
+            self.assertEqual(
+                rep["verification"]["checks"]["deferred_by_dependency"], 1)
+
+
+class TestDocLayoutCloneProbe(unittest.TestCase):
+    """probe.py 分轮编排：依赖判定 / 自动解决字段 / ready_to_fill / 答案合并。"""
+
+    ANALYSIS = {
+        "fields": [
+            {"key": "settle_mode", "label": "结算方式", "required": True},
+            {"key": "installment_count", "label": "分期期数", "required": True,
+             "phase": 2, "depends_on": {"key": "settle_mode", "equals": "分期付款"}},
+            {"key": "sign_date", "label": "签订日期", "required": True,
+             "default": "2026 年 12 月 31 日"},
+            {"key": "total", "label": "合计", "formula": "sum:amount"},
+        ],
+        "list_tables": [],
+    }
+
+    def test_round1_only_unlocked_and_auto_resolved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            apath = Path(tmp) / "analysis.json"
+            apath.write_text(json.dumps(self.ANALYSIS, ensure_ascii=False),
+                             encoding="utf-8")
+            r = _run(["probe.py", apath, "--json-only"])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            plan = json.loads(r.stdout)
+            self.assertFalse(plan["ready_to_fill"])
+            # 第 1 轮只问 settle_mode；分期期数被挡、日期/合计自动解决
+            self.assertEqual([f["key"] for f in plan["open_fields"]],
+                             ["settle_mode"])
+            self.assertEqual([f["key"] for f in plan["blocked_fields"]],
+                             ["installment_count"])
+            self.assertEqual({f["key"] for f in plan["auto_resolved"]},
+                             {"sign_date", "total"})
+
+    def test_round2_unlocks_after_answer_and_ready(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            apath = tmp / "analysis.json"
+            apath.write_text(json.dumps(self.ANALYSIS, ensure_ascii=False),
+                             encoding="utf-8")
+            new = tmp / "new.json"
+            new.write_text(json.dumps({"settle_mode": "分期付款"},
+                                      ensure_ascii=False), encoding="utf-8")
+            answers = tmp / "answers.json"
+            r = _run(["probe.py", apath, "--round", "2", "--merge", new,
+                      "--merge-out", answers, "--json-only"])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            plan = json.loads(r.stdout)
+            # 依赖解锁后分期期数进入待问（尚未 ready），需再答一轮
+            self.assertFalse(plan["ready_to_fill"])
+            self.assertEqual([f["key"] for f in plan["open_fields"]],
+                             ["installment_count"])
+            # 合并留痕：_meta.rounds 记录本轮答案键
+            merged = json.loads(answers.read_text(encoding="utf-8"))
+            self.assertEqual(merged["settle_mode"], "分期付款")
+            self.assertEqual(merged["_meta"]["rounds"][0]["answered_keys"],
+                             ["settle_mode"])
+
+            # 第 3 轮补上期数答案 -> ready_to_fill
+            new3 = tmp / "new3.json"
+            new3.write_text(json.dumps({"installment_count": "6"},
+                                       ensure_ascii=False), encoding="utf-8")
+            r = _run(["probe.py", apath, answers, "--round", "3",
+                      "--merge", new3, "--merge-out", answers, "--json-only"])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            plan = json.loads(r.stdout)
+            self.assertTrue(plan["ready_to_fill"], plan["counts"])
+            self.assertEqual(plan["counts"]["open"], 0)
+
+    def test_dependency_unsatisfied_blocked_but_ready(self):
+        # settle_mode 答了"一次性付款"：分期期数被挡（blocked）本轮不问，
+        # 也不阻塞 ready_to_fill（与 fill_doc 的 deferred 语义一致）
+        with tempfile.TemporaryDirectory() as tmp:
+            apath = Path(tmp) / "analysis.json"
+            apath.write_text(json.dumps(self.ANALYSIS, ensure_ascii=False),
+                             encoding="utf-8")
+            r = _run(["probe.py", apath, "-", "--round", "2", "--json-only"],
+                     stdin=json.dumps({"settle_mode": "一次性付款"},
+                                      ensure_ascii=False))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            plan = json.loads(r.stdout)
+            self.assertTrue(plan["ready_to_fill"], plan["counts"])
+            self.assertEqual(plan["counts"]["blocked"], 1)
+            self.assertEqual(plan["counts"]["open"], 0)
+
+
+class TestDocLayoutCloneIntake(unittest.TestCase):
+    """make_intake.py 信息采集表：生成（示例值黄色高亮）+ 回收（不依赖高亮）。"""
+
+    FIELDS = {
+        "title": "测试信息采集表",
+        "note": "黄色高亮=示例数据，请替换为真实值。",
+        "groups": [
+            {"name": "一、主体信息", "fields": [
+                {"key": "company_name", "label": "公司全称", "sample": "样例科技",
+                 "hint": "营业执照全称", "required": True},
+                {"key": "revenue", "label": "营业收入（万元）", "sample": ""},
+            ]},
+        ],
+    }
+
+    def test_build_and_extract_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            fpath = tmp / "fields.json"
+            fpath.write_text(json.dumps(self.FIELDS, ensure_ascii=False),
+                             encoding="utf-8")
+            out = tmp / "信息采集表.docx"
+            r = _run(["make_intake.py", fpath, out])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            res = json.loads(r.stdout)
+            self.assertEqual(res["groups"], 1)
+            self.assertEqual(res["fields"], 2)
+            self.assertEqual(res["highlight"], "yellow=示例数据")
+            self.assertTrue(out.is_file())
+
+            # 回收：填写第 3 列（不保留高亮），读回 key -> value
+            from docx import Document
+            doc = Document(str(out))
+            tbl = doc.tables[0]
+            tbl.rows[1].cells[2].text = "测试股份有限公司"
+            tbl.rows[2].cells[2].text = "4500"
+            filled = tmp / "filled.docx"
+            doc.save(str(filled))
+            values_out = tmp / "intake_values.json"
+            r = _run(["make_intake.py", "--extract", filled, fpath,
+                      "--out", values_out])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            res = json.loads(r.stdout)
+            self.assertEqual(res["count"], 2)
+            self.assertEqual(res["values"]["company_name"], "测试股份有限公司")
+            self.assertEqual(res["values"]["revenue"], "4500")
+            self.assertTrue(values_out.is_file())
 
 
 class TestDocLayoutClonePdf(unittest.TestCase):

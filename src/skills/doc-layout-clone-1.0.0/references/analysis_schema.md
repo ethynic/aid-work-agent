@@ -38,6 +38,10 @@
   "required": true,
   "default": null,
   "formula": null,
+  "phase": 1,
+  "depends_on": null,
+  "skip_when_blocked": true,
+  "hint": null,
   "locators": [ ... ]
 }
 ```
@@ -49,7 +53,41 @@
 | `required` | 缺失时报告标 `missing_required`，且 `ok=false` |
 | `default` | 用户未答时的默认值（可选） |
 | `formula` | 有值时不再提问，由表达式计算（见 1.3） |
+| `phase` | 问答轮次序号，默认 1；小的先问。用于「先问方向，再问细节」 |
+| `depends_on` | 见 1.2.1；未满足时本轮不问，也不计缺失，留到下一轮 |
+| `skip_when_blocked` | 默认 `true`：依赖未满足就跳过。设 `false` 则无论如何都要问 |
+| `hint` | 给用户的填写提示（单位、格式、可从哪份材料取数），只影响提问不写进文档 |
 | `locators` | **填在哪里**，可多个；一个值出现在多处时写多个 |
+
+#### 1.2.1 `depends_on`（多轮问答的驱动开关）
+
+复杂场景常出现「后一个问题的形态取决于前一个答案」：选了“是”才需要填比例，选了某个类型才需要填该类型的专属字段。用 `depends_on` 表达这种依赖，问答自然分成多轮：
+
+```json
+{"key": "settle_mode", "label": "结算方式", "required": true, "phase": 1}
+
+{"key": "installment_count", "label": "分期期数", "required": true, "phase": 2,
+ "depends_on": {"key": "settle_mode", "equals": "分期付款"}}
+
+{"key": "warranty_years", "label": "质保年限", "required": true, "phase": 3,
+ "depends_on": {"all": [{"key": "settle_mode", "equals": "分期付款"},
+                        {"key": "installment_count", "not_empty": true}]}}
+```
+
+支持形态（可嵌套）：
+
+| 形态 | 含义 |
+|------|------|
+| `{"key": "x"}` 或 `{"key":"x","not_empty":true}` | x 有值即满足 |
+| `{"key": "x", "equals": "值"}` | 等于该值 |
+| `{"key": "x", "not_equals": "值"}` | 不等于该值 |
+| `{"key": "x", "in": ["a","b"]}` | 取值在集合内 |
+| `{"all": [dep, ...]}` | 全部满足 |
+| `{"any": [dep, ...]}` | 任一满足 |
+
+**关键规则**：被依赖挡住且标了 `required` 的字段，本轮**不进 `missing_required`**，而是记进报告的 `deferred` / `verification.checks.deferred_by_dependency`。因此「第二轮还没问完」不会把 `ok` 打成 `false`，也不会阻塞已确定内容的回填。是否该继续问，由 `probe.py` 的 `ready_to_fill` 判定，不看回填报告。
+
+> 判断依据只能来自答案本身（某个字段有没有值、等不等于某值）。不要写成业务条件表达式，也不要指望它读取文档内容——那属于第 2 步分析时的判断。
 
 > 字段值写入采用「一次性哨兵替换」：所有定位先写唯一临时标记，最后统一解析成真值，
 > 因此 A 字段填进去的值即使恰好等于 B 字段的锚点，也不会被二次替换。
@@ -125,6 +163,8 @@
 | `table_index` | 表序号（与 dump 一致） |
 | `rows_source` | `answers.json` 中的数组键，默认 `items` |
 | `items_filter` | 可选，按条目字段过滤，用于同一份清单拆到多张表 |
+| `min_items` | 可选，默认 1；收集时提示至少给几条，`0` 表示允许空表 |
+| `item_hint` | 可选，告诉用户每条至少要有哪些字段，只影响提问 |
 | `header_rows` | 表头行数，不参与动态扩展 |
 | `sample_rows` | **样版里的样例行下标**，生成时被删除并按实际条数克隆替换 |
 | `footer_rows` | 合计/小计行下标，保留并可用 `total_cells` 更新数值 |
@@ -175,7 +215,8 @@
 |----|------|
 | `ok` | 无必填缺失、无未命中定位、无标记残留、**板式指纹一致**时为 `true` |
 | `fields_filled` / `fields_total` | 回填字段数 |
-| `missing_required` | 缺失的必填字段 |
+| `missing_required` | 缺失的必填字段（**不含被 `depends_on` 挡住的**） |
+| `deferred` | 因依赖未满足而本轮未问的字段及阻塞键，`checks.deferred_by_dependency` 为其条数 |
 | `unmatched_locators` | 没在样版中找到的定位（多半是分析缓存写错原文） |
 | `derived` / `item_computed` | 自动算出的字段值与清单列值 |
 | `tables` | 各清单表扩展前后的行数与实际条数 |
@@ -197,3 +238,22 @@
 - 第 4 步 `answers` 传 `-`，从 stdin 读 JSON（自动落盘为 `answers.json`），**一次工具调用完成「写答案 + 生成 + 验收」**。
 - 字段能由 `default` / `formula` 推出的不要提问；第 3 步把所有必填项一轮问全。
 - 第 4 步传 `--cache-key <prep.py 输出的 selected.hash>`，PDF 场景才会在下次按源 PDF 命中缓存。
+
+### 4.1 多轮问答（`probe.py`）
+
+单轮问全仍是默认。当字段之间存在 `depends_on` 依赖时，用 `probe.py` 决定每轮问什么：
+
+```
+# 第 1 轮：只看已有答案能解锁哪些问题
+python3 scripts/probe.py <work>/analysis.json --round 1
+
+# 用户回答后合并进答案，看第 2 轮
+python3 scripts/probe.py <work>/analysis.json <work>/answers.json \
+    --round 2 --merge <本轮新答案.json> --merge-out <work>/answers.json
+```
+
+`probe.py` 输出：`ready_to_fill`（是否可以直接回填）、`open_fields`（本轮该问的，按 `phase` 分组在 `by_phase`）、`blocked_fields`（依赖未满足暂不问及阻塞键）、`open_lists`（还没给条目的清单表）、`counts`。
+
+- 每轮只问 `open_fields` + `open_lists`，**不要把 `blocked_fields` 提前问**——那正是第二轮存在的理由。
+- `--merge` 会把本轮答案并入 `answers.json` 并在 `_meta.rounds` 留痕；不传 `--merge-out` 时回写 `answers` 参数所指文件。
+- `ready_to_fill=true` 即可停止提问，进第 4 步。回填报告里的 `deferred` 条数应与 `blocked_fields` 一致，两者对不上说明依赖声明写错了。
