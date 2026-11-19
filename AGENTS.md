@@ -36,15 +36,20 @@
 
 单行改动也可能是高风险；多个文档文件不因此升级。用户明确要求三智能体时遵从；发现影响扩大时升级并说明。
 
-**代码评审准则**：CR 以 [代码评审准则](docs/reviews/code-review-principles-draft.md) 为准绳（证据链、防御与门禁按实际风险设置、测试验证意图、命名格式不作阻断项）。
+## Code Review Rules
+
+- 开始评审前读取 [代码评审准则](docs/reviews/code-review-principles-draft.md)，核对用户明确要求和相关设计、计划。用户要求评审时默认只读。
+- 报出缺陷前，说明实际入口、生产者或操作者、可达的触发条件和具体后果，用可复现结果或完整的源码调用链支撑。只有注入异常状态才能触发且无法说明真实来源的场景，不列为缺陷或合并阻断项。
+- 建议新增校验、等待或阻断前，先核对现有机制、受影响的任务范围和恢复条件。优先保留正常接单、执行与回执。用户已明确禁止的验证方式不得采用或建议。
 
 ## 开发环境与验证
 
-开始需要运行项目或自测的任务时，先读[开发环境手册](docs/guides/development/local-dev-environments.md)。该手册是环境选择、启动、本地 Python、SQL 和 Web 验证的唯一执行入口。优先复用当前工作区的本地依赖。修改启动、依赖或自测入口时同步更新手册。
+开始需要运行项目或自测的开发任务时，先按 [开发环境手册](docs/guides/development/local-dev-environments.md) 选择环境。Windows 优先使用已安装的 WSL2 发行版内的 Docker Engine，WSL2 路径不可用时使用 Docker Desktop 的 Linux 容器。macOS 使用 Docker Desktop 的 Linux 容器，Linux 使用 Docker Engine。已在 WSL2 内时直接检查该发行版的 Docker。先复用挂载当前工作区的本地容器，需要时按手册创建。该手册是环境选择、启动、本地 Python、SQL 和 Web 验证的唯一执行入口；修改启动、依赖或自测入口时同步更新手册。
 
-- SQL 自动化测试使用专用测试 PG。应用联调使用本地业务 PG，按 ID 清理本轮写入的数据。[测试规范](.claude/rules/testing.md#数据库安全入口)
-- 验证开发分支或其他 worktree 时，从目标工作区运行自测；需要复用现有本地 API / Runner 时按[指定工作区验证](docs/guides/development/local-dev-environments.md#4-指定工作区验证)切换 `AID_LOCAL_SOURCE_DIR`。核对容器的 `/app` 来源，并在委派任务时交接 Docker 环境和工作区路径。
-- 前端源码修改执行 Web 构建。交互变化验证相关行为，布局变化查看受影响页面及窄屏状态，无法查看时明确验证缺口。桌面原生打包、签名和系统交互按各客户端要求使用目标系统。
+- 后端运行、Python 检查和 Web 前端构建、自测默认在容器内执行。普通 Python 测试使用 `bash scripts/dev_test.sh <相关测试> -p no:cacheprovider -q`。真实 PostgreSQL 测试使用 `docker compose -f docker-compose.test-db.yml run --rm sql <相关测试> -p no:cacheprovider -q`，复用常驻测试 PG 并自动清理本轮库。应用联调优先连接本地业务 PG，本轮写入的测试数据及时按 ID 清理。使用边界见 [测试规范](.claude/rules/testing.md#数据库安全入口)。
+- 委派开发、测试或评审任务时，交接已选定的 Docker 环境和工作区路径。使用独立工作区的智能体先核对容器挂载。
+- 验证开发分支或其他 worktree 时，从目标工作区运行自测；需要复用现有本地 API / Runner 时按[指定工作区验证](docs/guides/development/local-dev-environments.md#4-指定工作区验证)切换 `AID_LOCAL_SOURCE_DIR`。核对容器的 `/app` 来源。
+- 前端源码修改在容器的 `frontend/` 下运行 `npm run build`。交互变化验证相关行为，布局变化查看受影响页面及窄屏状态，无法查看时明确验证缺口。桌面原生打包、签名和系统交互按各客户端要求使用目标系统。
 - 本地容器无法满足验证时，将 **agent3** 作为在线开发测试环境。验证当前改动前核对实际运行版本。涉及部署时遵守 [真机部署授权](#真机部署授权)。测试脚本的宿主机兼容路径不作为默认后备。不打印配置凭据。
 - 配置字段变更同步检查 `src/config/settings.py` 与 `configs/config.yaml`。
 

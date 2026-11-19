@@ -48,8 +48,12 @@ aid-work-agent/
 
 ## 快速开始
 
-本地启动、Python / SQL / Web 自测和命令行调试统一见[开发环境手册](docs/guides/development/local-dev-environments.md)。验证开发分支或未提交改动时，见[指定工作区验证](docs/guides/development/local-dev-environments.md#4-指定工作区验证)。
+1. Windows 优先在 WSL2 内使用 Docker Engine，其次使用 Docker Desktop。macOS 使用 Docker Desktop，Linux 使用 Docker Engine。
+2. 按 [开发环境手册](docs/guides/development/local-dev-environments.md) 复用或准备本地 PostgreSQL、Redis 和 `.env`，启动开发容器，在容器内运行相关测试。
+3. 后端默认通过 `http://localhost:8000` 访问。本地容器无法满足验证时，按手册使用 agent3 在线开发测试环境。
 
+需要命令行聊天时，在开发容器的 Bash 中运行 `CLI_MODE=true python -m src.main`。
+验证开发分支或未提交改动时，见[指定工作区验证](docs/guides/development/local-dev-environments.md#4-指定工作区验证)。
 ### 访问 API
 
 - 健康检查: `GET /health`
