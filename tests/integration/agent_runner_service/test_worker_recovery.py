@@ -413,13 +413,13 @@ def test_control_idempotency_does_not_bypass_current_token_or_session_owner(
     assert workers.provider.requests(marker) == []
 
 
-def test_public_control_cannot_forge_browser_completion(workers, actors, service_database):
+def test_public_control_rejects_retired_browser_completion(workers, actors, service_database):
     marker = workers.provider.register(Reply())
     accepted = accept(workers.api, actors["a"], marker)
     before = copy.deepcopy(runner(service_database, accepted["runner_id"]))
     require_status(workers.api.call("POST", f"/v1/runners/{accepted['runner_id']}/controls", actor=actors["a"],
         json={"client_request_id": uuid.uuid4().hex, "action": "browser_complete", "target_execution_id": "forged-child",
-              "wait_id": "forged-wait", "completion_ref": "caller-says-completed"}), 403)
+              "wait_id": "forged-wait", "completion_ref": "caller-says-completed"}), 422)
     after = runner(service_database, accepted["runner_id"])
     assert before["revision"] == after["revision"] and before["checkpoint"] == after["checkpoint"]
     assert service_database.rows("SELECT 1 FROM agent_runner_controls WHERE runner_id=%s", (accepted["runner_id"],)) == []

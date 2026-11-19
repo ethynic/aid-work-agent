@@ -508,34 +508,6 @@ class TestVerboseWrapper:
         assert verbose_events[0]["data"] == VALID_TEXT
         assert events[-1]["type"] == "response"
 
-    async def test_browser_human_required_marks_response_started(self):
-        """browser_human_required 属用户可见终态：原样透传并置 response_started。
-
-        为什么重要：browser 挂起已向用户发出「等待你的操作」，挂起后 state 必须
-        拒绝任何后续提示（policy 发射守卫），用户可见语义不倒挂。
-        """
-        cfg = _fast_config()
-        state = VerboseFeedbackState()
-
-        async def gen():
-            yield {"type": "progress", "data": "working"}
-            yield {"type": "browser_human_required", "assistance_id": "a1"}
-            await asyncio.sleep(0.05)
-            # 挂起期间的补发尝试被状态机拒绝（不产 verbose）
-            event = make_verbose_event(new_verbose_event_id(), VALID_TEXT, "policy")
-            if state.try_emit(event):
-                yield event
-            yield {"type": "response", "data": "resumed"}
-
-        events = await _collect(iter_with_verbose_feedback(
-            gen(), surface="web", config=cfg, state=state,
-        ))
-        assert not [e for e in events if e.get("type") == "verbose"], (
-            "browser_human_required 之后不得补发提示"
-        )
-        assert state.response_started is True, "挂起事件应按设计 §7 视为用户可见终态"
-        assert events[-1]["type"] == "response"
-
     async def test_unregistered_verbose_dropped_by_wrapper(self):
         """绕过 try_emit 直塞事件流的未注册 verbose 被 wrapper 丢弃（防御分支）。"""
         cfg = _fast_config()

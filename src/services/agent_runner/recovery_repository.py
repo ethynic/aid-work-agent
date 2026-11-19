@@ -14,7 +14,6 @@ from .repository import decoded
 from .control_repository import ControlRepository
 from .control_projection import merge_control_projection
 from .event_repository import EventRepository
-from .application_public_projection import sync_public_display, project_public_snapshot
 
 
 def lock_original_claim(cursor, row):
@@ -90,16 +89,15 @@ class RecoveryRepository:
             checkpoint.pop('applied_control_id',None)
             checkpoint['continuous_activation'] = {'version':1, 'attempt':number,
                 'source_attempt':row['attempt']}
-            snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,
-                snapshot={**row.get('public_snapshot',{}),'waiting':None,
-                    'progress':'正在接续原持续任务。'},status='running')
+            snapshot = {**row.get('public_snapshot',{}),'waiting':None,
+                'progress':'正在接续原持续任务。'}
             cursor.execute('''UPDATE agent_runners SET status='running',attempt=%s,worker_id=%s,
                 lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),execution_started_at=clock_timestamp(),checkpoint=%s::jsonb,
                 public_snapshot=%s::jsonb,wake_at=NULL,revision=revision+1,view_revision=view_revision+1,
                 updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
                 (number,worker_id,lease_seconds,capped_checkpoint_dumps(checkpoint),
                  capped_snapshot_dumps(snapshot),row['runner_id']))
-            result = sync_public_display(cursor,decoded(cursor.fetchone()),advance_view=False)
+            result = decoded(cursor.fetchone())
             result = EventRepository.notify_in_tx(cursor,row,after=result)
             if source_port is not None:
                 source_port.authorize_row_in_tx(cursor,result,execute=True,prepared=prepared_source)
@@ -129,7 +127,7 @@ class RecoveryRepository:
                 revision=revision+1,view_revision=view_revision+1,updated_at=clock_timestamp()
                 WHERE runner_id=%s RETURNING *''', (capped_checkpoint_dumps(checkpoint),
                     capped_snapshot_dumps(snapshot),row['runner_id']))
-            result = sync_public_display(cursor,decoded(cursor.fetchone()),advance_view=False)
+            result = decoded(cursor.fetchone())
             EventRepository.notify_in_tx(cursor,row,after=result)
             connection.commit()
             return True
@@ -156,7 +154,7 @@ class RecoveryRepository:
 
 
     def claim_resume(self, runner_id, worker_id, lease_seconds, *, revision, control_id, checkpoint,
-                     recovery_port=None, source_port=None, prepared_source=None):
+                     source_port=None, prepared_source=None):
         """Application preflight prepares state before this short CAS transaction.
 
         The caller must reauthorize dispatch after acquisition. The input hash and
@@ -179,10 +177,10 @@ class RecoveryRepository:
                 source_port.authorize_row_in_tx(cursor,row,execute=True,prepared=prepared_source)
             cursor.execute('SELECT * FROM agent_runner_controls WHERE runner_id=%s AND control_id=%s FOR UPDATE', (runner_id,control_id))
             control = cursor.fetchone()
-            if not control or control['status'] != 'accepted' or control['action'] not in ('resume','reply','browser_complete'):
+            if not control or control['status'] != 'accepted' or control['action'] not in ('resume','reply'):
                 raise RunnerError('RECOVERY_CONTROL_STALE',409)
             snapshot = row['public_snapshot']
-            if control['action'] in ('reply','browser_complete'):
+            if control['action'] == 'reply':
                 # 受理后的 payload 是服务端权威存储：结构化受理把 canonical 写入
                 # answer 键并附 form/answers 审计键，不再是原始客户端形状，不能也
                 # 不必重过入口模型校验（extra='forbid'、answer×answers 互斥）。
@@ -198,8 +196,6 @@ class RecoveryRepository:
                     snapshot = {**snapshot, 'waiting':None}
             if row['checkpoint'] and row['checkpoint'].get('pending_finalization'):
                 raise RunnerError('RECOVERY_FINALIZATION_PENDING',409)
-            if recovery_port is not None:
-                recovery_port.assert_claim_in_tx(cursor,row,control,worker_id=worker_id)
             checkpoint=copy.deepcopy(checkpoint)
             checkpoint.pop('timer_activation',None)
             timer=checkpoint.get('durable_sleep') or {}
@@ -224,9 +220,6 @@ class RecoveryRepository:
                 (number,worker_id,lease_seconds,capped_checkpoint_dumps(checkpoint),
                  capped_snapshot_dumps(snapshot),runner_id))
             result = decoded(cursor.fetchone())
-            result = sync_public_display(cursor,result,advance_view=False)
-            if recovery_port is not None:
-                recovery_port.assert_claim_in_tx(cursor,row,control,worker_id=worker_id)
             result = EventRepository.notify_in_tx(cursor,row,after=result)
             if source_port is not None:
                 source_port.authorize_row_in_tx(cursor,result,execute=True,prepared=prepared_source)
@@ -289,7 +282,6 @@ class RecoveryRepository:
             # question actionable. Only a missing wait needs a verification card.
             if not isinstance(snapshot.get('waiting'),dict):
                 snapshot['waiting']={'kind':'verification','question':question}
-            snapshot=project_public_snapshot(cursor,row,snapshot=snapshot)
             if snapshot==(row.get('public_snapshot') or {}):
                 return False
             cursor.execute('''UPDATE agent_runners SET public_snapshot=%s::jsonb,
@@ -334,13 +326,13 @@ class RecoveryRepository:
                 snapshot={**(snapshot or {}),'waiting':copy.deepcopy(root.get('waiting')),
                     'business_iterations':(root.get('resources') or {}).get('business_iterations',root.get('iteration',0))}
             snapshot = merge_control_projection(snapshot,row.get('public_snapshot'))
-            snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,snapshot=snapshot,status='paused')
+            if snapshot is None:
+                snapshot = row.get('public_snapshot') or {}
             cursor.execute('''UPDATE agent_runners SET status='paused',worker_id=NULL,lease_until=NULL,
                 checkpoint=%s::jsonb,public_snapshot=%s::jsonb,revision=revision+1,
                 wake_at=%s,view_revision=view_revision+1,updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
                 (capped_checkpoint_dumps(checkpoint),capped_snapshot_dumps(snapshot),wake_at,attempt.runner_id))
             result = decoded(cursor.fetchone())
-            result = sync_public_display(cursor,result,advance_view=False)
             result = EventRepository.notify_in_tx(cursor,row,after=result)
             connection.commit()
             return result
@@ -361,8 +353,6 @@ class RecoveryRepository:
                 return False
             cursor.execute('''UPDATE agent_runners SET resume_control_id=NULL,control_revision=control_revision+1,
                 view_revision=view_revision+1,updated_at=clock_timestamp() WHERE runner_id=%s''',(runner_id,))
-            cursor.execute('SELECT * FROM agent_runners WHERE runner_id=%s',(runner_id,))
-            sync_public_display(cursor,decoded(cursor.fetchone()),advance_view=False)
             EventRepository.notify_in_tx(cursor,row)
             connection.commit()
             return True

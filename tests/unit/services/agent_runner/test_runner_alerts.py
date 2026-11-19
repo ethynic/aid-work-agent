@@ -145,7 +145,6 @@ def test_reclaimed_finalizer_ends_old_attempt_alert_in_claim_transaction(monkeyp
     current = {**previous, 'attempt': 3}
     connection = Connection([previous, current])
     monkeypatch.setattr(module, 'decoded', lambda row: row)
-    monkeypatch.setattr(module, 'sync_public_display', lambda _cursor, row, **_: row)
     monkeypatch.setattr(EventRepository, 'notify_in_tx',
                         staticmethod(lambda _cursor, _before, *, after: after))
     result = ExecutionRepository(lambda: connection).acquire('worker', 60)
@@ -162,8 +161,6 @@ def test_abandoned_finalization_closes_alert_even_when_public_event_fails(monkey
     connection = Connection([{**runner, 'status': 'failed'}])
     closed = []
     monkeypatch.setattr(module, 'close_pending_controls', lambda *_args: None, raising=False)
-    monkeypatch.setattr(module, 'project_terminal_public_state',
-                        lambda *_args: ({}, {}))
     monkeypatch.setattr(module.EventRepository, 'notify_in_tx',
                         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('event failed')))
     import src.services.agent_runner.runner_alerts as alerts

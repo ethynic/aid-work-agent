@@ -1,7 +1,7 @@
 """有界整数 adapter 契约版本：派发时随 checkpoint 持久化，恢复时校验。
 
 单一版本覆盖整个工具+恢复适配器契约族（ToolDispatcher phase/wait kind、
-LocalToolAdapter recover 协议、browser_* resources 键形、children 形状、
+LocalToolAdapter recover 协议、children 形状、
 恢复证明要求）。这是人工 bump 的显式兼容策略声明，不是源码 hash：
 文案/prompt/格式改动不触碰本版本，不让既有任务不可续；也不能默默用改变
 语义的新适配器执行旧阶段——未知/被淘汰版本必须明确拒绝恢复。

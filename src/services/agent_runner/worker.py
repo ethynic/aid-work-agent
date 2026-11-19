@@ -79,113 +79,20 @@ def channel_verbose_config(source, request_data, base_config):
 
 
 class RuntimeFactory:
-    def __init__(self, resource_directory=None, profiles=None, browser_process=None):
+    def __init__(self, resource_directory=None, profiles=None):
         self.resource_directory = Path(resource_directory or os.environ.get('AGENT_RUNNER_RESOURCE_DIR', 'storage/agent_runner')).resolve()
         self.profiles = profiles or MainProfileCatalog()
-        self.browser_process=browser_process
-        self._completion_scan_at=0.0
-        self._completion_scan_offset=0
 
     def recovery_port(self,connection_factory):
         """Install this application's finite capabilities for the scheduler."""
-        from .browser_recovery import ApplicationToolRecovery
-        return ApplicationToolRecovery(self.browser_process,connection_factory,self.profiles)
+        from .application_tool_recovery import ApplicationToolRecovery
+        return ApplicationToolRecovery(connection_factory,self.profiles)
 
     def source_capabilities(self,config,connection_factory):
         from .application_sources import build_source_capabilities
         return build_source_capabilities(config,connection_factory)
 
-    async def open(self):
-        """Start installed application observers before any task acquisition."""
-        process = self.browser_process
-        if process is not None and process['config'].view_enabled:
-            from .browser_sidecar import BrowserViewSidecar
-            if process.get('sidecar') is not None:
-                raise RuntimeError('BROWSER_VIEW_LISTENER_ALREADY_INSTALLED')
-            process['sidecar'] = BrowserViewSidecar(process)
-            await process['sidecar'].open()
-
-    async def close(self):
-        """Close resources installed by this application composition only."""
-        if self.browser_process is not None:
-            from src.tools.browser.run_manager import close_worker_browser_managers
-            sidecar = self.browser_process.get('sidecar')
-            if sidecar is not None:
-                await sidecar.stop_observations()
-            commands=tuple(self.browser_process.get('human_commands',set()))
-            if commands:
-                _,pending=await asyncio.wait(commands,timeout=35)
-                for task in pending:
-                    task.cancel()
-                await asyncio.gather(*commands,return_exceptions=True)
-            try:
-                await close_worker_browser_managers(self.browser_process['boot'])
-            finally:
-                if sidecar is not None:
-                    await sidecar.close()
-
-    async def prepare_acquisition(self):
-        """Bounded application observations; no execution task or second queue."""
-        process=self.browser_process
-        if not process or time.monotonic()<self._completion_scan_at:
-            return
-        self._completion_scan_at=time.monotonic()+1.0
-        managers=sorted(process.get('retained_managers',set()),
-            key=lambda manager:getattr(getattr(manager,'execution_owner',None),'record',None).run_id)
-        start=self._completion_scan_offset
-        chosen=managers[start:start+16]
-        self._completion_scan_offset=start+len(chosen) if start+len(chosen)<len(managers) else 0
-        for manager in chosen:
-            owner=getattr(manager,'execution_owner',None)
-            if owner and owner.process_resources is process:
-                await owner.bridge_completions()
-
-    async def after_park(self,row):
-        await self.prepare_acquisition()
-
-    async def request_resource_cancellation(self,attempt):
-        """Application capabilities close only original resources of this claim."""
-        process=self.browser_process
-        if not process:
-            return
-        from .browser_human_repository import BrowserHumanRepository
-        from .contracts import RunnerError
-        from .ownership import LeaseLost
-        from src.tools.browser.owner_port import BrowserOwnerFailure,HumanActionRejected,browser_resource_close_scope
-        for manager in tuple(process.get('retained_managers',set())):
-            owner=getattr(manager,'execution_owner',None)
-            if (not owner or owner.process_resources is not process or owner.worker_boot!=process['boot']
-                    or owner.runner_id!=attempt.runner_id):
-                continue
-            try:
-                repository=BrowserHumanRepository(owner.repository.connection_factory)
-                binding=copy.deepcopy(owner._binding(owner.record.tenant_id,owner.record.run_id))
-                owner_root,owner_state=owner.root,owner.state
-                tenant_id,user_id,run_id=owner.record.tenant_id,owner.record.user_id,owner.record.run_id
-                needed=await asyncio.to_thread(repository.assert_cancel_owner,attempt,binding)
-                if needed:
-                    async def guard(repository=repository,owner=owner,binding=binding,
-                                    owner_root=owner_root,owner_state=owner_state,manager=manager):
-                        if (owner.root is not owner_root or owner.state is not owner_state
-                                or owner.worker_boot!=binding['owner_boot_id']
-                                or owner.browser_epoch!=binding['browser_epoch']
-                                or owner.state.execution_id!=binding['runner_execution_id']
-                                or owner.call_id!=binding['runner_tool_call_id']
-                                or manager.execution_owner is not owner):
-                            raise HumanActionRejected('BROWSER_CANCEL_OWNER_CHANGED')
-                        try:
-                            await asyncio.to_thread(repository.assert_cancel_owner,attempt,binding)
-                        except (RunnerError,LeaseLost) as error:
-                            raise HumanActionRejected('BROWSER_CANCEL_OWNER_CHANGED') from error
-                    with browser_resource_close_scope(guard):
-                        await manager.request_cancel(tenant_id,user_id,run_id)
-            except (RunnerError,LeaseLost,CheckpointFailure,BrowserOwnerFailure,HumanActionRejected):
-                # The existing all-tree cancellation proof preserves unknown
-                # resources/claim. A requested close is never its own proof.
-                continue
-
     async def create(self, row, principal, control):
-        control.browser_process=self.browser_process
         from .runtime.profile import RuntimeResources
         from .runtime.executor import RuntimeExecution
         from .runtime.history_repository import HistoryRepository
@@ -310,8 +217,7 @@ class RunnerWorker:
         self.authorizer = authorizer or RunnerAuthorizer(config)
         self.usage = usage_repository or UsageRepository()
         self.finalizer = finalizer or RunnerFinalizer()
-        self.factory = runtime_factory or RuntimeFactory(browser_process={
-            'boot':self.boot_id,'config':getattr(config,'browser_owner',None)})
+        self.factory = runtime_factory or RuntimeFactory()
         source_factory=getattr(self.factory,'source_capabilities',None)
         self.sources=source_factory(config,self.repository.connection_factory) if source_factory is not None else None
         if self.sources is not None:
@@ -337,12 +243,6 @@ class RunnerWorker:
         self._acquisition_turn = 0
         self._memory_limit = None
         self._memory_warn_at = 0.0
-
-    async def _park(self,control,state,status):
-        row=await control.park(state,status)
-        hook=getattr(self.factory,'after_park',None)
-        if hook is not None:
-            await hook(row)
 
     def stop(self):
         self.stopping.set()
@@ -437,9 +337,6 @@ class RunnerWorker:
     async def _await_cancel_completion(self, attempt, control, state=None):
         from .local_recovery import cancellation_ready
         from .cancellation_projection import accept_cancellation_row
-        resource_cancel=getattr(self.factory,'request_resource_cancellation',None)
-        if resource_cancel is not None:
-            await resource_cancel(attempt)
         async def collect(request):
             async with control.lock:
                 facts = await self._cancel_saved_invocations(attempt,request=request,complete_audit=True)
@@ -644,10 +541,10 @@ class RunnerWorker:
                                 await self._preserve_duration(attempt, control)
                                 await asyncio.to_thread(self.executions.interrupt_attempt,attempt)
                                 return
-                            await self._park(control,state,'paused')
+                            await control.park(state,'paused')
                         return
                     if state and state.outcome in {Outcome.WAITING,Outcome.PAUSED} and not control.cancel_requested:
-                        await self._park(control,state,state.outcome.value)
+                        await control.park(state,state.outcome.value)
                         return
                     if state and not control.cancel_requested:
                         from .aggregate_tree import park_unfinished_tree
@@ -657,7 +554,7 @@ class RunnerWorker:
                             await asyncio.to_thread(self.executions.interrupt_attempt,attempt)
                             return
                         if parked:
-                            await self._park(control,state,parked)
+                            await control.park(state,parked)
                             return
                     if control.cancel_requested:
                         if not await self._await_cancel_completion(attempt, control, state):
@@ -1000,9 +897,6 @@ class RunnerWorker:
                 if close is not None: await close()
 
     async def _acquire_next(self):
-        hook=getattr(self.factory,'prepare_acquisition',None)
-        if hook is not None:
-            await hook()
         if time.monotonic() >= self._cancel_ready_scan_at:
             from .local_recovery import release_ready_cancellations
             self._cancel_scan_after = await asyncio.to_thread(release_ready_cancellations,
@@ -1055,9 +949,6 @@ class RunnerWorker:
             if not interrupted_candidate(row):
                 continue
             try:
-                affinity=getattr(self.tool_recovery,'affinity',None)
-                if affinity is not None and not await affinity(row):
-                    continue
                 prepared_source=await self.sources.prepare_execution(row) if self.sources is not None else None
                 prepared=await asyncio.to_thread(RecoveryCoordinator(self.authorizer,self.factory.profiles,
                     tool_recovery=self.tool_recovery,attachment_resolver=self.factory.attachments,
@@ -1084,9 +975,6 @@ class RunnerWorker:
         self._recovery_scan_after=candidates[-1]['queue_order'] if candidates else 0
         for row in candidates:
             try:
-                affinity=getattr(self.tool_recovery,'affinity',None)
-                if affinity is not None and not await affinity(row):
-                    continue
                 principal = await asyncio.to_thread(self.authorizer.authorize_persisted,row,execute=False)
                 control = await asyncio.to_thread(ControlRepository(self.repository.connection_factory).get,
                     principal,row['runner_id'],row['resume_control_id'])
@@ -1099,7 +987,6 @@ class RunnerWorker:
                 resumed = await asyncio.to_thread(recovery.claim_resume,row['runner_id'],self.worker_id,
                     self.config.lease_seconds,revision=row['revision'],control_id=control['control_id'],
                     checkpoint=prepared.checkpoint,
-                    recovery_port=self.tool_recovery if hasattr(self.tool_recovery,'assert_claim_in_tx') else None,
                     source_port=self.sources,prepared_source=prepared_source)
                 if resumed is not None:
                     return resumed
@@ -1108,9 +995,6 @@ class RunnerWorker:
                     control_id=row['resume_control_id'],public_verification=error.public_verification)
                 continue
             except RunnerError as error:
-                if getattr(error,'preserve_control',False):
-                    await asyncio.to_thread(self.tool_recovery.hold,row,error)
-                    continue
                 await asyncio.to_thread(recovery.reject_resume,row['runner_id'],revision=row['revision'],
                     control_id=row['resume_control_id'],error_code=error.code)
                 from .auto_local_recovery import fail_automatic_resume
@@ -1127,9 +1011,6 @@ class RunnerWorker:
             self._timer_scan_after=candidates[-1]['queue_order'] if candidates else 0
             for row in candidates:
                 try:
-                    affinity=getattr(self.tool_recovery,'affinity',None)
-                    if affinity is not None and not await affinity(row):
-                        continue
                     prepared_source=await self.sources.prepare_execution(row) if self.sources is not None else None
                     prepared=await asyncio.to_thread(RecoveryCoordinator(self.authorizer,self.factory.profiles,
                         tool_recovery=self.tool_recovery,attachment_resolver=self.factory.attachments,

@@ -76,7 +76,6 @@ export interface ChatMessage {
   /** 用户可见中间消息（设计 §8.2/§10，后端持久化于 assistant metadata.verboseMessages；
    *  Phase 2 裁决：前端默认不消费/不渲染，仅声明形状供历史恢复使用） */
   verboseMessages?: VerboseMessage[]
-  browserAssistance?: BrowserHumanAssistance
   /** Safe verification notice on the original assistant message. */
   waitingNotice?: string
   /** 用户主动取消的轮次（后端持久化于 assistant metadata.cancelled，历史加载时显示"用户取消"标记） */
@@ -165,23 +164,6 @@ export interface AnsweredFormBinding {
   terminal: boolean
 }
 
-export interface BrowserHumanAssistance {
-  assistance_id: string
-  run_id: string
-  continuation_id: string
-  reason_code: string
-  surface: 'server_web'
-  title: string
-  steps: string[]
-  completion_mode: 'auto_or_confirm' | 'confirm_only'
-  completion_status: string
-  expires_at: string
-  state?: 'pending' | 'controlling' | 'resume_queued' | 'resumed' | 'cancelled' | 'failed'
-  missing_conditions?: string[]
-  /** Proven availability of this exact native wait's observation endpoint. */
-  view_available?: boolean
-}
-
 export interface ProgressMessage {
   type: 'progress' | 'complete' | 'error' | 'thinking' | 'tool_start' | 'tool_result'
   content: string
@@ -228,11 +210,6 @@ export type MessageStreamEvent =
   | { type: 'busy'; flag: string; message: string; instance_id: string; is_same_user: boolean; current_user_name: string }
   | { type: 'images'; images: ImageRef[]; placement: 'after_text' | 'before_text' | 'inline'; timestamp: number }
   | { type: 'cancelled'; timestamp: number }
-  | ({ type: 'browser_human_required'; timestamp?: number } & BrowserHumanAssistance)
-  | { type: 'browser_resume_started'; run_id: string; seq?: number }
-  | { type: 'agent_continuation_started'; continuation_id: string; seq?: number }
-  | { type: 'agent_continuation_completed'; continuation_id: string; seq?: number }
-  | { type: 'agent_continuation_available'; continuation_id: string }
 
 // "正在输入"提示状态
 export type InputHintState = 'idle' | 'thinking' | 'working' | 'responding'

@@ -12,7 +12,6 @@ from .usage_repository import UsageRepository
 from .usage_pricing import grouped_cost
 from .transaction_repository import write_history, settle_record
 from .event_repository import EventRepository
-from .application_public_projection import project_terminal_public_state
 
 
 class RunnerFinalizer:
@@ -88,7 +87,7 @@ class RunnerFinalizer:
             if not result or result.get('status') not in ('completed','failed','cancelled'):
                 raise CheckpointFailure('FINALIZATION_INTENT_NOT_SAVED')
             settlement, delta, cost = self._settle(cursor, runner, result)
-            snapshot,result=project_terminal_public_state(cursor,runner,result)
+            snapshot = dict(runner.get('public_snapshot') or {})
             from .usage_projection import usage_in_tx
             snapshot['usage'] = usage_in_tx(cursor,runner,settlement)
             # 已接入 Runner 的渠道以最终合并 owner 写入历史，
@@ -168,17 +167,7 @@ class RunnerFinalizer:
         cursor.execute('DELETE FROM agent_runner_session_claims WHERE owner_runner_id=%s',(runner['runner_id'],))
         cursor.execute('''UPDATE agent_runner_usage_receipts SET applied=TRUE,applied_at=clock_timestamp()
             WHERE runner_id=%s AND NOT applied''',(runner['runner_id'],))
-        # The projection reads related rows; isolate it so a failure cannot
-        # abort this terminal transaction.
-        cursor.execute('SAVEPOINT finalize_abandon')
-        try:
-            snapshot,_ = project_terminal_public_state(cursor,runner,result)
-            cursor.execute('RELEASE SAVEPOINT finalize_abandon')
-        except Exception:
-            cursor.execute('ROLLBACK TO SAVEPOINT finalize_abandon')
-            logger.opt(exception=True).warning('AgentRunner abandon projection failed runner={}',runner['runner_id'])
-            snapshot = dict(runner.get('public_snapshot') or {})
-            snapshot.pop('browserAssistance',None)
+        snapshot = dict(runner.get('public_snapshot') or {})
         checkpoint = {**(runner.get('checkpoint') or {}),
                       'released_attempt':release_proof(attempt,status,'finalized'),
                       'finalize_abandoned':cause}

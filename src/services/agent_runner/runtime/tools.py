@@ -6,9 +6,7 @@ import json
 from pathlib import Path
 from src.core.agent_engine.contracts import CheckpointFailure, DispatchResult, ToolCall
 from src.core.agent_events import _extract_image_refs_from_tool_result, _normalize_image_placement, make_event
-from src.core.tool_suspension import ToolSuspension
 from src.tools.base import ExecutionTarget
-from .history_projection import waiting_messages
 
 
 def owns_plan_task(name):
@@ -26,8 +24,6 @@ class ToolDispatcher:
         self.verbose_config, self.verbose_state = verbose_config, verbose_state
         self.policy_iterations = set()
         self.child_recovery = child_recovery
-        from .browser_tools import BrowserToolAdapter
-        self.browser = BrowserToolAdapter(control,getattr(local,'state',None))
 
     def definitions(self):
         definitions = self.catalog._get_tools()
@@ -63,12 +59,6 @@ class ToolDispatcher:
             await self._finish_plan_task(state,call,result)
             return result
         tool = self.registry.get_tool(call.name)
-        from src.tools.browser.automation_tool import BrowserAutomationTool
-        if type(tool) is BrowserAutomationTool and getattr(self.control,'durable_owner',False):
-            context=self.control_tools.context.derive(tool_call_id=call.id,agent_execution_id=state.execution_id)
-            result=await self.browser.recover(state,call,context)
-            await self._finish_plan_task(state,call,result)
-            return result
         if tool and getattr(tool, 'execution_target', None) == ExecutionTarget.LOCAL_REQUIRED:
             context = self.control_tools.context.derive(tool_call_id=call.id, agent_execution_id=state.execution_id)
             terminal = None
@@ -346,31 +336,9 @@ class ToolDispatcher:
                     if result is None:
                         raise RuntimeError("LOCAL_TOOL_MISSING_RESULT")
                 else:
-                    result = await self.browser.execute(tool,self.executor,
-                        execution_call,context)
+                    result = await self.executor.execute(execution_call.name, execution_call.arguments, context=context)
                 if isinstance(result, DispatchResult):
                     terminal = result
-                elif isinstance(result, ToolSuspension):
-                    from src.tools.browser.resume_store import ResumeStore
-                    store = ResumeStore()
-                    try:
-                        assistance = await store.get_assistance(result.tenant_id, result.assistance_id)
-                        if assistance is None or not await store.bind_agent(assistance,
-                            self.subagent_config.dir_name if self.subagent_config else None):
-                            raise RuntimeError("TOOL_SUSPEND_FAILED")
-                    except CheckpointFailure:
-                        raise
-                    except Exception as error:
-                        if getattr(self.control,'durable_owner',False):
-                            # Mandatory wait is already committed and its live
-                            # original runtime must retain the Runner claim.
-                            raise CheckpointFailure('TOOL_SUSPENSION_STORAGE_FAILED') from error
-                        raise
-                    yield make_event("tool_messages", messages=waiting_messages(state), suspended=True)
-                    yield result.event
-                    yield make_event("progress", data="等待你的操作；完成后系统会自动继续")
-                    terminal = DispatchResult(None, wait={"kind": "human_assistance",
-                        "assistance_id": result.assistance_id, "tool_call_id": call.id})
                 else:
                     success = result.get("success", True) if isinstance(result, dict) else True
                     images = _extract_image_refs_from_tool_result(result) if isinstance(result, dict) else []

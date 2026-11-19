@@ -247,86 +247,6 @@ class SSEConnectionManager:
 sse_manager = SSEConnectionManager()
 
 
-async def _continue_browser_agent(record, browser_result: dict) -> None:
-    """后台恢复原 Agent；事件写 continuation stream，最终消息仍写 chat_messages。"""
-    from src.models.user import User
-    from src.tools.browser.resume_store import ResumeStore
-
-    agent = agent_router.get_agent(
-        record.agent_name, record.session_id, tenant_id=record.tenant_id
-    )
-    user = User(user_id=record.user_id, name=record.user_id, tenant_id=record.tenant_id)
-    store = ResumeStore()
-    response_parts: list[str] = []
-    tool_messages: list[dict] = []
-    async for event in agent.continue_tool_call(
-        session_id=record.session_id,
-        tool_call_id=record.tool_call_id,
-        result=browser_result,
-        user=user,
-    ):
-        event_type = event.get("type")
-        if event_type == "response":
-            response_parts.append(str(event.get("data", "")))
-        elif event_type == "tool_messages":
-            tool_messages.extend(event.get("messages", []))
-            continue
-        elif event_type == "llm_call":
-            # prompt/response trace 可能含敏感正文，不进入短期 continuation stream。
-            continue
-        if event_type in {
-            "response", "progress", "tool_start", "tool_result", "thinking",
-            "clarification", "images", "browser_human_required",
-            # Phase 2（设计 §8.1）：continuation 只透传原生 verbose 事件；
-            # 此路径不经 verbose 包装入口，只透传原生 verbose（MVP 约束）。
-            "verbose",
-        }:
-            await store.append_event(
-                record.tenant_id, record.continuation_id, event
-            )
-
-    full_response = "".join(response_parts)
-    batch_messages: list[dict] = []
-    for message in tool_messages:
-        if message.get("role") == "assistant" and message.get("tool_calls"):
-            batch_messages.append({
-                "role": "assistant",
-                "content": "",
-                "metadata": {"tool_calls": message["tool_calls"]},
-            })
-        elif message.get("role") == "tool":
-            content = message.get("content", "")
-            if isinstance(content, (dict, list)):
-                content = json.dumps(content, ensure_ascii=False, default=str)
-            batch_messages.append({
-                "role": "tool",
-                "content": content,
-                "metadata": {"tool_call_id": message.get("tool_call_id", "")},
-            })
-    if full_response:
-        batch_messages.append({
-            "role": "assistant",
-            "content": full_response,
-            "metadata": {"continued_from": record.continuation_id},
-        })
-    if batch_messages:
-        created = await asyncio.to_thread(
-            MessageDB.create_batch_transactional, record.session_id, batch_messages
-        )
-        if created is None:
-            raise RuntimeError("CONTINUATION_PERSIST_FAILED")
-    if full_response:
-        sse_manager.add_to_history(record.session_id, "assistant", full_response)
-    sse_manager.broadcast(record.session_id, {
-        "type": "agent_continuation_available",
-        "continuation_id": record.continuation_id,
-    })
-
-
-from src.tools.browser.agent_resume_coordinator import configure_continuation_callback
-configure_continuation_callback(_continue_browser_agent)
-
-
 # ============== Pydantic Models ==============
 
 class ChatRequest(BaseModel):
@@ -350,41 +270,6 @@ setup_logging(
     log_level="DEBUG" if settings.app.debug else "INFO",
     log_dir="log/agent",
 )
-
-_browser_shutdown_tasks: set[asyncio.Task] = set()
-
-
-def _finish_browser_shutdown_task(task: asyncio.Task) -> None:
-    """保留后台回收任务到终态，并消费异常避免未检索告警。"""
-    _browser_shutdown_tasks.discard(task)
-    if task.cancelled():
-        return
-    try:
-        task.result()
-    except Exception as exc:
-        logger.opt(exception=True).warning("浏览器后台回收异常")
-
-
-async def _close_browser_runs_on_shutdown() -> None:
-    """在 15 秒预算内关闭当前 worker 拥有的浏览器，不阻断其他收尾。"""
-    try:
-        from src.tools.browser.session import close_all_owned_browser_runs
-
-        close_task = asyncio.create_task(
-            close_all_owned_browser_runs(reason="shutdown")
-        )
-        _browser_shutdown_tasks.add(close_task)
-        close_task.add_done_callback(_finish_browser_shutdown_task)
-        report = await asyncio.wait_for(asyncio.shield(close_task), timeout=15.0)
-        logger.info(
-            "浏览器 shutdown 回收完成: requested={}, closed={}",
-            report.get("requested", 0),
-            report.get("closed", 0),
-        )
-    except asyncio.TimeoutError:
-        logger.warning("浏览器 shutdown 回收超过 15 秒预算")
-    except Exception as exc:
-        logger.opt(exception=True).warning("浏览器 shutdown 回收异常")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -502,59 +387,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"wecom_kf 拉取状态启动自愈失败（不影响启动）: {e}")
 
-    _browser_reaper = None
-    _browser_reaper_manager = None
-    _browser_resume_worker = None
-    try:
-        from src.tools.browser.agent_resume_coordinator import BrowserResumeWorker
-        from src.tools.browser.reaper import BrowserRunReaper
-        from src.tools.browser.run_manager import BrowserRunManager
-
-        _browser_reaper_manager = BrowserRunManager()
-        _browser_reaper = BrowserRunReaper(_browser_reaper_manager)
-        _browser_reaper.start()
-        if _browser_reaper_manager.store.distributed:
-            # Phase 3R：启用 resume worker 前一次性探测 Redis 原语
-            # （GET/SET NX/EX/DEL/TTL/SCAN/publish/Lua CAS，不含已迁移的 Stream）。
-            # 缺失时记录单条告警并跳过 resume worker，不形成高频异常循环。
-            from src.core.redis_client import redis_client
-            phase3_primitives_ok = redis_client.probe_phase3_primitives()
-            if phase3_primitives_ok:
-                _browser_resume_worker = BrowserResumeWorker()
-                _browser_resume_worker.start()
-            else:
-                logger.warning(
-                    "browser resume worker 未启用：Redis Phase 3 原语探针未通过，"
-                    "人工接管将被禁用（server run 仍可用）"
-                )
-        logger.info(
-            "browser run reaper 初始化完成: distributed={}",
-            _browser_reaper_manager.store.distributed,
-        )
-    except Exception as e:
-        logger.warning("browser run reaper 启动失败（不影响应用启动）: type={}", type(e).__name__)
-
     try:
         yield
     finally:
         # On shutdown
         logger.info("Application shutting down")
-
-        # 浏览器优先回收；异常或超时不阻断数据库、调度器和渠道资源关闭。
-        try:
-            if _browser_resume_worker is not None:
-                await _browser_resume_worker.stop()
-            if _browser_reaper is not None:
-                await _browser_reaper.stop()
-            if _browser_reaper_manager is not None:
-                await _browser_reaper_manager.close_all("shutdown")
-            from src.tools.browser.human_control import stop_all_completion_monitors
-            await stop_all_completion_monitors()
-            from src.tools.browser.run_manager import close_all_active_browser_managers
-            await close_all_active_browser_managers("shutdown")
-        except Exception as e:
-            logger.warning("browser run reaper 关闭异常: type={}", type(e).__name__)
-        await _close_browser_runs_on_shutdown()
 
         # Close PostgreSQL connection pool
         close_postgres_pool()
@@ -1334,17 +1171,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
     else:
         session_id = sse_manager.get_or_create_session(request.session_id)
 
-    # 活动工具挂起期间禁止同一会话启动第二个 Agent loop。
-    if chat_tenant_id and session_id:
-        from src.tools.browser.resume_store import get_active_session_suspension
-        active_suspension = await get_active_session_suspension(chat_tenant_id, session_id)
-        if active_suspension:
-            return JSONResponse({
-                "success": False, "error_code": "TOOL_WAITING_HUMAN",
-                "error": "当前浏览器任务正在等待你的操作",
-                "assistance_id": active_suspension["assistance_id"],
-            }, status_code=409)
-
     # M7 旧页面透明迁移桥：仅凭 fresh 登录 + 实际 owned chat_sessions 行做服务端
     # 分流（不认 User-Agent/客户端自报 header）。转接经 Runner 持久 claim 接单，
     # 兼容 stream 严格只读代理（不写历史、不结费用、断线只 detach）；匿名内存
@@ -1476,8 +1302,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
         verbose_events = []  # 用户可见中间消息（verbose），与技术 progress 严格分开收集
         tool_messages_collected = []  # 收集本轮 tool 消息序列，供事务持久化
         error_occurred = None
-        suspended_for_browser = False
-        suspension_messages_persisted = False
         agent_cancelled_by_check = False  # agent 经 cancel_check 正常返回（非 CancelledError）
 
         try:
@@ -1508,47 +1332,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     event_type = event.get("type")
                     if event_type == "tool_messages":
                         tool_messages_collected.extend(event.get("messages", []))
-                        if event.get("suspended"):
-                            # assistance 已在 Redis 建立；必须先持久化原 user +
-                            # assistant(tool_calls) 上下文，再把人工卡片交给客户端。
-                            # 否则此处断线会让后台 continuation 无法找到原 tool_call_id。
-                            suspended_batch = [{
-                                "role": "user",
-                                "content": full_message,
-                                "metadata": {
-                                    "progressMessages": [],
-                                    **({"attachments": request.files} if request.files else {}),
-                                },
-                            }]
-                            for tm in tool_messages_collected:
-                                if tm.get("role") == "assistant" and tm.get("tool_calls"):
-                                    metadata = {"tool_calls": tm["tool_calls"]}
-                                    if tm.get("reasoning_content"):
-                                        metadata["reasoning_content"] = tm["reasoning_content"]
-                                    suspended_batch.append({
-                                        "role": "assistant", "content": "",
-                                        "metadata": metadata,
-                                    })
-                                elif tm.get("role") == "tool":
-                                    content = tm.get("content", "")
-                                    if isinstance(content, (dict, list)):
-                                        content = json.dumps(
-                                            content, ensure_ascii=False, default=str
-                                        )
-                                    suspended_batch.append({
-                                        "role": "tool", "content": content,
-                                        "metadata": {
-                                            "tool_call_id": tm.get("tool_call_id", "")
-                                        },
-                                    })
-                            created = await asyncio.to_thread(
-                                MessageDB.create_batch_transactional,
-                                session_id,
-                                suspended_batch,
-                            )
-                            if created is None:
-                                raise RuntimeError("SUSPENSION_PERSIST_FAILED")
-                            suspension_messages_persisted = True
                     # 每个 event 直接序列化为 SSE 帧
                     try:
                         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -1570,8 +1353,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                     elif event_type in ("tool_start", "progress", "thinking", "clarification"):
                         record_service.handle_progress_event(event)
                         progress_events.append(event)
-                    elif event_type == "browser_human_required":
-                        suspended_for_browser = True
                     elif event_type == "cancelled":
                         # cancel_check 命中路径：agent 正常 return（非 CancelledError），
                         # 这里对齐取消语义（下方统一置 error_occurred 驱动 mark_error 与取消落库分支）
@@ -1617,11 +1398,6 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             if not error_occurred and full_response:
                 record_service.complete(full_response)
                 SessionRecordManager.end_record()
-            elif suspended_for_browser and not error_occurred:
-                # 本次 HTTP/SSE 已正常结束，但原工具仍挂起；关闭请求级记录，
-                # 后台 continuation 会以同一 session 独立完成后续持久化。
-                SessionRecordManager.end_record()
-
             # TraceCollector.on_complete 已在 Agent.process_message 的 finally 中调用。
 
             # 发送完成消息
@@ -1637,11 +1413,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
             sse_manager.add_to_history(session_id, "assistant", full_response)
 
             # 保存消息到 DB（事务：user + tool 消息序列 + assistant 最终回复，要么全成功要么全失败）
-            if (
-                (full_response or suspended_for_browser)
-                and not error_occurred
-                and not suspension_messages_persisted
-            ):
+            if full_response and not error_occurred:
                 try:
                     user_metadata = {"progressMessages": []}
                     if request.files:
@@ -1712,7 +1484,7 @@ async def chat_stream(http_request: Request, request: ChatRequest):
                 except Exception as e:
                     logger.opt(exception=True).error(f"[SSE] Failed to save messages: {e}")
 
-            elif error_occurred == "Cancelled by user" and not suspension_messages_persisted:
+            elif error_occurred == "Cancelled by user":
                 # 用户取消的轮次也落库并打 cancelled 标记，避免历史页"整轮消失"造成误解。
                 # 不保存 tool 消息序列：取消可能发生在工具执行中，尾部会留下
                 # "有 tool_calls 无 tool result"的悬空消息，破坏下一轮上下文的消息交替。
@@ -1899,9 +1671,6 @@ app.include_router(data_analysis.router)
 # 长期记忆 API
 from src.api import memory as memory_api
 app.include_router(memory_api.router)
-from src.api import browser_runs as browser_runs_api
-app.include_router(browser_runs_api.router)
-app.include_router(browser_runs_api.agent_router)
 
 # 工作日报 API（个人日报 / 团队日报 / 推送配置）
 from src.api import work_reports

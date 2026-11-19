@@ -9,7 +9,6 @@ from .repository import decoded
 def end_waiting(repository, principal, runner_id):
     from .local_recovery import _cancel_facts, owned_invocations
     from .control_repository import close_pending_controls
-    from .application_public_projection import sync_public_display
     from .event_repository import EventRepository
     with repository.connection_factory() as connection:
         cursor = connection.cursor()
@@ -63,7 +62,7 @@ def end_waiting(repository, principal, runner_id):
             control_revision=control_revision+1,view_revision=view_revision+1,
             updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
             (capped_checkpoint_dumps(checkpoint), runner_id))
-        result = sync_public_display(cursor, decoded(cursor.fetchone()), advance_view=False)
+        result = decoded(cursor.fetchone())
         result = EventRepository.notify_in_tx(cursor, row, after=result)
         connection.commit()
         return result

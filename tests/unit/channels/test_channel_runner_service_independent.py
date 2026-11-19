@@ -519,7 +519,6 @@ def test_finalizer_settles_execution_once_releases_claim_and_leaves_integrated_c
     finalizer = RunnerFinalizer(lambda: connection)
     with patch('src.services.agent_runner.finalizer.lock_runner', return_value=row), \
             patch.object(finalizer, '_settle', return_value=('settled', 5, 0.0)) as settle, \
-            patch('src.services.agent_runner.finalizer.project_terminal_public_state', return_value=({}, row['checkpoint']['pending_finalization'])), \
             patch('src.services.agent_runner.finalizer.write_history') as history, \
             patch('src.services.agent_runner.control_repository.close_pending_controls'), \
             patch('src.services.agent_runner.finalizer.EventRepository.notify_in_tx', return_value=finished), \
@@ -748,7 +747,6 @@ async def test_real_recovery_reply_on_fresh_schema_uses_generic_control_without_
                                    {'consumed_at': datetime.now(timezone.utc)}, resumed]
     with patch('src.services.agent_runner.recovery_repository.lock_runner', return_value=row) as fence, \
             patch('src.services.agent_runner.recovery_repository.ControlRepository', StoredControls), \
-            patch('src.services.agent_runner.recovery_repository.sync_public_display', side_effect=lambda cursor, row, **kwargs: row), \
             patch('src.services.agent_runner.recovery_repository.EventRepository.notify_in_tx', return_value=resumed):
         value = RecoveryRepository(lambda: connection).claim_resume('runner-1', 'worker', 30,
             revision=1, control_id=control['control_id'], checkpoint=recovered.checkpoint,

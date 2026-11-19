@@ -175,7 +175,6 @@ class RunnerRepository:
                 raise RunnerError("RUNNER_NOT_FOUND", 404)
             self.assert_owner(principal, row)
             previous = row
-            view_advanced=False
             if row["status"] == RunnerStatus.QUEUED.value:
                 # No execution/claim/usage existed. Keep accepted input in its
                 # projection; no chat/record/debit is fabricated for unstarted work.
@@ -184,7 +183,6 @@ class RunnerRepository:
                     control_revision=control_revision+1, updated_at=CURRENT_TIMESTAMP,
                     finished_at=CURRENT_TIMESTAMP WHERE runner_id=%s RETURNING *""", (runner_id,))
                 row = decoded(cursor.fetchone())
-                view_advanced=True
             elif row["status"] not in ("completed", "failed", "cancelled") and not row["cancel_requested"]:
                 from .auto_local_recovery import CANCEL_CHECKPOINT_KEY, publicly_automatic
                 from src.config.settings import settings
@@ -196,15 +194,12 @@ class RunnerRepository:
                     updated_at=CURRENT_TIMESTAMP WHERE runner_id=%s RETURNING *""",
                     (automatic, CANCEL_CHECKPOINT_KEY, runner_id))
                 row = decoded(cursor.fetchone())
-                view_advanced=True
             if row['cancel_requested'] or row['status'] in ('completed','failed','cancelled'):
                 from .control_repository import close_pending_controls
                 close_pending_controls(cursor,runner_id,'CONTROL_EXECUTION_CLOSED')
                 cursor.execute('''UPDATE agent_runners SET resume_control_id=NULL,pause_requested=FALSE,wake_at=NULL
                     WHERE runner_id=%s RETURNING *''',(runner_id,))
                 row = decoded(cursor.fetchone())
-            from .application_public_projection import sync_public_display
-            row=sync_public_display(cursor,row,advance_view=not view_advanced)
             row=EventRepository.notify_in_tx(cursor,previous,after=row)
             conn.commit()
             return row

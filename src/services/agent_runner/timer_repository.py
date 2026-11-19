@@ -9,7 +9,6 @@ from .ownership import Attempt, lock_runner
 from .persistence_limits import capped_checkpoint_dumps, capped_snapshot_dumps
 from .repository import decoded
 from .recovery_repository import lock_original_claim
-from .application_public_projection import project_public_snapshot, sync_public_display
 from .event_repository import EventRepository
 
 
@@ -102,15 +101,13 @@ class TimerRepository:
                     fact=state.get('tools',{}).get(consumed.get('tool_call_id'))
                     if state.get('execution_id')==consumed.get('execution_id') and fact:
                         fact['result']['woke_at']=consumed['woke_at']
-            snapshot=project_public_snapshot(cursor,row,checkpoint=checkpoint,
-                snapshot={**row.get('public_snapshot',{}),'waiting':None},status='running')
+            snapshot={**row.get('public_snapshot',{}),'waiting':None}
             cursor.execute('''UPDATE agent_runners SET status='running',attempt=attempt+1,worker_id=%s,
                 lease_until=clock_timestamp()+(%s*INTERVAL '1 second'),execution_started_at=clock_timestamp(),checkpoint=%s::jsonb,
                 public_snapshot=%s::jsonb,wake_at=NULL,revision=revision+1,view_revision=view_revision+1,
                 updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
                 (worker_id,lease_seconds,capped_checkpoint_dumps(checkpoint),capped_snapshot_dumps(snapshot),row['runner_id']))
             result=decoded(cursor.fetchone())
-            result=sync_public_display(cursor,result,advance_view=False)
             result=EventRepository.notify_in_tx(cursor,row,after=result)
             if source_port is not None:
                 source_port.authorize_row_in_tx(cursor,result,execute=True,prepared=prepared_source)
@@ -138,7 +135,7 @@ class TimerRepository:
                 public_snapshot=%s::jsonb,revision=revision+1,view_revision=view_revision+1,
                 updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
                 (capped_checkpoint_dumps(checkpoint),capped_snapshot_dumps(snapshot),row['runner_id']))
-            result=sync_public_display(cursor,decoded(cursor.fetchone()),advance_view=False)
+            result=decoded(cursor.fetchone())
             EventRepository.notify_in_tx(cursor,row,after=result)
             connection.commit()
             return True
@@ -159,7 +156,7 @@ class TimerRepository:
                 public_snapshot=%s::jsonb,revision=revision+1,view_revision=view_revision+1,
                 updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *''',
                 (capped_checkpoint_dumps(checkpoint),capped_snapshot_dumps(snapshot),row['runner_id']))
-            result=sync_public_display(cursor,decoded(cursor.fetchone()),advance_view=False)
+            result=decoded(cursor.fetchone())
             EventRepository.notify_in_tx(cursor,row,after=result)
             connection.commit()
             return True

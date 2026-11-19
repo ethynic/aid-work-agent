@@ -14,8 +14,7 @@ import GlobalNotificationSession from '@/notifications/GlobalNotificationSession
 
 const runner = { runner_id: 'original-runner', client_request_id: 'original-request', queue_order: 1,
   status: 'completed', session: { kind: 'web', session_id: 'original-session' },
-  snapshot: { input: { text: 'original input' }, quickOptions: [{ label: 'Do another task', value: 'send again' }],
-    browserAssistance: { kind: 'verification', url: 'https://provider.invalid' } },
+  snapshot: { input: { text: 'original input' }, quickOptions: [{ label: 'Do another task', value: 'send again' }] },
   result: { output: 'Original result' } }
 beforeEach(() => {
   vi.clearAllMocks(); localStorage.clear()
@@ -51,7 +50,6 @@ describe('independent global notification read-only boundary', () => {
     for (const component of renderedMessages) {
       const message = component.props('message')
       expect(message).not.toHaveProperty('quickOptions')
-      expect(message.browserAssistance).toBeUndefined()
       expect(message.runnerActive).toBe(false)
     }
     expect(boundaries.submit).not.toHaveBeenCalled()

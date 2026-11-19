@@ -399,19 +399,6 @@ export function useAgent() {
     const row = resumableTask.value
     if (row) void controlDurableTask('resume', row.runner_id)
   }
-  const isWaitingHuman = computed(() => {
-    const state = getStreamState(sessionId.value)
-    const currentMessages = messages.value
-    // Reply remains available when the original tree is waiting on clarification.
-    const parked = [...state.runnerViews.values()].sort((a,b) => a.queue_order-b.queue_order)
-      .find(row => ['waiting','paused','interrupted'].includes(row.status))
-    const leaf = clarificationLeaf(parked?.snapshot.waiting)
-    if (leaf?.wait_id && leaf.target_execution_id && !parked?.resume_requested) return false
-    return currentMessages.some(message => {
-      const state = message.browserAssistance?.state
-      return state === 'pending' || state === 'controlling' || state === 'resume_queued'
-    })
-  })
   // 根据路由获取认证头（租户前台自动带 X-Tenant-Id）
   function getEffectiveAuthHeader(): Record<string, string> {
     const { getAuthHeader } = useTenantAuth()
@@ -463,7 +450,7 @@ export function useAgent() {
       '原工具当前不可用于恢复。请检查工具配置后继续，或停止任务。',
       '暂时无法确认继续请求，正在查询任务状态。',
       '暂时无法确认原任务状态，本次消息和附件已保留。',
-      '请先完成原任务的人工协助，本次输入已保留。',
+      '原任务正在等待，本次输入已保留。',
       '原任务需要恢复核对，本次输入已保留。',
       '补充消息暂时无法确认接收，请稍后重试。',
       '当前服务不支持持续任务，本次消息未发送。',
@@ -1351,11 +1338,9 @@ export function useAgent() {
       return
     }
     if (parked) {
-      const issue = Object.assign(new Error(parked.status === 'waiting'
-        ? '请先完成原任务的人工协助，本次输入已保留。'
-        : '原任务需要恢复核对，本次输入已保留。'), {
-        code: parked.status === 'waiting' ? 'RUNNER_ASSISTANCE_PENDING' : 'RUNNER_RESUME_REQUIRED', status: 409,
-      })
+      const issue = new Error(parked.status === 'waiting'
+        ? '原任务正在等待，本次输入已保留。'
+        : '原任务需要恢复核对，本次输入已保留。')
       runnerError(effectiveSessionId,issue)
       return { restoreInput: true, canRestore:() => currentRunnerContext(state,effectiveSessionId,generation,headers) }
     }
@@ -1646,17 +1631,6 @@ export function useAgent() {
             }
           }
         },
-        // onBrowserHumanRequired - 结构化卡片独立于 LLM 文本渲染
-        (event) => {
-          state.liveVerbose.value = null
-          const lastMsg = state.messages.value[state.messages.value.length - 1]
-          if (lastMsg?.role === 'assistant') {
-            lastMsg.browserAssistance = { ...event, state: 'pending' }
-          }
-          state.isProcessing.value = false
-          state.inputHintState.value = 'idle'
-          addProgress(state, '等待你在浏览器中完成操作', 'progress')
-        },
         // onVerbose - 用户可见中间消息（Phase 2，设计 §8.2）
         // 后端每轮最多一条；这里按 eventId 覆盖去重（后来者覆盖）纯属防御，
         // 只写当前 session 状态，不进 progressMessages / debug 执行详情
@@ -1913,6 +1887,5 @@ export function useAgent() {
     askControlView,
     // "正在输入"提示
     inputHintState,
-    isWaitingHuman
   }
 }

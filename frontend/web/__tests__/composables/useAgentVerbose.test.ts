@@ -38,7 +38,6 @@ vi.mock('@/api/agent', () => ({
       _onThinking?: unknown,
       _onClarification?: unknown,
       _onImages?: unknown,
-      _onBrowserHumanRequired?: unknown,
       onVerbose?: (message: any) => void,
     ): Promise<void> {
       streamRegistry.set(sessionId, {

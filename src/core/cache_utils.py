@@ -52,19 +52,6 @@ class CacheKeys:
     # 空转重试；多副本部署时只允许一个副本驱动任务循环，其余副本空转等待）
     WECHAT_MP_SCHEDULER_LOCK = "wechat_mp_scheduler_lock"        # 公众号内容调度器驱动锁（src/wechat_mp/scheduler.py）
     HONGTAO_SHOP_SCHEDULER_LOCK = "hongtao_shop_scheduler_lock"  # hongtao_shop 调度器驱动锁（src/tenant_custom/hongtao_shop/scheduler.py）
-    BROWSER_RUN = "browser_run"              # browser_run:{tenant_id}:{run_id}
-    BROWSER_OWNER = "browser_owner"          # browser_owner:{tenant_id}:{run_id}
-    BROWSER_CONTROL = "browser_control"      # browser_control:{tenant_id}:{run_id}
-    # Phase 3+ 预登记命名，不代表当前阶段已提供相应功能。
-    BROWSER_VIEW_TICKET = "browser_view_ticket"
-    BROWSER_WEB_PRESENCE = "browser_web_presence"
-    BROWSER_LAUNCH_TICKET = "browser_launch_ticket"
-    BROWSER_DESKTOP_RUNTIME_SESSION = "browser_desktop_runtime_session"
-    BROWSER_ASSISTANCE = "browser_assistance"
-    AGENT_TOOL_SUSPENSION = "agent_tool_suspension"
-    AGENT_SESSION_SUSPENSION = "agent_session_suspension"
-    BROWSER_RESUME_JOBS = "browser_resume_jobs"
-    AGENT_CONTINUATION_EVENTS = "agent_continuation_events"
     TDOC_EXPORT_COUNT = "tdoc_export_cnt"  # tdoc_export_cnt:{open_id}:{yyyymmdd}（腾讯文档每日导出配额计数，48h TTL）
     AI_LEAD_GEN_OPENS_SYNC = "ailg_opens_sync"  # ailg_opens_sync:watermark（AI获客打开记录合并已扫描的 opens.id 水位，持久无 TTL）
     # video-agent：精修模式提示词草稿缓存（draft_only=True 时写入，draft_only=False 时优先读取）

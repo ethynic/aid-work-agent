@@ -83,11 +83,9 @@ class TestEntryValidation:
         expect_code(lambda: reply(answers=[], skip=True), "CONTROL_SKIP_CONFLICT")
 
     def test_non_reply_actions_cannot_carry_structured_fields(self):
-        for action in ("pause", "resume", "browser_complete"):
+        for action in ("pause", "resume"):
             values = {"client_request_id": "k", "action": action,
                       "target_execution_id": "runner-1"}
-            if action == "browser_complete":
-                values.update(wait_id="wait-1", completion_ref="ref-1")
             expect_code(lambda values=values: RunnerControl(**values, answers=[structured()]),
                         "CONTROL_STRUCTURED_UNEXPECTED")
             expect_code(lambda values=values: RunnerControl(**values, skip=True),

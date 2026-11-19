@@ -97,7 +97,7 @@ def test_ordinary_task_and_human_wait_are_not_silently_restarted(interrupted):
     row['checkpoint'].pop('continuous')
     assert not interrupted_candidate(row)
     row['input']['execution_mode'] = 'continuous'
-    for kind in ('clarification', 'human_assistance', 'continuous_guard'):
+    for kind in ('clarification', 'child_clarification', 'continuous_guard'):
         row['checkpoint']['execution']['waiting'] = {'kind':kind}
         assert not interrupted_candidate(row)
 

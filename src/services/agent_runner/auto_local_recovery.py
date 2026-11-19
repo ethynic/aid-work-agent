@@ -324,7 +324,6 @@ def _parked(cursor, runner_id, providers):
 
 
 def _write_parked(cursor, row, *, finalizing=False):
-    from .application_public_projection import sync_public_display
     from .event_repository import EventRepository
     from .persistence_limits import capped_checkpoint_dumps
     from .repository import decoded
@@ -335,7 +334,7 @@ def _write_parked(cursor, row, *, finalizing=False):
         revision=revision+1,view_revision=view_revision+1,updated_at=clock_timestamp()
         WHERE runner_id=%s RETURNING *""",
         (capped_checkpoint_dumps(row['checkpoint']), finalizing, finalizing, finalizing, row['runner_id']))
-    saved = sync_public_display(cursor, decoded(cursor.fetchone()), advance_view=False)
+    saved = decoded(cursor.fetchone())
     return EventRepository.notify_in_tx(cursor, row, after=saved)
 
 

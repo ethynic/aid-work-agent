@@ -170,8 +170,6 @@ def create_router(config=None, client=None):
 
     @router.post('/runners/{runner_id}/controls',status_code=202)
     async def runner_control(runner_id: str,body: RunnerControl,request: Request):
-        if body.action not in {'pause','resume','reply'}:
-            raise RunnerError('CONTROL_COMPLETION_FORBIDDEN',403)
         return await forward(request,'POST','/v1/runners/'+quote(runner_id,safe='')+'/controls',
                              body=control_body(body))
 
