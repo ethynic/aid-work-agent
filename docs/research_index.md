@@ -9,6 +9,7 @@
 | 就业咨询智能体客户数据库同步方案 | [调研](research/employment-agent-db-sync-research.md) | 2026-11-17 定稿（§7 现行方案）：宏陶模式两 module（lyjy_employment+sccy_policy）纯 KB 路线，六分类映射表定版；deadline→expires_at 检索层归零作废滞后；目录全量+内容增量双层 run；岗位电话直接给、求职者 PII 零同步；区域匹配+iframe 嵌官网。开发已立项：[计划](plans/plan-employment-kb-sync.md)。 |
 | 就业咨询智能体关联库表数据字典 | [数据字典](research/employment-agent-db-data-dictionary.md) | 2026-11-11：只读探查 gt_lyjy（聊易就业）与 gt_sccy（水城创业网），筛出 85 张关联表含字段类型与注释；两库无共享主键靠手机号/身份证关联，缺口为机器人会话表与意向/短板回流画像表。 |
 
+| 微信小程序面向客户开放智能体 | [调研](research/wechat-mini-program-agent-service-research.md) | 2026-11-16：通用 AppID、租户品牌发码、微信身份、AI 与人工接待、试点范围。 |
 | master Runtime 通信源码实录 | [设备 API 与执行](research/runtime-master-communication-20261111.md) / [插件与 MCP](research/runtime-master-plugin-communication-20261111.md) / [会话任务与企微后台](research/runtime-master-session-communication-20261111.md) | 2026-11-11，基线 `574aed3c`，覆盖配对、派发、IPC、插件、写许可、回执与恢复。 |
 | agent3 Runner 端到端混合负载实验 | [实测报告](research/agent3-runner-end-to-end-load-test-20261106.md) | Runner 执行槽隔离 Phase 4：三档 8/8 任务完成结算，双槽并行已验；同步阻塞、告警与旧客户端仍待验。 |
 | WeCom CLI OCR 使用点清单 | [调研](research/wecom-cli-ocr-inventory-20261106.md) | 2026-11-06：9 组原使用场景，区分仍运行的入口、退役脚本与发行包 OCR 依赖。 |

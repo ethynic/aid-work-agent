@@ -212,6 +212,10 @@ Desktop 的 Electron adapter 转换 IPC/凭证/选择器；Runtime 的 platform 
 
 创建 202 只表示接单；相同请求键绑定不可变意图。事件游标用于补读，snapshot/result 是展示基础。新增 binding 字段尚不在 WebSubmission 中，不能自行塞进 request_data 充当已验证授权。
 
+#### 微信小程序服务共同检查点
+
+2026-11-16 · 拟议的加性服务端契约 `wechat_mini_program/v1`。小程序渠道服务写入发布、微信访客归属、接待状态及该来源的公开渠道历史。AgentRunner 接受由该受信渠道提交并持久绑定的回合，以 `source=wechat_mini_program` 和 `session.kind=channel` 负责执行、恢复、终态和用量。渠道服务依据原回合、接待版本与当前发布权限投影最终回复。现有 Web、微信客服、Device API 和旧客户端契约沿原语义。生产端、接单与读取服务、领取池及回复投影须共同验证后启用该来源，回退时由支持版本收完在途回合。详见[设计](../channel/wechat-mini-program/agent-service-design.md)和[开发计划](../plans/plan-wechat-mini-program-agent-service.md)。
+
 #### Runner 检查点恢复共同检查点
 
 2026-11-13 · 已实现并通过独立验证，实体旧 Runtime＋CLI 组合待验。详见 [Runner 恢复设计 §5.8](agent-application-architecture-design.md#58-runner-按检查点继续执行2026-11-13已实现) 和 [开发计划](../plans/plan-runner-server-skill-interruption-recovery.md)。
