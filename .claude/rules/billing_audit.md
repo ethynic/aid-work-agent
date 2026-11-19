@@ -302,6 +302,18 @@ if result and result.get("code") == 200:
 - `parse_association_evidence_with_llm`（`association_enrichment_ui.py:73`）- 死代码无调用方；接线时需补计费
 - association 富化链路条件 E 依赖 `association_enrichment_ui` 唯一安装 `install_usage_recorder`——新增直接调用 `enrich_one()` 的入口会静默漏计，新入口必须同样包 recorder
 
+### 5.4 2026-11-19 已核实登记（hongtao_shop 内容同步计费链路）
+
+| 调用点 | 场景 | 裁决 | 状态 |
+|--------|------|------|------|
+| `embed_batch`（`src/tenant_custom/hongtao_shop/service.py:720`） | 宏陶商城产品同步的知识库向量化 | ✅ 条件 D：`reset_usage()` + `last_usage_tokens` 后经 `_bill_embedding` → `knowledge_service._record_knowledge_embedding_billing` 落账（source_type=hongtao_shop_embedding）；本管线无 LLM 摘要（documents.summary=NULL），summary_usage=None 正确 | ✅ 已核实正确计费（2026-11-19） |
+| `_bill_vl_images`（`src/tenant_custom/hongtao_shop/service.py:734`，解析入口 `vision.py` `describe_images_cached`） | 产品详情图 VL 解析按张计费 | ✅ 条件 C：逐张 `ChatRecordDB.create`（source_type 单一事实源在 bootstrap），倍率=全局×3 记入 usage_breakdown 供对账；缓存命中不计费，skip/restore 路径不携带未计费新解析（新解析成功必改变 content_hash，不变式成立） | ✅ 已核实正确计费（2026-11-19） |
+
+登记说明：
+- weekly-2026-11-19 引用的行号 ：695 为当日快照，实际链路在 719–734；行号漂移不改变结论。
+- **后续每周巡检 diff 与季度全量审计将本表两处调用点按基线处理，不再列为「新增调用点」重复报出**；该模块新增调用点仍按 §3 checklist 自检。
+- 既有残余窗口（`embed_batch` 已耗 token 后业务落库失败则不计费）为「业务先提交、计费后提交 fail-open」既定模式（wechat_mp / lyjy_employment 同语义），不列为缺口。
+
 ---
 
 ## 6. 审计报告模板
@@ -348,6 +360,7 @@ if result and result.get("code") == 200:
 
 - **新增计费调用点时**：开发者按 §3 checklist 自检，PR 描述中附"已按 billing_audit.md §3 核对"
 - **CodeReview 阶段**：审查者按 §3.5「已计费五条件」逐点核对，未满足的标 P0
+- **巡检核实后**：核实合规或用户裁决豁免的调用点登记进 §5（含核实日期与证据）；已登记调用点后续巡检按基线处理，不再重复列报
 - **定期审计**：每季度或大版本前执行全量审计，输出报告并更新 §5 缺口索引
 
 ---
