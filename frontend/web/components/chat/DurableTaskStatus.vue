@@ -1,5 +1,7 @@
 <template>
-  <section class="mb-3 rounded-lg border border-default bg-surface p-3 text-sm text-default" aria-label="任务状态">
+  <!-- 纯 clarification 等待时整块隐藏：问题卡片已含提问与提交入口，输入框可直接回复，
+       停止走输入框右侧按钮；取消/暂停等控制过渡仍需面板反馈，不隐藏。 -->
+  <section v-if="!hidden" class="mb-3 rounded-lg border border-default bg-surface p-3 text-sm text-default" aria-label="任务状态">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <p class="font-medium" :role="automatic ? 'status' : undefined">{{ title }}</p>
       <span v-if="row.execution_mode === 'continuous'" class="text-xs text-muted">持续任务</span>
@@ -34,6 +36,8 @@ const terminal = computed(() => runnerTerminal(props.row.status))
 const automatic = computed(() => props.row.local_recovery_mode === 'automatic' && !terminal.value)
 const wait = computed(() => runnerWaitLeaf(props.row.snapshot.waiting))
 const timer = computed(() => wait.value?.kind === 'timer' ? wait.value : undefined)
+const hidden = computed(() => props.row.status === 'waiting' && wait.value?.kind === 'clarification'
+  && !props.row.cancel_requested && !props.row.pause_requested)
 // 与 sendMessage/播放按钮同一恢复判定（含发版中断的 verification 等待）
 const canResume = computed(() => !props.resumePending && runnerResumable(props.row))
 const disabled = computed(() => props.busy || props.resumePending || props.row.cancel_requested || !!props.row.resume_requested)
@@ -43,7 +47,6 @@ const title = computed(() => automatic.value ? (props.row.status === 'finalizing
   : props.resumePending || props.row.resume_requested ? '正在恢复任务'
   : props.row.sleep_blocked ? '自动继续已暂停'
   : wait.value?.kind === 'continuous_guard' ? '连续执行已暂停'
-  : wait.value?.kind === 'clarification' && props.row.status === 'waiting' ? '等待你的回复'
   : ({ paused:'任务已暂停', interrupted:'任务已中断，请核对执行记录', completed:'任务已完成',
       failed:'任务执行失败', cancelled:'任务已停止', finalizing:'正在保存任务结果', queued:'任务排队中' } as Record<string,string>)[props.row.status]
     || (timer.value && props.row.status === 'waiting' ? '任务休眠中' : '任务执行中'))

@@ -72,11 +72,17 @@ describe('Durable task controls use server state', () => {
     expect(wrapper.text()).not.toContain('立即继续')
     wrapper.unmount()
   })
-  it('keeps the continuation button hidden while the task waits for a reply', () => {
+  it('hides the whole panel while the task purely waits for a clarification reply', () => {
     const wrapper = mount(DurableTaskStatus, { props: { busy:false, row:runnerView({ status:'waiting',
       snapshot:{ waiting:{ kind:'clarification', wait_id:'recovery-wait', target_execution_id:'root' } } }) } })
-    expect(wrapper.text()).toContain('等待你的回复')
-    expect(wrapper.findAll('button').map(button => button.text())).toEqual(['暂停','停止任务'])
+    expect(wrapper.find('[aria-label="任务状态"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+  it('keeps the panel with stopping feedback while a clarification wait is being cancelled', () => {
+    const wrapper = mount(DurableTaskStatus, { props: { busy:false, row:runnerView({ status:'waiting', cancel_requested:true,
+      snapshot:{ waiting:{ kind:'clarification', wait_id:'recovery-wait', target_execution_id:'root' } } }) } })
+    expect(wrapper.find('[aria-label="任务状态"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('正在停止任务')
     wrapper.unmount()
   })
   it('shows background recovery progress and keeps only independent cancellation', async () => {
