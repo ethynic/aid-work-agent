@@ -318,7 +318,11 @@ class TestMultiSession:
         assert session["session_id"].startswith(prefix)
         # 与默认确定性会话 {tenant}_web_c_{uid}_{subagent} 区分：前缀之后为 {subagent}_s{8hex}
         assert session["session_id"][len(prefix):].startswith("main_s")
-        assert captured["channel_chat_id"].startswith("n_")
+        # chat_id 恒为 NULL（Runner 授权按该列严格比对，代理侧调用全程 None），
+        # 额外会话改用 metadata extra_session 标记与默认会话区分
+        assert captured["channel_chat_id"] is None
+        assert captured["metadata"]["extra_session"] == "1"
+        assert captured["metadata"]["channel_config_id"] == "chan_1"
         assert captured["subagent_id"] == "main"
         assert captured["user_info"] == {"user_id": "user_1", "name": ""}
 
@@ -326,16 +330,14 @@ class TestMultiSession:
         from src.saas.api.web_c import _create_extra_session_sync
 
         identity = self._identity()
-        ids, tokens = [], []
+        ids = []
         with patch("src.saas.api.web_c.channel_session_manager") as mgr:
             mgr.create_session.side_effect = lambda **kw: dict(kw)
             for _ in range(3):
                 created = _create_extra_session_sync(identity, "user_1")
                 ids.append(created["session_id"])
-                tokens.append(created["channel_chat_id"])
-        # session_id 与 chat_id token 均唯一（chat_id 唯一保证默认查找按空过滤后互不干扰）
+        # 随机后缀保证 session_id 唯一（uid 模式下会话 id 不可由 userid 推算）
         assert len(set(ids)) == 3
-        assert len(set(tokens)) == 3
 
     def test_chat_request_session_fields_default(self):
         from src.saas.api.web_c import WebCChatRequest

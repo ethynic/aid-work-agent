@@ -4902,3 +4902,12 @@
         singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
         unit_price NUMERIC(12,2) CHECK (unit_price >= 0)
     );
+
+- datetime: "2026-11-19 16:30:00"
+  remark: "web_c 额外会话 chat token 迁移：token 写入 channel_chat_id 导致 Runner 授权 CHANNEL_ACTOR_FORBIDDEN，改写为 NULL 并补 extra_session 标记"
+  statements: |
+    UPDATE channel_sessions
+    SET channel_chat_id = NULL,
+        metadata = COALESCE(metadata, '{}'::jsonb) || '{"extra_session": "1"}'::jsonb
+    WHERE channel_type = 'web_c'
+      AND channel_chat_id ~ '^n_[0-9a-f]{12}$';

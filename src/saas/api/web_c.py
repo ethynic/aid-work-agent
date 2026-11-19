@@ -500,11 +500,15 @@ def _create_extra_session_sync(identity: WebCIdentity, user_id: str) -> dict:
 
     session_id 须满足归属前缀 {tenant}_web_c_{uid}_（_assert_session_owned 校验），
     以 _s{12hex} 随机后缀与默认会话区分；uid 模式（仅 userid 链接）依赖该随机
-    后缀保证会话 id 不可由 userid 推算（48bit 熵，设计 §3.5）。channel_chat_id
-    用唯一 token 使 get_or_create_session 默认查找（按 chat_id 为空过滤）与缓存
-    key 均不冲突。
+    后缀保证会话 id 不可由 userid 推算（48bit 熵，设计 §3.5）。
+
+    channel_chat_id 恒为 NULL：Runner 侧 _channel_in_tx 把请求 chat_id 与
+    channel_sessions.channel_chat_id 严格比对（web_c 代理对 Runner 的 submit/
+    快照/SSE/cancel 调用全程 channel_chat_id=None，2026-11-19 聊易生产
+    CHANNEL_ACTOR_FORBIDDEN 事故），额外会话与默认会话的区分改用 metadata
+    extra_session 标记（get_or_create_session 默认查找按该标记排除），
+    不得再把唯一 token 写进 channel_chat_id 列。
     """
-    token = f"n_{uuid.uuid4().hex[:12]}"
     session_id = (
         f"{identity.tenant_id}_web_c_{identity.channel_user_id}_"
         f"{identity.subagent_type or ''}_s{uuid.uuid4().hex[:12]}"
@@ -514,10 +518,10 @@ def _create_extra_session_sync(identity: WebCIdentity, user_id: str) -> dict:
         channel_type="web_c",
         channel_user_id=identity.channel_user_id,
         tenant_id=identity.tenant_id,
-        channel_chat_id=token,
+        channel_chat_id=None,
         user_info={"user_id": user_id, "name": identity.display_name or ""},
         subagent_id=identity.subagent_type or "",
-        metadata={"channel_config_id": identity.config_id},
+        metadata={"channel_config_id": identity.config_id, "extra_session": "1"},
     )
 
 
