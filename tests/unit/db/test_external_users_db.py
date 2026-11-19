@@ -134,8 +134,10 @@ class TestListExternalUsersCombinationGranularity:
         count_sql = calls[0][0][0]
         assert "cs.channel_type = %s" not in count_sql
 
-    def test_no_channel_type_excludes_office_channel_rows(self):
-        """不传 channel_type 时应排除办公软件渠道会话组合（防止企微内部员工混入微信接待客户页）"""
+    def test_no_channel_type_whitelist_reception_channels(self):
+        """不传 channel_type 时只显示接待类渠道白名单会话组合（fail-closed，新渠道默认不进本页）"""
+        from src.db.models import UserDB
+
         _, calls = self._run(
             tenant_id="tenant_001",
             page=1,
@@ -143,14 +145,24 @@ class TestListExternalUsersCombinationGranularity:
         )
         count_sql = calls[0][0][0]
         list_sql = calls[1][0][0]
-        expected = "(cs.channel_type IS NULL OR cs.channel_type NOT IN ('wecom', 'dingtalk', 'feishu'))"
+        expected = "(cs.channel_type IS NULL OR cs.channel_type = ANY(%s))"
         assert expected in count_sql
         assert expected in list_sql
-        # source 非空硬条件仍保留
+        # 白名单参数与 UserDB.RECEPTION_CHANNEL_TYPES 一致（当前仅 wecom_kf），
+        # 办公软件渠道（wecom/dingtalk/feishu）与官网客服（web_c）均被排除
+        assert list(UserDB.RECEPTION_CHANNEL_TYPES) in calls[0][0][1]
+        assert list(UserDB.RECEPTION_CHANNEL_TYPES) in calls[1][0][1]
+        # source 非空硬条件仍保留（无会话的引流客户靠它可见）
         assert "u.source IS NOT NULL" in count_sql
 
-    def test_channel_type_passed_no_office_exclusion(self):
-        """传 channel_type（办公软件会话页）时不应加办公渠道排除条件"""
+    def test_web_c_not_in_reception_whitelist(self):
+        """官网客服（web_c）有独立查看页，不在微信接待客户页白名单内（2026-11-18 混入事故回归）"""
+        from src.db.models import UserDB
+
+        assert "web_c" not in UserDB.RECEPTION_CHANNEL_TYPES
+
+    def test_channel_type_passed_no_whitelist(self):
+        """传 channel_type（办公软件/官网会话页）时不加白名单条件，按指定渠道过滤"""
         _, calls = self._run(
             tenant_id="tenant_001",
             channel_type="wecom",
@@ -158,7 +170,7 @@ class TestListExternalUsersCombinationGranularity:
             page_size=20,
         )
         count_sql = calls[0][0][0]
-        assert "cs.channel_type NOT IN" not in count_sql
+        assert "cs.channel_type = ANY(%s)" not in count_sql
         assert "u.source IS NOT NULL" not in count_sql
 
     def test_group_by_subagent_splits_combinations(self):
@@ -300,3 +312,62 @@ class TestListSessionsChannelChatIdFilter:
         assert "open_kfid_A" in params
         # 参数顺序：tenant_id、user_id、channel_chat_id
         assert params == ["tenant_001", "user_001", "open_kfid_A"]
+
+
+class TestListExternalUsersChannelConfigFilter:
+    """官网接待页按渠道配置归属筛选（channel_sessions.metadata.channel_config_id）"""
+
+    def _run(self, **kwargs):
+        from src.db.models import UserDB
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = {"cnt": 0}
+        mock_cursor.fetchall.return_value = []
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch("src.db.models.get_db_connection") as mock_get_db:
+            mock_get_db.return_value.__enter__.return_value = mock_conn
+            UserDB.list_external_users(**kwargs)
+            return mock_cursor.execute.call_args_list
+
+    def test_no_config_id_no_condition(self):
+        """不传 channel_config_id 时无归属筛选条件（零影响现有调用方）"""
+        calls = self._run(tenant_id="tenant_001", channel_type="web_c", page=1, page_size=20)
+        assert "channel_config_id" not in calls[0][0][0]
+
+    def test_config_id_neq_fallback_only_exists(self):
+        """筛选渠道非兜底渠道：仅归属会话 EXISTS 条件"""
+        calls = self._run(
+            tenant_id="tenant_001", channel_type="web_c",
+            channel_config_id="cfg_b", channel_config_fallback_id="cfg_a",
+            page=1, page_size=20,
+        )
+        count_sql = calls[0][0][0]
+        assert "cf.metadata->>'channel_config_id' = %s" in count_sql
+        assert "NOT EXISTS" not in count_sql
+        # 参数顺序：基础条件（tenant/channel_type）+ EXISTS 子查询（tenant/channel_type/config）
+        assert calls[0][0][1] == ["tenant_001", "web_c", "tenant_001", "web_c", "cfg_b"]
+
+    def test_config_id_eq_fallback_includes_unattributed(self):
+        """筛选渠道为兜底渠道：归属命中 OR 无归属会话（存量回退最早渠道）"""
+        calls = self._run(
+            tenant_id="tenant_001", channel_type="web_c",
+            channel_config_id="cfg_a", channel_config_fallback_id="cfg_a",
+            page=1, page_size=20,
+        )
+        count_sql = calls[0][0][0]
+        assert "cf.metadata->>'channel_config_id' = %s" in count_sql
+        assert "NOT EXISTS" in count_sql
+        assert "cf2.metadata->>'channel_config_id' IS NOT NULL" in count_sql
+        # 参数顺序：基础条件（tenant/channel_type）+ EXISTS 三参 + NOT EXISTS 两参
+        assert calls[0][0][1] == ["tenant_001", "web_c", "tenant_001", "web_c", "cfg_a", "tenant_001", "web_c"]
+
+    def test_config_id_without_channel_type_no_condition(self):
+        """channel_type 未传时不应用归属筛选（避免误拦接待客户页口径）"""
+        calls = self._run(
+            tenant_id="tenant_001",
+            channel_config_id="cfg_a", channel_config_fallback_id="cfg_a",
+            page=1, page_size=20,
+        )
+        assert "channel_config_id" not in calls[0][0][0]

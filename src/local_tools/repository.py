@@ -1454,6 +1454,14 @@ def write_result(
                 data = {key: value for key, value in data.items()
                     if key != RUNTIME_COMPLETION_KEY} or None
 
+        if isinstance(data, dict) and 'receipt_version' in data:
+            from .catalog import execution_receipt_version
+            from .execution_receipts import EFFECTS, strip_receipt_extension
+            version = execution_receipt_version(_device_capabilities_json(cursor, row), row)
+            if (version is None or data.get('receipt_version') != version
+                    or data.get('known_effect') not in EFFECTS):
+                data = strip_receipt_extension(data) or None
+
         if success:
             new_state = "succeeded"
         elif code == "EXECUTION_UNKNOWN":

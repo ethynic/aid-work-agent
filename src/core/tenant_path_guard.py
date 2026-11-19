@@ -2,7 +2,7 @@
 
 多租户 SaaS 场景下，LLM 可调用的文件工具（cp、skill_execute 等）不得触碰
 其他租户的存储目录。真实案例（2026-09-11）：售前会话中 LLM 通过
-`skill_execute` 执行 `find /app -iname '*爱定义*'`，枚举到了其他租户
+`skill_execute` 执行 `find /app -iname '*某租户*'`，枚举到了其他租户
 storage/tenants/ 下的报价单文件路径。
 
 真实案例（2026-10-09）：微信客服会话中 LLM 连续 15 轮用 skill_execute 执行

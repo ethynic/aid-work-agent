@@ -32,6 +32,8 @@ export interface FakeInvocation {
   provider?: string | null
   /** 契约 2.20：并行可领作业（服务端按设备上报声明判定后的镜像标记） */
   parallel?: boolean
+  /** 执行回执标准 1.1：非 null 字符串 → claim 回包附加 receipt_version（服务端协商镜像）；缺省不附加 */
+  receipt_version?: string | null
   /** v2 write-authorize 已签发的许可（同 invocation 重复申请 → 409，对齐服务端一次性语义） */
   permit?: { permit_id: string; permit_token: string; deadline_at: string; state?: 'issued' | 'expired' }
   /** 迟到回执接纳时许可已过期（R21 服务端 audit permit_expired_late 的镜像标记，断言用） */
@@ -125,7 +127,7 @@ export class FakeCloud {
     return { device_id: device.device_id, token: device.token }
   }
 
-  enqueueInvocation(toolName: string, args: Record<string, unknown> = {}, opts: { provider?: string | null; parallel?: boolean } = {}): string {
+  enqueueInvocation(toolName: string, args: Record<string, unknown> = {}, opts: { provider?: string | null; parallel?: boolean; receipt_version?: string | null } = {}): string {
     const inv: FakeInvocation = {
       invocation_id: randomUUID(),
       tool_name: toolName,
@@ -137,6 +139,7 @@ export class FakeCloud {
       result: null,
       provider: opts.provider,
       parallel: opts.parallel,
+      ...(opts.receipt_version !== undefined ? { receipt_version: opts.receipt_version } : {}),
     }
     this.invocations.set(inv.invocation_id, inv)
     return inv.invocation_id
@@ -294,6 +297,7 @@ export class FakeCloud {
                 lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
               }
               if (inv.provider !== null) response['provider'] = inv.provider ?? 'boss-recruiting'
+              if (typeof inv.receipt_version === 'string') response['receipt_version'] = inv.receipt_version
               this.sendJson(res, 200, response)
               return
             }

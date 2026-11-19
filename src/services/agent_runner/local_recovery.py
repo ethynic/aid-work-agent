@@ -225,13 +225,18 @@ class LocalRecoveryProof:
                 continue
             phase = LocalPhase(state.execution_id,fact.call.id,ref['branch'],ref['ordinal'])
             request = ref.get('request') or {}
+            from .auto_local_recovery import RETRY_LIMIT, retry_branch
+            original_phase = LocalPhase(state.execution_id, fact.call.id, 'main', 0)
+            automatic = (ref['branch'] == retry_branch(original_phase, row['runner_id'])
+                         and 1 <= ref['ordinal'] <= RETRY_LIMIT)
             inbound = ref['branch'].startswith('wecom.inbound.') and cls.provider_key == 'wecom'
             resolving = ref['branch'] == RESOLVE_BRANCH and named_send(cls.name,requested_arguments)
-            if (key!=phase.key(row['runner_id']) or ref['ordinal']!=0
-                    or request.get('tool_name')!=('wecom_read_session' if inbound or resolving else allowed.get(ref['branch']))
+            if (key!=phase.key(row['runner_id']) or ref['ordinal']!=0 and not automatic
+                    or request.get('tool_name')!=('wecom_read_session' if inbound or resolving
+                        else cls.name if automatic else allowed.get(ref['branch']))
                     or request.get('device_id')!=original_device
                     or resolving and not validate_resolve_phase(requested_arguments,ref)
-                    or ref['branch'] in {'main','heal.retry'} and request.get('arguments')!=arguments
+                    or (automatic or ref['branch'] in {'main','heal.retry'}) and request.get('arguments')!=arguments
                     or ref['branch']=='heal.inspect' and request.get('arguments')!={}):
                 raise RunnerError('LOCAL_INVOCATION_OWNER_VERIFICATION_REQUIRED',409)
             invocation = repository.get_invocation(ref['invocation_id'],row['tenant_id'])
@@ -356,11 +361,12 @@ def _cancel_facts(cursor, row, *, request):
     return facts
 
 
-def cancel_completion_status(facts, *, detached_local_wait=False):
+def cancel_completion_status(facts, *, detached_local_wait=False, detached_invocations=()):
     pending = False
     for fact in facts:
-        if fact.get('kind') == 'local' and fact.get('readonly_db'):
-            continue  # Logical cancellation grants no new UI operation or stop proof.
+        if fact.get('kind') == 'local' and (fact.get('readonly_db')
+                or str(fact.get('id')) in detached_invocations):
+            continue  # Logical cancellation grants no new device operation or stop proof.
         if fact.get('kind')=='domain':
             if not fact['known']:
                 # Keep the original domain reason in its private HTTP fact;
@@ -382,6 +388,19 @@ def cancel_completion_status(facts, *, detached_local_wait=False):
     return (False, 'LOCAL_CANCEL_ACK_PENDING') if pending else (True,None)
 
 
+def cancellation_ready(facts, checkpoint):
+    from .auto_local_recovery import CANCEL_CHECKPOINT_KEY
+
+    detached = checkpoint.get('detached_local_wait') is True
+    if detached and checkpoint.get(CANCEL_CHECKPOINT_KEY) is True:
+        # Skip only physically protected or already verified original invocations.
+        # Unknown domain actions still require their own completion proof.
+        ids = set(checkpoint.get('detached_local_invocations') or ())
+        ids.update(checkpoint.get('verified_local_invocations') or ())
+        return cancel_completion_status(facts, detached_invocations=ids)
+    return cancel_completion_status(facts, detached_local_wait=detached)
+
+
 def cancel_owned_invocations(connection_factory, attempt, *, request=True, complete_audit=False):
     """User cancellation, root fence and complete original bindings in one TX."""
     try:
@@ -390,21 +409,35 @@ def cancel_owned_invocations(connection_factory, attempt, *, request=True, compl
             row = lock_runner(cursor, attempt.runner_id, attempt)
             if not row['cancel_requested']:
                 raise CheckpointFailure('LOCAL_USER_CANCEL_NOT_REQUESTED')
+            from .auto_local_recovery import CANCEL_CHECKPOINT_KEY
+
             original = row.get('checkpoint') or {}
+            automatic = original.get(CANCEL_CHECKPOINT_KEY) is True
             marker = (original.get('execution') or {}).get('resources', {}).get('wecom_task_device') or {}
+            if automatic or marker.get('version') == 2:
+                repository.lock_operation_admission(cursor, row['tenant_id'])
             if marker.get('version') == 2:
                 devices = sorted({fact['request']['device_id'] for _, phase, fact in
                     owned_invocations(original.get('execution') or {}, row['runner_id']) if phase is not None})
-                repository.lock_operation_admission(cursor, row['tenant_id'])
                 cursor.execute('SELECT id FROM local_tool_devices WHERE tenant_id=%s AND user_id=%s '
                     'AND id=ANY(%s::uuid[]) ORDER BY id FOR UPDATE',
                     (row['tenant_id'], row['user_id'], devices))
             facts = _cancel_facts(cursor,row,request=request)
+            if automatic and request:
+                verification = (original.get('local_verification') or {}).get('invocation_id')
+                if verification:
+                    repository.request_cancel_in_tx(cursor, verification, row['tenant_id'])
             from .notify_audit import complete_cancellation_audits
             checkpoint = complete_cancellation_audits(cursor,row,attempt) if complete_audit else None
             unresolved = [fact for fact in facts if fact.get('kind') == 'local'
                 and not fact['completion_known'] and not fact.get('readonly_db')]
-            if (marker.get('version') == 2 and unresolved
+            if automatic and any(fact['holdable'] for fact in unresolved):
+                verified = set(original.get('verified_local_invocations') or ())
+                checkpoint = copy.deepcopy(checkpoint if checkpoint is not None else original)
+                checkpoint['detached_local_wait'] = True
+                checkpoint['detached_local_invocations'] = sorted(str(fact['id']) for fact in unresolved
+                    if fact['holdable'] and str(fact['id']) not in verified)
+            elif (marker.get('version') == 2 and unresolved
                     and all(fact.get('provider_key') == 'wecom'
                         and (fact.get('state') == 'unknown' or fact.get('effect') == 'unknown')
                         for fact in unresolved)):
@@ -458,7 +491,7 @@ def release_ready_cancellations(connection_factory, *, limit=16, after_queue_ord
                         or blocked.get('revision') != row['revision']):
                     continue
                 facts = _cancel_facts(cursor,row,request=False)
-                if not cancel_completion_status(facts,detached_local_wait=checkpoint.get('detached_local_wait') is True)[0]:
+                if not cancellation_ready(facts, checkpoint)[0]:
                     continue
                 checkpoint['cancel_completion_blocked'] = {**blocked,'ready':True,'revision':row['revision']+1}
                 cursor.execute("""UPDATE agent_runners SET checkpoint=%s::jsonb,revision=revision+1,

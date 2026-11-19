@@ -1,6 +1,6 @@
 # 第一方 Runtime 离线包格式与打包入口
 
-**Runtime、BOSS 和 WeCom 从源码到最终 ZIP 的操作流程见[完整打包手册](../../docs/ops/runtime-boss-release-guide.md)。** 手册包含验收签名配置默认路径及 WeCom 便携 Python 准备步骤。
+**Runtime、BOSS 和 WeCom 从源码到最终 ZIP 的操作流程见[完整打包手册](../../docs/guides/deployment/runtime-boss-release-guide.md)。** 手册包含验收签名配置默认路径及 WeCom 便携 Python 准备步骤。
 
 此目录仅在构建机运行。客户机接收 `.aidplugin.zip`，验证签名与清单后解包，不运行 npm、pip、Git 或安装 hook。支持 BOSS、微信、企业微信和小红书。工具集合由本次插件 `version --json` 和 `runtime-manifest.json` 产生。Host 可执行范围由 Runtime 的受信策略决定。
 

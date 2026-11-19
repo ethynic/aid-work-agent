@@ -1,7 +1,7 @@
 # 重工具服务化设计（2026-11-13）
 
 > 状态：设计 v1.2（2026-11-13 评审修订 + 同日二次修订）。2026-11-13 与用户三轮讨论定稿方向：5 个重工具剥离 LLM 后放入独立「重工具容器」，轻容器经 HTTP 调用；轻容器 4 × 5 并发 = 20 执行体，通用池（池路由）代码 B1 一次性剥离见 §9。
-> 评审修正（同日）：§3 fill_template 含 LLM 结构分析的核实错误及切分方案、§4.1 重试范围与路径校验、§5 文件介导提前 B1 与产物目录双轨、§6 生产 DB 连接放大 200（[生产发布备忘](../../deploy/生产发布备忘.md) 条目 5）。
+> 评审修正（同日）：§3 fill_template 含 LLM 结构分析的核实错误及切分方案、§4.1 重试范围与路径校验、§5 文件介导提前 B1 与产物目录双轨、§6 生产 DB 连接放大 200（[生产发布备忘](../deploy/生产发布备忘.md) 条目 5）。
 > 二次修订（同日，用户重述定调）：§1 补入「入队判型过判」出发点（旅游咨询智能体带 OCR 全量判重实证）；§9 废弃两步走——通用槽代码未发布生产，B1 一次性剥离池路由全套。
 > 关联：[Runner 容量与轻重负载分离](runner-capacity-and-load-separation-design.md)、[Excel 阻塞事故 §7.2 工具级子进程隔离方向](../incidents/excel-process-shared-runner-blocking-20261105.md)、[架构 §10](agent-application-architecture-design.md)。
 > 本方案是事故报告 §7.2「工具级子进程隔离」的容器级实现：把重负载从执行面剥离到独立可回收的容器。
@@ -147,7 +147,7 @@ GET  /internal/heavy-tools/health
 其余不变项：服务 token 恒等比较认证照旧（内网 + 安全组只放行 runner 容器网段）；PaddleOCR 模型权重在新机常驻一份；内网带宽千兆级，不涉及公网限速规范；多副本 DNS 负载均衡仅适用于同机 compose，跨机多实例时在 `HEAVY_TOOLS_URL` 层面配置多地址轮询（实现时定，MVP 可单地址）。
 - **agent2 拓扑**：4 轻容器 × 5 并发 + 1 重工具容器。**角色机制整体剥离（2026-11-13 用户裁决，见 §9）**：无 `AGENT_RUNNER_ROLE`，compose 合并为单一 `runner-worker` 服务 ×4 副本，每容器并发统一走 config `slot_concurrency`——不再存在 light/general 之分，全部 worker 等价、全量领取。agent3 共享宿主机的内存余量需在部署前复测（现 6 容器 → 5 容器 + 重容器，空载略降）。
 - **agent3 开发环境不部署重工具容器**（2026-11-13 用户裁决）：`HEAVY_TOOLS_MODE=local`，5 个重工具在轻容器本地执行（与现状行为一致，1GiB cgroup、病理样本偶发 OOM 爆炸半径 = 单槽，仅开发人员触发，可接受）。红利：agent3 成为重工具本身的开发调试环境（改 handler 无需先部署重容器）与全局故障回退环境（重服务异常时始终可本地跑重任务）。
-- **生产拓扑**：沿用 20 执行体分档（12~16 轻容器 × 4~5 并发）+ 1~2 重工具容器（replicas 2 时信号量各自独立，天然负载分担）。**生产 DB 连接账（评审重算，用户裁决放大 max_connections 至 200）**：12~16 容器 × pool 7 = 84~112 + 监督 ~10 + 非 Runner ~30 ≈ 124~152 ≤ 200，连接预算充足无需下调 pool；放大操作见 [生产发布备忘](../../deploy/生产发布备忘.md) 条目 5——`docker-compose.postgres.yml` 的 `max_connections` 120 → 200 随发版窗口修改提交，属 PG 启动参数，**reload 无效必须重建容器（秒级中断，低峰执行）**。agent2 测试库维持 80：4×7 + 监督 ~10 + 非 Runner ~20 ≈ 58 ≤ 80 不变。
+- **生产拓扑**：沿用 20 执行体分档（12~16 轻容器 × 4~5 并发）+ 1~2 重工具容器（replicas 2 时信号量各自独立，天然负载分担）。**生产 DB 连接账（评审重算，用户裁决放大 max_connections 至 200）**：12~16 容器 × pool 7 = 84~112 + 监督 ~10 + 非 Runner ~30 ≈ 124~152 ≤ 200，连接预算充足无需下调 pool；放大操作见 [生产发布备忘](../deploy/生产发布备忘.md) 条目 5——`docker-compose.postgres.yml` 的 `max_connections` 120 → 200 随发版窗口修改提交，属 PG 启动参数，**reload 无效必须重建容器（秒级中断，低峰执行）**。agent2 测试库维持 80：4×7 + 监督 ~10 + 非 Runner ~20 ≈ 58 ≤ 80 不变。
 - 上传上限 50MB → 20MB 作为独立加固项同批落地（前后端同步：接口校验 + 前端提示；注意移动端 blob 下载 10MB 门槛与本上限无关联，不混改）。
 
 ## 7. 计费与安全核对
@@ -190,7 +190,7 @@ GET  /internal/heavy-tools/health
 | 角色 | `AGENT_RUNNER_ROLE`（`worker.py:293`、`supervisor.py:371`）、`slot_capacity.py` `effective_slot_concurrency`（general 强制 1） | 删除；并发统一走 config `slot_concurrency`（`--slot-concurrency` 显式覆盖保留） |
 | 配置 | `config.yaml` `agent_runner.heavy_skills` 清单 | 删除（判型退役后无消费方；interior-render 的重负载随 image_render 观察结论走 §3） |
 | 配置 | `config.yaml` `agent_runner.heavy_tools` 清单 | **保留但语义切换**：从判型信号变为「远程派发白名单」——RemoteHeavyTool 代理注册依据（§4.2），名字不变避免配置漂移 |
-| 部署 | `AGENT_RUNNER_LIGHT_SLOTS` / `AGENT_RUNNER_GENERAL_SLOTS` / `AGENT_RUNNER_ROLE` 环境变量；compose overlay `runner-worker-light` + `runner-worker-general` 双服务 | 合并为单一 `runner-worker` 服务（副本数 = 容器数）；`agent2_update.sh` 注释与 [agent-runner-deploy-checklist.md](../../deploy/agent-runner-deploy-checklist.md) 部署步骤同步 |
+| 部署 | `AGENT_RUNNER_LIGHT_SLOTS` / `AGENT_RUNNER_GENERAL_SLOTS` / `AGENT_RUNNER_ROLE` 环境变量；compose overlay `runner-worker-light` + `runner-worker-general` 双服务 | 合并为单一 `runner-worker` 服务（副本数 = 容器数）；`agent2_update.sh` 注释与 [agent-runner-deploy-checklist.md](../guides/deployment/agent-runner-deploy-checklist.md) 部署步骤同步 |
 | 观测 | `system_health/collector.py:203-208` light/general slots 指标 | 改为 worker_slots + 重工具服务指标（副本/并发/busy/排队） |
 | 观测 | `notifications/events.py:330` 池名映射（轻专用池/通用池）、`runner_alerts.py` `load_class` 字段 | 口径调整（不再区分池归属） |
 | DB | `agent_runner` 表 `load_class` 列 | **保留不删**（避免 DB 变更、历史行可读） |

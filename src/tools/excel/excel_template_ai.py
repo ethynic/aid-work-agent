@@ -12,6 +12,7 @@
   行增删后显式重锚定合并单元格范围（openpyxl insert/delete_rows 不自动平移）。
 """
 
+import hashlib
 import json
 import re
 from copy import copy
@@ -23,6 +24,7 @@ from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 from loguru import logger
 
+from src.core.cache_utils import CacheKeys
 from src.tools.excel.excel_lib import ExcelFileHandler, copy_cell_style
 
 
@@ -115,7 +117,7 @@ class FillData(BaseModel):
     columns: Optional[List[Dict[str, Any]]] = None  # 显式列绑定（可选，优先于 LLM 推断）
     group_subtotals: Dict[str, Any] = Field(default_factory=dict)
     totals: Dict[str, Any] = Field(default_factory=dict)
-    # totals 形如 {"grand_total": 10230, "per_capita": {"成人人均": 2280}}
+    # totals 形如 {"grand_total": 10230, "per_capita": {"人均": 2280}}
     # 所有将写入单元格的值必须是标量（per_capita 的值同理）；按列/档位分列的
     # 合计没有嵌套表达方式，须拆成独立标量键（_validate_cell_scalars 前置拦截）
 
@@ -134,7 +136,8 @@ def _validate_cell_scalars(fill_data: "FillData") -> Optional[str]:
         return (
             f"data.{path} 的值必须是标量（单元格只能填 str/int/float/bool），实际是 {kind}。"
             "请拆平后重试：按列/档位分列的数值拆成独立标量键"
-            "（如 合计总价:{'40人':9520,'45人':10560} 拆成 合计总价_40人:9520、合计总价_45人:10560），"
+            "（如 合计_档位A:{'档位一':9520,'档位二':10560} 拆成 "
+            "合计_档位A_档位一:9520、合计_档位A_档位二:10560），"
             "多值明细转为多行放入 rows"
         )
 
@@ -328,7 +331,7 @@ def _build_analyze_prompt(grid_text: str, data_keys: Dict[str, List[str]], data:
   ],
   "totals": [
     {{"row": 13, "col": 6, "label": "合计", "bind": "grand_total"}},
-    {{"row": 13, "col": 4, "label": "成人人均", "bind": "成人人均"}}
+    {{"row": 13, "col": 4, "label": "人均费用", "bind": "人均费用"}}
   ]
 }}
 
@@ -340,7 +343,7 @@ def _build_analyze_prompt(grid_text: str, data_keys: Dict[str, List[str]], data:
    - **⚠️ 列式小计**：小计与明细**同行**——某列跨行竖向合并显示，如"商品类别总计/分类小计"列每组仅首行有值、下方合并居中。**此类列严禁设 subtotal_row/subtotal_col**，必须作为普通 columns 绑定列（bind=对应键名，如"商品类别总计"），组内非首行该键留空（竖向合并会自动居中显示）。误把列式小计设成 subtotal_row，会在明细行数变化时让小计落到相邻分组的残留行，触发"样例残留"报错。
    **无分区小计的简单版式，groups 填空数组，改填 detail_first_row/detail_last_row。**
 3. **meta_fields 的 (row,col) 是"标题单元格"（标题文字所在格），不是值格**。这类是左右结构：标题在左格、值要填到它**右侧相邻格**。渲染器会自动把值写到 col+1，所以你只需标注标题格。例如"日期："在 C2（col=3）、值要填到 D2，则 meta_fields 写 {{row:2,col:3,bind:"date"}}（col=3 是标题格 C2，渲染器自动写到 D2）。**千万不要把 col 写成值格或写进标题格的 bind——否则值会覆盖标题。** 若某字段值不在标题紧邻右侧（如隔一列、或在合并区右端），加 value_col 显式指定值格列。
-4. **totals**：合计行 + 人均/标量单元格。bind 用上面"合计可用的键"（grand_total 或 per_capita 的键名，如"成人人均"）。
+4. **totals**：合计行 + 人均/标量单元格。bind 用上面"合计可用的键"（grand_total 或 per_capita 的键名，如"人均费用"）。
 5. **bind 优先用上面给出的键**；键里没有的不要编造。
 6. title/meta/totals 没有对应内容时填 null / 空数组。
 7. 只返回 JSON。"""
@@ -1010,6 +1013,7 @@ def fill_with_sample(
     output_dir: Optional[str] = None,
     *,
     llm_callable: Optional[Callable[[str], str]] = None,
+    use_cache: bool = True,
 ) -> Dict[str, Any]:
     """无状态：样例 + data → 按样例版式填好的 Excel。
 
@@ -1028,13 +1032,148 @@ def fill_with_sample(
         {success, file_path, file_name, file_size, rows_rendered, inferred_structure,
          unused_data_keys, missing_fields, message}
     """
-    structure_result = analyze_structure_safe(sample_file_path, data, llm_callable=llm_callable)
+    structure_result = analyze_structure_safe(
+        sample_file_path, data, llm_callable=llm_callable, use_cache=use_cache
+    )
     if not structure_result.get("success"):
         return structure_result
-    return render_with_structure(
-        sample_file_path, data, structure_result["structure"],
-        output_name=output_name, output_dir=output_dir,
+    try:
+        result = render_with_structure(
+            sample_file_path, data, structure_result["structure"],
+            output_name=output_name, output_dir=output_dir,
+        )
+    except Exception:
+        # 结构缓存复用后渲染失败（如坏结构）：删除缓存键，避免 TTL 内持续复用
+        invalidate_structure_cache(sample_file_path, data)
+        raise
+    if isinstance(result, dict) and not result.get("success"):
+        invalidate_structure_cache(sample_file_path, data)
+    return result
+
+
+# ============================================================
+# 结构分析缓存（同一模板 + 同 data 键集合，跨调用复用 LLM 分析结果）
+# ============================================================
+
+# 结构分析单次思考型 LLM 调用实测 79~92s（2026-11-18 聊易 trace
+# tr_runner_2f6d4b579c2f4811813b287e053fbb2d），同模板重复填充时复用以省时。
+# 缓存键含模板内容 hash 与 data 键签名：模板改动或数据键集合变化都不命中，
+# 不会复用错的列绑定。TTL 取 1h（同一会话内多轮填充足够覆盖，模板更新后可自然失效）。
+STRUCTURE_CACHE_TTL_SECONDS = 3600
+_STRUCTURE_CACHE_VERSION = 1
+_STRUCTURE_CACHE_MAX_FILE_BYTES = 50 * 1024 * 1024
+
+
+def _structure_cache_key(sample_file_path: str, fill_data: "FillData") -> Optional[str]:
+    """缓存键：模板内容 sha256 + data 键签名；无法计算（文件不可读/过大）返回 None（不缓存）。"""
+    path = Path(sample_file_path)
+    try:
+        if path.stat().st_size > _STRUCTURE_CACHE_MAX_FILE_BYTES:
+            return None
+        template_hash = hashlib.sha256(path.read_bytes()).hexdigest()[:32]
+    except Exception:
+        return None
+    row_keys = sorted({k for row in fill_data.rows for k in (row or {}).keys()})
+    meta_keys = sorted((fill_data.meta or {}).keys())
+    totals = fill_data.totals or {}
+    per_capita = totals.get("per_capita")
+    total_keys = sorted(
+        set(totals.keys()) | (set(per_capita.keys()) if isinstance(per_capita, dict) else set())
     )
+    sig_raw = "\x1f".join(row_keys) + "\x1e" + "\x1f".join(meta_keys) + "\x1e" + "\x1f".join(total_keys)
+    keys_sig = hashlib.sha256(sig_raw.encode("utf-8")).hexdigest()[:16]
+    identifier = f"v{_STRUCTURE_CACHE_VERSION}:{template_hash}:{keys_sig}"
+    try:
+        from src.core.redis_client import redis_client
+
+        # 走 make_key：拼 REDIS_KEY_PREFIX 实现多实例隔离，clear_all() 也能按前缀清理
+        return redis_client.make_key(CacheKeys.EXCEL_STRUCTURE, identifier)
+    except Exception:
+        return f"{CacheKeys.EXCEL_STRUCTURE}:{identifier}"
+
+
+def _load_cached_structure(cache_key: Optional[str]) -> Optional["SheetStructure"]:
+    """读缓存结构；Redis 不可用/数据损坏一律返回 None（降级为重新调用 LLM）。"""
+    if not cache_key:
+        return None
+    if cache_key in _BAD_STRUCTURE_KEYS:
+        return None  # 本进程已判定该结构坏（渲染失败过），Redis 删除可能失败
+    try:
+        from src.core.redis_client import redis_client
+
+        if not redis_client.is_available():
+            return None
+        raw = redis_client.get(cache_key)
+        if not isinstance(raw, dict):
+            return None
+        return _deserialize_structure(raw)
+    except Exception as e:
+        logger.debug(f"[excel_template_ai] 结构缓存读取失败: {e}")
+        return None
+
+
+def _store_cached_structure(cache_key: Optional[str], structure: "SheetStructure") -> None:
+    if not cache_key:
+        return
+    # 重新分析得到的新结构覆盖旧缓存：解除本进程的坏结构标记
+    _BAD_STRUCTURE_KEYS.discard(cache_key)
+    try:
+        from src.core.redis_client import redis_client
+
+        if not redis_client.is_available():
+            return
+        redis_client.set(
+            cache_key, _serialize_structure(structure), ex=STRUCTURE_CACHE_TTL_SECONDS
+        )
+    except Exception as e:
+        logger.debug(f"[excel_template_ai] 结构缓存写入失败: {e}")
+
+
+def _delete_cached_structure(cache_key: Optional[str]) -> None:
+    if not cache_key:
+        return
+    try:
+        from src.core.redis_client import redis_client
+
+        # 不因 is_available() 提前返回：Redis 抖动期间的渲染失败也要尽力删除，
+        # 删不掉时由 _BAD_STRUCTURE_KEYS 在本进程内兜底跳过（见 _load_cached_structure）
+        redis_client.delete(cache_key)
+    except Exception as e:
+        logger.debug(f"[excel_template_ai] 结构缓存删除失败: {e}")
+
+
+# 本进程内的坏结构键黑名单：渲染失败时登记，避免 Redis 抖动导致"删除被跳过"后
+# 同一进程继续命中坏结构。跨进程不共享（Redis delete 成功时本黑名单无需参与）。
+_BAD_STRUCTURE_KEYS: set = set()
+_BAD_STRUCTURE_KEYS_MAX = 1000
+
+
+def _mark_bad_structure(cache_key: Optional[str]) -> None:
+    if not cache_key:
+        return
+    if len(_BAD_STRUCTURE_KEYS) >= _BAD_STRUCTURE_KEYS_MAX:
+        _BAD_STRUCTURE_KEYS.clear()
+    _BAD_STRUCTURE_KEYS.add(cache_key)
+
+
+def _cache_key_for_data(sample_file_path: str, data: Any) -> Optional[str]:
+    try:
+        fill_data = data if isinstance(data, FillData) else FillData(**(data or {}))
+        return _structure_cache_key(sample_file_path, fill_data)
+    except Exception:
+        return None
+
+
+def invalidate_structure_cache(sample_file_path: str, data: Any) -> None:
+    """主动失效某模板 + data 键组合的结构缓存。
+
+    用途：渲染失败时（结构绑定错误等）删除缓存，避免 1h TTL 内其它调用继续复用
+    同一坏结构——原先每次重新分析天然具备的"重试自愈"能力不能因缓存而丢失。
+    远程渲染路径（重容器）失败时由调用方调用本函数。
+    """
+    cache_key = _cache_key_for_data(sample_file_path, data)
+    _mark_bad_structure(cache_key)
+    _delete_cached_structure(cache_key)
 
 
 def analyze_structure_safe(
@@ -1042,12 +1181,16 @@ def analyze_structure_safe(
     data: Any,
     *,
     llm_callable: Optional[Callable[[str], str]] = None,
+    use_cache: bool = True,
 ) -> Dict[str, Any]:
     """fill_template 拆分第一段：样例结构分析（含 LLM 调用）。
 
     独立可调用，供轻容器在远程模式下先本地完成结构分析，再把序列化结构
     交给重容器渲染段（render_with_structure）。失败以 {"success": False,
     "error": ...} 返回，与 fill_with_sample 既有失败口径一致。
+
+    use_cache=True（默认）时按「模板内容 hash + data 键签名」命中结构缓存，
+    跳过思考型 LLM 调用；注入 llm_callable（测试）不读缓存。
     """
     src = Path(sample_file_path)
     if not src.exists():
@@ -1061,15 +1204,118 @@ def analyze_structure_safe(
     if err:
         return {"success": False, "error": err}
 
+    cache_key = _structure_cache_key(sample_file_path, fill_data) if use_cache and llm_callable is None else None
+    cached = _load_cached_structure(cache_key)
+    if cached is not None:
+        # 显式 columns 优先于缓存/推断的列绑定（调用方已知 schema 时钉死）
+        if fill_data.columns:
+            cached.columns = [ColumnBinding(**c) for c in fill_data.columns]
+        logger.info(
+            f"[excel_template_ai] 结构分析命中缓存，跳过 LLM: rows={len(fill_data.rows)}"
+        )
+        return {"success": True, "structure": _serialize_structure(cached), "structure_cached": True}
+
     try:
         structure = analyze_structure(sample_file_path, fill_data, llm_callable=llm_callable)
-        # 显式 columns 优先于 LLM 推断（调用方已知 schema 时钉死列绑定）
-        if fill_data.columns:
-            structure.columns = [ColumnBinding(**c) for c in fill_data.columns]
     except Exception as e:
         logger.opt(exception=True).error(f"[excel_template_ai] 结构分析失败: {e}")
         return {"success": False, "error": f"样例结构分析失败: {e}"}
-    return {"success": True, "structure": _serialize_structure(structure)}
+    # 先存 LLM 原始结构再叠加显式 columns：缓存键不含 fill_data.columns，
+    # 若把叠加后的列绑定存进缓存，后续不带 columns 的调用会继承别人的钉死绑定
+    _store_cached_structure(cache_key, structure)
+    # 显式 columns 优先于 LLM 推断（调用方已知 schema 时钉死列绑定）
+    if fill_data.columns:
+        structure.columns = [ColumnBinding(**c) for c in fill_data.columns]
+    return {"success": True, "structure": _serialize_structure(structure), "structure_cached": False}
+
+
+def _detect_unmapped_numeric_rows(
+    ws, structure: "SheetStructure", data: "FillData", limit: int = 20,
+    max_scan_rows: int = 5000,
+) -> List[int]:
+    """渲染后检测「含数值但结构未映射」的行（模板其他档位/区块的示例数据残留）。
+
+    背景（2026-11-18 聊易 trace tr_runner_2f6d4b579c2f4811813b287e053fbb2d）：
+    多档位模板只识别并填充了 A 档明细区，B/C 档示例数据原样保留；_verify_render
+    只校验已绑定区，调用方必须再 read 一次才发现，随后整表重填（多耗 ~79s）。
+    这里把「未绑定行 + ≥2 个数值」作为提示返回，调用方一次决策即可。
+
+    纯启发式提示，不改文件，也不保证穷尽：
+    - 绑定区按渲染计划（_final_row）换算到输出坐标后整行视为已映射；
+    - 模板自带的表头档位/固定数值行可能被列出（message 已注明可忽略）；
+    - 每行仅 1 个数值的残留（如只填单价列）不在本提示范围；
+    - 只检查 active 工作表，扫描上限 max_scan_rows 行防病态模板。
+    任何异常返回空列表——提示能力绝不能影响填充本身。
+    """
+    try:
+        groups, _assigned, plan, _unmatched, _min_col, _max_col, _bound = _compute_plan(structure, data)
+
+        bound_rows = set()
+        title = structure.title
+        if isinstance(title, dict):
+            try:
+                title_row = int(title.get("row") or 0)
+            except (TypeError, ValueError):
+                title_row = 0
+            if title_row > 0:
+                bound_rows.add(title_row)
+        for mf in structure.meta_fields:
+            bound_rows.add(mf.row)  # 标题格与右侧值格同行
+        for g, rows, _delta in plan:
+            if rows:
+                first_final = _final_row(g.detail_first_row, plan)
+                bound_rows.update(range(first_final, first_final + len(rows)))
+            if g.subtotal_row:
+                bound_rows.add(_final_row(g.subtotal_row, plan))
+        for t in structure.totals:
+            bound_rows.add(_final_row(t.row, plan))
+
+        hits: List[int] = []
+        max_row = min(int(getattr(ws, "max_row", 0) or 0), max_scan_rows)
+        # 列范围以结构列跨度为准加余量并封顶：openpyxl 的 ws.max_column 可能被远处
+        # 带格式单元格撑到上万列，逐行实例化 Cell 会让检测本身变成 CPU/内存热点
+        # （与"降耗时"目标相反）。values_only 遍历不构造 Cell 对象。
+        span_max = max(
+            (int(c.col) for c in structure.columns if getattr(c, "col", None)), default=0
+        )
+        max_col = min(max(span_max + 4, 20), 256)
+        for r, values in enumerate(
+            ws.iter_rows(min_row=1, max_row=max_row, max_col=max_col, values_only=True), start=1
+        ):
+            if r in bound_rows:
+                continue
+            numeric = 0
+            for v in values:
+                if isinstance(v, bool):
+                    continue
+                if isinstance(v, (int, float)):
+                    numeric += 1
+                elif isinstance(v, str) and re.fullmatch(r"-?\d+(?:\.\d+)?", v.strip()):
+                    numeric += 1
+            if numeric >= 2:
+                hits.append(r)
+                if len(hits) >= limit:
+                    break
+        return hits
+    except Exception as e:
+        logger.debug(f"[excel_template_ai] 未映射数值行检测跳过: {e}")
+        return []
+
+
+def _format_row_ranges(rows: List[int]) -> str:
+    """行号压缩为区间文本（如 16-20、23），仅用于提示。"""
+    if not rows:
+        return ""
+    parts: List[str] = []
+    start = prev = rows[0]
+    for r in rows[1:]:
+        if r == prev + 1:
+            prev = r
+            continue
+        parts.append(f"{start}" if start == prev else f"{start}-{prev}")
+        start = prev = r
+    parts.append(f"{start}" if start == prev else f"{start}-{prev}")
+    return "、".join(parts)
 
 
 def render_with_structure(
@@ -1110,6 +1356,7 @@ def render_with_structure(
         ws = wb.active
         rows_rendered = _render(ws, sheet_structure, fill_data)
         _verify_render(ws, sheet_structure, fill_data)  # fail-loud：残留即 bug
+        unmapped_rows = _detect_unmapped_numeric_rows(ws, sheet_structure, fill_data)
 
         output_name = output_name or (src.stem + "_filled.xlsx")
         save_result = ExcelFileHandler.save_temp(wb, file_name=output_name, output_dir=output_dir)
@@ -1123,6 +1370,13 @@ def render_with_structure(
     if missing:
         labels = [f"{m.get('label') or m.get('bind')}" for m in missing]
         notes.append(f"模板中以下字段未提供数据，已清空：{', '.join(labels)}")
+    if unmapped_rows:
+        notes.append(
+            f"输出文件第 {_format_row_ranges(unmapped_rows)} 行含未映射的数值（未纳入本次 data 填充）："
+            "可能是其他档位/区块的旧示例，也可能是模板自带的档位表头、说明或固定数值。"
+            "是否处理由业务要求决定：用户要求处理的区块可补全 data 或用修改类指令更新；"
+            "模板固定内容或用户未要求改动的区块保持原样即可，不要为改而改"
+        )
 
     save_result.update({
         "success": True,
@@ -1130,6 +1384,7 @@ def render_with_structure(
         "inferred_structure": _serialize_structure(sheet_structure),
         "unused_data_keys": unused,
         "missing_fields": missing,
+        "unmapped_numeric_rows": unmapped_rows,
         "message": "；".join(notes) if notes else f"已填充 {rows_rendered} 行",
     })
     return save_result

@@ -11,7 +11,7 @@ from .contracts import RunnerError, RunnerStatus, scope_key
 
 
 from .persistence_limits import capped_checkpoint_dumps, capped_snapshot_dumps
-from .public_view import decoded, public_runner, with_local_operation_facts
+from .public_view import decoded, local_recovery_applicable, public_runner, with_local_operation_facts
 from .event_repository import EventRepository
 
 # 绕过应用的 SQL 直插可以占用 queue_order 却不推进 BIGSERIAL 序列，此后正常
@@ -186,9 +186,15 @@ class RunnerRepository:
                 row = decoded(cursor.fetchone())
                 view_advanced=True
             elif row["status"] not in ("completed", "failed", "cancelled") and not row["cancel_requested"]:
+                from .auto_local_recovery import CANCEL_CHECKPOINT_KEY, publicly_automatic
+                from src.config.settings import settings
+                automatic = (row['status'] != 'finalizing' and publicly_automatic(row, row.get('checkpoint') or {},
+                    settings.agent_runner.auto_local_recovery_providers, local_recovery_applicable(row)))
                 cursor.execute("""UPDATE agent_runners SET cancel_requested=TRUE,
+                    checkpoint=CASE WHEN %s THEN jsonb_set(checkpoint,ARRAY[%s], 'true'::jsonb) ELSE checkpoint END,
                     view_revision=view_revision+1, control_revision=control_revision+1,
-                    updated_at=CURRENT_TIMESTAMP WHERE runner_id=%s RETURNING *""", (runner_id,))
+                    updated_at=CURRENT_TIMESTAMP WHERE runner_id=%s RETURNING *""",
+                    (automatic, CANCEL_CHECKPOINT_KEY, runner_id))
                 row = decoded(cursor.fetchone())
                 view_advanced=True
             if row['cancel_requested'] or row['status'] in ('completed','failed','cancelled'):

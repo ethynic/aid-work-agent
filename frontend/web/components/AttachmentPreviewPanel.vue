@@ -1,13 +1,15 @@
 <template>
   <div
     ref="panelRef"
-    class="w-full md:max-w-[80vw] flex flex-col bg-white h-full flex-shrink-0 pb-[env(safe-area-inset-bottom)] relative"
+    class="w-full md:max-w-[60vw] flex flex-col bg-white h-full flex-shrink-0 pb-[env(safe-area-inset-bottom)] relative"
     :style="panelStyle"
   >
-    <!-- 拖拽调整宽度的手柄 -->
+    <!-- 拖拽调整宽度的手柄（pointerdown + setPointerCapture：
+         面板内容含 iframe，拖拽经过 iframe 时 mousemove 会被 iframe 文档吞掉导致拖拽卡死，
+         指针捕获后所有 move/up 事件始终派发给把手，不受 iframe 影响） -->
     <div
       class="hidden md:block absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10 hover:bg-primary-300 active:bg-primary-400 transition-colors group"
-      @mousedown="startResize"
+      @pointerdown="startResize"
     >
       <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-0.5 h-8 bg-gray-300 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"></div>
     </div>
@@ -331,33 +333,43 @@ const panelStyle = computed(() => ({
   borderLeft: '1px solid #e5e7eb',
 }))
 
-// 拖拽调整宽度
-function startResize(e: MouseEvent) {
+// 拖拽调整宽度。
+// 必须用 Pointer Events + setPointerCapture（勿改回 document mousemove）：
+// 面板内容含 iframe（HTML 预览）等元素，拖拽中鼠标一旦经过 iframe，
+// mousemove 会被 iframe 内部文档吞掉、document 收不到，拖拽即永久卡死；
+// setPointerCapture 把后续 pointermove/pointerup 全部锁定到把手元素，彻底规避
+function startResize(e: PointerEvent) {
   e.preventDefault()
+  const handle = e.currentTarget as HTMLElement
+  // 捕获指针：此后所有指针事件都派发给把手，即使鼠标位于 iframe 上方
+  handle.setPointerCapture(e.pointerId)
   const startX = e.clientX
   const startWidth = panelWidth.value
 
-  function onMouseMove(ev: MouseEvent) {
+  function onPointerMove(ev: PointerEvent) {
     // 面板在右侧，向左拖 = 变宽，向右拖 = 变窄
+    // 上限 60% 视口：面板内侧还有导航栏 + 对话列，上限过大会把对话列挤成不可读的窄条
     const delta = startX - ev.clientX
-    const newWidth = Math.min(Math.max(startWidth + delta, 320), window.innerWidth * 0.8)
+    const newWidth = Math.min(Math.max(startWidth + delta, 320), window.innerWidth * 0.6)
     panelWidth.value = newWidth
     // 面板宽度即 docx 整页缩放的约束维度之一，拖拽时同步重算
     // （window resize 的防抖路径管不到这里；Excel 的整表缩放按 sheet 重渲染，不走此函数）
     if (previewType.value === 'docx') applyDocxZoom()
   }
 
-  function onMouseUp() {
-    document.removeEventListener('mousemove', onMouseMove)
-    document.removeEventListener('mouseup', onMouseUp)
+  function onPointerUp() {
+    handle.removeEventListener('pointermove', onPointerMove)
+    handle.removeEventListener('pointerup', onPointerUp)
+    handle.removeEventListener('pointercancel', onPointerUp)
     document.body.style.cursor = ''
     document.body.style.userSelect = ''
   }
 
   document.body.style.cursor = 'col-resize'
   document.body.style.userSelect = 'none'
-  document.addEventListener('mousemove', onMouseMove)
-  document.addEventListener('mouseup', onMouseUp)
+  handle.addEventListener('pointermove', onPointerMove)
+  handle.addEventListener('pointerup', onPointerUp)
+  handle.addEventListener('pointercancel', onPointerUp)
 }
 
 // 判断预览类型

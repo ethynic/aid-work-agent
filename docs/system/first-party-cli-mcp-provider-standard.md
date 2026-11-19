@@ -130,6 +130,46 @@ terminal user        any MCP Host
 - `unknown` 永不自动重试写动作；
 - progress 丢失不影响最终结果完整性。
 
+### 5.3.1 执行回执标准 1.1
+
+2026-11-18 · 已完成 Phase 5。首个落地是 BOSS GUI 工具。1.1 是执行回执版本，Runtime 和 BOSS CLI 的发行版本 1.1 见[开发计划](../plans/plan-boss-filter-input-and-local-recovery.md#phase-5--cli-异常与业务结果)。
+
+#### 回执字段
+
+保持 §5.3 的 OperationResult 外层，扩展写入同一个 `data` 对象，业务工具继续保留原有业务字段。CLI 是业务事实的唯一写入者。
+
+| 字段 | 类型与规则 |
+|---|---|
+| `data.receipt_version` | 固定字符串 `"1.1"`。识别本次调用使用的扩展格式。 |
+| `data.step` | 稳定的工具内诊断步骤标识，由 CLI 在对应工具实现和契约测试中维护。已发布标识保持含义稳定。Runner 重试额度不取该字段。例如 `apply_filter`。已知失败或部分完成发生在哪一步时填写。 |
+| `data.reason` | 对象 `{code, message}`。code 使用稳定大写标识，message 是可向用户展示的简短原因。已识别的失败或部分完成填写。 |
+| `data.known_effect` | `none`、`applied`、`partial` 或 `unknown`。已启用 1.1 的 CLI 必须填写，与该回执外层 `effect` 一致。 |
+| `data.partial_results` | 批量操作部分完成时提供已知逐项结果。每项为 `{item_ref, status, known_effect, reason?}`。item_ref 是字符串，优先复用 CLI 能确认的稳定业务引用。没有此类引用时，用首次选中目标时冻结的调用内尝试序号，在本次调用及内部重试中保持一致。status 为 `completed`、`failed`、`unknown` 或 `skipped`。已跳过项为 `none`，未确认项为 `unknown`。 |
+| `data.screenshot` | 可选的当前受权页面截图。对象采用 P10 已有的 MCP image 块形状 `{type:"image", mimeType, data}`。data 是 Base64，BOSS 首版使用 PNG 或 JPEG。 |
+
+`none` 表示确认没有业务副作用。只读操作可以已执行且仍为 `none`。`applied` 表示有可信证据证明预期副作用已发生。`partial` 表示已证实部分效果，逐项保留未知内容。`unknown` 表示效果无法确认。部分完成只记录已知的目标和结果，不推断未报告项。外层 `effect` 继续作为旧消费者的业务效果字段。扩展没有权限把未知效果升级为成功或允许重发，`retryable` 也只作为后台判断的输入。
+
+BOSS 批量简历工具在 CLI 阶段通常尚无云端简历 ID，且页面位置随滚动变化。没有稳定业务引用时使用该批次中冻结的尝试序号。该序号限本调用逐项对账，不能用于跨调用去重或确认候选人身份。
+
+本节的外层一致性指 CLI 的 OperationResult。BOSS 首版沿既有 Device /result，外层 effect 已接收 partial，data.known_effect 同为 partial。另一条 Device v2 /operation-result 是独立的投递回执，只接受 none/applied/unknown，Runtime 现有代码将不受支持的 partial 归为 unknown。这条 v2 通路和枚举不在 BOSS Phase 5 改动范围。
+
+#### 插件独立性与平台边界
+
+插件独立拥有工具业务逻辑、输入处理、页面与账号语义、业务结果核验和取证。插件通过既有签名工具声明及受权调用提供标准回执。Runtime 与服务端依靠已授权的设备、工具和原调用、宿主能力与协商版本处理回执。回执的通用路径不能用插件 ID、工具名前缀、静态名单或以配置包装的插件专用 handler 选择不同业务逻辑。BOSS 是 1.1 的首个实现，插件名和业务工具名只用于插件侧和业务验收。接入下一个符合标准、已授权的插件，回执协商、校验和附件消费无需新增平台代码。
+
+Runtime 管理 MCP 通信、执行事实、证据来源及补传。云端保留发布信任、用户和租户授权、工具可见性、计费、原调用绑定及资源归属核验。签名和标准回执用于提供可追溯事实，既有平台权限和安全约束继续生效。旧插件回执兼容及存量业务适配按原路径处理，Phase 5 的通用入口可以与之并存。
+
+#### MCP、Runtime 与云端结果通路
+
+1. **启用**。Runtime 按宿主对协议的实际支持，通过既有 device capabilities 宣告 `runtime_execution_receipt_v1_1`。支持 1.1 的服务端对已授权且纳入本版本的调用，在既有 Device 领取响应附加可选 `receipt_version: "1.1"`。Runtime 仅在收到该值时，在既有 MCP `tools/call` 的 `_meta["aidwork/receipt_version"]` 传入该版本。CLI 从 MCP 请求元数据读取，业务参数、工具输入 schema 和 invocation 的原参数摘要不承载该控制字段。版本未协商时走既有回执。直接面向人的 CLI 命令继续使用自身的输出适配方式。
+2. **MCP 响应**。复用 `structuredContent` 和等价的单个 JSON text 回执。可识别业务失败仍为有效 OperationResult，使用 `success:false` 和相应错误码。Runtime 沿现有优先级解码，`isError:true` 优先，已提供但不合法的结构化结果无需回退 text，缺结构化结果时只接受唯一合法的 JSON text。响应缺失、超时、异常退出或无法解码按已有 Host 故障路径处理。Runtime 只报告能确认的执行阶段和影响，按现有机制独立附加 `_runtime_completion` 或受管停稳证明。
+3. **Runtime 回传**。验证已协商的扩展形状，未知版本或无效可选字段按旧回执语义处理，记录脱敏诊断。对已协商 1.1 且两个合法效果值相互矛盾的回执，Runtime 保留原结果并记脱敏诊断，Runner 的自动恢复判断按 unknown 处理。保留原回执和既有计费事实，禁止据此重试写动作。旧回执无扩展字段按既有规则处理。合法扩展随既有 Device result/outbox 上报，仍绑定原设备、原领取凭据和 invocation。重发沿原结果幂等方式，不重跑业务。1.1 回执、图片和 `known_effect` 都不能替代 Runtime 停稳证明。服务端按原规则核验归属并固化结果。Runner 消费结果与依赖，自行决定安全重试、继续独立步骤或终态收尾。
+4. **截图消费**。BOSS 首版在失败、部分完成或业务效果未知的终态，对可用的当前受权页面尽力截一张。正常成功不自动截取。验收可显式取图。复用 P10 单张、5 MiB 原始字节上限及现有整包预算，原业务结果和已有简历图等业务附件优先。截图超限、拿不到或无效时省略截图，保留业务结果。Runtime 沿结果通道传递，云端复用通用图片解码，按原调用、设备、用户和执行归属核验。受权页面绑定和业务结果判断由插件完成。企微 P10 原按请求消息 ID 核验的业务路径保持兼容。云端沿原调用持久回执保存图片，Agent 默认只得到文字结果和无路径的执行内图片引用 `data.screenshot: {image_ref: "receipt_image_<invocation_id>"}`。截图按需从原调用的受权回执读取，不生成独立图片文件、通用文件注册或公开 URL。常规模型消息不放入自动展开的 runner_image 部件。Agent 确需辨认时调用既有 image_read，只允许读取能从当前 Runner 资源核对归属和权限的引用。未启用读图能力或图片不可用时采用结构化回执和文字原因。原始 Base64、本机路径不进入模型文本或通知。截图只说明页面事实，停稳、外发效果和计费沿各自既有证明。
+
+#### 兼容性验收
+
+旧 Runtime、旧 CLI 或旧服务端参与时，未完成协商的调用走既有结果路径，补充字段缺失不影响普通接单、回执和计费。新端组合额外验证结构化业务失败、部分完成、截图经过 result/outbox 到 Agent 视觉上下文，以及无法截图、扩展缺失、重连补传仍保留业务结果。Runtime 发布能力仅在完整实现此标准后开启。版本兼容见[共同契约](runner-desktop-runtime-integration-contract.md#boss-筛选容错与本机操作恢复共同检查点)。
+
 ### 5.4 MCP metadata
 
 - server `instructions` 前 512 字符包含关键前提、工作流、副作用和速率/数量限制；

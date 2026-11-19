@@ -1,4 +1,4 @@
-﻿# 按 docs/ops/runtime-boss-release-guide.md 所述独立组件打包入口（配套入口，文档为语义权威）。
+﻿# 按 docs/guides/deployment/runtime-boss-release-guide.md 所述独立组件打包入口（配套入口，文档为语义权威）。
 # stage 9 内置文件占用自愈：workspace 内编辑器/索引器对刚复制文件的短暂监视锁
 # （2026-10-21 实跑两次复现，RM API 实证占用者为 VS Code 文件 watcher）会导致
 # Compress-Archive PermissionDenied——失败时用 Restart Manager 诊断占用者并退避重试。

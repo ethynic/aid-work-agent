@@ -124,6 +124,10 @@ class CacheKeys:
     # recap 延迟补推 payload：recap_deferred_payload:{tenant_id}:{session_id}:{task_name}
     # （同会话同任务重复跳过时 latest-wins 覆盖；TTL = 补推延迟 + 缓冲，过期即放弃补推）
     RECAP_DEFERRED_PAYLOAD = "recap_deferred_payload"
+    # Excel 模板结构分析缓存：excel_structure:v1:{模板内容sha256}:{data键签名}
+    # （excel_template_ai 结构分析 LLM 结果；同一模板 + 同一 data 键集合复用，
+    # 模板内容或键集合变化即不命中；不涉租户数据，TTL 3600s，Redis 不可用自动降级直连 LLM）
+    EXCEL_STRUCTURE = "excel_structure"
     # workspace 产物 path -> file_id 反查索引：ws_file_idx:{sha256(绝对路径)}
     # （AgentRunner 附件/工具产物落盘 workspace 后注册 ImageRegistry 时写入，
     # value JSON {file_id,name,tenant_id,registered_at}；供跨轮历史路径改写把

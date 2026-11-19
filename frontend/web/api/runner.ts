@@ -23,6 +23,7 @@ export interface RunnerView {
   execution_mode?: 'continuous'
   usage?: { task_credits: number; session_credits: number; pending: boolean; updated_at: string | null }
   local_recovery?: boolean
+  local_recovery_mode?: 'automatic'
   local_recovery_kind?: 'original_operation' | 'dispatch_unconfirmed'
   local_recovery_actions?: Array<'verify' | 'stop' | 'stop_and_continue' | 'resume' | 'end'>
   local_verification_available?: boolean
@@ -75,7 +76,7 @@ export function runnerWaitLeaf(wait?: RunnerWait): RunnerWait | undefined {
  *  verification 等待即发版/心跳中断文案，不阻断恢复）。resume 在途、已请求取消、
  *  local_recovery 行排除——后者必须走「核对并继续」卡片。 */
 export function runnerResumable(row: RunnerView): boolean {
-  if (row.cancel_requested || row.resume_requested || row.local_recovery) return false
+  if (row.cancel_requested || row.resume_requested || row.local_recovery || row.local_recovery_mode === 'automatic') return false
   const wait = runnerWaitLeaf(row.snapshot.waiting)
   const timerResume = wait?.kind === 'timer' && !!wait.wait_id && !!wait.target_execution_id
     && ['waiting', 'paused', 'interrupted'].includes(row.status)

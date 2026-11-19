@@ -44,9 +44,15 @@ async def original_invocation(proxy, operation, device, arguments):
     # 到期语义不忽略（存量投影见 proxy_tool._poll_invocation / local_recovery）。
     deadline = (datetime.fromisoformat(saved['request']['deadline_at'])
         if saved is not None and saved['request'].get('deadline_at') else None)
+    from src.services.agent_runner.auto_local_recovery import enabled
+    provider = getattr(proxy, 'provider_key', None)
+    options = {}
+    if operation.branch == 'main' and operation.ordinal == 0 and enabled(operation.owner, provider):
+        options['automatic_provider'] = provider
     return await operation.owner.bind_invocation(branch=operation.branch,
         ordinal=operation.ordinal, tool_name=proxy.name, device=device,
-        arguments=arguments, provider_key=proxy.invocation_provider_key, deadline_at=deadline)
+        arguments=arguments, provider_key=proxy.invocation_provider_key,
+        deadline_at=deadline, **options)
 
 
 async def recover_original(proxy, operation, progress_queue, *, arguments):

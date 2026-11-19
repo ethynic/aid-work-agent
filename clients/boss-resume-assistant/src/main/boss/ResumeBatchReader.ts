@@ -94,6 +94,14 @@ export interface BatchResumeResult {
   /** 候选人姓名（卡片 DOM 配对唯一来源；与识别文本的交叉校验在云端做） */
   name: string
   readResult: ResumeReadResult
+  itemRef?: string
+}
+
+interface BatchResumeFailure {
+  name: string | null
+  error: string
+  execution?: PageExecution
+  itemRef?: string
 }
 
 export interface ResumeBatchDeps {
@@ -138,13 +146,13 @@ export interface ResumeBatchDeps {
 
 export interface ResumeBatchCheckpoint {
   resumes?: BatchResumeResult[]
-  failures?: Array<{ name: string | null; error: string; execution?: PageExecution }>
+  failures?: BatchResumeFailure[]
   processedNames?: Set<string>
   anonymousRows?: Set<number>
   attempted?: number
   scrollRounds?: number
   execution?: PageExecution
-  current?: { name: string; reference: string | null; sourceIdentity?: string; phase: 'open' | 'read' | 'close'; failureStart: number; nativeWindowRefusals?: number }
+  current?: { name: string; reference: string | null; itemRef?: string; sourceIdentity?: string; phase: 'open' | 'read' | 'close'; failureStart: number; nativeWindowRefusals?: number }
 }
 
 /** 点卡片后轮询等详情 canvas 出现的总超时（ms）。真机 ~600ms 出现，轮询容错 */
@@ -260,7 +268,7 @@ export class ResumeBatchReader {
    */
   async readBatch(opts: { limit: number; saveDir?: string; excludeNames?: string[]; scanMore?: boolean }): Promise<{
     resumes: BatchResumeResult[]
-    failures: Array<{ name: string | null; error: string; execution?: PageExecution }>
+    failures: BatchResumeFailure[]
     attempted: number
     processed_names: string[]
     stop_reason: string
@@ -293,7 +301,9 @@ export class ResumeBatchReader {
     }
     /** failures.push + 同步落一条诊断日志（logDetail 只进日志不进 error，云端契约文本不变） */
     const pushFailure = (name: string | null, error: string, logDetail?: string): void => {
-      failures.push({ name, error, ...(name && this.execution.stage !== 'prepared' ? { execution: structuredClone(this.execution) } : {}) })
+      const itemRef = name && checkpoint.current?.name === name ? checkpoint.current.itemRef : undefined
+      failures.push({ name, error, ...(itemRef ? { itemRef } : {}),
+        ...(name && this.execution.stage !== 'prepared' ? { execution: structuredClone(this.execution) } : {}) })
       batchLog(`卡片[${name ?? '无名卡'}] 失败：${error}${logDetail ? `（${logDetail}）` : ''}`)
     }
 
@@ -457,7 +467,8 @@ export class ResumeBatchReader {
       if (!continuingItem) {
         this.execution = { attemptsUsed: 1, ordinaryRetriesUsed: 0, stage: 'prepared', inputStatus: 'not_started', verification: { status: 'inconclusive', evidence: [] } }
         const bound = loadedCandidates(snap).filter(candidate => candidate.name === card.name && !candidate.excluded)
-        checkpoint.current = { name: card.name, reference: bound.length === 1 ? candidateReference(bound[0]!) : null,
+        const reference = bound.length === 1 ? candidateReference(bound[0]!) : null
+        checkpoint.current = { name: card.name, reference, itemRef: reference ?? 'attempt:' + attempted,
           ...(bound.length === 1 ? { sourceIdentity: sourceIdentity(bound[0]!) } : {}),
           phase: 'open', failureStart: failures.length }
       }
@@ -617,7 +628,7 @@ export class ResumeBatchReader {
         `卡片[${name}] 已读取拼接图（${result.segments} 段` +
           `${result.bottomReached ? '，已到底' : '，未到底'}；${result.width}x${result.height}）`,
       )
-      resumes.push({ name, readResult: result })
+      resumes.push({ name, readResult: result, itemRef: checkpoint.current?.itemRef })
       checkpoint.current!.phase = 'close'
       const closed = await this.tryCloseDetail()
       processedNames.add(name)

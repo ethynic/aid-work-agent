@@ -53,6 +53,11 @@ export interface ProviderCallOptions {
    *  路由正确），不占用串行 busy 标志；计入并行在途（isBusy/waitForIdle/shutdown 覆盖）。
    *  缺省串行 lane：busy 门行为与现状完全不变。 */
   parallel?: boolean
+  /** 执行回执标准 1.1（2026-11-18）：注入 MCP tools/call 请求级 _meta（如
+   *  {"aidwork/receipt_version":"1.1"}）。仅协商调用传入；不进业务 arguments、
+   *  不进工具输入 schema（协议探针实证 SDK 1.30.0 params._meta 透传为 handler extra._meta）。
+   *  缺省不注入 _meta（请求与现状逐字节一致）。 */
+  requestMeta?: Record<string, unknown>
 }
 
 export interface ProviderOptions {
@@ -379,14 +384,20 @@ export class ProviderManager {
       }
       let result
       try {
-        result = await client.callTool({ name, arguments: args }, undefined, {
-          onprogress: opts.onProgress
-            ? (p) => opts.onProgress!({ progress: p.progress, total: p.total, message: p.message })
-            : undefined,
-          signal: opts.signal,
-          timeout: opts.timeoutMs ?? 10 * 60 * 1000,
-          resetTimeoutOnProgress: true,
-        })
+        // _meta 是请求级元数据（CallToolRequest params 顶层字段），不混入业务 arguments——
+        // 旧 CLI 忽略未知 _meta（既有回执），新 CLI 从 extra._meta 读取协商态
+        result = await client.callTool(
+          { name, arguments: args, ...(opts.requestMeta ? { _meta: opts.requestMeta } : {}) },
+          undefined,
+          {
+            onprogress: opts.onProgress
+              ? (p) => opts.onProgress!({ progress: p.progress, total: p.total, message: p.message })
+              : undefined,
+            signal: opts.signal,
+            timeout: opts.timeoutMs ?? 10 * 60 * 1000,
+            resetTimeoutOnProgress: true,
+          },
+        )
       } catch (err) {
         if (this.crashed) {
           throw new ProviderCrashError(`Provider 执行中崩溃: ${this.transportFailure ?? (err instanceof Error ? err.message : String(err))}`)

@@ -91,7 +91,18 @@ def _should_notify_terminal(runner, config):
         return False
     if runner['source'] != 'chat':
         return True
+    if _local_recovery_summary(runner):
+        return True
     return _runner_duration_seconds(runner) >= config.wecom_task_min_seconds
+
+
+def _local_recovery_summary(runner):
+    if runner.get('status') != 'failed':
+        return None
+    from src.services.agent_runner.auto_local_recovery import active_failure, failure_summary
+    checkpoint = runner.get('checkpoint') or {}
+    failure = active_failure(checkpoint)
+    return failure_summary(failure, checkpoint)[:420] if failure else None
 
 
 def _wecom_daily_terminal_extras(cursor, runner, task, event_kind):
@@ -224,11 +235,13 @@ def publish_runner_terminal_in_tx(cursor, runner, config=None):
         return  # Deleted resources have no recipient-readable result.
     from .events import publish_in_tx
     occurred=runner['finished_at']
+    summary = _local_recovery_summary(runner)
     return publish_in_tx(cursor,subject=subject,producer='runner',event_type='task.'+runner['status'],
         event_key='terminal:'+runner['runner_id'],resource_ref={'type':'runner_result','id':runner['runner_id']},
         parameters={'session_title':session_title(session['title']),'event_kind':runner['status'],
             # 执行时长随终态事件带入（设计 §4.3，触发判定已算得）；0=时长未知
-            'duration_seconds':_runner_duration_seconds(runner)},
+            'duration_seconds':_runner_duration_seconds(runner),
+            **({'recovery_summary': summary} if summary else {})},
         occurred_at=occurred,accepted_at=runner['accepted_at'],
         expires_at=occurred+timedelta(seconds=config.ttl_seconds))
 

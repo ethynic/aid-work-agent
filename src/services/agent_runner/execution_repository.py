@@ -12,6 +12,17 @@ from .event_repository import EventRepository
 from .application_public_projection import sync_public_display, project_public_snapshot
 
 
+def _preserve_server_checkpoint(row, checkpoint):
+    from .auto_local_recovery import CANCEL_CHECKPOINT_KEY
+    from .durable_sleep import preserve_activation_fence
+
+    checkpoint = preserve_activation_fence(row, checkpoint)
+    # The user can stop an automatic recovery while its Worker is saving progress.
+    if (row.get('checkpoint') or {}).get(CANCEL_CHECKPOINT_KEY) is True:
+        checkpoint = {**checkpoint, CANCEL_CHECKPOINT_KEY: True}
+    return checkpoint
+
+
 def release_proof(attempt, status, reason):
     return {'attempt':attempt.number,'worker_id':attempt.worker_id,'status':status,'reason':reason}
 
@@ -221,8 +232,7 @@ class ExecutionRepository:
             physical_dispatch=dispatch
             if physical_dispatch:
                 self._source_dispatch(cursor,row,source_prepared)
-            from .durable_sleep import preserve_activation_fence
-            checkpoint = preserve_activation_fence(row,checkpoint)
+            checkpoint = _preserve_server_checkpoint(row, checkpoint)
             snapshot = merge_control_projection(snapshot,row.get('public_snapshot'))
             snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,snapshot=snapshot)
             cursor.execute("""UPDATE agent_runners SET checkpoint=%s::jsonb,
@@ -291,8 +301,7 @@ class ExecutionRepository:
                     cursor.execute("""UPDATE agent_runner_controls SET status='consumed',consumed_attempt=%s,
                         consumed_at=clock_timestamp() WHERE runner_id=%s AND action='pause' AND status='accepted'""",
                         (attempt.number,attempt.runner_id))
-            from .durable_sleep import preserve_activation_fence
-            checkpoint = {**preserve_activation_fence(row,checkpoint),'released_attempt':release_proof(attempt,status,'parked')}
+            checkpoint = {**_preserve_server_checkpoint(row, checkpoint),'released_attempt':release_proof(attempt,status,'parked')}
             wake_at = None
             from .durable_sleep import arm_in_tx,sleep_leaf
             leaf = sleep_leaf(checkpoint)
@@ -342,8 +351,7 @@ class ExecutionRepository:
                     raise LeaseLost('FINALIZATION_INTENT_IMMUTABLE')
                 return row
             if row['revision']!=revision: raise LeaseLost('CHECKPOINT_REVISION_CHANGED')
-            from .durable_sleep import preserve_activation_fence
-            checkpoint = {**preserve_activation_fence(row,checkpoint), "pending_finalization": result}
+            checkpoint = {**_preserve_server_checkpoint(row, checkpoint), "pending_finalization": result}
             snapshot = merge_control_projection(snapshot,row.get('public_snapshot'))
             snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,snapshot=snapshot,status='finalizing')
             previous = (row.get('checkpoint') or {}).get('pending_finalization')

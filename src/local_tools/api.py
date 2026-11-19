@@ -530,6 +530,8 @@ async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dic
                         f"后端日志：invocation {invocation['id']} 被设备 {device_id} 领取 "
                         f"tool={invocation['tool_name']} provider={invocation_provider}"
                     )
+                    receipt_version = catalog.execution_receipt_version(
+                        device.get("capabilities_json"), invocation)
                     return {
                         "success": True,
                         "invocation_id": str(invocation["id"]),
@@ -538,6 +540,7 @@ async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dic
                         "claim_token": claim_token,
                         "lease_expires_at": _iso(invocation["lease_expires_at"]),
                         "provider": invocation_provider,
+                        **({"receipt_version": receipt_version} if receipt_version else {}),
                     }
             if asyncio.get_event_loop().time() >= deadline:
                 return {"success": True, "invocation": None}

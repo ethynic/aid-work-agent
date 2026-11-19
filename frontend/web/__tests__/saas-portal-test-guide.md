@@ -18,11 +18,11 @@
 
 ### 方式一：单元/集成测试（Vitest + MSW）
 
-在 [MSW handlers](./mocks/handlers.ts) 中维护所需的 SaaS API mock，再按[开发环境手册](../../../docs/infrastructure/local-dev-environments.md#3-在容器内自测)运行相关测试。
+在 [MSW handlers](./mocks/handlers.ts) 中维护所需的 SaaS API mock，再按[开发环境手册](../../../docs/guides/development/local-dev-environments.md#3-在容器内自测)运行相关测试。
 
 ### 方式二：浏览器手动测试
 
-按[开发环境手册](../../../docs/infrastructure/local-dev-environments.md)启动本地 API 和 Vite。确认 SaaS 模块已注册，再从 `/portal/login` 开始执行下方用例。
+按[开发环境手册](../../../docs/guides/development/local-dev-environments.md)启动本地 API 和 Vite。确认 SaaS 模块已注册，再从 `/portal/login` 开始执行下方用例。
 
 ---
 

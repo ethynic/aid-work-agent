@@ -331,6 +331,63 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     expect(agent.localRecoveryBusy.value).toBe(false)
   })
 
+  it('preserves input during automatic recovery, then shows the persisted outcome and accepts new work', async () => {
+    const recovering = runnerView({ status:'interrupted', local_recovery:true, local_recovery_mode:'automatic',
+      local_recovery_actions:['stop_and_continue', 'verify', 'resume', 'end'],
+      snapshot:{ waiting:{ kind:'verification', question:'Legacy verification prompt' } } })
+    await discoverParked(recovering)
+    const attachment = { file_id:'retained', name:'retained.txt', size:4, type:'file' as const, mime_type:'text/plain' }
+    agent.currentFiles.value = [attachment]
+    expect(agent.durableTask.value?.runner_id).toBe('runner-A')
+    expect(agent.localRecovery.value).toBeUndefined()
+    expect(agent.resumableTask.value).toBeUndefined()
+    expect(agent.messages.value.some(message => message.waitingNotice)).toBe(false)
+    agent.resumeResumableTask()
+    await agent.controlDurableTask('resume', 'runner-A')
+    await agent.controlDurableTask('pause', 'runner-A')
+    await agent.resolveLocalRecovery('end')
+    const disposition = await agent.sendMessage('保留这条新任务', null, 'A')
+    expect(disposition?.restoreInput).toBe(true)
+    expect(agent.currentFiles.value).toEqual([attachment])
+    expect(agent.runnerFeedback.value).toBeNull()
+    expect(network.requests.filter(item => item.method === 'POST')).toEqual([])
+
+    request('/runners/runner-A').respond({ success:true,
+      runner:{ ...recovering, view_revision:2, resume_requested:true } })
+    await flush()
+    expect(agent.localRecovery.value).toBeUndefined()
+    expect(agent.resumableTask.value).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1000)
+    request('/runners/runner-A').respond({ success:true,
+      runner:{ ...recovering, status:'finalizing', view_revision:3 } })
+    await flush()
+    await agent.controlDurableTask('cancel', 'runner-A')
+    expect(network.requests.filter(item => item.method === 'POST')).toEqual([])
+    await vi.advanceTimersByTimeAsync(1000)
+    const output = '原任务未能恢复。已完成一个步骤，记录已保留。'
+    request('/runners/runner-A').respond({ success:true, runner:runnerView({
+      status:'failed', settlement_status:'settled', view_revision:4, local_recovery_mode:'automatic',
+      result:{status:'failed', output, error_code:'LOCAL_RECOVERY_DEADLINE'},
+      local_verification_available:true,
+      local_verification:{invocation_id:'previous-attempt', state:'succeeded', resource_stopped:true},
+    }) })
+    await flush()
+    expect(agent.messages.value.filter(message => message.content === output)).toHaveLength(1)
+    expect(agent.messages.value.some(message => message.runnerFailure)).toBe(false)
+    expect(agent.localRecovery.value).toBeUndefined()
+    expect(agent.durableTask.value).toBeUndefined()
+    expect(agent.runnerFeedback.value).toBeNull()
+    expect(agent.currentFiles.value).toEqual([attachment])
+
+    const sendNew = agent.sendMessage('保留这条新任务', null, 'A'); await flush()
+    if (network.pending.some(item => item.url.endsWith('/capabilities'))) { capability(); await flush() }
+    const post = request('/runners', 'POST')
+    expect(JSON.parse(post.body!)).toMatchObject({message:'保留这条新任务',session_id:'A',files:[attachment]})
+    post.respond({success:true,runner:runnerView({runner_id:'runner-B', queue_order:2})},202)
+    await sendNew; await flush()
+    expect(network.requests.filter(item => item.method === 'POST')).toHaveLength(1)
+  })
+
   it.each(['resume', 'end'] as const)('an undispatched old checkpoint can %s in the same session', async action => {
     const row = runnerView({ status:'interrupted', local_recovery:true,
       local_recovery_kind:'dispatch_unconfirmed', local_recovery_actions:['resume','end'] })
@@ -517,6 +574,75 @@ describe('Existing useAgent public interface with durable Runner transport', () 
         page_observed:false,continue_after_stop:true,error_code:'WRONG_PAGE'}}})
     await flush(); await vi.advanceTimersByTimeAsync(1000)
     expect(agent.localRecovery.value).toBeUndefined()
+  })
+
+  // ---- R11 真机反馈：恢复卡按钮合并为单个「停止上一步并继续」+ 停稳后不再渲染停稳指引通知 ----
+
+  it('projects stop_and_continue as the only recovery action while it is available', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:continueActions}))
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+    expect(agent.localRecoveryActions.value).toEqual(['stop_and_continue'])
+  })
+
+  it('keeps the legacy recovery actions projectable when stop_and_continue is absent', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:['verify','stop','resume','end']}))
+    expect(agent.localRecoveryActions.value).toEqual(['verify','stop','resume','end'])
+  })
+
+  it('keeps the legacy four-button fallback for an older service without the actions field', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true}))
+    expect(agent.localRecoveryActions.value).toEqual(['verify','stop','resume','end'])
+  })
+
+  // ---- R12：接续被拒后的按钮回退与提示（R11 单按钮合并按停稳落地状态收窄） ----
+
+  it('a rejected auto-continue falls back to the full server action list with a retry hint', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:continueActions,
+      local_verification:{invocation_id:'stop-continue-A',state:'succeeded',resource_stopped:true,
+        page_observed:false,continue_after_stop:true,error_code:null}}))
+    expect(agent.localRecovery.value?.runner_id).toBe('runner-A')
+    expect(agent.localRecoveryActions.value).toEqual(['verify','stop','stop_and_continue','resume','end'])
+    expect(agent.localVerificationMessage.value).toContain('设备已停稳，原任务尚未继续')
+    expect(agent.localVerificationMessage.value).toContain('停止上一步并继续')
+  })
+
+  it('an in-flight stop_and_continue before the stop receipt keeps the merged single button', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:continueActions,
+      local_verification:{invocation_id:'stop-continue-A',state:'queued',continue_after_stop:true}}))
+    expect(agent.localRecoveryActions.value).toEqual(['stop_and_continue'])
+    expect(agent.localVerificationMessage.value).toContain('停止上一步')
+  })
+
+  it('a landed plain stop without auto-continue keeps the R11 merged single button', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:continueActions,
+      local_verification:{invocation_id:'stop-A',state:'succeeded',resource_stopped:true,
+        page_observed:false,error_code:'WRONG_PAGE'}}))
+    expect(agent.localRecoveryActions.value).toEqual(['stop_and_continue'])
+  })
+
+  it('a landed stop_and_continue whose resume stayed in flight clears the recovery card', async () => {
+    // R11 语义适配说明：停稳落地且 resume_requested=true（服务端停稳回执同一事务
+    // 设置）时卡片整体让位——静默场景只存在于在途状态；卡片可见的停稳落地态
+    // 现在渲染「接续未生效」提示（上一用例），R11 的静默断言按新语义收敛。
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:continueActions,resume_requested:true,
+      local_verification:{invocation_id:'stop-continue-A',state:'succeeded',resource_stopped:true,
+        page_observed:false,continue_after_stop:true,error_code:null}}))
+    expect(agent.localRecovery.value).toBeUndefined()
+    expect(agent.localVerificationMessage.value).toBe('')
+  })
+
+  it('a failed stop_and_continue still explains why the stop did not land', async () => {
+    await discoverParked(runnerView({status:'interrupted',local_recovery:true,
+      local_recovery_actions:continueActions,
+      local_verification:{invocation_id:'stop-continue-A',state:'failed',resource_stopped:false,
+        page_observed:false,continue_after_stop:true,stop_error_code:'LOCAL_RECOVERY_BUSY'}}))
+    expect(agent.localVerificationMessage.value).toContain('还有正在执行的任务')
   })
 
   it('only-read verification reports active-original guidance through the exact safe message reducer', async () => {

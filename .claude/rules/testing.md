@@ -1,6 +1,6 @@
 # 测试指南
 
-本地环境、测试入口和命令参数以[开发环境手册](../../docs/infrastructure/local-dev-environments.md#3-在容器内自测)为准。本指南维护测试分层、编写规则及隔离要求。
+本地环境、测试入口和命令参数以[开发环境手册](../../docs/guides/development/local-dev-environments.md#3-在容器内自测)为准。本指南维护测试分层、编写规则及隔离要求。
 
 ## 测试目录结构
 
@@ -34,11 +34,11 @@ tests/
 ## 数据库安全入口
 
 - 本地 API 和 Runner 优先连接本地业务 PostgreSQL。联调时可对已确认的本地业务库执行只读查询，或写入明确归本轮的测试数据。能回滚就回滚，否则记录 ID 并在验证后按 ID 清理。迁移、全库扫描、批量写入和自动化 SQL 回归使用专用测试 PG。
-- 日常 SQL 测试命令见[开发环境手册](../../docs/infrastructure/local-dev-environments.md#3-在容器内自测)。每轮测试使用一个临时库，并清理自己创建的库。
+- 日常 SQL 测试命令见[开发环境手册](../../docs/guides/development/local-dev-environments.md#3-在容器内自测)。每轮测试使用一个临时库，并清理自己创建的库。
 - 普通pytest未明确提供`DATABASE_URL`时默认无数据库模式，实际PostgreSQL连接被测试guard拒绝；不要依赖业务`.env`或默认共享库。纯单测应mock数据库。集成SQL用例必须显式使用本机任务专属`aid_test_*`库。
 - 自定义测试 PG 的管理入口使用本机专用测试实例和管理库 `postgres`。业务与追踪连接均指向本轮随机 `aid_test_*` 库。管理 URL 不接受 query/service/hostaddr 重定向。
 - 测试启动不直接加载业务`.env`；显式非法或共享库URL会在产品模块初始化前拒绝。不要增加`allow-unsafe`绕过，不要为测试读取或排查真实业务库。连接错误与验证输出不得包含DSN、密码或令牌。
-- `dev_test.sh` 的 Docker 自动模式在测试或 helper 执行前核对当前工作区的三个测试安全入口。代码不一致时拒绝执行。用该脚本运行 SQL 测试时显式使用 `--isolated-db`，管理连接须在测试进程所在网络命名空间内通过 loopback 访问。无法复用匹配容器时，按 [开发环境手册](../../docs/infrastructure/local-dev-environments.md) 选用 Compose 入口或 agent3。
+- `dev_test.sh` 的 Docker 自动模式在测试或 helper 执行前核对当前工作区的三个测试安全入口。代码不一致时拒绝执行。用该脚本运行 SQL 测试时显式使用 `--isolated-db`，管理连接须在测试进程所在网络命名空间内通过 loopback 访问。无法复用匹配容器时，按 [开发环境手册](../../docs/guides/development/local-dev-environments.md) 选用 Compose 入口或 agent3。
 - 清理仅在明确隔离库模式执行，并先核对实际`current_database()`与本轮目标一致；收集测试不启动清理。独立测试需用驱动底层tripwire证明零connect/零DELETE，单独禁止Python socket不能证明C/libpq没有发起连接。
 
 详细设计与执行证据见[测试隔离计划](../../docs/plans/plan-test-database-isolation-runtime-assertions.md)。该策略仅作用于测试入口，不改变产品数据库连接配置；不宣称隔离任意恶意Python代码。
@@ -179,4 +179,4 @@ async def test_my_route():
 
 ## 运行测试
 
-按[开发环境手册](../../docs/infrastructure/local-dev-environments.md#3-在容器内自测)选择 Python、真实 PostgreSQL 或浏览器的容器入口。入口接受 pytest 的路径、节点和 `-m` 标记表达式。带 `e2e` 标记的用例按各用例准备真实服务和凭据。`--cov=src --cov-report=term-missing` 需要测试镜像提供 `pytest-cov`。
+按[开发环境手册](../../docs/guides/development/local-dev-environments.md#3-在容器内自测)选择 Python、真实 PostgreSQL 或浏览器的容器入口。入口接受 pytest 的路径、节点和 `-m` 标记表达式。带 `e2e` 标记的用例按各用例准备真实服务和凭据。`--cov=src --cov-report=term-missing` 需要测试镜像提供 `pytest-cov`。

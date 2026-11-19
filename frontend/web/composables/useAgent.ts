@@ -124,6 +124,7 @@ const LOCAL_RECOVERY_MESSAGES = {
   verifyUnavailable: '本机只读核验暂不可用，请确认原 Runtime 连接后重试；原操作不会重新执行。',
   unavailable: '原操作暂不能结束等待。请保持原 Runtime 连接以回传结果，再核对原操作；补充消息和附件仍保留。',
   stopContinue: '正在停止上一步并解锁设备；停稳后将自动继续原任务，也可以直接发送新指令。本次输入和附件已保留。',
+  continueRejected: '设备已停稳，原任务尚未继续：自动接续未生效（如积分不足等原因被拒）。原因解决后可重试「停止上一步并继续」，也可改用「核对并继续」或「结束等待，继续对话」。',
 } as const
 
 const RECOVERY_REPLY_MESSAGES: Record<string, string> = {
@@ -229,7 +230,8 @@ export function useAgent() {
     void state.messages.value
     void state.isProcessing.value
     const rows = [...state.runnerViews.values()].sort((a,b) => b.queue_order-a.queue_order)
-    return rows.find(row => !runnerTerminal(row.status)
+    return rows.find(row => row.local_recovery_mode === 'automatic' && !runnerTerminal(row.status))
+      || rows.find(row => !runnerTerminal(row.status)
       && (row.execution_mode === 'continuous' || runnerWaitLeaf(row.snapshot.waiting)?.kind === 'timer'))
       || (rows[0]?.execution_mode === 'continuous' ? rows[0] : undefined)
       // 暂停、中断或等用户答复时，普通任务同样保留停止入口。
@@ -252,6 +254,7 @@ export function useAgent() {
     const row = targetRunnerId ? state.runnerViews.get(targetRunnerId) : durableTask.value
     if (!row || durableTaskBusy.value || state.pendingControl || row.resume_requested
       || row.cancel_requested || runnerTerminal(row.status)) return
+    if (row.local_recovery_mode === 'automatic' && (row.status === 'finalizing' || action === 'pause')) return
     const wait = runnerWaitLeaf(row.snapshot.waiting)
     if (action === 'resume' && (resumePending.value === row.runner_id || !runnerResumable(row))) return
     const headers = getEffectiveAuthHeader()
@@ -281,12 +284,34 @@ export function useAgent() {
     const rows = [...state.runnerViews.values()].sort((a,b) => b.queue_order-a.queue_order)
     // resume_requested（含服务端停稳后的自动接续）让位：恢复被拒绝时控制链
     // 清除 resume_control_id，卡片随投影自动回归。
-    return rows.find(row => (row.local_recovery || row.local_verification_available) && !row.resume_requested)
-      || (rows[0]?.local_verification?.resource_stopped && !rows[0].resume_requested ? rows[0] : undefined)
+    return rows.find(row => row.local_recovery_mode !== 'automatic'
+      && (row.local_recovery || row.local_verification_available) && !row.resume_requested)
+      || (rows[0]?.local_recovery_mode !== 'automatic' && rows[0]?.local_verification?.resource_stopped
+        && !rows[0].resume_requested ? rows[0] : undefined)
+  })
+  // R11 真机反馈：恢复卡按钮合并——stop_and_continue 可用时卡片只保留
+  // 「停止上一步并继续」一个按钮，旧四按钮（verify/stop/resume/end）不再并列渲染；
+  // 动作不含 stop_and_continue 或旧服务端未投影动作列表时保持既有四按钮回退。
+  // R12：停稳已落地（resource_stopped）而恢复卡仍可见 = 自动接续不在途
+  // （在途时 resume_requested 让位整卡）→ 接续被拒或未投递，回退渲染服务端
+  // 完整动作列表：保留重试入口与「核对并继续」「结束等待」手工路径。
+  const localRecoveryActions = computed<Array<'verify' | 'stop' | 'stop_and_continue' | 'resume' | 'end'>>(() => {
+    const row = localRecovery.value
+    const actions = row?.local_recovery_actions
+    if (!row || !actions?.includes('stop_and_continue')) return actions ?? ['verify', 'stop', 'resume', 'end']
+    if (row.local_verification?.continue_after_stop && row.local_verification?.resource_stopped) return actions
+    return ['stop_and_continue']
   })
   const localVerificationMessage = computed(() => {
     const value = localRecovery.value?.local_verification
     if (!value) return ''
+    if (value.state === 'queued' || value.state === 'running' || value.state === 'claimed') return value.continue_after_stop
+      ? LOCAL_RECOVERY_MESSAGES.stopContinue
+      : '正在等待原 Runtime 处理核验请求，不会重新执行原操作。'
+    // R12：停稳已落地而恢复卡仍可见（在途接续会让位整卡，见 localRecovery）
+    // → 自动接续未生效，必须提示用户行动与重试/手工路径，不再静默吞掉；
+    // 停止未落地的失败指引（下方 stop_error_code / 默认分支）保留。
+    if (value.continue_after_stop && value.resource_stopped) return LOCAL_RECOVERY_MESSAGES.continueRejected
     if (value.resource_stopped && value.page_observed === false) return value.waiting_ended
       ? '旧执行已停稳，但原页面未核对；原等待已结束。请明确提出当前页的新意图，未知发送不会重发。'
       : '旧执行已停稳，但原页面未核对。请结束等待，再明确提出当前页的新意图，未知发送不会重发。'
@@ -294,9 +319,6 @@ export function useAgent() {
     if (value.resource_stopped) return value.target_relation === 'original'
       ? '旧执行已停稳，已只读观察原页面。请结束等待，再明确提出新的页面操作；未知发送不会重发。'
       : '旧执行已停稳，已只读观察当前页面，但无法核对原目标。请结束等待，再明确提出当前页的新意图；未知发送不会重发。'
-    if (value.state === 'queued' || value.state === 'running' || value.state === 'claimed') return value.continue_after_stop
-      ? LOCAL_RECOVERY_MESSAGES.stopContinue
-      : '正在等待原 Runtime 处理核验请求，不会重新执行原操作。'
     const stopIssue = value.stop_error_code
     if (stopIssue === 'LOCAL_RECOVERY_BUSY') return '原设备还有正在执行的任务，本次未回收受管进程。请等该任务结束后重试；只读观察仍可使用。'
     if (stopIssue === 'LOCAL_RECOVERY_LEGACY_UNMANAGED') return '检测到未受管的旧 Runtime 实例。请先结束该旧实例，再停止旧执行并解锁设备；无需重启 Windows。'
@@ -493,7 +515,8 @@ export function useAgent() {
         }
       }
     }
-    if (!state.controlIssue && row.status !== 'failed' && row.session.session_id === sessionId.value && error.value === state.runnerIssue) error.value = null
+    if (!state.controlIssue && (row.status !== 'failed' || row.local_recovery_mode === 'automatic')
+        && row.session.session_id === sessionId.value && error.value === state.runnerIssue) error.value = null
     if (!state.controlIssue) state.runnerIssue = undefined
     state.runnerViews.set(row.runner_id, row)
     reconcileAskConflicts(state, row)
@@ -521,7 +544,7 @@ export function useAgent() {
         state.hasUnreadCompletion.value = true
       }
     }
-    if (row.status === 'failed') runnerError(row.session.session_id,
+    if (row.status === 'failed' && row.local_recovery_mode !== 'automatic') runnerError(row.session.session_id,
       new Error(row.result?.error_code || 'RUNNER_EXECUTION_FAILED'), notify && previous?.status !== 'failed')
   }
 
@@ -1267,7 +1290,11 @@ export function useAgent() {
         || [...state.runnerViews.values()].some(row => row.resume_requested || ['queued','running','finalizing'].includes(row.status))
     }
 
-    if (!currentSendContext() || (retryFiles && [...state.runnerViews.values()].some(view => !runnerTerminal(view.status)))) return
+    if (!currentSendContext()) return
+    if ([...state.runnerViews.values()].some(row => row.local_recovery_mode === 'automatic' && !runnerTerminal(row.status))) {
+      return { restoreInput:true, canRestore:currentSendContext }
+    }
+    if (retryFiles && [...state.runnerViews.values()].some(view => !runnerTerminal(view.status))) return
 
     if (executionMode && [...state.runnerViews.values()].some(row => !runnerTerminal(row.status))) {
       runnerError(effectiveSessionId,new Error('当前会话已有任务，请先处理原任务后再开启持续执行。'))
@@ -1860,6 +1887,7 @@ export function useAgent() {
     resumeResumableTask,
     localRecovery,
     localRecoveryBusy,
+    localRecoveryActions,
     localVerificationMessage,
     resolveLocalRecovery,
     sessionId,

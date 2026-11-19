@@ -283,6 +283,9 @@ class LocalToolProxyTool(BaseTool):
         result = await self._dispatch_and_wait(tenant_id, user_id, session_id, device, args, progress_queue)
 
         from .boss_visual_recovery import cli_owns_recovery, is_visual_failure, recover_operation, recovery_arguments
+        from .execution_receipts import has_receipt_effect_conflict
+        if has_receipt_effect_conflict(result):
+            return result
         if cli_owns_recovery(result):
             return result
         if is_visual_failure(self, result):
@@ -358,6 +361,16 @@ class LocalToolProxyTool(BaseTool):
             durable=operation is not None)
 
     async def _poll_invocation(self, invocation, tenant_id, progress_queue, *, durable=False):
+        if durable:
+            from src.local_tools.lifecycle import current_local_operation
+            from src.services.agent_runner.auto_local_recovery import enabled, poll_owned
+            operation = current_local_operation()
+            if (operation is not None and operation.branch == 'main' and operation.ordinal == 0
+                    and enabled(operation.owner, self.provider_key)):
+                return await poll_owned(self, operation, invocation, tenant_id, progress_queue)
+        return await self._poll_invocation_once(invocation, tenant_id, progress_queue, durable=durable)
+
+    async def _poll_invocation_once(self, invocation, tenant_id, progress_queue, *, durable=False, observe_queue=None):
         """Keep the original wire/event polling; durable owners observe the persisted call.
 
         Phase 4（观察与执行解耦）：durable 观察不再有 Runner 侧墙钟总时限。
@@ -391,6 +404,8 @@ class LocalToolProxyTool(BaseTool):
                 result = self._map_terminal(invocation)
                 return self._attach_credit_cost(invocation, result)
 
+            if observe_queue is not None and invocation and invocation['state'] == 'queued':
+                await observe_queue(invocation)
             if durable:
                 if ((invocation or {}).get("state") == "cancel_requested"
                         and not (invocation or {}).get("result_json")

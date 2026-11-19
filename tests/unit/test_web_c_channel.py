@@ -290,3 +290,61 @@ class TestChannelRegistration:
         from src.saas.services.auto_register import CHANNEL_TYPE_NAME
 
         assert CHANNEL_TYPE_NAME["web_c"] == "官网客服"
+
+
+class TestMultiSession:
+    """多会话模型（「新会话」按钮）：额外会话 id 前缀/唯一性 + 请求模型字段。"""
+
+    def _identity(self):
+        from src.saas.api.web_c import WebCIdentity
+
+        return WebCIdentity("tenant_x", "chan_1", "anon", "u_abc", "", "main")
+
+    def test_extra_session_id_matches_ownership_prefix(self):
+        from src.saas.api.web_c import _create_extra_session_sync
+
+        identity = self._identity()
+        captured = {}
+
+        def fake_create_session(**kwargs):
+            captured.update(kwargs)
+            return {"session_id": kwargs["session_id"]}
+
+        with patch("src.saas.api.web_c.channel_session_manager") as mgr:
+            mgr.create_session.side_effect = fake_create_session
+            session = _create_extra_session_sync(identity, "user_1")
+
+        prefix = identity.session_prefix  # {tenant}_web_c_{uid}_
+        assert session["session_id"].startswith(prefix)
+        # 与默认确定性会话 {tenant}_web_c_{uid}_{subagent} 区分：前缀之后为 {subagent}_s{8hex}
+        assert session["session_id"][len(prefix):].startswith("main_s")
+        assert captured["channel_chat_id"].startswith("n_")
+        assert captured["subagent_id"] == "main"
+        assert captured["user_info"] == {"user_id": "user_1", "name": ""}
+
+    def test_extra_session_ids_unique(self):
+        from src.saas.api.web_c import _create_extra_session_sync
+
+        identity = self._identity()
+        ids, tokens = [], []
+        with patch("src.saas.api.web_c.channel_session_manager") as mgr:
+            mgr.create_session.side_effect = lambda **kw: dict(kw)
+            for _ in range(3):
+                created = _create_extra_session_sync(identity, "user_1")
+                ids.append(created["session_id"])
+                tokens.append(created["channel_chat_id"])
+        # session_id 与 chat_id token 均唯一（chat_id 唯一保证默认查找按空过滤后互不干扰）
+        assert len(set(ids)) == 3
+        assert len(set(tokens)) == 3
+
+    def test_chat_request_session_fields_default(self):
+        from src.saas.api.web_c import WebCChatRequest
+
+        body = WebCChatRequest(text="hi", client_request_id="wc_abc12345")
+        assert body.session_id == ""
+        assert body.new_session is False
+        body2 = WebCChatRequest(
+            text="hi", client_request_id="wc_abc12345",
+            session_id="tenant_x_web_c_u_abc_main_s0a1b2c3", new_session=True)
+        assert body2.session_id.startswith("tenant_x_web_c_u_abc_")
+        assert body2.new_session is True

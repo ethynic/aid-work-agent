@@ -267,7 +267,13 @@ def public_runner(row):
     held = set(row.get('_unresolved_local_invocations', held))
     if held and checkpoint.get('detached_local_wait'):
         value['local_verification_available'] = True
-    if local_recovery_applicable(row):
+    local_wait = local_recovery_applicable(row)
+    from .auto_local_recovery import CANCEL_CHECKPOINT_KEY, CHECKPOINT_KEY, publicly_automatic
+    if checkpoint.get(CHECKPOINT_KEY) or checkpoint.get(CANCEL_CHECKPOINT_KEY):
+        from src.config.settings import settings
+        if publicly_automatic(row, checkpoint, settings.agent_runner.auto_local_recovery_providers, local_wait):
+            value['local_recovery_mode'] = 'automatic'
+    if local_wait:
         value['local_recovery'] = True
         root = checkpoint.get('execution') or {}
         from src.local_tools.repository import owned_invocation_ids

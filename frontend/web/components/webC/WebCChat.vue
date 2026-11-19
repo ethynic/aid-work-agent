@@ -12,18 +12,24 @@
         <div class="text-xs text-muted">智能助手 · 官网客服</div>
       </div>
       <button
-        v-if="identityMode !== 'ext'"
+        v-if="showHistoryEnabled && identityMode !== 'ext'"
         class="text-xs text-muted hover:text-default border border-default rounded-md px-2 py-1"
-        @click="showHistory = !showHistory"
+        @click="toggleHistory"
       >
         历史会话
       </button>
     </header>
 
     <div class="flex-1 flex min-h-0">
-      <!-- 历史会话侧栏（anon 模式本浏览器历史；ext 模式跨设备） -->
-      <aside v-if="showHistory && identityMode !== 'ext'" class="w-64 border-r border-default bg-surface flex flex-col max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-10">
-        <div class="px-3 py-2 text-xs text-muted border-b border-default">本浏览器历史会话</div>
+      <!-- 历史会话侧栏（anon 模式本浏览器历史；入口开关关闭时不渲染） -->
+      <aside v-if="showHistoryEnabled && showHistory && identityMode !== 'ext'" class="w-64 border-r border-default bg-surface flex flex-col max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-10">
+        <div class="px-3 py-2 border-b border-default flex items-center justify-between gap-2">
+          <span class="text-xs text-muted">本浏览器历史会话</span>
+          <button
+            class="text-xs text-primary-600 hover:text-primary-700 border border-primary-200 rounded-md px-2 py-1 shrink-0"
+            @click="startNewSession"
+          >+ 新会话</button>
+        </div>
         <div class="flex-1 overflow-y-auto">
           <button
             v-for="s in sessions"
@@ -62,6 +68,7 @@
                   >{{ String((att as Record<string, unknown>).name || '附件') }}</span>
                 </div>
                 <div v-if="msg.content" class="bg-primary-500 text-white rounded-2xl rounded-br-sm px-4 py-2 text-sm whitespace-pre-wrap break-words">{{ msg.content }}</div>
+                <div v-if="msg.created_at" class="text-xs text-muted mt-1 mr-2 text-right tabular-nums">{{ formatMsgTime(msg.created_at) }}</div>
               </div>
             </div>
             <!-- AI 消息 -->
@@ -78,6 +85,7 @@
                 <div v-if="msg.files && msg.files.length" class="space-y-2">
                   <DownloadFileCard v-for="(f, i) in msg.files" :key="i" :file="f" />
                 </div>
+                <div v-if="msg.created_at" class="ml-2 mt-1 text-xs text-muted tabular-nums">{{ formatMsgTime(msg.created_at) }}</div>
               </div>
             </div>
           </template>
@@ -114,7 +122,7 @@
         <!-- 输入区 -->
         <div class="border-t border-default bg-surface px-4 py-3">
           <div class="max-w-3xl mx-auto flex items-end gap-2">
-            <label class="shrink-0 cursor-pointer text-muted hover:text-primary-600 p-2" title="发送文件">
+            <label v-if="allowAttachment" class="shrink-0 cursor-pointer text-muted hover:text-primary-600 p-2" title="发送文件">
               <input type="file" class="hidden" multiple @change="onFileChosen" />
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="w-5 h-5">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke-linecap="round" stroke-linejoin="round"/>
@@ -148,7 +156,7 @@ import { computed, onMounted, onBeforeUnmount, ref, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   buildIdentityQuery, getBootstrap, postChat, uploadFile, cancelRunner,
-  getRunner, getSessionMessages, webCFileUrl, runnerEventsUrl,
+  getRunner, getSessionMessages, listSessions, webCFileUrl, runnerEventsUrl,
   type IdentityQuery, type UploadRef, type RunnerSnapshot, type SessionSummary,
   type ChannelMessage
 } from '@/api/webC'
@@ -161,6 +169,7 @@ interface ChatMessage {
   message_id?: string
   role: 'user' | 'assistant'
   content: string
+  created_at?: string
   attachments: Record<string, unknown>[]
   images: import('@/types').ImageRef[]
   files: import('@/types').DownloadableFile[]
@@ -177,6 +186,8 @@ const identityName = ref('')
 const greeting = ref('')
 const headerTitle = ref('官网客服')
 const subagentName = ref('')
+const allowAttachment = ref(false)
+const showHistoryEnabled = ref(false)
 const sessions = ref<SessionSummary[]>([])
 const currentSessionId = ref('')
 const messages = ref<ChatMessage[]>([])
@@ -214,6 +225,8 @@ onMounted(async () => {
     identityMode.value = data.identity?.mode || ''
     identityName.value = data.identity?.display_name || ''
     subagentName.value = data.subagent?.name || ''
+    allowAttachment.value = data.allow_attachment === true
+    showHistoryEnabled.value = data.show_history === true
     headerTitle.value = subagentName.value ? `${subagentName.value}` : '官网客服'
     sessions.value = data.sessions || []
     if (sessions.value.length) {
@@ -241,6 +254,15 @@ function formatTime(value?: string): string {
   return `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
+/** 消息时间戳：MM-DD HH:mm:ss（与主聊天页 MessageItem 一致） */
+function formatMsgTime(value?: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
 // ============== 消息加载与渲染 ==============
 
 function newClientId(): string {
@@ -248,6 +270,11 @@ function newClientId(): string {
     return `wc_${crypto.randomUUID()}`
   }
   return `wc_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`
+}
+
+/** 本地乐观渲染消息的时间戳（服务端权威校准以 reload 为准） */
+function nowIso(): string {
+  return new Date().toISOString()
 }
 
 async function openSession(sessionId: string) {
@@ -260,6 +287,32 @@ async function switchSession(sessionId: string) {
   showHistory.value = false
   resetStreamState()
   await openSession(sessionId)
+}
+
+/** 新会话：本地进入空白聊天，首条消息发送时才调后端惰性创建（避免空会话垃圾数据） */
+function startNewSession() {
+  showHistory.value = false
+  resetStreamState()
+  currentSessionId.value = ''
+  messages.value = []
+  isLoading.value = false
+  errorMessage.value = ''
+}
+
+/** 打开侧栏时刷新会话列表（新会话/其他标签页产生的会话在此同步） */
+function toggleHistory() {
+  showHistory.value = !showHistory.value
+  if (showHistory.value) void refreshSessions()
+}
+
+async function refreshSessions() {
+  try {
+    const data = await listSessions(tenantId.value, configId.value, identity.value, 20)
+    sessions.value = (data.sessions || []).slice().sort((a, b) =>
+      (Date.parse(b.updated_at || b.created_at || '') || 0) - (Date.parse(a.updated_at || a.created_at || '') || 0))
+  } catch {
+    /* 列表刷新失败保持现状 */
+  }
 }
 
 function resetStreamState() {
@@ -277,13 +330,20 @@ async function reloadMessages() {
   if (!currentSessionId.value) return
   try {
     const data = await getSessionMessages(tenantId.value, configId.value, identity.value, currentSessionId.value, 1, 200)
+    // 后端按 id 倒序返回，这里统一按时间升序渲染（与主流聊天软件一致）
     messages.value = (data.messages || []).map(toChatMessage)
+      .sort((a, b) => msgTimeValue(a) - msgTimeValue(b))
   } catch {
     /* 历史加载失败不阻断输入 */
   }
   isLoading.value = false
   await nextTick()
   scrollToBottom()
+}
+
+function msgTimeValue(m: ChatMessage): number {
+  const t = Date.parse(m.created_at || '')
+  return Number.isNaN(t) ? 0 : t
 }
 
 function toChatMessage(m: ChannelMessage): ChatMessage {
@@ -296,6 +356,7 @@ function toChatMessage(m: ChannelMessage): ChatMessage {
     message_id: m.message_id,
     role: m.role === 'user' ? 'user' : 'assistant',
     content: m.content || '',
+    created_at: m.created_at,
     attachments: attachments.filter(a => (a as Record<string, unknown>).type !== 'image'),
     images,
     files
@@ -325,6 +386,7 @@ function onScroll() {
 // ============== 附件 ==============
 
 async function onFileChosen(event: Event) {
+  if (!allowAttachment.value) return
   const input = event.target as HTMLInputElement
   const files = Array.from(input.files || [])
   input.value = ''
@@ -343,6 +405,7 @@ async function onFileChosen(event: Event) {
 }
 
 function onPaste(event: ClipboardEvent) {
+  if (!allowAttachment.value) return
   const files = Array.from(event.clipboardData?.files || [])
   if (files.length) {
     event.preventDefault()
@@ -369,6 +432,7 @@ async function submit() {
   messages.value.push({
     role: 'user',
     content: text,
+    created_at: nowIso(),
     attachments: attachments.map(a => ({ type: a.type, file_id: a.file_id, name: a.name, mime_type: a.mime_type, size: a.size })),
     images: [],
     files: []
@@ -379,14 +443,18 @@ async function submit() {
   isTerminal.value = false
 
   try {
+    const isNewSession = !currentSessionId.value
     const reply = await postChat(tenantId.value, configId.value, identity.value, {
       text,
       client_request_id: newClientId(),
-      attachments
+      attachments,
+      session_id: currentSessionId.value || undefined,
+      new_session: isNewSession || undefined
     })
     currentSessionId.value = reply.session_id
+    if (isNewSession) void refreshSessions()
     if (reply.direct_reply) {
-      messages.value.push({ role: 'assistant', content: reply.direct_reply, attachments: [], images: [], files: [] })
+      messages.value.push({ role: 'assistant', content: reply.direct_reply, created_at: nowIso(), attachments: [], images: [], files: [] })
       submitting.value = false
       streamingActive.value = false
       isTerminal.value = true
@@ -532,7 +600,7 @@ async function observeRunner(runnerId: string) {
       }
     }
     if (streamFailed.value === false && streamingText.value) {
-      messages.value.push({ role: 'assistant', content: streamingText.value, attachments: [], images: [], files: [] })
+      messages.value.push({ role: 'assistant', content: streamingText.value, created_at: nowIso(), attachments: [], images: [], files: [] })
     }
     streamingText.value = ''
     waitingText.value = ''

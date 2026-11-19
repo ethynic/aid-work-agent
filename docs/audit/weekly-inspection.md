@@ -19,7 +19,7 @@
 - 宿主机主日志按日轮转：`log/agent/aid-work-agent_YYYYMMDD.log`（243）/ `aid-work-agent_*.log`（254），非 `aid-work-agent.log` 单文件
 
 - psql 统一经容器执行：`sudo docker exec aid-postgres psql -U aid_user -d <库名> -c "<SQL>"`（两台服务器 postgres 容器同名）
-- 测试库公网 5433 可直连；生产库走 SSH 隧道（见 [postgres.md](../deploy/postgres.md) §4）
+- 测试库公网 5433 可直连；生产库走 SSH 隧道（见 [postgres.md](../guides/deployment/postgres.md) §4）
 - 详细路径与排障见 [服务器部署现状.md](../deploy/服务器部署现状.md) §11
 - **安全红线**：巡检以只读为主；连接串/密码/令牌不得写入报告；发现可疑入侵迹象先报告用户，不自行处置
 

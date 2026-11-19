@@ -476,6 +476,11 @@ class UserDB:
                 """)
             return [dict(row) for row in cursor.fetchall()]
 
+    # 微信接待客户页（list_external_users 不传 channel_type）可见的「接待类」渠道白名单。
+    # fail-closed：新增渠道默认不进本页（办公软件渠道走办公会话页、web_c 走官网客服独立页），
+    # 新接待类渠道上线时在此显式加入
+    RECEPTION_CHANNEL_TYPES = ("wecom_kf",)
+
     @staticmethod
     def list_external_users(
         tenant_id: str,
@@ -489,6 +494,8 @@ class UserDB:
         referral_end_date: str = None,
         keyword: str = None,
         group_by_subagent: bool = False,
+        channel_config_id: str = None,
+        channel_config_fallback_id: str = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
@@ -497,8 +504,9 @@ class UserDB:
         返回组合粒度：每个「用户 × 渠道会话（客服账号）」一行。
         仅 wecom_kf 渠道按 channel_chat_id（open_kfid，客服账号）拆分，
         其它渠道折叠为单个组合（channel_chat_id 为空）。
-        不传 channel_type 时排除办公软件渠道（wecom/dingtalk/feishu）会话组合，
-        避免内部员工混入微信接待客户页；传 channel_type（办公软件会话页）不过滤。
+        不传 channel_type 时只显示接待类渠道白名单（RECEPTION_CHANNEL_TYPES，当前 wecom_kf）
+        的会话组合，fail-closed 防止办公软件渠道内部员工、官网客服访客及未来新渠道混入
+        微信接待客户页；传 channel_type（办公软件/官网会话页）按指定渠道过滤。
 
         Args:
             tenant_id: 租户ID
@@ -510,6 +518,10 @@ class UserDB:
             keyword: 组合搜索词（可选，办公软件会话页用）：用户名/昵称 OR 智能体名称/ID
             group_by_subagent: 按用户 × 渠道 × 智能体拆分组合（可选，办公软件会话页用），
                 返回行带 subagent_id 字段
+            channel_config_id: 渠道配置归属筛选（可选，官网接待页 web_c 渠道下拉）：
+                只返回在该渠道有归属会话（channel_sessions.metadata.channel_config_id）的用户
+            channel_config_fallback_id: 存量无归属会话的兜底渠道 config_id（可选，通常传租户
+                最早创建的该渠道配置）；与 channel_config_id 相等时，无归属会话的用户也视为该渠道用户
             referrer_user_id: 引流员工筛选（可选，命中则只返回该员工引流的客户）
             referral_start_date: 引流起始日期（可选，含当日，格式 YYYY-MM-DD），过滤基准 = customer_referrals.created_at，
                 与引流统计 Tab 同口径（引流统计下钻时传入）
@@ -557,15 +569,16 @@ class UserDB:
             # 传 channel_type 时按渠道会话聚合定位用户，放宽 source 非空硬条件
             # （存量办公软件渠道用户 source 可能未回填，有会话即应可见）
             conditions = ["u.tenant_id = %s"]
+            params = [tenant_id]
             if not channel_type:
-                # 微信接待客户页口径：只显示接待类会话组合（wecom_kf 等）。
-                # 办公软件渠道（wecom/dingtalk/feishu）用户注册时也写 source（2edf4007 起），
-                # 仅凭 source IS NOT NULL 会把内部员工的企微办公会话混入本页，按组合行排除
+                # 微信接待客户页口径：只显示接待类渠道白名单（RECEPTION_CHANNEL_TYPES）内的会话组合。
+                # 白名单 fail-closed：办公软件渠道（wecom/dingtalk/feishu）与官网客服（web_c）
+                # 均不进本页，新渠道默认也被挡住，无需逐一追加排除
                 conditions.append(
                     "(u.source IS NOT NULL AND "
-                    "(cs.channel_type IS NULL OR cs.channel_type NOT IN ('wecom', 'dingtalk', 'feishu')))"
+                    "(cs.channel_type IS NULL OR cs.channel_type = ANY(%s)))"
                 )
-            params = [tenant_id]
+                params.append(list(UserDB.RECEPTION_CHANNEL_TYPES))
 
             if username:
                 conditions.append("(u.username ILIKE %s OR u.nickname ILIKE %s)")
@@ -606,6 +619,28 @@ class UserDB:
             if channel_chat_id:
                 conditions.append("cs.channel_chat_id = %s")
                 params.append(channel_chat_id)
+
+            if channel_config_id and channel_type:
+                # 官网接待页按渠道筛选：用户在指定渠道有归属会话（metadata.channel_config_id），
+                # 或（存量会话无归属 + 兜底渠道命中）视为该渠道用户
+                has_attr = (
+                    "EXISTS (SELECT 1 FROM channel_sessions cf"
+                    " WHERE cf.user_id = u.user_id AND cf.tenant_id = %s"
+                    " AND cf.channel_type = %s AND cf.metadata->>'channel_config_id' = %s)"
+                )
+                if channel_config_fallback_id and channel_config_fallback_id == channel_config_id:
+                    conditions.append(
+                        f"({has_attr} OR NOT EXISTS ("
+                        "SELECT 1 FROM channel_sessions cf2"
+                        " WHERE cf2.user_id = u.user_id AND cf2.tenant_id = %s"
+                        " AND cf2.channel_type = %s"
+                        " AND cf2.metadata->>'channel_config_id' IS NOT NULL))"
+                    )
+                    params.extend([tenant_id, channel_type, channel_config_id,
+                                   tenant_id, channel_type])
+                else:
+                    conditions.append(has_attr)
+                    params.extend([tenant_id, channel_type, channel_config_id])
 
             if referrer_user_id:
                 conditions.append("cr.referrer_user_id = %s")

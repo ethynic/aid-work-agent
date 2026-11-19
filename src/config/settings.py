@@ -759,6 +759,7 @@ class AgentRunnerConfig(BaseModel):
     enabled: bool = False
     web_enabled: bool = False
     durable_sleep_enabled: bool = False
+    auto_local_recovery_providers: List[str] = Field(default_factory=list)
     api_url: str = "http://127.0.0.1:8091"
     web_service_id: str = "web"
     # 服务间明文凭据：主 API 与 runner-api 共用同一 .env 注入，恒等比较即验证。
@@ -1096,6 +1097,9 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         runner_cfg["enabled"] = os.getenv("AGENT_RUNNER_ENABLED", "").lower() in ("true", "1", "yes")
     if os.getenv('AGENT_RUNNER_DURABLE_SLEEP_ENABLED') is not None:
         runner_cfg['durable_sleep_enabled'] = os.environ['AGENT_RUNNER_DURABLE_SLEEP_ENABLED'].lower() in ('true','1','yes')
+    if 'AGENT_RUNNER_AUTO_LOCAL_RECOVERY_PROVIDERS' in os.environ:
+        runner_cfg['auto_local_recovery_providers'] = [provider.strip() for provider in
+            os.environ['AGENT_RUNNER_AUTO_LOCAL_RECOVERY_PROVIDERS'].split(',') if provider.strip()]
     if os.getenv('AGENT_RUNNER_SLOT_CONCURRENCY'):
         try:
             runner_cfg['slot_concurrency'] = int(os.environ['AGENT_RUNNER_SLOT_CONCURRENCY'])

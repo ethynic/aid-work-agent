@@ -105,7 +105,7 @@
 
 ## 命令
 
-Web 本地启动、构建、测试、覆盖率与监听模式见[开发环境手册](../../docs/infrastructure/local-dev-environments.md#3-在容器内自测)。
+Web 本地启动、构建、测试、覆盖率与监听模式见[开发环境手册](../../docs/guides/development/local-dev-environments.md#3-在容器内自测)。
 
 ## 开发规范
 
@@ -321,7 +321,7 @@ new Date('2026-05-15T11:49:45.429739' + 'Z')  // 结果会变成 19:49
 
 ## 运行构建
 
-修改前端源码后，执行[开发环境手册](../../docs/infrastructure/local-dev-environments.md#3-在容器内自测)里的 Web 构建。
+修改前端源码后，执行[开发环境手册](../../docs/guides/development/local-dev-environments.md#3-在容器内自测)里的 Web 构建。
 
 ## 测试指南
 

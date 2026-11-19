@@ -79,6 +79,24 @@ describe('Durable task controls use server state', () => {
     expect(wrapper.findAll('button').map(button => button.text())).toEqual(['暂停','停止任务'])
     wrapper.unmount()
   })
+  it('shows background recovery progress and keeps only independent cancellation', async () => {
+    const row = runnerView({ status:'waiting', local_recovery_mode:'automatic',
+      snapshot:{ waiting:{ kind:'verification' } } })
+    const wrapper = mount(DurableTaskStatus, { props: { busy:false, row } })
+    expect(wrapper.get('[role="status"]').text()).toBe('后台正在恢复本机任务')
+    expect(wrapper.findAll('button').map(button => button.text())).toEqual(['停止任务'])
+    await wrapper.get('button').trigger('click')
+    expect(wrapper.emitted('control')).toEqual([['cancel']])
+    await wrapper.setProps({ row:{ ...row, status:'interrupted', resume_requested:true } })
+    expect(wrapper.get('[role="status"]').text()).toBe('后台正在恢复本机任务')
+    expect(wrapper.findAll('button').map(button => button.text())).toEqual(['停止任务'])
+    await wrapper.setProps({ row:{ ...row, status:'finalizing', resume_requested:true, cancel_requested:true } })
+    expect(wrapper.get('[role="status"]').text()).toBe('正在保存任务结果')
+    expect(wrapper.findAll('button')).toHaveLength(0)
+    await wrapper.setProps({ row:{ ...row, status:'finalizing', local_recovery_mode:undefined } })
+    expect(wrapper.findAll('button').map(button => button.text())).toEqual(['停止任务'])
+    wrapper.unmount()
+  })
   it('keeps a local recovery interruption on its own card without a resume shortcut', () => {
     const wrapper = mount(DurableTaskStatus, { props: { busy:false, row:runnerView({ status:'interrupted', local_recovery:true,
       local_recovery_kind:'dispatch_unconfirmed', local_recovery_actions:['resume','end'] }) } })

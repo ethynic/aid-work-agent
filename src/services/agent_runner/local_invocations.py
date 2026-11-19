@@ -101,13 +101,16 @@ class LocalInvocationRepository:
 
     def bind(self, attempt, revision, phase, *, device_id, tool_name, arguments,
              provider_key=None, deadline_at=None, authorization_epoch=None,
-             execution_lane='standard', device_policy=None):
+             execution_lane='standard', device_policy=None, recovery_deadline=None,
+             automatic_provider=None, recovery_key=None):
         with self.connection_factory() as connection:
             try:
                 return self._bind(attempt, revision, phase, device_id=device_id,
                     tool_name=tool_name, arguments=arguments, provider_key=provider_key,
                     deadline_at=deadline_at, authorization_epoch=authorization_epoch,
-                    execution_lane=execution_lane, device_policy=device_policy, connection=connection)
+                    execution_lane=execution_lane, device_policy=device_policy,
+                    recovery_deadline=recovery_deadline, automatic_provider=automatic_provider,
+                    recovery_key=recovery_key, connection=connection)
             except (ResumeContinuationConflict, DeviceOperationUnresolved) as error:
                 # get_db_connection logs rollback errors while preserving the
                 # original exception. Require an explicit successful rollback
@@ -117,7 +120,8 @@ class LocalInvocationRepository:
 
     def _bind(self, attempt, revision, phase, *, device_id, tool_name, arguments,
               provider_key=None, deadline_at=None, authorization_epoch=None,
-              execution_lane='standard', device_policy=None, connection=None):
+              execution_lane='standard', device_policy=None, recovery_deadline=None,
+              automatic_provider=None, recovery_key=None, connection=None):
         """Fence, insert/dedupe and associate the phase in one transaction.
 
         A slow invocation unique/device lock may consume the lease. Recheck the
@@ -192,6 +196,8 @@ class LocalInvocationRepository:
         intent_json = json.dumps(intent, sort_keys=True, separators=(',', ':'),
                                  ensure_ascii=False, allow_nan=False)
         digest = hashlib.sha256(intent_json.encode()).hexdigest()
+        from .auto_local_recovery import CHECKPOINT_KEY, reject_unknown_replay
+        reject_unknown_replay(cursor, row, tool_name, arguments)
         phases = node.setdefault('resources', {}).setdefault('local_invocations', {})
         previous = phases.get(key)
         if previous is not None and previous.get('intent_digest') != digest:
@@ -210,10 +216,21 @@ class LocalInvocationRepository:
             raise LeaseLost('LOCAL_PHASE_INVOCATION_CHANGED')
         # Same row lock remains held, but the database wall clock must advance.
         lock_runner(cursor, attempt.runner_id, attempt, dispatch=True)
+        if recovery_deadline is not None:
+            cursor.execute('SELECT clock_timestamp() AS now')
+            if cursor.fetchone()['now'] >= recovery_deadline:
+                raise DeviceOperationUnresolved('LOCAL_RECOVERY_DEADLINE')
         if previous is not None:
             return row
         phases[key] = {**reference, 'invocation_id': invocation_id,
                        'intent_digest': digest, 'request': json.loads(intent_json)}
+        if automatic_provider:
+            checkpoint.setdefault(CHECKPOINT_KEY, {})[key] = {
+                **reference, 'provider': automatic_provider, 'invocation_id': invocation_id,
+                'status': 'observing', 'step': tool_name, 'code': None, 'deadline': None,
+            }
+        if recovery_key:
+            checkpoint[CHECKPOINT_KEY][recovery_key]['invocation_id'] = invocation_id
         cursor.execute("""UPDATE agent_runners SET checkpoint=%s::jsonb,
             revision=revision+1,updated_at=clock_timestamp()
             WHERE runner_id=%s RETURNING *""",

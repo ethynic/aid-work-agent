@@ -22,7 +22,7 @@
 |--------|------|----------|
 | M6b | 飞书原渠道接入 Runner，待开发 | [飞书渠道计划](../channel/feishu/implementation_plan.md#agentrunner-接入后续独立事项) |
 | M6c | 钉钉原渠道接入 Runner，待开发 | [钉钉渠道计划](../channel/dingtalk/implementation_plan.md#agentrunner-接入后续独立事项) |
-| M7 | 已有整改和验收记录归档；尚未验证的容量、真实外部工具及其他环境不宣称通过 | 本文 §10 保留历史证据；后续接入按渠道计划验收，环境发布按[部署清单](../../deploy/agent-runner-deploy-checklist.md)核对 |
+| M7 | 已有整改和验收记录归档；尚未验证的容量、真实外部工具及其他环境不宣称通过 | 本文 §10 保留历史证据；后续接入按渠道计划验收，环境发布按[部署清单](../guides/deployment/agent-runner-deploy-checklist.md)核对 |
 
 > 制定日期：2026-10-01
 >

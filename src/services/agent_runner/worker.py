@@ -12,6 +12,7 @@ import uuid
 from loguru import logger
 from src.core.agent_engine.contracts import AgentMode, CheckpointFailure, ExecutionState, Outcome
 from .authorization import RunnerAuthorizer
+from .auto_local_recovery import CANCEL_CHECKPOINT_KEY
 from .contracts import RunnerError
 from .durable_control import DurableControl, DurableObserver
 from .execution_repository import ExecutionRepository
@@ -247,6 +248,13 @@ class RuntimeFactory:
         return attachments
 
 
+def _automatic_cancel_output(checkpoint):
+    if checkpoint.get(CANCEL_CHECKPOINT_KEY) and checkpoint.get('detached_local_invocations'):
+        return ('任务已取消。原本机操作的结果尚未确认，已完成的结果已保留。'
+                '你可以在本会话开始其他任务。与原操作冲突的本机任务需等待原设备确认停稳。')
+    return None
+
+
 def execution_result(state, status=None, error_code=None):
     if state is None:
         return {'status':status or 'failed','output':'','images':[], 'messages':[], 'error_code':error_code}
@@ -324,6 +332,8 @@ class RunnerWorker:
         self._recovery_scan_after = 0
         self._timer_scan_after = 0
         self._continuous_scan_after = 0
+        self._auto_local_scan_after = 0
+        self._auto_local_scan_at = 0.0
         self._acquisition_turn = 0
         self._memory_limit = None
         self._memory_warn_at = 0.0
@@ -425,7 +435,7 @@ class RunnerWorker:
             attempt,request=request,complete_audit=complete_audit)
 
     async def _await_cancel_completion(self, attempt, control, state=None):
-        from .local_recovery import cancel_completion_status
+        from .local_recovery import cancellation_ready
         from .cancellation_projection import accept_cancellation_row
         resource_cancel=getattr(self.factory,'request_resource_cancellation',None)
         if resource_cancel is not None:
@@ -438,8 +448,7 @@ class RunnerWorker:
         facts = await collect(not control.envelope.get('cancel_completion_requested',False))
         until = time.monotonic()+5.0
         while True:
-            ready, issue = cancel_completion_status(facts,
-                detached_local_wait=control.envelope.get('detached_local_wait') is True)
+            ready, issue = cancellation_ready(facts, control.envelope)
             if ready:
                 return True
             if issue != 'LOCAL_CANCEL_ACK_PENDING' or time.monotonic() >= until:
@@ -455,6 +464,7 @@ class RunnerWorker:
         if self.slot_state is not None:
             self.slot_state.busy(attempt)
         control = DurableControl(self.executions,attempt,row)
+        control.auto_local_recovery_providers = getattr(self.config, "auto_local_recovery_providers", ())
         scope = UsageScope(attempt,self.usage,row['runner_id'])
         started = time.monotonic()
         guard = Path(self.factory.resource_directory)/'guards'/f"{row['runner_id']}.{row['attempt']}.failure"
@@ -503,7 +513,11 @@ class RunnerWorker:
                     state = control.envelope.get('execution')
                     state = ExecutionState.restore(state) if state else None
                     result = execution_result(state,'cancelled')
-                    if control.envelope.get('detached_local_wait') is True:
+                    cancel_output = _automatic_cancel_output(control.envelope)
+                    if cancel_output:
+                        result['output'] = cancel_output
+                    elif (control.envelope.get('detached_local_wait') is True
+                          and not control.envelope.get(CANCEL_CHECKPOINT_KEY)):
                         result['output'] = '已结束原任务的云端等待，可以继续对话。原本机操作结果仍待核对；确认停止前，该设备的新操作会被阻止。'
                     result['duration_ms'] = int((time.monotonic()-started)*1000)
                     await control.stage(state,result)
@@ -649,6 +663,14 @@ class RunnerWorker:
                         if not await self._await_cancel_completion(attempt, control, state):
                             return
                     result = execution_result(state,'cancelled' if control.cancel_requested else None)
+                    cancel_output = _automatic_cancel_output(control.envelope) if control.cancel_requested else None
+                    if cancel_output:
+                        result['output'] = cancel_output
+                    from .auto_local_recovery import active_failure, failure_summary
+                    failure = active_failure(control.envelope) if not control.cancel_requested else None
+                    if failure:
+                        result.update(status='failed', error_code=failure['code'],
+                            output=failure_summary(failure, control.envelope))
                     result['duration_ms'] = int((time.monotonic()-started)*1000)
                     result['assistant_metadata'] = copy.deepcopy(control.envelope.get('presentation') or {})
                     staged=await control.stage(state,result)
@@ -986,6 +1008,12 @@ class RunnerWorker:
             self._cancel_scan_after = await asyncio.to_thread(release_ready_cancellations,
                 self.repository.connection_factory,after_queue_order=self._cancel_scan_after)
             self._cancel_ready_scan_at = time.monotonic()+10.0
+        providers = getattr(self.config, 'auto_local_recovery_providers', ())
+        if providers and time.monotonic() >= self._auto_local_scan_at:
+            from .auto_local_recovery import advance_waiting
+            self._auto_local_scan_after = await advance_waiting(
+                self.repository, self.authorizer, providers, self._auto_local_scan_after)
+            self._auto_local_scan_at = time.monotonic() + self.config.poll_seconds
         if not getattr(self.config,'durable_sleep_enabled',False):
             return await self._acquire_controls() or await self._acquire_queued()
         priority=getattr(self.executions,'acquire_priority',None)
@@ -1085,6 +1113,9 @@ class RunnerWorker:
                     continue
                 await asyncio.to_thread(recovery.reject_resume,row['runner_id'],revision=row['revision'],
                     control_id=row['resume_control_id'],error_code=error.code)
+                from .auto_local_recovery import fail_automatic_resume
+                await asyncio.to_thread(fail_automatic_resume, self.repository.connection_factory,
+                    row['runner_id'], row['resume_control_id'], error.code)
         return None
 
     async def _acquire_timers(self):

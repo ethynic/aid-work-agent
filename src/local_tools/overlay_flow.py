@@ -126,8 +126,9 @@ async def poll_operation(proxy, operation, arguments, *, tenant_id, user_id, ses
             raise LocalContinuationRequired('LOCAL_PHASE_INTENT_CHANGED',str(invocation['id']))
         proxy._push_progress(progress_queue,{'type':'started','invocation_id':str(invocation['id']),
             'text':f'⏳ 正在等待原本机操作：{proxy.display_name}'})
-        result = await proxy._poll_invocation(invocation,tenant_id,progress_queue,
-            durable=True)
+        with local_operation_scope(operation.owner, branch=operation.branch, ordinal=operation.ordinal):
+            result = await proxy._poll_invocation(invocation,tenant_id,progress_queue,
+                durable=True)
         if allow_visual_input_unknown and proxy.name == 'boss_overlay_dismiss' and arguments.get('recovery_ref'):
             return result
         return _known(result, proxy)
@@ -194,6 +195,14 @@ async def run_base(proxy, operation, kwargs):
         session_id=session_id,progress_queue=progress,
         expected_device_id=kwargs.get('_resume_expected_device_id'))
     from .boss_visual_recovery import cli_owns_recovery, is_visual_failure, recover_operation, recovery_arguments
+    from .execution_receipts import has_receipt_effect_conflict
+    if has_receipt_effect_conflict(original):
+        return original
+    from src.services.agent_runner.auto_local_recovery import CHECKPOINT_KEY
+    phase = operation.owner._phase(operation.branch, operation.ordinal) if hasattr(operation.owner, '_phase') else None
+    if phase and ((operation.owner.root.envelope.get(CHECKPOINT_KEY) or {}).get(
+            phase.key(operation.owner.root.attempt.runner_id)) or {}).get('status') == 'failed':
+        return original
     if cli_owns_recovery(original):
         return original
     if is_visual_failure(proxy, original):

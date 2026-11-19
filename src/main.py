@@ -1940,6 +1940,9 @@ app.include_router(billing_balance.router)
 app.include_router(abuse_router)
 app.include_router(wecom_kf_account_router)
 app.include_router(knowledge_share_router)
+# 使用教程文档中心（docs/guides/，Portal「使用教程」页数据源）
+from src.api.guides import router as guides_router  # noqa: E402
+app.include_router(guides_router)
 # 协会客户端（docs/tools/association-client-design.md）
 from src.api import client_routes  # noqa: E402
 from src.saas.api import client_activation_mgmt  # noqa: E402

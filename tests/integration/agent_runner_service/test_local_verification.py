@@ -787,6 +787,42 @@ def test_r9_settled_scope_continue_replay_is_idempotent(lost_local, service_data
     assert repository.get(row['runner_id'])['checkpoint']['verified_local_invocations'] == [original]
 
 
+def test_r12_rejected_continue_dispatch_is_retried_with_a_fresh_resume_on_reclick(
+        lost_local, service_database):
+    """R12：Worker 拒绝自动接续（如积分不足）后重按「停止上一步并继续」必须产生
+    新的 resume 投递（新序数键），不被被拒记录短路；拒绝后 resume_control_id 清空、
+    公开动作恢复 resume/end，受理门放行；在途 accepted 时重按仍不重复投递。"""
+    from src.services.agent_runner.recovery_repository import RecoveryRepository
+    from src.services.agent_runner.repository import public_runner
+    repository, _, principal, row, device, original, claim = lost_local
+    r8_enable(service_database, device)
+    r8_write_proven_completion(devices, row, device, original, claim)
+    verify_local(repository, principal, row['runner_id'], 'settled-retry',
+                 stop_resources=True, continue_after_stop=True)
+    first = resume_controls(service_database, row['runner_id'])
+    assert len(first) == 1 and first[0]['status'] == 'accepted'
+    recovery = RecoveryRepository(repository.connection_factory)
+    assert recovery.reject_resume(row['runner_id'],
+        revision=repository.get(row['runner_id'])['revision'],
+        control_id=first[0]['control_id'], error_code='CREDIT_INSUFFICIENT') is True
+    rejected = repository.get(row['runner_id'])
+    assert rejected['resume_control_id'] is None, '拒绝后控制链清空在途键'
+    public = public_runner(rejected)
+    assert public['resume_requested'] is False
+    assert 'resume' in public['local_recovery_actions'] and 'end' in public['local_recovery_actions']
+    assert 'stop_and_continue' in public['local_recovery_actions'], '停稳已证：重试入口保持投影'
+    verify_local(repository, principal, row['runner_id'], 'settled-retry-again',
+                 stop_resources=True, continue_after_stop=True)
+    retried = resume_controls(service_database, row['runner_id'])
+    assert len(retried) == 2 and retried[1]['status'] == 'accepted'
+    assert retried[1]['client_request_id'] != first[0]['client_request_id'], '新序数键：不复用被拒记录'
+    assert repository.get(row['runner_id'])['resume_control_id'] == retried[1]['control_id']
+    # 在途幂等门不变：接续处理中重按不重复投递。
+    verify_local(repository, principal, row['runner_id'], 'settled-retry-third',
+                 stop_resources=True, continue_after_stop=True)
+    assert len(resume_controls(service_database, row['runner_id'])) == 2
+
+
 def test_r9_receipt_after_started_supersedes_stop_before_the_stop_action(lost_local, service_database):
     """R9 修复3 服务端：/started 确认后、停止动作执行前原回执补传 → started 幂等
     重发复判命中，核验行落 superseded 终态、verified 合并与接续编排照常；无回执时

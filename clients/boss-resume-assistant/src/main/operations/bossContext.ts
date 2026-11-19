@@ -24,6 +24,7 @@ import {
   type OpContext,
 } from './types.js'
 import { mapExecutorError } from './errorMapping.js'
+import { attachReceipt1_1, type ReceiptAttachOptions } from './receipt.js'
 import { rememberBrowserTarget, resolveBrowserTarget, targetBindingStale, updateBrowserTarget, type BrowserPageContext } from '../boss/browserTargetBinding.js'
 import { captureBrowserPageContext, restoreBrowserPageContext, rememberFilterResult } from '../boss/browserPageRecovery.js'
 import { PerfCollector } from '../perf.js'
@@ -297,6 +298,7 @@ export interface OperationOutcome {
   message: string
   data?: Record<string, unknown>
   effect?: Effect
+  receipt?: Omit<ReceiptAttachOptions, 'capture'>
 }
 
 /** 写动作完成量追踪：operation body 经 executor onProgress 实时更新，失败时用于 partial/unknown 判定 */
@@ -325,7 +327,11 @@ export async function runBossOperation(
   const invalid = validate()
   if (invalid) {
     logOpFailure(runId, 'INVALID_ARGUMENT', invalid)
-    return failResult(runId, 'INVALID_ARGUMENT', invalid, 'none')
+    const result = failResult(runId, 'INVALID_ARGUMENT', invalid, 'none')
+    // 协商 1.1：前置参数失败也是已知失败（known_effect=none；未连接页面无截图）
+    return ctx.executionReceipt === '1.1'
+      ? attachReceipt1_1(result, { step: 'validate_input' })
+      : result
   }
 
   const perf = new PerfCollector()
@@ -334,6 +340,7 @@ export async function runBossOperation(
   let session: BossSession | undefined
   let ok = false
   let browserTargetRef = ctx.browserTargetRef
+  let targetAuthorized = false
   const boundData = (data: Record<string, unknown>): Record<string, unknown> => {
     if (!browserTargetRef) return data
     const result: Record<string, unknown> = { ...data, browser_target_ref: browserTargetRef }
@@ -351,6 +358,7 @@ export async function runBossOperation(
       const expected = await resolveBrowserTarget(browserTargetRef, ctx.cdpPort ?? DEFAULT_CDP_PORT)
       if (targetId !== expected.target_id) throw targetBindingStale()
     } else if (targetId) browserTargetRef = await rememberBrowserTarget(targetId, ctx.cdpPort ?? DEFAULT_CDP_PORT)
+    targetAuthorized = true
     if (browserTargetRef) session.browserTargetRef = browserTargetRef
     if (browserTargetRef && session.recoveryPageContext && targetId) {
       const binding = await resolveBrowserTarget(browserTargetRef, ctx.cdpPort ?? DEFAULT_CDP_PORT)
@@ -364,7 +372,9 @@ export async function runBossOperation(
     ok = true
     const result = okResult(runId, outcome.message, effect, boundData(outcome.data ?? {}))
     if (session.recoveryPageContext) await rememberFilterResult(spec.name, result, ctx.cdpPort ?? DEFAULT_CDP_PORT)
-    return result
+    if (ctx.executionReceipt !== '1.1') return result
+    return await attachReceipt1_1(result, { step: 'postcheck', ...outcome.receipt,
+      capture: !ctx.signal.aborted ? () => session!.captureFullpage() : undefined })
   } catch (err) {
     const mapped = mapExecutorError(err)
     logOpFailure(runId, mapped.code, mapped.message)
@@ -380,7 +390,20 @@ export async function runBossOperation(
       ? 'partial' : facts?.operation_class === 'external_effect' && business?.status === 'not_started' && completed === 0
         ? 'none' : writeEffect(false, mapped.code, completed)
     if (spec.kind === 'write' && completed > 0) data.completed = completed
-    return failResult(runId, mapped.code, mapped.message, effect, boundData(data))
+    const result = failResult(runId, mapped.code, mapped.message, effect, boundData(data))
+    // 执行回执标准 1.1（仅协商调用）：已知失败/部分完成/效果未知终态附加 step/reason/
+    // known_effect/partial_results，并尽力截一张当前受权页面（成功不截；截图失败省略）。
+    // step 取恢复事实的执行阶段；未建立会话（连接/attach 失败）标 connect。登录失效沿
+    // 既有映射为 NOT_LOGGED_IN（reason.code 与外层 code 同源，不另立平行码表）。
+    if (ctx.executionReceipt !== '1.1') return result
+    const factsStage = (facts as { execution?: { stage?: unknown } } | undefined)?.execution?.stage
+    const step = !session ? 'connect' : typeof factsStage === 'string' && factsStage ? factsStage : 'execute'
+    const liveSession = session
+    return await attachReceipt1_1(result, {
+      step,
+      capture: liveSession && targetAuthorized && !ctx.signal.aborted
+        ? () => liveSession.captureFullpage() : undefined,
+    })
   } finally {
     // close 计时后统一输出 [boss-perf]（成功/失败都输出；ok 由上方分支标记）
     if (session) await perf.time('close', () => session!.close())

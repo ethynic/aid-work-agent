@@ -11,8 +11,10 @@
 import { randomUUID } from 'node:crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { serializeMessage } from '@modelcontextprotocol/sdk/shared/stdio.js'
 import { TOOL_DEFS } from './toolDefs.js'
 import { providerVersion } from './manifest.js'
+import { attachReceipt1_1 } from '../main/operations/receipt.js'
 import { OPERATIONS } from '../main/operations/index.js'
 import { failResult, type OperationResult } from '../main/operations/types.js'
 
@@ -31,6 +33,17 @@ const INSTRUCTIONS =
 /** stderr 日志（脱敏）：不含参数值/页面内容，只记操作与结果元数据 */
 function logLine(msg: string): void {
   process.stderr.write(`[boss-mcp] ${msg}\n`)
+}
+
+/**
+ * 执行回执标准 1.1 协商态：Runtime 仅在服务端领取响应附加 receipt_version 时，经 MCP
+ * tools/call 请求级 _meta["aidwork/receipt_version"] 传入（协议探针实证 SDK 1.30.0 stdio
+ * 透传 extra._meta）。未协商（旧 Runtime/无能力/直调）返回 undefined——沿既有回执，
+ * data 无 1.1 字段、不截图。导出以便单测锁定协商/未协商两态行为。
+ */
+export function negotiatedReceiptVersion(meta: unknown): '1.1' | undefined {
+  const value = (meta as Record<string, unknown> | undefined)?.['aidwork/receipt_version']
+  return value === '1.1' ? '1.1' : undefined
 }
 
 /** 单飞锁执行器（导出以便单测）：占用中立即返回 BUSY 结构化结果 */
@@ -53,6 +66,24 @@ export async function runSingleFlight<T extends OperationResult>(
   } finally {
     running.current = null
   }
+}
+
+// Match the Host's existing maximum unread MCP stdio frame (128 MiB).
+const MCP_STDIO_RESPONSE_BUDGET = 128 * 1024 * 1024
+
+export function encodeOperationResult(result: OperationResult, requestId: string | number,
+                                      budget = MCP_STDIO_RESPONSE_BUDGET) {
+  const encode = (value: OperationResult) => ({
+    content: [{ type: 'text' as const, text: JSON.stringify(value) }],
+    structuredContent: value as unknown as Record<string, unknown>,
+  })
+  const response = encode(result)
+  if (result.data.receipt_version !== '1.1' || result.data.screenshot === undefined) return response
+  const frame = serializeMessage({ jsonrpc: '2.0', id: requestId, result: response })
+  if (Buffer.byteLength(frame) <= budget) return response
+
+  const { screenshot, ...data } = result.data
+  return encode({ ...result, data })
 }
 
 export interface McpServerOptions {
@@ -78,10 +109,12 @@ export function registerBossTools(server: McpServer, opts: McpServerOptions, run
         const { _boss_target_ref: browserTargetRef, _boss_expected_contact_ref: expectedContactRef, ...operationArgs } = args ?? {}
         const startedAt = Date.now()
         const progressToken = extra._meta?.progressToken
-        const result = await runSingleFlight(running, def.name, () =>
+        const executionReceipt = negotiatedReceiptVersion(extra._meta)
+        const outcome = await runSingleFlight(running, def.name, () =>
           operation.execute(operationArgs, {
             ...(typeof browserTargetRef === 'string' ? { browserTargetRef } : {}),
             ...(typeof expectedContactRef === 'string' ? { expectedContactRef } : {}),
+            ...(executionReceipt ? { executionReceipt } : {}),
             signal: extra.signal,
             cdpPort: opts.cdpPort,
             progress: (p) => {
@@ -101,14 +134,14 @@ export function registerBossTools(server: McpServer, opts: McpServerOptions, run
             },
           }),
         )
+        const result = executionReceipt
+          ? await attachReceipt1_1(outcome, { step: outcome.code === 'BUSY' ? 'dispatch' : 'execute' })
+          : outcome
         logLine(
           `tool=${def.name} run_id=${result.run_id} success=${result.success} code=${result.code} ` +
             `effect=${result.effect} elapsed_ms=${Date.now() - startedAt}`,
         )
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result) }],
-          structuredContent: result as unknown as Record<string, unknown>,
-        }
+        return encodeOperationResult(result, extra.requestId)
       },
     )
   }

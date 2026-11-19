@@ -54,7 +54,7 @@
 
 > 依据：[Codex、DeepSeek Harness、Hermes 源码调研](../research/desktop-agent-harness-architecture-research.md)；执行侧协作：[Runtime 插件宿主计划](plan-runtime-plugin-host.md)。
 >
-> 基线：[已完成 Runner 重构](plan-agent-runner-service.md)、[构建手册](../system/desktop-agent-client-build-manual.md)
+> 基线：[已完成 Runner 重构](plan-agent-runner-service.md)、[构建手册](../guides/clients/desktop-agent-client-build-manual.md)
 >
 > 本计划跟踪桌面后续工作；不重新打开已完成的 Runner 重构。现有 Shell 属于既有部分完成成果。
 
@@ -423,7 +423,7 @@ Windows包装首构建已生成NSIS，但package整体exit1：powershell.exe继�
 
 主控实际启动此次win-unpacked EXE（app.isPackaged=true），包内resources、Runtime产品名称/独立验收userData、未配对禁止启动、真实Node/Host管理features与getState、关窗隐藏/重开、无pageerror及实际exit0共12断言通过，CIM核对无该包或资源Node残留。启动前确认两验收目录不存在，测试只建立独立验收profile并保留未配对空Host，不读取生产home/账号；没有运行NSIS安装。已查看包内窗口截图。首次探测误用不存在的runtime.getState被白名单拒绝，修正为getState；第二次Playwright在close后取process对象失败，改为启动时保存child引用；最终检查通过。这两项为测试脚本纠正，不改产品代码或包输入。
 
-H3开发交付完成，第一部分具备人工验收包；[构建手册12节](../system/desktop-agent-client-build-manual.md#12-独立runtime首期验收包)列出同批三包与验收步骤。人工仍需确认NSIS安装/原生选择器、软件实际登录及业务条件、真实服务配对与执行；ready=false来源于实际未满足条件。停止在第一部分，不进入B1/B2、完整Desktop对话、H2/H4新任务链路或生产签名发行。共同wire候选0.3未因此冻结；没有提交、推送或服务器部署。
+H3开发交付完成，第一部分具备人工验收包；[构建手册12节](../guides/clients/desktop-agent-client-build-manual.md#12-独立runtime首期验收包)列出同批三包与验收步骤。人工仍需确认NSIS安装/原生选择器、软件实际登录及业务条件、真实服务配对与执行；ready=false来源于实际未满足条件。停止在第一部分，不进入B1/B2、完整Desktop对话、H2/H4新任务链路或生产签名发行。共同wire候选0.3未因此冻结；没有提交、推送或服务器部署。
 
 #### UI握手竞态增量后的最终交付（2026-10-09，替代a8b0）
 
