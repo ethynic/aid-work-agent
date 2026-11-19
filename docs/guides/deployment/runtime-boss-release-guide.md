@@ -99,6 +99,7 @@ powershell.exe -NoProfile -File $release -Component Wecom -SourceRef HEAD -Targe
 
 - **BOSS 独立 npm CLI**供 `npm install -g` 和外部 MCP Host 使用。先在 Windows x64 构建机执行 `npm --prefix clients/shared ci --ignore-scripts` 和 `npm --prefix clients/boss-resume-assistant ci --ignore-scripts`，再从仓库根用 Git Bash 执行 `bash clients/boss-resume-assistant/scripts/pack-release.sh`。该入口输出 `clients/boss-resume-assistant/boss-resume-assistant-<版本>.tgz`。它会随包带上共享 Win32 模块及 koffi 原生依赖。直接运行 `npm pack` 会留下客户机无法解析的仓库相对依赖。独立包交付前在空目录安装，验证 `createKoffiApi()` 可实例化，不能只跑 `version --json`。客户机需 Node ≥ 22 且可访问 npm registry。
 - **WeCom**走表中的签名离线插件入口。当前未维护独立 npm 交付流程。
+- **浏览器**使用 `clients/runtime-plugin-packaging/package.mjs --provider browser`，传入 `--node`、`--output`、`--signer` 和不可复用的 `--release-id`。配套验收 Runtime 需包含 `aidwork-acceptance-browser-v1` 公开根。构建机的签名配置位于 `%LOCALAPPDATA%\AidWorkBuild\signers\acceptance-browser-v1\signer.json`。导入前用目标 Runtime 的固定 Node 和公开根执行 `verify-offline.py`。 [浏览器插件设计](../../tools/browser/browser_tool_rebuild_design.md)
 - **隔离试验**可在独立输出目录显式运行 `package.mjs --test --test-key-id aid-isolated-<唯一值>`，传入所需 Provider 和固定 Node 等参数。随机测试根随该次实验产物单独保存，仅供隔离测试环境。容器格式与低层参数见[插件打包说明](../../../clients/runtime-plugin-packaging/README.md)。
 
 ## 7. 验包与证据

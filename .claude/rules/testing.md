@@ -19,7 +19,6 @@ tests/
 │   └── tools/               # 各工具单元测试（mock 外部依赖）
 │       ├── test_email_tool.py
 │       ├── test_search_tool.py
-│       └── test_browser_tool.py
 ├── integration/             # 集成测试 — 真实组件组合，选择性 mock
 │   ├── test_agent_loop.py   # Agent 消息处理循环
 │   ├── test_tool_execution.py # ToolExecutor + 真实 Tool

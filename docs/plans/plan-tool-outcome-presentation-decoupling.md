@@ -34,7 +34,6 @@
 - `web_search`：计算 `results` 数量；
 - `email_process`：输出“成功”；
 - `read`：截取文件正文；
-- `browser_automation`：截取 `result` 或 `message`。
 
 这些代码没有参与工具执行，也没有影响写入 LLM 的工具结果。它们只是额外发送
 `progress` 事件。
@@ -87,10 +86,9 @@ Agent 读取委派结果顶层 `generated_contents` 的路径与当前 Delegate 
 不增加 `SKIP_PLAN_TRACKING` 之类的新策略。没有证据表明定时工具应当跳过计划状态；
 旧旁路更像历史遗留，而不是领域契约。
 
-### 2.4 浏览器参数日志
+### 2.4 工具参数日志
 
-浏览器工具名称判断不是结果展示，而是参数脱敏。安全要求必须保留，但没有必要靠
-工具名实现。
+工具参数日志应沿用统一脱敏策略。
 
 轻量处理方式：
 
@@ -174,7 +172,6 @@ LLM tool call
 - 删除前端普通工具结果预览 switch；
 - 后端提供工具友好名称，前端通用展示；
 - 下载文件和快捷选项改为按结果字段识别；
-- 删除按 `browser_automation` 名称进行日志脱敏的判断，默认不记录参数。
 
 ### 本期不处理
 
@@ -185,7 +182,6 @@ LLM tool call
 - `use_skill`；
 - `skill_execute`；
 - `delegate_to_subagent`；
-- 浏览器 `ToolSuspension`；
 - `ExecutionTarget.LOCAL_REQUIRED` 本机执行路由。
 
 这些分支是否继续下沉，应另行设计控制工具调度器，不能和本次删除型优化混在一起。
@@ -219,7 +215,6 @@ LLM tool call
 - Executor 默认只记录 `tool_name`；
 - 不记录普通工具参数；
 - 保留受信边界的异常脱敏行为；
-- 删除 `browser_automation` 名称判断。
 
 ### Phase 3：删除前端名称判断
 
@@ -239,7 +234,7 @@ LLM tool call
 
 - `agent.py` 不再比较：
   `create_scheduled_task`、`manage_scheduled_task`、`content_generate`、
-  `web_search`、`email_process`、`read`、`browser_automation`；
+  `web_search`、`email_process`、`read`；
 - `executor.py` 不按任何普通工具名称决定日志行为；
 - Web 执行详情不按普通工具名称解释结果；
 - 普通工具仍只执行一次，结果按既有序列化与截断规则交给 LLM；

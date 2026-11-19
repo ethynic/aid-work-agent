@@ -113,7 +113,7 @@
 | 截图 | `mss`（高速）或 `PIL.ImageGrab` | 全屏/区域截取 |
 | 编排 | 纯 Python + `asyncio`/`time.sleep` 节流 | 拟人节奏，避免风控 |
 
-> 复用提示：本项目 `src/tools/ocr/` 已有 paddleocr 能力，`src/tools/browser/` 有图像/视觉相关积累，可参考。
+> 复用提示：本项目 `src/tools/ocr/` 已有 paddleocr 能力。
 
 ### 3.2 流程编排（单次搜索）
 

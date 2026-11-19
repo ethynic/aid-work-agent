@@ -398,8 +398,6 @@ XLSX。程序先规范空白、按名称去重并保留首次顺序，再逐协�
 |---|---|---|
 | 候选官网发现 | `WebSearchTool` / Tavily | 可复用；只取 URL、标题和候选分数 |
 | 普通 HTTP | `HttpApiTool` | 仅作轻量页面/API兜底；CAAPA 官网实测 403 |
-| 动态官网访问 | `BrowserAutomationTool` | 可复用；venv匹配浏览器安装后已通，CAAPA 官网自身返回异常访问/403 |
-| HTML/页面交互 | Browser orchestrator/page ops | 可复用，但需增加确定性站内采集接口 |
 | PDF文本 | `PdfProcessTool`、`pdf_to_md` | 可复用，文本不足自动降级 OCR |
 | 图片/扫描PDF | `PaddleOCRDocParsingTool` | 已在微信图片型 PDF 真机验证 |
 | 结构化判断 | `src.llm.gateway.llm_gateway` | 可复用；外层必须做严格 Schema 与证据原文校验 |
@@ -411,10 +409,8 @@ XLSX。程序先规范空白、按名称去重并保留首次顺序，再逐协�
 
 - `WebSearchTool("中国游艺设备游乐园协会 官网")` 成功发现 `https://www.caapa.org`；
 - `HttpApiTool(GET https://www.caapa.org)` 返回 403；
-- venv 中 Playwright 1.60.0 最初缺少匹配 Chromium revision 1223；安装后最小 Playwright
-  与完整 `BrowserAutomationTool` 均可正常启动；
-- CAAPA 官网对无头 Chromium 返回“异常访问/403”；Browser 工具现已在页面快照层
-  确定性返回 `success=false/status=blocked/ACCESS_BLOCKED`，不再接受 LLM `done` 覆盖；
+- venv 中 Playwright 1.60.0 最初缺少匹配 Chromium revision 1223；安装匹配的 Chromium 后最小 Playwright 探针可启动；
+- CAAPA 官网对无头 Chromium 返回“异常访问/403”；
 - 可信本地 `headless=false` 可见模式已真机通过：AI访问CAAPA首页、读取页面、
   点击“关于协会”，进入 `/About/1.html` 并获取协会简介正文，共4个编排步骤；
   任务结束后 Chromium 与worker进程均已回收。该模式未触发无头访问风控；
@@ -544,7 +540,7 @@ SSRF 门禁。仅检查最终 URL 不能证明中间跳转未访问不可信地�
 
 ### 8.2 `website_content_collector`
 
-在 Browser 工具之上提供机器可测的站内采集接口：
+站内采集接口：
 
 - 获取最终 URL、标题、正文 Markdown、链接和附件；
 - 支持 sitemap、同域队列、内容哈希；

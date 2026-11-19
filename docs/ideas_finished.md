@@ -213,7 +213,6 @@
 | 20260630-1713 | 文件生成类工具入参语义拆分与路由健壮性 | ✅ 已完成开发。Word/PDF/Excel/PPT 通用 `context` 同时承载"用户目的 + 待处理正文 + 隐含参数"导致内部 LLM 路由不稳定、转换正文被工具指令污染。 | [设计](tools/tool-input-contract-redesign.md) | — |
 | 20260714-1911 | skill_complete 工具彻底删除 | ✅ 已完成开发。 | [设计](system/skill-complete-removal-design.md) | — |
 | 20260612-0940 | 文件工具四件套（read/write/edit/cp）v2 | ✅ 已完成开发。拆分旧 text_file_writer/file_reader/file_list 为四个原子工具，支持 SKILL.md `<SKILL_ROOT>` 占位符。 | [设计 v2](tools/text-file/file_tools_redesign_v2.md) | — |
-| 20260518-2225 | 浏览器自动化工具 | 网页自动化操作、数据采集、Markdown 转换 | [设计](tools/browser/browser_automation_design.md) | — |
 | 20260602-1649 | 知识库检索租户隔离 | 知识库检索工具添加 tenant_id 过滤，修复跨租户数据泄露 + 分块 overlap 修复。2026-06-02 | — | — |
 | 20260512-1711 | PPT 生成工具（基础版） | ✅ 已完成开发；初始架构决策已并入现行整合版设计文档（2026-10-09 文档整合）。 | [设计（整合版）](tools/ppt/ppt_tool_design.md) | — |
 | 20260630-2158 | PPT 工具增强与 HTML 转 PPTX 导出 | ✅ 已完成开发（Phase 0-8，2026-07-01）；设计与开发计划已并入整合版设计文档（2026-10-09 文档整合）。 | [设计（整合版）](tools/ppt/ppt_tool_design.md) | — |

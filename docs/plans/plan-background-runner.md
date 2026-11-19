@@ -24,7 +24,6 @@
 8. **部署**：`docker-compose.prod.yml` 单服务 `aid-agent-api`，无显式 command；`agent_update.sh:47` 用 `up -d --wait`（新服务必须带可靠 healthcheck）；宿主 4 核。表已就绪（`scheduled_tasks`、`social_publish_jobs` 在 init-postgres.sql）。
 9. **其他文件中的 `asyncio.create_task`**（原 #38 调研遗留，迁移决策输入）：
    - `src/llm/key_pool.py`：并发抢 Key 槽位，每个 worker 独立管理自己的 Key 池，**不外置**。
-   - `src/tools/browser/session.py`：单 worker 内浏览器会话资源清理，**不外置**。
    - `src/subagents/executor.py`：子智能体异步执行，单 session 内执行，**不外置**。
    - `src/saas/api/channel_routes.py`：渠道消息后台处理，每个请求独立，**不外置**。
    - `src/core/session_queue.py` watchdog：与 request 生命周期绑定的锁续期，**留 HTTP worker**（§8 排除项已明确）。

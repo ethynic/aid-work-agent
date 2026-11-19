@@ -85,11 +85,11 @@ Redis 应返回 `PONG`，PostgreSQL 应开始接受连接。沿用旧数据网�
 docker compose -f docker-compose.dev-tools.yml run --rm python tests/unit/test_models.py -p no:cacheprovider -q
 ```
 
-已有 API 容器挂载当前工作区时，也可以沿用 `bash scripts/dev_test.sh`。浏览器用例按该 [测试脚本](../../../scripts/dev_test.sh) 使用 Redis helper。测试或检查指向其他工作区的结果不得用于当前改动。
+已有 API 容器挂载当前工作区时，也可以沿用 `bash scripts/dev_test.sh`。测试或检查指向其他工作区的结果不得用于当前改动。
 
 可将示例路径换成测试文件、子目录或具体测试节点，用 `-k` 选择用例。默认排除 `e2e` 和 `real_browser`。显式传入 `-m` 会替换默认筛选，需要保留的排除条件应写进表达式，例如 `-m 'tools and not e2e and not real_browser'`。
 
-需要实际浏览器与 Redis helper 时，确认默认名为 `aid-agent-api` 的本地 API 容器正在运行并挂载当前工作区。在能调用该 Docker 引擎的 Bash 中运行 `bash scripts/dev_test.sh -m 'not e2e and real_browser' -p no:cacheprovider -q`。脚本使用该终端的 `python` 核对测试入口，实际测试在容器内运行。
+需要运行标记为 `real_browser` 的用例时，确认默认名为 `aid-agent-api` 的本地 API 容器正在运行并挂载当前工作区。在能调用该 Docker 引擎的 Bash 中运行 `bash scripts/dev_test.sh -m 'not e2e and real_browser' -p no:cacheprovider -q`。脚本使用该终端的 `python` 核对测试入口，实际测试在容器内运行。
 
 **PostgreSQL。** 本地 API 和 Runner 默认连本地业务库。联调已有业务流程时，可以查询本地业务数据，也可以写入本轮专用记录。先核对实际目标是本机容器和预期数据库。有事务的测试可回滚，需要提交的联调记录按确切 ID 及时清理。[测试规范](../../../.claude/rules/testing.md#数据库安全入口)
 

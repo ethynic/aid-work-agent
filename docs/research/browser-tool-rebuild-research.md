@@ -2,7 +2,7 @@
 
 2026-11-19 · 已完成原包双端受控验证、Linux 沙盒接入冒烟与 Windows 实站验证。本期复用 `agent-browser` 官方发行二进制，首期面向 Windows Runtime。以下源码盘点用于理解和比对官方 MCP 的行为。关联[重构设计](../tools/browser/browser_tool_rebuild_design.md)及[开发计划](../plans/plan-browser-tool-rebuild.md)。
 
-旧通用服务端浏览器已退出任务工具目录，后续代码清理见执行槽计划。Runtime 已使用签名插件和 stdio MCP 接入本机能力，可复用这条链路。此前 ChatGPT「Browser Use 集成研究」与「CDP网页信息格式」中的页面结构、元素引用和按需截图仍可参考。 [执行槽计划 Phase 1A](../plans/plan-runner-execution-slot-isolation-and-alerts.md#phase-1a-旧通用浏览器彻底移除) · [Runtime 插件与 MCP 源码实录](runtime-master-plugin-communication-20261111.md)
+Runtime 的签名离线包和 stdio MCP 宿主可用于接入本机浏览器。此前 ChatGPT「Browser Use 集成研究」与「CDP网页信息格式」中的页面结构、元素引用和按需截图仍可参考。 [Runtime 插件与 MCP 源码实录](runtime-master-plugin-communication-20261111.md)
 
 | 候选 | 借用方式 | 要验证的缺口 |
 | --- | --- | --- |

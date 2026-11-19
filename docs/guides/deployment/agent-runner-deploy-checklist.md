@@ -88,7 +88,7 @@ Phase 3 的 `execution_started_at`、告警/阈值/扫描状态表须在启动 `
 
 当前迁移工具按 `_db_update_applied.last_datetime` 执行，`file_hash` 仅为兼容旧结构保留的字段；不以文件 hash 变化触发全量重跑。
 
-**核查方法（只读）**：核对当前迁移条目及五张通用表存在；Browser Web 兼容仍要求 `bs_browser_assistance_requests.continuation_id`，controls 不使用 SQL 外键级联。启动断言不等于完成迁移，不能据此跳过数据库准备。
+**核查方法（只读）**：核对当前迁移条目及五张通用表存在，controls 不使用 SQL 外键级联。启动断言不等于完成迁移，不能据此跳过数据库准备。
 
 ### ② 旧主 API 容器补注入 AGENT_RUNNER_API_URL（需 recreate，必检）
 
@@ -213,25 +213,7 @@ assert_schema，compose 并发重建时先断言会撞上未迁移的表/列秒�
 - `runner-monitor`：healthcheck 核对数据库中最近成功扫描时间，超过 3 分钟报告
   `unhealthy`；该状态本身不会触发 Docker 自动重启。进程退出由 restart policy 拉起。
 
-## 5. Browser owner 拓扑说明
-
-- **owner 不是独立进程**：Browser owner 是执行 worker 进程内的应用侧 owner
-  （`src/services/agent_runner/browser_owner.py`），随 runner-worker 双池生命周期存在；
-  `runner-api` 不参与 Browser。
-- **view listener 是同 worker 进程内的 sidecar**（`src/services/agent_runner/browser_sidecar.py`），
-  由 `browser_owner.view_enabled` 装配（`worker.py` RuntimeFactory.open）；主 API 的
-  `browser_view_gateway.py` 才是跨容器观察请求的网关。sidecar 不另起容器。
-- `bind_host/bind_port` 默认 `127.0.0.1:8092`；各 worker 副本位于独立容器网络命名空间，
-  同用该 loopback 端口不会互相冲突，不要求按副本改 `bind_port`。同一容器内端口被占用时，
-  view listener 会在认领前启动失败。
-- 当前默认 `view_enabled: false`，本 overlay 不发布 8092 端口、不注入 Browser env；
-  扩 worker 副本无需为关闭的 view listener 配置端口。若未来启用 Browser view，主 API 的
-  `browser_view_gateway` 会按数据库记录的 `owner_endpoint` 跨容器连接 owner，并以
-  `allowed_endpoints` 校验；`127.0.0.1` 仅指向网关自身，届时须为各 owner 配置可达且可精确
-  区分的地址与允许列表，并核对 listener 的 `bind_host/bind_port`，不能仅靠 Compose 服务名
-  负载均衡来定位持有该 run 的副本。该功能另行验收，不作为默认扩槽门槛。
-
-## 6. 相关文件
+## 5. 相关文件
 
 - overlay：`docker-compose.agent-runner.yml`（根目录）
 - 部署总文档：`docs/guides/deployment/DEPLOYMENT.md`「AgentRunner 分进程部署」一节

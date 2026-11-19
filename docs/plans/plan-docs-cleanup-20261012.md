@@ -112,7 +112,6 @@
 | docs/system/knowledge-base/unified-kb-resource-table-metadata-design.md | tool-overall-optimization-dev-plan.md |
 | docs/tools/large-content-retrieval-design.md | file-tools-claude-code-parity-design.md、tool-overall-optimization-design.md |
 | docs/tools/tool-development-spec.md | tool-overall-optimization-design.md、tool-overall-optimization-dev-plan.md |
-| docs/tools/browser/browser_visualization_design.md | order-processing/dev_plan.md |
 | docs/subagent/travel-consultant/travel_pricing_resource_design.md、travel_subagent_design.md | archive/route_distance_skill_design.md |
 | docs/research/org-knowledge-sedimentation-research.md | context_compression_research.md、enterprise-agent-platform-research.md |
 | docs/research/ai-agent-experience-daily-report-research.md | enterprise-agent-platform-research.md |
