@@ -106,7 +106,7 @@ async def list_users(request: Request, username: Optional[str] = None,
                      page: int = Query(default=1, ge=1), page_size: int = Query(default=20, ge=1, le=200)):
     """官网客服客户列表（用户 × web_c 渠道会话，每条会话一行，最近活跃倒序）。
 
-    行字段：uid 徽标（channel_user_id，ext_*/anon_* 前缀区分身份模式）、
+    行字段：uid 徽标（channel_user_id，ext_*/uid_* 实名、anon_* 匿名，前缀区分身份模式）、
     名称（签名 name / 官网访客xxxx）、会话起止时间、session_id、归属渠道
     （channel_config_id / channel_name，存量无归属会话回退最早渠道）。
     按会话拆行（group_by_session）：uid 模式访客每次进入即新会话（设计 §3.5），
