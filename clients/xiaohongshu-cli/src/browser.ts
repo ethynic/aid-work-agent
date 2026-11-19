@@ -2,6 +2,10 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { chromium, type BrowserContext, type Page } from 'playwright-core'
+import { BrowserFailure } from './errors.js'
+import { collectionLimit, listComments, listNotes, noteId, openConversation, profileTarget } from './browsing.js'
+
+export { BrowserFailure } from './errors.js'
 
 export const HOME = 'https://www.xiaohongshu.com/explore'
 export const PROFILE_KEY = /^[0-9a-f]{64}$/
@@ -18,10 +22,6 @@ export function chromeExecutable(): string | undefined {
     process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', localAppData]
     .map(path => join(path, 'Google', 'Chrome', 'Application', 'chrome.exe'))
     .find(existsSync)
-}
-
-export class BrowserFailure extends Error {
-  constructor(readonly code: string, message: string) { super(message) }
 }
 
 export type BrowserAction = 'login' | 'open'
@@ -51,6 +51,30 @@ export class XiaohongshuBrowser {
   constructor(private readonly launch: LaunchProfile = launchProfile) {}
 
   async run(action: BrowserAction, profileKey: string, signal?: AbortSignal): Promise<BrowserStatus> {
+    return this.execute(profileKey, page => this.openPage(page, action, signal), signal)
+  }
+
+  async listNotes(profileKey: string, profileUrl: string, limit?: number, signal?: AbortSignal) {
+    const target = profileTarget(profileUrl)
+    const maximum = collectionLimit(limit)
+    return this.execute(profileKey, page => listNotes(page, target, maximum, signal), signal)
+  }
+
+  async listComments(profileKey: string, profileUrl: string, id: string, limit?: number, signal?: AbortSignal) {
+    const target = profileTarget(profileUrl)
+    const maximum = collectionLimit(limit)
+    const note = noteId(id)
+    return this.execute(profileKey, page => listComments(page, target, note, maximum, signal), signal)
+  }
+
+  async openConversation(profileKey: string, profileUrl: string, signal?: AbortSignal) {
+    const target = profileTarget(profileUrl)
+    return this.execute(profileKey, (page, context) => openConversation(page, context, target, signal), signal)
+  }
+
+  private async execute<T>(
+    profileKey: string, action: (page: Page, context: BrowserContext) => Promise<T>, signal?: AbortSignal,
+  ): Promise<T> {
     if (!PROFILE_KEY.test(profileKey)) throw new BrowserFailure('XHS_INVALID_INPUT', '连接资料无效')
     if (this.busy) throw new BrowserFailure('XHS_BUSY', '设备正在打开小红书，请稍后重试')
     this.busy = true
@@ -63,9 +87,15 @@ export class XiaohongshuBrowser {
         context.once('close', () => this.contexts.delete(profileKey))
       }
       signal?.throwIfAborted()
-      const existing = context.pages().find(page => page.url() === HOME || page.url() === 'about:blank')
+      const existing = context.pages().find(page => {
+        if (page.url() === 'about:blank') return true
+        const url = new URL(page.url())
+        return url.origin === new URL(HOME).origin && url.pathname !== '/chat'
+      })
       const page = existing ?? await context.newPage()
-      return await this.openPage(page, action, signal)
+      const result = await action(page, context)
+      signal?.throwIfAborted()
+      return result
     } catch (error) {
       if (error instanceof BrowserFailure) throw error
       if (signal?.aborted) throw new BrowserFailure('XHS_CANCELLED', '操作已取消')

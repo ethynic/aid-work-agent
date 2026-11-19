@@ -288,6 +288,8 @@ suggestion_created → suggestion_pending_review → suggestion_approved
 
 连接器接口（扩展可选能力）：`ensure_logged_in`（登录态校验/恢复，失效转人工重新登录，不破解）、`search`、`read_page`、`post_content`、`comment`、`send_dm`、`fetch_interactions`。
 
+小红书指定主页场景沿[本机连接器设计](../../design/xiaohongshu-local-connector-design.md#指定主页线索与首条私信)使用用户设备上的已登录 Runtime 插件。社媒智能体负责来源清单、[企业线索筛选配置](../../design/xiaohongshu-local-connector-design.md#爱定义科技线索筛选配置初稿)和交接记录。首条私信在明确任务授权和网页允许时由插件执行，人工继续沟通。其他平台和接洽场景沿各自现有设计。
+
 ### 7.3 操作节奏与异常处理
 
 - **操作节奏管理**：日配额（单账号日发布 2–3、评论 10–15、私信 3–5）、动作间随机间隔、只在正常活跃时段操作；

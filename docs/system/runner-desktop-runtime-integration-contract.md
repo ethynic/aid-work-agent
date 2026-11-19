@@ -31,6 +31,8 @@
 - 小红书 Provider 唯一生成浏览器结果。成功沿现有 OperationResult 外层回传 `data: {schema_version: 1, status: "qr_ready" | "opened"}`。扫码和打开都可能回报已打开；`qr_ready` 只证明二维码已显示。会话失效返回 `XHS_LOGIN_REQUIRED`。页面身份无法核定与浏览器不可用使用本业务错误码。调用过程与结果均不含二维码或浏览器凭据，设备不接收任意导航地址或 Profile 路径。
 - 开发者维护 Provider、服务端和 UI 接线。主控维护此契约与计划。独立验证覆盖可信安装和发现、调用归属、Profile 隔离、固定输入和结果投影，以及服务端单独升级后已交付旧 Provider 的路径。
 
+
+2026-11-19 · 小红书线索能力为插件业务 schema v1 加性变更。CLI 是签名工具声明、浏览结果及首条发送事实的唯一生产端。现有可信清单、设备领取流程和 OperationResult 外层沿用，新增工具串行执行。本期只交付 CLI/MCP 能力，无云端模型投影。老插件保留登录和打开能力。共同契约、计划由主控登记，开发智能体写插件，独立测试与审查验证真实入口和兼容。详见[线索场景](../design/xiaohongshu-local-connector-design.md#指定主页线索与首条私信)。
 ### BOSS 筛选容错与本机操作恢复共同检查点
 
 2026-11-12 · 本节登记契约 2.20 的既有事实与 2026-11-18 无人值守恢复增量（代码已实现，Windows 实机验收与正式发版待完成）。适用 BOSS 网页任务。规则见 [筛选输入](../design/recruiting/resume-job-matching-design.md#boss-筛选参数容错)、[恢复交互](agent-application-architecture-design.md#boss-本机操作恢复) 和 [计划](../plans/plan-boss-filter-input-and-local-recovery.md)。
