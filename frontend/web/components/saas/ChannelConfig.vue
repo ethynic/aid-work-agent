@@ -44,8 +44,9 @@
           </div>
         </div>
         <!-- 回调地址展示（企业微信应用通知为纯外发通知渠道，无回调地址；
-             企微/飞书应用「仅通知」用途同样不接回调） -->
-        <div v-if="tenant && ch.channel_type !== 'wecom_app_notify' && ch.config?.notify_usage !== 'notify_only'" class="bg-canvas rounded-lg p-3 text-sm">
+             企微/飞书应用「仅通知」用途同样不接回调；
+             web_c 为前端嵌入直连 API 渠道，后端无回调端点，同样不展示） -->
+        <div v-if="tenant && ch.channel_type !== 'wecom_app_notify' && ch.channel_type !== 'web_c' && ch.config?.notify_usage !== 'notify_only'" class="bg-canvas rounded-lg p-3 text-sm">
           <span class="text-muted">回调地址：</span>
           <code class="text-primary-600 select-all font-mono">{{ ch.callback_url || getCallbackUrl(ch.channel_type, ch.config_id) }}</code>
           <BaseButton intent="ghost" size="sm" @click="copyUrl(ch.callback_url || getCallbackUrl(ch.channel_type, ch.config_id), ch.config_id)">
@@ -244,21 +245,24 @@
             <p class="text-xs text-muted">默认关闭，聊天页仅支持纯文字；开启后访客可上传文件/图片（单次最多 10 个，单个 20MB）</p>
           </div>
 
-          <!-- 历史会话入口开关（默认关：不显示右上角按钮；uid 模式服务端强制关闭故隐藏） -->
-          <div v-if="form.config.identity_mode !== 'uid'" class="flex items-start gap-2">
+          <!-- 历史会话入口开关（默认关；uid 模式服务端强制关闭，此处禁用置灰让管理员可见该约束） -->
+          <div class="flex items-start gap-2">
             <input
               id="webc-show-history"
               type="checkbox"
               v-model="form.config.show_history"
-              class="mt-1 w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+              :disabled="form.config.identity_mode === 'uid'"
+              class="mt-1 w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
             />
-            <label for="webc-show-history" class="text-sm text-default cursor-pointer">显示历史会话入口</label>
-            <p class="text-xs text-muted">默认关闭，聊天页右上角不显示「历史会话」按钮；开启后匿名身份可查看本浏览器历史会话（仅匿名模式生效）</p>
+            <label for="webc-show-history" class="text-sm text-default cursor-pointer" :class="form.config.identity_mode === 'uid' ? 'text-muted' : ''">显示历史会话入口</label>
+            <p class="text-xs text-muted">默认关闭，聊天页右上角不显示「历史会话」按钮；开启后匿名身份可查看本浏览器历史会话（仅匿名模式生效）{{ form.config.identity_mode === 'uid' ? '；userid 链接模式不验签无跨访问历史，该入口强制关闭' : '' }}</p>
           </div>
 
           <!-- 集成代码 -->
           <div class="bg-canvas rounded-lg p-3">
             <div class="text-sm font-medium text-default mb-2">集成代码（保存后复制）</div>
+            <p v-if="form.config.identity_mode === 'uid'" class="text-xs text-warning-600 mb-2">当前为 userid 链接模式：复制后把 <code class="font-mono">{官网userid}</code>（及可选 name）替换为当前登录用户的实际值再嵌入</p>
+            <p v-else-if="form.config.identity_mode === 'ext'" class="text-xs text-warning-600 mb-2">当前为签名链接模式：参数需由官网服务端按下方签名算法生成后拼接，直接复制仅为链接形态示意</p>
             <template v-if="editingId">
               <div class="space-y-2 text-xs">
                 <div>
@@ -284,7 +288,7 @@
           <details v-if="form.config.identity_mode === 'uid'" class="bg-canvas rounded-lg p-3">
             <summary class="cursor-pointer text-sm font-medium text-default">userid 链接说明（官网仅需改前端）</summary>
             <div class="mt-2 text-xs text-muted space-y-2">
-              <p>链接形态：官网前端在现有聊天页地址后拼接 <code class="font-mono">?u={官网userid}</code>，可选 <code class="font-mono">&amp;name={urlencode(昵称)}</code> 用于接待页显示。无需后端签名服务。</p>
+              <p>链接形态：官网前端在现有聊天页地址后拼接 <code class="font-mono">?u={官网userid}</code>，可选 <code class="font-mono">&amp;name={urlencode(可选显示名称)}</code> 用于接待页显示。无需后端签名服务。</p>
               <p class="text-default">注意：userid 不验签，恶意用户可伪造他人 userid，因此<b class="text-default">本模式下聊天页无跨访问历史会话</b>（每次进入为新会话，同一标签页刷新保持）。管理员在「官网接待客户」页可按人查看全部会话。需要跨访问连续性请使用签名链接模式。</p>
             </div>
           </details>
@@ -297,7 +301,7 @@
             </summary>
             <div class="mt-2 text-xs text-muted space-y-2">
               <p>签名必须在<b class="text-default">官网服务端</b>生成（官网有登录体系即有服务端；前端 JS 内嵌密钥等于没有签名，任何人都可伪造身份读取他人会话）。无法做服务端签名的官网请使用匿名模式。</p>
-              <p>链接形态：<code class="font-mono">/c/{tenant_id}/{config_id}?u={userid}&amp;name={urlencode(昵称)}&amp;ts={unix秒}&amp;sig={签名}</code></p>
+              <p>链接形态：<code class="font-mono">/c/{tenant_id}/{config_id}?u={userid}&amp;name={urlencode(可选显示名称)}&amp;ts={unix秒}&amp;sig={签名}</code></p>
               <p>签名算法：<code class="font-mono">sig = HMAC-SHA256(key=channel_secret, message="{userid}.{ts}.{name}")</code> hex 小写；name 可缺省（缺省时签名串用空串）；ts 与服务端时间差 ≤ 24 小时。</p>
               <div class="bg-surface border border-default rounded p-2">
                 <p class="font-medium text-default mb-1">本渠道占位符实际取值（替换后即可使用）：</p>
@@ -561,8 +565,9 @@
         </div>
 
         <!-- 回调地址提示（企业微信应用通知为纯外发通知渠道，无回调地址；
-             企微/飞书应用「仅通知」用途纯服务端 API 发消息，同样无回调） -->
-        <div v-if="tenant && form.channel_type !== 'wecom_app_notify' && !isNotifyOnly" class="mt-3 bg-primary-50 border border-primary-200 rounded-lg p-3">
+             企微/飞书应用「仅通知」用途纯服务端 API 发消息，同样无回调；
+             web_c 为前端嵌入直连 API 渠道，后端无回调端点，签名参数在官网服务端生成后拼进聊天页链接，与回调无关） -->
+        <div v-if="tenant && form.channel_type !== 'wecom_app_notify' && form.channel_type !== 'web_c' && !isNotifyOnly" class="mt-3 bg-primary-50 border border-primary-200 rounded-lg p-3">
           <p class="text-sm font-medium text-primary-800 mb-1">回调地址</p>
           <p class="text-xs text-primary-600 mb-2">请将此地址填入 {{ channelTypeLabel(form.channel_type) }} 后台的「接收消息」配置中</p>
           <div class="flex items-center gap-2">
@@ -801,7 +806,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, inject } from 'vue'
+import { ref, reactive, computed, onMounted, inject, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import AppHeader from '@/components/AppHeader.vue'
@@ -1366,6 +1371,13 @@ function selectChannelType(type: string) {
   }
 }
 
+// web_c 身份模式切换到 uid 时强制关闭历史会话入口（与服务端 bootstrap 强制 False 同口径）
+watch(() => form.value.config.identity_mode, (mode) => {
+  if (form.value.channel_type === 'web_c' && mode === 'uid' && form.value.config.show_history) {
+    form.value.config.show_history = false
+  }
+})
+
 // ==================== 配置指引（简短版，弹窗内） ====================
 
 const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: string }> = {
@@ -1867,14 +1879,25 @@ function editChannel(ch: any) {
 
 // ==================== 官网客服（web_c）：签名密钥与集成代码 ====================
 
+// 集成代码随身份模式变化：anon 为纯链接；uid 拼接 userid 参数；ext 拼接签名参数（占位符，
+// 实际值由官网服务端按签名算法生成，见下方签名说明）
 const webCChatUrl = computed(() => {
   if (!editingId.value) return ''
-  return `${window.location.origin}/c/${tenantId.value}/${editingId.value}`
+  const base = `${window.location.origin}/c/${tenantId.value}/${editingId.value}`
+  const mode = form.value.config.identity_mode || 'anon'
+  if (mode === 'uid') {
+    return `${base}?u={官网userid}&name={urlencode(可选显示名称)}`
+  }
+  if (mode === 'ext') {
+    return `${base}?u={userid}&name={urlencode(可选显示名称)}&ts={unix秒}&sig={签名}`
+  }
+  return base
 })
 
 const webCIframeCode = computed(() => {
   if (!editingId.value) return ''
-  return `<iframe src="${webCChatUrl.value}?embed=1" style="width:420px;height:640px;border:0" allow="clipboard-write"></iframe>`
+  const sep = webCChatUrl.value.includes('?') ? '&' : '?'
+  return `<iframe src="${webCChatUrl.value}${sep}embed=1" style="width:420px;height:640px;border:0" allow="clipboard-write"></iframe>`
 })
 
 function copyText(text: string, label: string) {
@@ -1919,7 +1942,7 @@ function copyWebCSignDoc() {
     '',
     '## 链接形态',
     '',
-    '`/c/{tenant_id}/{config_id}?u={userid}&name={urlencode(昵称)}&ts={unix秒}&sig={签名}`',
+    '`/c/{tenant_id}/{config_id}?u={userid}&name={urlencode(可选显示名称)}&ts={unix秒}&sig={签名}`',
     '',
     '## 占位符实际取值（本渠道）',
     '',
