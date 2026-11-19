@@ -21,7 +21,11 @@ from src.saas.api.tenant_auth import require_admin
 from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.db.subscription_db import SubscriptionDB
 from src.saas.models.enums import BehaviorAction, BehaviorResourceType
-from src.saas.services.channel_factory import ChannelFactory
+from src.saas.services.channel_factory import (
+    ChannelFactory,
+    MEDIA_SWITCH_CHANNEL_TYPES,
+    extract_media_switches,
+)
 from src.services.behavior_log import audit_action
 from src.db.database import get_db_connection
 from src.wechat_mp import config_codec as wechat_mp_codec
@@ -186,6 +190,17 @@ def _normalize_web_c_config(config: dict, existing: Optional[dict] = None) -> No
     if not secret:
         old_secret = str((existing or {}).get("channel_secret") or "").strip()
         config["channel_secret"] = old_secret or _generate_web_c_secret()
+
+
+def _normalize_media_switch_config(channel_type: str, config: dict) -> None:
+    """原地规整媒体识别开关字段（create/update 共用，2026-11-19）。
+
+    支持渠道（wecom/wecom_kf/dingtalk/feishu）将 asr_enabled（缺省 True）/
+    image_recognition_enabled（缺省 False）以规整后的布尔值写回 config，
+    保证存量/前端漏传时落库值确定；非支持渠道不动（不注入无关键）。
+    """
+    switches = extract_media_switches(channel_type, config)
+    config.update(switches)
 
 
 def _notify_usage(channel_type: str, config: dict) -> str:
@@ -361,6 +376,11 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
         body.config = dict(body.config)
         _normalize_web_c_config(body.config)
 
+    # 媒体识别开关（2026-11-19）：支持渠道规整布尔值落库（缺省 ASR 开、图片识别关）
+    if body.channel_type in MEDIA_SWITCH_CHANNEL_TYPES:
+        body.config = dict(body.config)
+        _normalize_media_switch_config(body.channel_type, body.config)
+
     _validate_channel_subagent(admin["tenant_id"], body.subagent_type)
 
     try:
@@ -457,6 +477,12 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
         body.config = dict(body.config)
         # web_c get_by_id 返回明文 config（非敏感字段机制渠道），旧 secret 可直接沿用
         _normalize_web_c_config(body.config, existing.get("config") or {})
+
+    # 媒体识别开关（2026-11-19）：支持渠道规整布尔值落库（缺省 ASR 开、图片识别关；
+    # 前端漏传/存量旧表单整体覆盖时开关值确定，不会静默丢失）
+    if existing["channel_type"] in MEDIA_SWITCH_CHANNEL_TYPES:
+        body.config = dict(body.config)
+        _normalize_media_switch_config(existing["channel_type"], body.config)
 
     _validate_channel_subagent(admin["tenant_id"], body.subagent_type)
 

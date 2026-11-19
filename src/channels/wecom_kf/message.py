@@ -107,6 +107,10 @@ def should_process_kf_message(msgtype: str) -> bool:
 # 拦截 video/file 等不支持消息时回复客户的固定话术（image/text/voice 已放行）
 KF_FILTER_HINT_MESSAGE = "我无法识别该类型文件，请直接发送图片，并用文字描述您的需求。"
 
+# 媒体识别开关关闭（租户渠道配置 asr_enabled/image_recognition_enabled，2026-11-19）
+# 时语音/图片消息回复客户的固定话术（同 KF_FILTER_HINT_MESSAGE 节流口径）
+KF_MEDIA_DISABLED_HINT_MESSAGE = "当前未开通语音/图片识别功能，请用文字发送消息。"
+
 
 def markdown_to_plain_text(md: str) -> str:
     """

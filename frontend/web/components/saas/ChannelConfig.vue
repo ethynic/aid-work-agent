@@ -210,6 +210,31 @@
           </div>
         </div>
 
+        <!-- 媒体识别开关（2026-11-19）：语音 ASR 默认开、图片识别默认关，识别消耗租户积分 -->
+        <div v-if="supportsMediaSwitches" class="mt-3 pt-3 border-t border-default space-y-2">
+          <div class="text-sm font-medium text-default">媒体识别（消耗积分）</div>
+          <div class="flex items-start gap-2">
+            <input
+              id="media-asr-enabled"
+              type="checkbox"
+              v-model="form.config.asr_enabled"
+              class="mt-1 w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+            />
+            <label for="media-asr-enabled" class="text-sm text-default cursor-pointer">语音识别（ASR）</label>
+            <p class="text-xs text-muted">默认开启，语音自动转文字后进入对话（按次消耗积分）；关闭后语音不再转文字、不产生识别消耗</p>
+          </div>
+          <div class="flex items-start gap-2">
+            <input
+              id="media-image-enabled"
+              type="checkbox"
+              v-model="form.config.image_recognition_enabled"
+              class="mt-1 w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+            />
+            <label for="media-image-enabled" class="text-sm text-default cursor-pointer">图片识别</label>
+            <p class="text-xs text-muted">默认关闭；开启后客户发来的图片会传给数字员工判读（多模态积分消耗较高）；关闭后图片不识别、不产生识别消耗</p>
+          </div>
+        </div>
+
         <!-- 官网客服专属：身份模式 / 签名密钥 / 集成代码（设计 §4.8） -->
         <div v-if="form.channel_type === 'web_c'" class="mt-3 pt-3 border-t border-default space-y-3">
           <div class="grid grid-cols-2 gap-3">
@@ -1328,6 +1353,22 @@ const notifyUsage = computed({
 const isNotifyOnly = computed(() =>
   supportsNotifyUsage.value && notifyUsage.value === 'notify_only')
 
+// ==================== 媒体识别开关（2026-11-19） ====================
+// 语音 ASR（默认开）/ 图片识别（默认关）；识别消耗租户积分，租户可按渠道关闭。
+// 与后端 channel_factory.MEDIA_SWITCH_CHANNEL_TYPES 口径一致
+const MEDIA_SWITCH_CHANNEL_TYPES = ['wecom', 'wecom_kf', 'dingtalk', 'feishu']
+
+const supportsMediaSwitches = computed(() =>
+  MEDIA_SWITCH_CHANNEL_TYPES.includes(form.value.channel_type) && !isNotifyOnly.value)
+
+// checkbox 绑定需显式初值：存量配置不含键时按缺省回填（须在快照捕获前调用，避免误报脏状态）
+function applyMediaSwitchDefaults() {
+  if (supportsMediaSwitches.value) {
+    if (form.value.config.asr_enabled === undefined) form.value.config.asr_enabled = true
+    if (form.value.config.image_recognition_enabled === undefined) form.value.config.image_recognition_enabled = false
+  }
+}
+
 // 钉钉「仅通知」用途补填字段：工作通知发送需应用 AgentId（2026-11-16 钉钉通知接入；
 // agent_only/both 保持原两项表单不变——存量行为零变更）
 const DINGTALK_NOTIFY_ONLY_AGENT_FIELD: { key: string; label: string; placeholder: string; hint?: string; location: string; type?: 'text' | 'file' | 'password' } =
@@ -1860,6 +1901,7 @@ function copyHistoryLink(it: ListHistoryItem) {
 function openAddChannel() {
   editingId.value = null
   form.value = { channel_type: 'wecom', name: '', config: {}, subagent_type: '' }
+  applyMediaSwitchDefaults()
   formError.value = ''
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
   resetWaitingIndicator()
@@ -1870,6 +1912,7 @@ function openAddChannel() {
 function editChannel(ch: any) {
   editingId.value = ch.config_id
   form.value = { channel_type: ch.channel_type, name: ch.name || '', config: { ...ch.config }, subagent_type: ch.subagent_type || '' }
+  applyMediaSwitchDefaults()
   formError.value = ''
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
   loadWaitingIndicator(ch.config?.waiting_indicator)
