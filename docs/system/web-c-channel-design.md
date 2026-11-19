@@ -1,6 +1,7 @@
 # 官网客服渠道（web_c）设计方案
 
 > 状态：Phase 1+2 已实现（2026-11-16，代码完成待部署真机验收；实现偏离点见下）
+> 增补：uid 模式（仅 userid 链接，免签名，2026-11-19 设计定版并实现，见 §3.5）
 > 实现偏离：C 端上传落盘名用 `{file_id}{ext}`（设计原稿 upload_{uuid12}.{ext}）——Runner 侧 `resolve_scoped_uploaded_file` 磁盘兜底按 basename==file_id 匹配，Redis TTL 过期后仍可解析；C 端前端以 GET runner 快照轮询驱动流式渲染（SSE 事件流为无载荷变更通知，每帧触发快照刷新，连续失败回退轮询），SSE 透传端点保留。
 > 定版命名：channel_type = `web_c`，显示名 = **官网客服**
 > 定版命名：channel_type = `web_c`，显示名 = **官网客服**
@@ -10,12 +11,13 @@
 
 现有渠道中，wecom_kf（微信客服）允许 C 端用户免登录与智能体会话，但要求租户开通企业微信；Web 聊天仅面向 B 端（租户员工）且必须登录。本方案新增 **官网客服（web_c）** 渠道：租户管理员在本租户开通配置后，将「AI 聊天」入口嵌入租户官网（按钮跳转或 iframe），C 端访客免注册/免登录直接对话。
 
-身份两种来源：
+身份三种来源：
 
 | 模式 | 场景 | 身份凭证 | 历史会话可见范围 |
 |------|------|---------|----------------|
 | 签名链接（ext） | 租户官网自有登录体系 | 官网服务端生成的 HMAC 签名链接（防伪造） | 同一 userid，跨设备可见 |
 | 匿名（anon） | 官网无登录体系 | 前端生成随机 uid 存 localStorage + cookie 双写 | 同一浏览器可见；换浏览器/清存储丢失（本质属性） |
+| 仅 userid 链接（uid，2026-11-19 增补） | 官网只能改前端、无签名服务 | URL 直接携带官网 userid（不验签，§3.5） | 无（服务端强制关闭，防伪造 userid 读他人历史）；租户管理员在「官网接待客户」页可看全部 |
 
 Phase 1 交付渠道核心（配置、C 端聊天页、执行链路、附件/图片上传、留资接入、防滥用与计费）；Phase 2 仿照「微信接待客户」页交付租户侧「官网接待客户」查看页（含留资线索 Tab）。转人工暂不考虑（裁决 2026-11-16）。
 
@@ -46,6 +48,7 @@ Phase 1 交付渠道核心（配置、C 端聊天页、执行链路、附件/图
 |------|---------------------|------|
 | 签名 | `ext_{官网userid}` | 官网 userid 原样透传，`ext_` 前缀与匿名区分，便于接待页统计 |
 | 匿名 | `anon_{uuid4}` | 前端生成，localStorage + cookie 双写 |
+| 仅 userid | `uid_{官网userid}` | 不验签只做归属；与 `ext_` 分命名空间，伪造 uid 链接触碰不到签名用户的会话（§3.5） |
 
 session_id 自动生成为 `{tenant_id}_web_c_{channel_user_id}_{subagent_id}`（channel_chat_id 为空不纳入）。
 
@@ -74,8 +77,40 @@ session_id 自动生成为 `{tenant_id}_web_c_{channel_user_id}_{subagent_id}`�
 |------|---------|-----------|
 | ext | `u` + `ts` + `sig`（query 或 header） | config_id 归属租户且 `channel_type='web_c'` 且 `enabled`；HMAC 验签；ts 时效 |
 | anon | `uid`（query 或 header） | config_id 归属租户且 enabled；uid 格式（`anon_` + uuid） |
+| uid | `u`（query 或 header） | config_id 归属租户且 enabled 且 `identity_mode='uid'`；userid 格式白名单（同 ext 正则）；无签名校验（§3.5） |
 
 校验失败一律 401/403，不区分失败原因细节（防枚举）。所有会话/消息查询强制叠加 `tenant_id + session_id 前缀` 双重过滤，杜绝跨租户、跨身份读他人会话。
+
+### 3.5 uid 模式（仅 userid 链接，免签名，2026-11-19 增补）
+
+**定位**：匿名（anon）与签名链接（ext）之间的折中。租户官网只改前端（嵌入聊天页链接时带上官网 userid），无需后端签名服务；代价是**无跨访问会话连续性**（设计使然）。
+
+| 维度 | anon | uid | ext |
+|------|------|-----|-----|
+| 官网改造 | 无 | 仅前端 | 前端 + 后端签名 |
+| 身份可信 | 不可信（浏览器随机） | 不可信（URL 可伪造） | 可信（HMAC 验签） |
+| 跨设备/跨访问连续性 | 无 | 无 | 有 |
+| 历史会话入口 | 开关可选 | 服务端强制关闭 | 无（按 userid 跨设备续聊） |
+
+**安全模型**：userid 不验签 = 任何人可伪造他人 userid，因此 **userid 只做归属（接待页按人统计），绝不作为会话读取凭据**。防线三条：
+
+1. **无确定性默认会话**：uid 模式不调用 `get_or_create_session` 按 userid 派生默认会话（ext/anon 沿用），首条消息一律惰性创建随机后缀会话（`_s{12hex}`，复用 `_create_extra_session_sync`），session_id 48bit 熵不可枚举。
+2. **会话 id 由前端 sessionStorage 持有**（key `web_c_sess_{config_id}`，每标签页独立，try/catch 降级内存持有）：真实用户同一标签页刷新/站内跳转保持会话；关标签页再进即新会话（等价「每次进入都开新会话」且刷新不断线）；攻击者伪造 userid 后本地无受害者 session_id，只能开新空会话。sessionStorage 绑定标签页而非页面加载，租户官网整体刷新（iframe 随之重载）不丢会话。
+3. **服务端闸门（不依赖前端）**：
+   - `/bootstrap`：uid 模式 `sessions` 恒空、`show_history` 恒 false（开关只挡 UI 不挡 API，必须在服务端置空）；
+   - `GET /sessions`：uid 模式恒返回空列表；
+   - `_assert_session_owned` 在 uid 模式额外要求 `_s{8hex}` 以上随机后缀，防将来任何确定性会话 id 在 uid 模式下可寻址。
+
+**channel_user_id 前缀 `uid_{userid}`**：与 `ext_{userid}` 分命名空间，同一官网用户走签名与走 uid 链接是两个独立访客/会话域，伪造 uid 链接无法触碰签名用户的任何会话。
+
+**前端行为**（`webC.ts` / `WebCChat.vue`）：URL 有 `u` 即透传（签名三元组齐备为 ext，仅 u 为 uid 链接，可用性由后端 `identity_mode` 门控，非 uid 渠道 403）；uid 模式下当前会话读写 sessionStorage、首条消息后落存储、「新会话」按钮清存储进空白聊天、历史会话入口仅 anon 模式渲染。
+
+**残余接受项**：
+- display_name 来自 URL `name` 参数（请求自身参数，不读库），伪造者只能污染自己会话的显示名，无法读取他人信息；接待页可能看到伪造的 name/userid（归属污染接受，与 ext 的「官网 userid 唯一」约定同级）。
+- sessionStorage 在隐私模式/部分浏览器第三方 iframe 策略下不可用时降级为内存持有 → 刷新即新会话，只损失连续性不损失安全性。
+- uid 模式下签名参数（ts/sig）被忽略，不做「验签通过升级 ext」的混合语义，避免同一链接两套会话域。
+
+**UX 口径（对接文档/配置页）**：uid 模式无跨访问连续性，想要连续性升级签名链接。
 
 ## 4. Phase 1 详细设计
 
@@ -226,10 +261,11 @@ C 端流程：
 | 4 | 匿名身份与签名身份合并 | **不做**，两套 session 独立 |
 | 5 | 留资线索 | **纳入**：Phase 1 复用留资链路落库（§4.7），Phase 2 接待页含留资线索 Tab（§5.2） |
 | 6 | 签名时效 | **24h 可以**，后续按需配置化 |
+| 7 | 仅 userid 链接折中方案（免签名、免后端改造） | **纳入**（2026-11-19）：`identity_mode` 增 `uid`；无确定性默认会话 + sessionStorage 持有会话 + bootstrap/sessions 服务端强制置空，见 §3.5 |
 
 ## 7. 验证计划
 
-- 单测：HMAC 验签（有效/过期/篡改/name 缺省）、session_id 生成、`ext_/anon_` 身份构建、限流计数、积分拦截、终态落库幂等、C 端 API 的 config_id 归属与 enabled 校验、runner_id/session_id 归属校验、上传 MIME 白名单/大小限制/文件名清洗、代理下载归属校验（跨身份 file_id 拒绝）、留资 web_c 口径字段（channel_chat_id=None/kf_account_name 快照）。
+- 单测：HMAC 验签（有效/过期/篡改/name 缺省）、session_id 生成、`ext_/anon_/uid_` 身份构建、uid 模式免签名解析与非 uid 渠道 403、uid 模式会话 id 随机后缀闸门、额外会话熵 ≥12 hex、限流计数、积分拦截、终态落库幂等、C 端 API 的 config_id 归属与 enabled 校验、runner_id/session_id 归属校验、上传 MIME 白名单/大小限制/文件名清洗、代理下载归属校验（跨身份 file_id 拒绝）、留资 web_c 口径字段（channel_chat_id=None/kf_account_name 快照）。
 - 集成：TestClient 提交 -> mock Runner client；SSE 透传事件序列；`submit()` 拆分后既有渠道回归（wecom_kf/dingtalk/feishu 渠道管线单测全绿）。
 - 前端：`npm run build` + 聊天页/接待页组件测试。
 - 真机（agent2）：签名链接与匿名两条身份路径、iframe（含 Safari 预期登记）、附件/图片上传与代理下载（含大文件限速）、留资全链路（对话触发落表 + 接待页线索 Tab）、防滥用限流触发、计费落 `chat_records`（source_type=web_c）核对（按 [billing_audit.md](../../.claude/rules/billing_audit.md) 自检）。

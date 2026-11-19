@@ -348,3 +348,91 @@ class TestMultiSession:
             session_id="tenant_x_web_c_u_abc_main_s0a1b2c3", new_session=True)
         assert body2.session_id.startswith("tenant_x_web_c_u_abc_")
         assert body2.new_session is True
+
+
+class TestUidIdentityMode:
+    """uid 模式（仅 userid 链接免签名，设计 §3.5）：身份解析 / 会话 id 后缀闸门 / 熵。"""
+
+    def _resolve(self, conf: dict, params: dict):
+        from types import SimpleNamespace
+
+        from src.saas.api import web_c as web_c_module
+
+        cfg = {"tenant_id": "tenant_x", "channel_type": "web_c",
+               "subagent_type": "main", "config": conf}
+        request = SimpleNamespace(query_params=params, headers={})
+        with patch.object(web_c_module, "_load_web_c_config", return_value=(cfg, conf)):
+            return web_c_module._resolve_identity(request, "tenant_x", "chan_1")
+
+    def test_uid_mode_accepts_unsigned_userid(self):
+        identity = self._resolve({"identity_mode": "uid", "enabled": True},
+                                 {"u": "u1001", "name": "张三"})
+        assert identity.mode == "uid"
+        assert identity.channel_user_id == "uid_u1001"
+        assert identity.display_name == "张三"
+        assert identity.session_prefix == "tenant_x_web_c_uid_u1001_"
+
+    def test_uid_mode_ignores_signature_params(self):
+        # uid 模式下 ts/sig 被忽略：无签名与伪造签名同样按 uid 身份放行，不升级 ext
+        identity = self._resolve({"identity_mode": "uid"},
+                                 {"u": "u1001", "ts": "1", "sig": "deadbeef"})
+        assert identity.mode == "uid"
+        assert identity.channel_user_id == "uid_u1001"
+
+    def test_uid_mode_rejects_bad_userid_format(self):
+        with pytest.raises(HTTPException) as exc:
+            self._resolve({"identity_mode": "uid"}, {"u": "bad id!空间"})
+        assert exc.value.status_code == 403
+
+    def test_uid_mode_rejects_anon_uid(self):
+        # 「仅 userid 链接」= uid 链接单一路径，匿名 uid 不放行
+        with pytest.raises(HTTPException) as exc:
+            self._resolve({"identity_mode": "uid"}, {"uid": "anon_2f0c9d1e-1111-4222-8333-444455556666"})
+        assert exc.value.status_code == 403
+
+    def test_ext_mode_rejects_unsigned_userid(self):
+        # 非 uid 渠道：u 无签名仍 403（既有安全语义不回归）
+        with pytest.raises(HTTPException) as exc:
+            self._resolve({"identity_mode": "both", "channel_secret": SECRET}, {"u": "u1001"})
+        assert exc.value.status_code == 403
+
+    def test_anon_mode_rejects_userid(self):
+        with pytest.raises(HTTPException) as exc:
+            self._resolve({"identity_mode": "anon", "channel_secret": SECRET}, {"u": "u1001"})
+        assert exc.value.status_code == 403
+
+    def test_assert_session_owned_requires_random_suffix_in_uid_mode(self):
+        from src.saas.api.web_c import _assert_session_owned, WebCIdentity
+
+        identity = WebCIdentity("tenant_x", "chan_1", "uid", "uid_u1001", "", "main")
+        # 确定性派生形态（可由 userid 推算）拒绝
+        with pytest.raises(HTTPException) as exc:
+            _assert_session_owned(identity, "tenant_x_web_c_uid_u1001_main")
+        assert exc.value.status_code == 403
+        # 随机后缀形态放行（DB 归属校验 mock 通过）
+        with patch("src.saas.api.web_c.channel_session_manager") as mgr:
+            mgr.get_session_by_id.return_value = {"tenant_id": "tenant_x"}
+            session = _assert_session_owned(
+                identity, "tenant_x_web_c_uid_u1001_main_s0a1b2c3d4e5")
+        assert session["tenant_id"] == "tenant_x"
+
+    def test_assert_session_owned_non_uid_accepts_default_session(self):
+        # ext/anon 模式默认确定性会话不受影响（行为不回归）
+        from src.saas.api.web_c import _assert_session_owned, WebCIdentity
+
+        identity = WebCIdentity("tenant_x", "chan_1", "ext", "ext_u1001", "", "main")
+        with patch("src.saas.api.web_c.channel_session_manager") as mgr:
+            mgr.get_session_by_id.return_value = {"tenant_id": "tenant_x"}
+            session = _assert_session_owned(identity, "tenant_x_web_c_ext_u1001_main")
+        assert session["tenant_id"] == "tenant_x"
+
+    def test_extra_session_suffix_entropy_at_least_12_hex(self):
+        from src.saas.api.web_c import _UID_SESSION_SUFFIX_RE, WebCIdentity, _create_extra_session_sync
+
+        identity = WebCIdentity("tenant_x", "chan_1", "uid", "uid_u1001", "", "main")
+        with patch("src.saas.api.web_c.channel_session_manager") as mgr:
+            mgr.create_session.side_effect = lambda **kw: dict(kw)
+            session = _create_extra_session_sync(identity, "user_1")
+        match = _UID_SESSION_SUFFIX_RE.search(session["session_id"])
+        assert match, f"随机后缀缺失: {session['session_id']}"
+        assert len(match.group(0)) - 2 >= 12  # 去掉 _s 前缀，熵 ≥ 48bit

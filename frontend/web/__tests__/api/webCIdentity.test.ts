@@ -55,8 +55,42 @@ describe('web_c 身份凭证构建', () => {
     expect(identity.uid).toMatch(/^anon_[0-9a-f-]{36}$/)
   })
 
-  it('签名参数不全（缺 sig）时回退匿名', () => {
+  it('签名参数不全（缺 sig）时按 userid 链接透传（uid 渠道可用，其余渠道后端 403）', () => {
     const identity = buildIdentityQuery('cfg1', { u: 'u1001', ts: '1731000000' })
-    expect(identity.uid).toMatch(/^anon_/)
+    expect(identity.u).toBe('u1001')
+    expect(identity.uid).toBeUndefined()
+  })
+})
+
+describe('web_c uid 链接身份（设计 §3.5）', () => {
+  it('仅有 u 无签名时按 userid 链接透传（可用性由后端 identity_mode 门控）', () => {
+    const identity = buildIdentityQuery('cfg1', { u: 'u1001' })
+    expect(identity.u).toBe('u1001')
+    expect(identity.uid).toBeUndefined()
+  })
+
+  it('u + 部分签名参数同样透传（非 uid 渠道由后端 403）', () => {
+    const identity = buildIdentityQuery('cfg1', { u: 'u1001', ts: '1731000000' })
+    expect(identity.u).toBe('u1001')
+    expect(identity.ts).toBe('1731000000')
+    expect(identity.sig).toBe('')
+  })
+
+  it('uid 模式当前会话 sessionStorage 持有：写入/读取/清除', async () => {
+    const { readStoredSessionId, writeStoredSessionId, clearStoredSessionId } = await import('@/api/webC')
+    expect(readStoredSessionId('cfg1')).toBe('')
+    writeStoredSessionId('cfg1', 'tenant_x_web_c_uid_u1_main_s0a1b2c3d4e5')
+    expect(readStoredSessionId('cfg1')).toBe('tenant_x_web_c_uid_u1_main_s0a1b2c3d4e5')
+    expect(sessionStorage.getItem('web_c_sess_cfg1')).toBe('tenant_x_web_c_uid_u1_main_s0a1b2c3d4e5')
+    clearStoredSessionId('cfg1')
+    expect(readStoredSessionId('cfg1')).toBe('')
+  })
+
+  it('非法/超长 session id 不写入', async () => {
+    const { writeStoredSessionId, readStoredSessionId } = await import('@/api/webC')
+    writeStoredSessionId('cfg1', '')
+    expect(readStoredSessionId('cfg1')).toBe('')
+    writeStoredSessionId('cfg1', 'x'.repeat(201))
+    expect(readStoredSessionId('cfg1')).toBe('')
   })
 })

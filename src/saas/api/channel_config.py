@@ -153,7 +153,7 @@ def _generate_web_c_secret() -> str:
     return _secrets.token_hex(32)
 
 
-_WEB_C_IDENTITY_MODES = ("ext", "anon", "both")
+_WEB_C_IDENTITY_MODES = ("ext", "anon", "both", "uid")
 # web_c config 缺省值（create 时补齐；identity_mode 非法值 400）
 _WEB_C_DEFAULT_GREETING = "您好，我是本公司的智能助手，有什么可以帮您？"
 
@@ -176,7 +176,7 @@ def _normalize_web_c_config(config: dict, existing: Optional[dict] = None) -> No
     config["show_history"] = bool(config.get("show_history", False))
     mode = str(config.get("identity_mode") or "both").strip()
     if mode not in _WEB_C_IDENTITY_MODES:
-        raise HTTPException(status_code=400, detail="身份模式取值应为 ext / anon / both")
+        raise HTTPException(status_code=400, detail="身份模式取值应为 ext / anon / both / uid")
     config["identity_mode"] = mode
 
     secret = str(config.get("channel_secret") or "").strip()

@@ -218,8 +218,9 @@
                 <option value="both">签名 + 匿名（默认）</option>
                 <option value="ext">仅签名链接</option>
                 <option value="anon">仅匿名</option>
+                <option value="uid">仅 userid 链接（免签名）</option>
               </BaseSelect>
-              <p class="mt-1 text-xs text-muted">签名：官网服务端按密钥生成，同一官网用户跨设备可见历史；匿名：浏览器本地保留，换浏览器丢失。Safari 对第三方 iframe 的本地存储约 7 天不活跃清除（浏览器策略，非缺陷）。</p>
+              <p class="mt-1 text-xs text-muted">签名：官网服务端按密钥生成，同一官网用户跨设备可见历史；匿名：浏览器本地保留，换浏览器丢失；userid 链接：官网仅改前端嵌入带 userid 的链接，无需后端签名，但不验签故无跨访问历史（每次进入为新会话，管理员可在官网接待客户页查看全部）。Safari 对第三方 iframe 的本地存储约 7 天不活跃清除（浏览器策略，非缺陷）。</p>
             </div>
             <div v-if="editingId">
               <label class="text-sm text-muted mb-1 block">签名密钥</label>
@@ -244,8 +245,8 @@
             <p class="text-xs text-muted">默认关闭，聊天页仅支持纯文字；开启后访客可上传文件/图片（单次最多 10 个，单个 20MB）</p>
           </div>
 
-          <!-- 历史会话入口开关（默认关：不显示右上角按钮） -->
-          <div class="flex items-start gap-2">
+          <!-- 历史会话入口开关（默认关：不显示右上角按钮；uid 模式服务端强制关闭故隐藏） -->
+          <div v-if="form.config.identity_mode !== 'uid'" class="flex items-start gap-2">
             <input
               id="webc-show-history"
               type="checkbox"
@@ -253,7 +254,7 @@
               class="mt-1 w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
             />
             <label for="webc-show-history" class="text-sm text-default cursor-pointer">显示历史会话入口</label>
-            <p class="text-xs text-muted">默认关闭，聊天页右上角不显示「历史会话」按钮；开启后匿名身份可查看本浏览器历史会话</p>
+            <p class="text-xs text-muted">默认关闭，聊天页右上角不显示「历史会话」按钮；开启后匿名身份可查看本浏览器历史会话（仅匿名模式生效）</p>
           </div>
 
           <!-- 集成代码 -->
@@ -280,8 +281,17 @@
             <p v-else class="text-xs text-muted">保存配置后即可生成聊天页地址与 iframe 嵌入代码</p>
           </div>
 
-          <!-- 签名算法说明（ext 模式） -->
-          <details class="bg-canvas rounded-lg p-3">
+          <!-- userid 链接说明（uid 模式） -->
+          <details v-if="form.config.identity_mode === 'uid'" class="bg-canvas rounded-lg p-3">
+            <summary class="cursor-pointer text-sm font-medium text-default">userid 链接说明（官网仅需改前端）</summary>
+            <div class="mt-2 text-xs text-muted space-y-2">
+              <p>链接形态：官网前端在现有聊天页地址后拼接 <code class="font-mono">?u={官网userid}</code>，可选 <code class="font-mono">&amp;name={urlencode(昵称)}</code> 用于接待页显示。无需后端签名服务。</p>
+              <p class="text-default">注意：userid 不验签，恶意用户可伪造他人 userid，因此<b class="text-default">本模式下聊天页无跨访问历史会话</b>（每次进入为新会话，同一标签页刷新保持）。管理员在「官网接待客户」页可按人查看全部会话。需要跨访问连续性请使用签名链接模式。</p>
+            </div>
+          </details>
+
+          <!-- 签名算法说明（ext 模式；uid 模式不使用签名故隐藏） -->
+          <details v-if="form.config.identity_mode !== 'uid'" class="bg-canvas rounded-lg p-3">
             <summary class="flex items-center justify-between cursor-pointer text-sm font-medium text-default">
               <span>签名链接算法说明（官网有登录体系时必读）</span>
               <BaseButton size="sm" intent="ghost" @click.stop.prevent="copyWebCSignDoc">复制MD</BaseButton>
