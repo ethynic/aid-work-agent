@@ -215,11 +215,15 @@
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="text-sm text-muted mb-1 block">身份模式</label>
-              <BaseSelect v-model="form.config.identity_mode">
-                <option value="anon">匿名（默认）</option>
-                <option value="uid">userid 链接（免签名）</option>
-                <option value="ext">签名链接</option>
-              </BaseSelect>
+              <div class="flex items-center gap-2">
+                <BaseSelect v-model="form.config.identity_mode" class="flex-1">
+                  <option value="anon">匿名（默认）</option>
+                  <option value="uid">userid 链接（免签名）</option>
+                  <option value="ext">签名链接</option>
+                </BaseSelect>
+                <BaseButton v-if="form.config.identity_mode !== 'ext'" size="md" @click="downloadWebCDemo">下载 demo 页面</BaseButton>
+              </div>
+              <p v-if="form.config.identity_mode !== 'ext'" class="mt-1 text-xs text-muted">可下载一个极简官网演示页（含 iframe 悬浮客服窗与「AI问答」按钮），链接已按当前渠道生成，可直接交给官网开发人员参考集成</p>
               <p class="mt-1 text-xs text-muted">三种单一身份模式：匿名：浏览器本地保留，换浏览器丢失；userid 链接：官网仅改前端嵌入带 userid 的链接，无需后端签名，但不验签故无跨访问历史（每次进入为新会话，管理员可在官网接待客户页查看全部）；签名：官网服务端按密钥生成，同一官网用户跨设备可见历史。Safari 对第三方 iframe 的本地存储约 7 天不活跃清除（浏览器策略，非缺陷）。</p>
             </div>
             <div v-if="editingId">
@@ -1911,6 +1915,41 @@ function copyWebCSecret() {
     return
   }
   copyText(secret, '签名密钥')
+}
+
+// 官网客服 demo 页面下载（anon/uid 模式可用；ext 模式链接由官网服务端签名生成，不提供 demo）
+// 模板位于 frontend/public/web_c_embed_demo.html（构建后随 dist 根目录发布），
+// 占位符 __WEB_C_CHAT_URL__ / __WEB_C_IFRAME_SRC__ 替换为当前渠道实际链接后以 Blob 下载
+async function downloadWebCDemo() {
+  if (!editingId.value) {
+    toast.warning('请先保存配置，生成渠道地址后再下载 demo 页面')
+    return
+  }
+  const base = `${window.location.origin}/c/${tenantId.value}/${editingId.value}`
+  const mode = form.value.config.identity_mode || 'anon'
+  // uid 模式保留 {官网userid} 占位符（与集成代码口径一致），由官网开发人员替换实际值；匿名模式为纯链接
+  const chatUrl = mode === 'uid'
+    ? `${base}?u={官网userid}&name={urlencode(可选显示名称)}`
+    : base
+  const iframeSrc = `${chatUrl}${chatUrl.includes('?') ? '&' : '?'}embed=1`
+  try {
+    const resp = await fetch('/web_c_embed_demo.html')
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const html = (await resp.text())
+      .split('__WEB_C_IFRAME_SRC__').join(iframeSrc)
+      .split('__WEB_C_CHAT_URL__').join(chatUrl)
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'web_c_chat_demo.html'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(a.href)
+    toast.success('demo 页面已下载，可交给官网开发人员')
+  } catch (e) {
+    toast.error(`下载 demo 页面失败：${e instanceof Error ? e.message : String(e)}`)
+  }
 }
 
 // web_c 签名说明：示例代码（页面展示与「复制MD」共用一份，占位符统一为 {userid} / channel_secret）
