@@ -482,8 +482,7 @@ class SkillScriptRunDispatchTool(LocalToolProxyTool):
     # 弹层自愈是 BOSS 页面编排，对设备脚本执行不适用，绝不触发
     heal_eligible = False
     unsupported_provider_message = (
-        "选定设备不支持技能脚本执行。请确认本机 Runtime 已启用 skill-runner 能力"
-        "（配置 skills.python 受管解释器并安装对应技能）后再试"
+        "选定设备不支持技能脚本执行（skill-runner），请联系管理员确认设备能力后再试"
     )
     timeout_seconds = 900  # 默认值；dispatch 时按 settings.device_execution.timeout_seconds 现读注入
 
