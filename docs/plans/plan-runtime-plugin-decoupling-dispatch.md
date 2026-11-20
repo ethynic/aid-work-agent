@@ -40,7 +40,7 @@
 
 ### Phase 4 agent2 手动发布准备
 
-1. 发布 agent2 服务端并沿用当前安装的 Runtime、CLI 和浏览器插件。用新版 `requirements.txt` 构建服务端镜像，确保所有 Runner worker 能执行 `python -c 'import rfc8785'`。快捷更新脚本只给主 API 容器增量安装 Python 依赖。
+1. 发布 agent2 服务端并沿用当前安装的 Runtime、CLI 和浏览器插件。用新版 `requirements.txt` 构建服务端镜像，确保所有 Runner worker 能执行 `python -c 'import rfc8785'`。快捷更新脚本不重建镜像，改为给本项目内所有同镜像容器（api/background/runner-api/worker/heavy-tools/monitor）逐个增量安装 Python 依赖；安装落在容器可写层，容器再次重建后需重跑脚本或改用镜像构建固化依赖。
 2. 把登记目录放在 agent2 的 `/var/www/agent2/configs/runtime-plugin-manifests`，在 agent2 `.env` 中设 `AGENT_RUNNER_PLUGIN_MANIFEST_DIR=/app/configs/runtime-plugin-manifests`，使发布启动的 Runner 读取该目录。放入验收环境的 `trust-roots.json` 和当前电脑已装浏览器包的两份签名文件，服务端目录按上文的设备编号和插件键布局。
 
 ### Phase 4 agent2 网页验收

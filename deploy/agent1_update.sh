@@ -170,11 +170,40 @@ sudo chown -R ubuntu:ubuntu "$DIST_DIR"
 sudo chmod 777 "$DIST_DIR"
 
 # 8. 增量安装 requirements.txt 中新增的依赖（不重建镜像，新依赖需补装）
-echo "[8] 增量安装新增依赖..."
-docker exec -u root aid-agent-api1 \
-    pip install --no-cache-dir -r /app/requirements.txt \
-    -i https://mirrors.cloud.tencent.com/pypi/simple \
-    --quiet || echo "  警告：依赖安装失败，部分新功能可能不可用"
+#    注意：api/runner-api/runner-worker 共用同一镜像，docker exec 的安装只落在
+#    单个容器的可写层，其它容器不会继承；而 [5] 的 --force-recreate 又会丢弃
+#    容器内既有安装。因此必须对本 compose project 内所有同镜像容器逐个安装，
+#    否则 Runner 侧运行时 import 新依赖直接失败（2026-11-20 rfc8785 事故）。
+echo "[8] 增量安装新增依赖（本项目全部同镜像容器）..."
+PIP_PROJECT=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' aid-agent-api1 2>/dev/null || true)
+[ -z "$PIP_PROJECT" ] && PIP_PROJECT="${PWD##*/}"
+PIP_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=$PIP_PROJECT" \
+    --format '{{.Image}} {{.Names}}' | awk '$1 == "aid-agent-api:latest" {print $2}')
+if [ -z "$PIP_CONTAINERS" ]; then
+    echo "  警告：未匹配到同镜像容器，退回仅安装 aid-agent-api1"
+    PIP_CONTAINERS="aid-agent-api1"
+fi
+PIP_TMPDIR=$(mktemp -d)
+PIP_RUNNING=0
+for c in $PIP_CONTAINERS; do
+    echo "    -> $c"
+    ( docker exec -u root "$c" \
+          pip install --no-cache-dir -r /app/requirements.txt \
+          -i https://mirrors.cloud.tencent.com/pypi/simple \
+          --quiet || echo "$c" >> "$PIP_TMPDIR/failed" ) &
+    PIP_RUNNING=$((PIP_RUNNING + 1))
+    if [ "$PIP_RUNNING" -ge 4 ]; then
+        wait -n || true
+        PIP_RUNNING=$((PIP_RUNNING - 1))
+    fi
+done
+wait || true
+if [ -s "$PIP_TMPDIR/failed" ]; then
+    echo "  警告：以下容器依赖安装失败，对应功能可能不可用：$(tr '\n' ' ' < "$PIP_TMPDIR/failed")"
+else
+    echo "    全部容器依赖安装完成"
+fi
+rm -rf "$PIP_TMPDIR"
 
 # 9. 健康检查（确认启动横幅「⚠️ 仿真环境（SIMULATION_MODE=1）」门控生效）
 echo "[9] 健康检查..."

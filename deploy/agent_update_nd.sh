@@ -16,9 +16,10 @@
 # 与 243 版保持一致，变更记录见 deploy/agent_update.sh。
 #
 # 用法：bash agent_update_nd.sh [recreate|提交哈希]
-#   recreate = 仅重建容器使修改后的 .env 生效（不拉代码、不编译前端、不装依赖；
-#              只做 PG 连通自检 + 后端/runner 容器重建 + CPU 限制 + /tmp 权限兜底）。
-#              docker restart 不会重读 env，必须 force-recreate 重建
+#   recreate = 仅重建容器使修改后的 .env 生效（不拉代码、不编译前端；
+#              只做 PG 连通自检 + 后端/runner 容器重建 + CPU 限制 + /tmp 权限
+#              兜底 + 依赖补装）。docker restart 不会重读 env，必须 force-recreate
+#              重建；重建会丢弃容器可写层里的 pip 安装，故依赖补装必须执行
 #   提交哈希 = 更新到指定版本；不传 = 更新到 origin/master 最新
 # ==============================================================================
 
@@ -234,7 +235,7 @@ if ! sudo docker exec -u root aid-agent-api chmod 1777 /tmp 2>/dev/null; then
 fi
 sudo docker exec -u root aid-agent-api ls -ld /tmp || true
 
-# ── 以下前端切换/依赖安装段仅在标准更新模式执行 ──
+# ── 以下前端切换段仅在标准更新模式执行 ──
 if [ "$RECREATE_ONLY" -eq 0 ]; then
 
 # 8. 等待前端编译完成
@@ -258,14 +259,46 @@ sudo rm -rf "$DIST_DIR.old"
 sudo chown -R "$RUN_USER:$RUN_USER" "$DIST_DIR"
 sudo chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
 
-# 10. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像）
-echo "[10] 增量安装新增依赖..."
-sudo docker exec -u root aid-agent-api \
-    pip install --no-cache-dir -r /app/requirements.txt \
-    -i https://mirrors.cloud.tencent.com/pypi/simple \
-    --quiet || echo "  警告：依赖安装失败，部分新功能可能不可用"
+fi  # 结束：标准更新模式专属段（前端切换）
 
-fi  # 结束：标准更新模式专属段（前端切换/依赖安装）
+# 10. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像）
+#     两种模式都必须执行：recreate 同样会 --force-recreate，丢弃容器可写层里的
+#     既有安装；标准模式还可能引入新依赖。
+#     注意：api/background/runner-api/runner-worker/heavy-tools/runner-monitor 共用
+#     同一镜像，docker exec 的安装只落在单个容器的可写层，其它容器不会继承；
+#     因此必须对本 compose project 内所有同镜像容器逐个安装，否则 Runner 侧
+#     运行时 import 新依赖直接失败（2026-11-20 事故：仅主 API 装了 rfc8785，
+#     Runner worker 全部缺包）。彻底解法仍是定期重建镜像，把依赖固化进镜像层。
+echo "[10] 增量安装新增依赖（本项目全部同镜像容器）..."
+PIP_PROJECT=$(sudo docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' aid-agent-api 2>/dev/null || true)
+[ -z "$PIP_PROJECT" ] && PIP_PROJECT="${PWD##*/}"
+PIP_CONTAINERS=$(sudo docker ps --filter "label=com.docker.compose.project=$PIP_PROJECT" \
+    --format '{{.Image}} {{.Names}}' | awk '$1 == "aid-agent-api:latest" {print $2}')
+if [ -z "$PIP_CONTAINERS" ]; then
+    echo "  警告：未匹配到同镜像容器，退回仅安装 aid-agent-api"
+    PIP_CONTAINERS="aid-agent-api"
+fi
+PIP_TMPDIR=$(mktemp -d)
+PIP_RUNNING=0
+for c in $PIP_CONTAINERS; do
+    echo "    -> $c"
+    ( sudo docker exec -u root "$c" \
+          pip install --no-cache-dir -r /app/requirements.txt \
+          -i https://mirrors.cloud.tencent.com/pypi/simple \
+          --quiet || echo "$c" >> "$PIP_TMPDIR/failed" ) &
+    PIP_RUNNING=$((PIP_RUNNING + 1))
+    if [ "$PIP_RUNNING" -ge 4 ]; then
+        wait -n || true
+        PIP_RUNNING=$((PIP_RUNNING - 1))
+    fi
+done
+wait || true
+if [ -s "$PIP_TMPDIR/failed" ]; then
+    echo "  警告：以下容器依赖安装失败，对应功能可能不可用：$(tr '\n' ' ' < "$PIP_TMPDIR/failed")"
+else
+    echo "    全部容器依赖安装完成"
+fi
+rm -rf "$PIP_TMPDIR"
 
 echo ""
 echo "=========================================="
