@@ -4911,3 +4911,13 @@
         metadata = COALESCE(metadata, '{}'::jsonb) || '{"extra_session": "1"}'::jsonb
     WHERE channel_type = 'web_c'
       AND channel_chat_id ~ '^n_[0-9a-f]{12}$';
+
+- datetime: "2026-11-20 11:00:00"
+  remark: "tdoc_credentials 增加 OAuth 授权字段（auth_type/expires_at/refresh_expires_at/union_id/nick/scope），任务 #2 多租户 OAuth 授权流"
+  statements: |
+    ALTER TABLE tdoc_credentials ADD COLUMN IF NOT EXISTS auth_type TEXT NOT NULL DEFAULT 'personal';
+    ALTER TABLE tdoc_credentials ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;
+    ALTER TABLE tdoc_credentials ADD COLUMN IF NOT EXISTS refresh_expires_at TIMESTAMP;
+    ALTER TABLE tdoc_credentials ADD COLUMN IF NOT EXISTS union_id TEXT;
+    ALTER TABLE tdoc_credentials ADD COLUMN IF NOT EXISTS nick TEXT;
+    ALTER TABLE tdoc_credentials ADD COLUMN IF NOT EXISTS scope TEXT;

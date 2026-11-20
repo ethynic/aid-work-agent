@@ -31,7 +31,7 @@ from src.knowledge.service import knowledge_service
 
 from .client import TencentDocsClient, TencentDocsError, TencentDocsRateLimitError, TencentDocsUnmarshalError
 from .converter import document_tree_to_markdown
-from .credentials import get_credentials
+from .credentials import CredentialsNotBoundError, get_credentials_with_refresh
 from .exporter import (
     EXPORT_DAILY_LIMIT,
     ExportQuotaExceededError,
@@ -108,7 +108,7 @@ async def create_batch(
     if not files:
         return {"success": False, "error": "未选择任何文档"}
 
-    credentials = get_credentials(tenant_id, user_id)
+    credentials = await get_credentials_with_refresh(tenant_id, user_id)
 
     prechecked: List[Dict[str, Any]] = []
     needs_export_count = 0
@@ -207,13 +207,24 @@ def _retry_backoff(retry_count: int) -> int:
     return min(RETRY_BASE_SECONDS * (2 ** retry_count), RETRY_MAX_SECONDS)
 
 
-async def execute_item(item: Dict[str, Any], credentials: TencentDocsCredentials) -> None:
-    """执行单个导入 item。异常全部在内部消化（落 item 状态），不向上抛。"""
+async def execute_item(item: Dict[str, Any], credentials: Optional[TencentDocsCredentials] = None) -> None:
+    """执行单个导入 item。异常全部在内部消化（落 item 状态），不向上抛。
+
+    credentials 缺省时按 item 的 (tenant_id, user_id) 读取（OAuth 凭据自动懒刷新）；
+    调度器默认路径只传 item，测试可直接注入凭据。
+    """
     item_id = item["id"]
     file_id = item["tdoc_file_id"]
     tenant_id = item["tenant_id"]
     user_id = item.get("user_id") or ""
     title = item.get("title") or file_id
+
+    if credentials is None:
+        try:
+            credentials = await get_credentials_with_refresh(tenant_id, user_id)
+        except CredentialsNotBoundError as e:
+            TdocImportItemDB.mark_failed(item_id, f"凭据不可用：{e}")
+            return
 
     try:
         async with TencentDocsClient(credentials) as client:

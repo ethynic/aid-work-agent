@@ -578,6 +578,11 @@ class TencentDocsConfig(BaseModel):
     client_id: str = ""
     access_token: str = ""      # 开发测试期个人 Token；生产禁止落配置
     open_id: str = ""
+    # OAuth 第三方应用（任务 #2，2026-11-20 过审）
+    oauth_client_id: str = ""
+    oauth_client_secret: str = ""  # 仅服务端 env，不下发前端、不落库
+    oauth_redirect_uri: str = "https://agent.aidingyi.cn/api/knowledge/tdoc/oauth/callback"
+    oauth_state_ttl_seconds: int = 600  # 回调 state 一次性防 CSRF 有效期（code 本身 10 分钟）
     request_timeout: int = 30
     export_daily_limit: int = 9  # 官方每 openID 每日导出配额
 

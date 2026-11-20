@@ -7,22 +7,27 @@
 认证：与 knowledge/api.py 同模式（get_current_user + get_current_tenant_id）。
 """
 
+import asyncio
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.api import auth
 from src.db.tdoc_import import TdocImportBatchDB, TdocImportItemDB, TdocImportedDocDB
 from src.saas.context import get_current_tenant_id
+from src.services.tencent_docs import oauth as tdoc_oauth
 from src.services.tencent_docs.client import TencentDocsClient, TencentDocsError
 from src.services.tencent_docs.credentials import (
     CredentialsNotBoundError,
     delete_credentials,
-    get_credentials,
+    get_credentials_with_refresh,
     get_status,
     save_credentials,
+    save_oauth_credentials,
 )
 from src.services.tencent_docs.import_service import create_batch
 
@@ -62,7 +67,11 @@ def _require_auth(http_request: Request) -> Dict[str, Any]:
 @router.get("/auth")
 async def get_auth_status(http_request: Request):
     ctx = _require_auth(http_request)
-    return {"success": True, **get_status(ctx["tenant_id"], ctx["user_id"])}
+    return {
+        "success": True,
+        "oauth_enabled": tdoc_oauth.is_oauth_configured(),
+        **get_status(ctx["tenant_id"], ctx["user_id"]),
+    }
 
 
 @router.post("/auth")
@@ -90,6 +99,82 @@ async def remove_auth(http_request: Request):
     return {"success": True, "deleted": deleted}
 
 
+# ------------------------------- OAuth 授权流（任务 #2） -------------------------------
+
+def _auth_page_url(tenant_id: str, ok: bool, reason: str = "") -> str:
+    """授权结果回跳前端页面（与 redirect_uri 同 origin 的租户前台）。"""
+    base = tdoc_oauth.frontend_base_url()
+    result = "success" if ok else "failed"
+    url = f"{base}/t/{tenant_id}/knowledge/tdoc-imports?tdoc_auth={result}"
+    if reason:
+        url += f"&reason={quote(reason)}"
+    return url
+
+
+@router.get("/oauth/start")
+async def start_oauth(http_request: Request):
+    """发起 OAuth 授权：登录态用户获取绑定到自身身份的授权跳转 URL。"""
+    ctx = _require_auth(http_request)
+    if not tdoc_oauth.is_oauth_configured():
+        raise HTTPException(status_code=409, detail="腾讯文档 OAuth 未配置，请联系管理员")
+    if not await asyncio.to_thread(tdoc_oauth.redis_available):
+        # state 是跨 worker 会话凭据：内存降级会让回调必然 fail-closed，
+        # 与其让用户白走腾讯授权页再失败，不如发起前 fail-fast
+        raise HTTPException(status_code=503, detail="缓存服务不可用，请稍后再试")
+    try:
+        state = tdoc_oauth.create_oauth_state(ctx["tenant_id"], ctx["user_id"])
+        authorize_url = tdoc_oauth.build_authorize_url(state)
+    except Exception as e:
+        logger.opt(exception=True).error(f"腾讯文档 OAuth state 生成失败: {e}")
+        raise HTTPException(status_code=500, detail="授权发起失败，请稍后重试")
+    return {"success": True, "authorize_url": authorize_url}
+
+
+@router.get("/oauth/callback")
+async def oauth_callback(
+    http_request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    error_description: str = "",
+):
+    """腾讯文档 OAuth 回调（浏览器 302 进入，无认证头；身份由一次性 state 还原）。
+
+    成功 -> 302 回 /t/{tenant}/knowledge/tdoc-imports?tdoc_auth=success
+    失败 -> 302 回同页 ?tdoc_auth=failed&reason=...（state 无效时退回站点首页）
+    """
+    payload = tdoc_oauth.consume_oauth_state(state)
+    if not payload:
+        # state 无效/过期：无法定位租户页面，退回前端站点根
+        return RedirectResponse(
+            f"{tdoc_oauth.frontend_base_url()}/?tdoc_auth=failed&reason={quote('授权会话已过期，请重新发起')}",
+            status_code=302,
+        )
+    tenant_id, user_id = payload["tenant_id"], payload["user_id"]
+
+    if error:
+        reason = error_description or error
+        logger.warning(f"腾讯文档 OAuth 回调报错 tenant_id={tenant_id} user_id={user_id}: {error} {error_description}")
+        return RedirectResponse(_auth_page_url(tenant_id, ok=False, reason=reason), status_code=302)
+
+    if not code:
+        return RedirectResponse(_auth_page_url(tenant_id, ok=False, reason="回调缺少授权码"), status_code=302)
+
+    try:
+        token = await tdoc_oauth.exchange_code(code)
+        userinfo = await tdoc_oauth.get_userinfo(token.access_token)
+        await save_oauth_credentials(tenant_id, user_id, token, userinfo)
+    except tdoc_oauth.OAuthError as e:
+        logger.error(f"腾讯文档 OAuth code 换取失败 tenant_id={tenant_id} user_id={user_id}: {e}")
+        return RedirectResponse(_auth_page_url(tenant_id, ok=False, reason=e.message), status_code=302)
+    except Exception as e:
+        logger.opt(exception=True).error(f"腾讯文档 OAuth 凭据落库失败: {e}")
+        return RedirectResponse(_auth_page_url(tenant_id, ok=False, reason="授权处理失败，请重试"), status_code=302)
+
+    logger.info(f"腾讯文档 OAuth 授权完成 tenant_id={tenant_id} user_id={user_id} open_id={token.open_id}")
+    return RedirectResponse(_auth_page_url(tenant_id, ok=True), status_code=302)
+
+
 # ------------------------------- 目录浏览 -------------------------------
 
 @router.get("/files")
@@ -102,7 +187,7 @@ async def list_files(
     """代理浏览腾讯文档目录（分页，start=0 表示根目录；返回 next 供翻页）。"""
     ctx = _require_auth(http_request)
     try:
-        credentials = get_credentials(ctx["tenant_id"], ctx["user_id"])
+        credentials = await get_credentials_with_refresh(ctx["tenant_id"], ctx["user_id"])
     except CredentialsNotBoundError as e:
         raise HTTPException(status_code=409, detail=str(e))
 

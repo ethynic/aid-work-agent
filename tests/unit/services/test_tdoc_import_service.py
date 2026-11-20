@@ -1,6 +1,7 @@
 """导入服务单测：批次创建（预检/配额闸门/无变化跳过）+ item 执行编排（全 mock，不连库不联网）"""
 
 import os
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -123,7 +124,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(svc_mod, "TdocImportItemDB", items_db)
     monkeypatch.setattr(svc_mod, "TdocImportBatchDB", batches_db)
     monkeypatch.setattr(svc_mod, "knowledge_service", ks)
-    monkeypatch.setattr(svc_mod, "get_credentials", lambda t, u: CREDS)
+    monkeypatch.setattr(svc_mod, "get_credentials_with_refresh", AsyncMock(return_value=CREDS))
     monkeypatch.setattr(svc_mod, "get_tenant_storage_dir", lambda tid, scene: str(tmp_path))
     monkeypatch.setattr(svc_mod, "get_tenant_storage_path",
                         lambda tid, scene, fn: os.path.join(str(tmp_path), fn))

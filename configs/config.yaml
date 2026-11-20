@@ -614,5 +614,10 @@ tencent_docs:
   client_id: ${TDOC_CLIENT_ID:-}
   access_token: ${TDOC_ACCESS_TOKEN:-}
   open_id: ${TDOC_OPEN_ID:-}
+  # OAuth 第三方应用（任务 #2）：client_secret 仅存服务器 .env，禁止进仓库
+  oauth_client_id: ${TDOC_OAUTH_CLIENT_ID:-}
+  oauth_client_secret: ${TDOC_OAUTH_CLIENT_SECRET:-}
+  oauth_redirect_uri: ${TDOC_OAUTH_REDIRECT_URI:-https://agent.aidingyi.cn/api/knowledge/tdoc/oauth/callback}
+  oauth_state_ttl_seconds: ${TDOC_OAUTH_STATE_TTL:-600}
   request_timeout: 30
   export_daily_limit: 9

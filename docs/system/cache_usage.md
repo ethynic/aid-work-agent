@@ -478,6 +478,16 @@ AI 获客邮件打开追踪的定时合并任务（每 10 分钟）记录已扫�
 **失效时机**：TTL 过期即视为采集中断（页面 60s 未更新显示「采集中断」）；采集器恢复后下一轮自动重写
 **源文件**：`src/services/system_health/collector.py`、`src/services/system_health/assessment.py`（前缀注册：`src/core/cache_utils.py`）
 
+### 7.9 腾讯文档 OAuth 回调 state
+
+腾讯文档知识库导入 OAuth 授权流（任务 #2）的回调防 CSRF 一次性 state，绑定发起授权的 (tenant_id, user_id)。
+
+**存储**：Redis + 内存降级
+**键模式**：`tdoc_oauth_state:{state}`（state 为 uuid4 hex，一次性）
+**TTL**：600s（不小于授权 code 的 10 分钟有效期）
+**失效时机**：回调消费时 GETDEL 原子取删（防重放）；TTL 过期自动失效。消费侧 `getdel` 禁降级（Redis 不可用返回 None，回调 fail-closed 引导重试）
+**源文件**：`src/services/tencent_docs/oauth.py`（前缀注册：`src/core/cache_utils.py`）
+
 ---
 
 ## 8. 去重缓存（PostgreSQL）

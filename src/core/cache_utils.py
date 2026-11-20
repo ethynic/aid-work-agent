@@ -53,6 +53,7 @@ class CacheKeys:
     WECHAT_MP_SCHEDULER_LOCK = "wechat_mp_scheduler_lock"        # 公众号内容调度器驱动锁（src/wechat_mp/scheduler.py）
     HONGTAO_SHOP_SCHEDULER_LOCK = "hongtao_shop_scheduler_lock"  # hongtao_shop 调度器驱动锁（src/tenant_custom/hongtao_shop/scheduler.py）
     TDOC_EXPORT_COUNT = "tdoc_export_cnt"  # tdoc_export_cnt:{open_id}:{yyyymmdd}（腾讯文档每日导出配额计数，48h TTL）
+    TDOC_OAUTH_STATE = "tdoc_oauth_state"  # tdoc_oauth_state:{state}（OAuth 回调一次性防 CSRF，值={tenant_id,user_id}，TTL 600s）
     AI_LEAD_GEN_OPENS_SYNC = "ailg_opens_sync"  # ailg_opens_sync:watermark（AI获客打开记录合并已扫描的 opens.id 水位，持久无 TTL）
     # video-agent：精修模式提示词草稿缓存（draft_only=True 时写入，draft_only=False 时优先读取）
     # video_prompt_draft:{session_id} -> PromptResult 序列化 dict（含 business_prompt/craft_prompt/model_params）

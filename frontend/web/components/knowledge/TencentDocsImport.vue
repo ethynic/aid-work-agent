@@ -24,16 +24,21 @@
                   {{ authStatus.status === 'active' ? '已绑定' : '已失效' }}
                 </BaseBadge>
                 <BaseBadge v-else intent="neutral">未绑定</BaseBadge>
+                <BaseBadge v-if="authStatus?.bound && authStatus?.auth_type === 'oauth'" intent="info">OAuth 授权</BaseBadge>
               </div>
               <p v-if="authStatus?.bound" class="text-xs text-muted mt-1 truncate">
+                <template v-if="authStatus?.nick">{{ authStatus.nick }}　</template>
                 Client ID：{{ authStatus.client_id_masked }}　Open ID：{{ authStatus.open_id_masked }}
               </p>
-              <p v-else class="text-xs text-muted mt-1">绑定开发期个人测试凭据（Client ID / Access Token / Open ID），仅导入「在线文档」类型</p>
+              <p v-else class="text-xs text-muted mt-1">授权腾讯文档账号后，可批量导入「在线文档」到知识库</p>
             </div>
             <div class="flex gap-2 flex-shrink-0">
+              <BaseButton v-if="authStatus?.oauth_enabled" :disabled="isStartingOAuth" size="sm" @click="handleStartOAuth">
+                {{ isStartingOAuth ? '跳转中...' : '授权绑定' }}
+              </BaseButton>
               <BaseButton v-if="authStatus?.bound" size="sm" intent="secondary" @click="openBindModal">更新凭据</BaseButton>
               <BaseButton v-if="authStatus?.bound" size="sm" intent="danger-ghost" @click="handleUnbind">解绑</BaseButton>
-              <BaseButton v-else size="sm" @click="openBindModal">绑定腾讯文档账号</BaseButton>
+              <BaseButton v-else size="sm" intent="secondary" @click="openBindModal">手工绑定</BaseButton>
             </div>
           </div>
 
@@ -228,7 +233,8 @@ import {
   listTdocFiles,
   listTdocImports,
   retryTdocImport,
-  saveTdocAuth
+  saveTdocAuth,
+  startTdocOAuth
 } from '@/api/tdoc'
 
 const route = useRoute()
@@ -273,6 +279,39 @@ async function loadAuthStatus() {
   } catch (e: any) {
     console.error('前端日志：获取腾讯文档绑定状态失败', e)
   }
+}
+
+// ========== OAuth 授权流 ==========
+const isStartingOAuth = ref(false)
+
+async function handleStartOAuth() {
+  isStartingOAuth.value = true
+  try {
+    const result = await startTdocOAuth()
+    if (result.success && result.authorize_url) {
+      // 整页跳转腾讯文档授权页（回调 302 返回本页带 tdoc_auth 参数）
+      window.location.href = result.authorize_url
+      return
+    }
+    toast.error(result.detail || '发起授权失败')
+  } catch (e: any) {
+    toast.error(e.message || '发起授权失败')
+  } finally {
+    isStartingOAuth.value = false
+  }
+}
+
+/** 回调 302 带回 ?tdoc_auth=success|failed&reason=...，展示结果并清理 URL */
+function consumeOAuthCallbackParam() {
+  const result = route.query.tdoc_auth as string | undefined
+  if (!result) return
+  const reason = (route.query.reason as string | undefined) || ''
+  if (result === 'success') {
+    toast.success('腾讯文档账号授权成功')
+  } else {
+    toast.error(`腾讯文档授权失败${reason ? `：${reason}` : ''}`)
+  }
+  router.replace({ query: { ...route.query, tdoc_auth: undefined, reason: undefined } })
 }
 
 function openBindModal() {
@@ -604,6 +643,7 @@ function stopPolling() {
 watch(batches, () => startPollingIfNeeded())
 
 onMounted(async () => {
+  consumeOAuthCallbackParam()
   await Promise.all([loadAuthStatus(), loadBatches()])
 })
 
