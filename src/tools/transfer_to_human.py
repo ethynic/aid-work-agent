@@ -84,6 +84,19 @@ class TransferToHumanTool(BaseTool):
         session_id = ctx.get("session_id", "")
 
         if not adapter or not open_kfid or not external_userid:
+            if not adapter:
+                # 渠道上下文存在但无发送适配器（如 web_c 官网客服，转人工暂不支持）
+                logger.info(
+                    f"转人工被拒绝（渠道未提供人工客服通道）: session={session_id}, reason={reason}"
+                )
+                return {
+                    "success": False,
+                    "error": "当前渠道未提供人工客服，请直接用文字回复用户处理其问题",
+                    "hint": (
+                        "此渠道暂不支持转人工，请勿再次尝试。"
+                        "请改为直接用文字回复用户，尝试解决其问题或说明情况。"
+                    ),
+                }
             return {"success": False, "error": "缺少必要的会话上下文"}
 
         allow_agent_transfer = kf_config.get("allow_agent_transfer", True)

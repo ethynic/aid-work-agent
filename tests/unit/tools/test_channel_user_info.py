@@ -17,6 +17,9 @@ pytestmark = [pytest.mark.tools, pytest.mark.unit]
 
 def _make_kf_ctx(**overrides):
     ctx = {
+        # 真实 wecom_kf 上下文恒含发送适配器；工具据此区分「微信客服实时上下文」
+        # 与「web_c 等无适配器渠道的留资上下文」（后者回退 users 表）
+        "adapter": MagicMock(),
         "open_kfid": "kfAAA",
         "external_userid": "wm_ext_user_1",
         "kf_config": {"name": "售前客服", "tenant_user_id": "emp_001"},

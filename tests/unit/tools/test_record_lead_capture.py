@@ -59,14 +59,15 @@ def _make_ctx(**overrides):
 
 
 @contextmanager
-def _patch_execute(ctx, *, session_metadata=None, lead_db_return=_NO_LEAD):
+def _patch_execute(ctx, *, session_metadata=None, session_extra=None, lead_db_return=_NO_LEAD):
     """构造 record_lead_capture 执行的 mock 环境，yield (tool, mocks)。
 
     必须用 with 包裹调用方：patch 在 with 退出时才还原。
+    session_extra 用于补充会话行字段（如 channel_type='web_c'）。
     """
     from src.tools.lead_capture.record_lead_capture import RecordLeadCaptureTool
 
-    session = {"metadata": session_metadata or {}}
+    session = {"metadata": session_metadata or {}, **(session_extra or {})}
     lead_record = lead_db_return if lead_db_return is not _NO_LEAD else {
         "lead_id": "lead_lc_abcdef123456",
         "tenant_id": ctx["tenant_id"],
@@ -208,6 +209,39 @@ class TestRecordLeadCaptureValidate:
 
 
 class TestRecordLeadCaptureExecute:
+    @pytest.mark.asyncio
+    async def test_success_web_c_uses_official_site_snapshot(self):
+        """web_c（官网客服）渠道留资：channel_chat_id=None（open_kfid 语义不适用）、
+        kf_account_name 按 web_c 口径快照为「官网客服」、无引流员工 assigned_to=None、
+        kf_config_id 取渠道配置行 id 供通知规则 kf_config 层匹配"""
+        ctx = _make_ctx(
+            adapter=None,
+            open_kfid=None,
+            kf_config={},
+            kf_config_id="cfg_web_1",
+            external_userid="anon_uid_1",
+        )
+        with _patch_execute(ctx, session_extra={"channel_type": "web_c"}) as (tool, mocks):
+            result = await tool.execute(
+                phone="13800138000",
+                contact_name="张三",
+            )
+
+        assert result["success"] is True
+        create_args = mocks["lead_db_create"].call_args.kwargs
+        assert create_args["tenant_id"] == "tenant_001"
+        assert create_args["customer_user_id"] == "anon_uid_1"
+        assert create_args["channel_chat_id"] is None
+        assert create_args["kf_account_name"] == "官网客服"
+        assert create_args["assigned_to"] is None
+        assert create_args["assignee_name"] is None
+        assert create_args["session_id"] == "sess_1"
+        # 通知事件携带渠道配置行 id（kf_config 层规则匹配依据）
+        publisher = mocks["lead_db_create"].call_args.kwargs["event_publisher"]
+        publisher(MagicMock(), mocks["lead_db_create"].return_value)
+        event_kwargs = mocks["publish_event"].call_args.kwargs
+        assert event_kwargs["kf_config_id"] == "cfg_web_1"
+
     @pytest.mark.asyncio
     async def test_success_phone_writes_lead_and_updates_state(self):
         """成功留资（phone）：写入线索 + 更新会话状态机"""

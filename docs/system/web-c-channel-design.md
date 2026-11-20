@@ -207,6 +207,7 @@ C 端流程：
 复用 pre-sales 留资链路，web_c 无专用改动：
 
 - 写入路径不变：绑定子智能体在 web_c 对话中按技能提示词触发 `record_lead_capture` 工具（`src/tools/lead_capture/record_lead_capture.py`）-> `LeadCaptureDB.create` 落 `bs_lead_capture_leads`；身份从 `ToolExecutionContext` 取（tenant/session/user），工具无需感知渠道。
+- Runner 执行上下文注入（2026-11-20 修复）：`channel_runtime_scope`（`src/services/agent_runner/channel_context.py`）对 `source='web_c'` 增加 web_c 分支，经 `web_c_binding` 校验渠道配置行（存在 + enabled + 渠道级 `subagent_type` 绑定与 `profile_id` 一致）后设置 kf context，使留资工具的 `get_kf_context()` 渠道闸门可达。字段按 web_c 语义降维：`open_kfid=None`、`adapter=None`、`kf_config={}`（无引流员工，`assigned_to` 为空）、`kf_config_id=渠道配置行 id`（通知规则 kf_config 层匹配）；wecom_kf 分支同批补齐了此前缺失的 `kf_config_id`。`get_channel_user_info` 按有无 `adapter` 区分：web_c 回退 users 表读取客户信息；`transfer_to_human` 在无 adapter 时返回明确的「渠道未提供人工客服」拒绝。
 - web_c 口径：`channel_chat_id=None`（该列是 wecom_kf open_kfid 语义）、`kf_account_name='官网客服'`（名称快照）、`session_id=当前 web_c session_id`（表已支持，web_c 线索靠 session_id 关联渠道会话识别，零 DDL）。
 - C 端聊天页无专门留资 UI，联系方式收集走子智能体对话流程（含文本化提问）；AI 产出可下载文件（如报价单）经 §4.6 代理下载交付。
 - Phase 2 接待页留资 Tab 见 §5.2。
