@@ -786,20 +786,8 @@ async def get_available_subagents(request: Request):
         with get_db_connection() as conn:
             subagent_types = SubscriptionDB.get_allowed_subagent_types(conn, tenant_id)
 
-        # 构建 agent_id -> 中文名 映射（主智能体 main 固定为 CEO智能体）
-        name_map = {"main": "CEO智能体"}
-        registry = master_agent.subagent_registry
-        if registry:
-            registry.load_from_db()
-            for item in registry.get_all_subagents_with_type():
-                name_map[item["agent_id"]] = item.get("name") or item["agent_id"]
-
-        result = [
-            {"agent_id": t, "name": name_map.get(t, t)}
-            for t in subagent_types
-        ]
-
         # 附加本租户数字员工副本实例（base 在订阅内才可见，订阅继承）
+        copy_rows = []
         try:
             from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
             allowed_set = set(subagent_types)
@@ -808,10 +796,33 @@ async def get_available_subagents(request: Request):
                     continue
                 if row.get("base_agent_id") not in allowed_set:
                     continue
-                name = row.get("display_name") or name_map.get(row["base_agent_id"], row["base_agent_id"])
-                result.append({"agent_id": row["agent_id"], "name": f"{name}（副本）"})
+                copy_rows.append(row)
         except Exception as e:
             logger.warning(f"附加租户数字员工副本失败: {e}")
+
+        # 名称解析：租户实例 display_name（含基础员工定制改名）优先，其次注册表/DB 定义
+        registry = master_agent.subagent_registry
+        if registry:
+            registry.load_from_db()
+        from src.saas.services.agent_name_resolver import resolve_agent_names
+        name_map = resolve_agent_names(
+            tenant_id,
+            [*subagent_types, *[row["agent_id"] for row in copy_rows]],
+        )
+        if name_map.get("main", "main") == "main":
+            name_map["main"] = "CEO智能体"
+
+        result = [
+            {"agent_id": t, "name": name_map.get(t, t)}
+            for t in subagent_types
+        ]
+        for row in copy_rows:
+            name = (
+                name_map.get(row["agent_id"])
+                or row.get("display_name")
+                or name_map.get(row["base_agent_id"], row["base_agent_id"])
+            )
+            result.append({"agent_id": row["agent_id"], "name": f"{name}（副本）"})
 
         return {"success": True, "subagents": result}
     except Exception as e:
