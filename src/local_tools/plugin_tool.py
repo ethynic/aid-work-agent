@@ -8,11 +8,12 @@ from referencing.exceptions import Unresolvable
 
 from . import repository
 from .lifecycle import current_local_operation, local_operation_scope
+from .plugin_manifests import PLUGIN_PHASE
 from .proxy_tool import LocalToolProxyTool
 
 
-PLUGIN_PHASE = 'runtime_plugin'
 PLUGIN_CALL_IDS = 'runtime_plugin_call_ids'
+PLUGIN_BINDINGS = 'runtime_plugin_bindings'
 _INTERNAL_ARGUMENTS = frozenset({'_trusted_tenant_id', '_trusted_user_id', '_session_id', '_progress_queue'})
 
 
@@ -29,15 +30,20 @@ class RuntimePluginTool(LocalToolProxyTool):
     unknown_effect_notice = ''
     boss_login_recovery = False
 
-    def __init__(self, *, device_id, provider_key, definition):
+    def __init__(self, *, device_id, provider_key, definition, plugin_manifest_digest=None):
         self.device_id = device_id
         self.provider_key = self.invocation_provider_key = provider_key
+        self.plugin_manifest_digest = plugin_manifest_digest
         self.name = definition['name']
         self.description = definition.get('description', '')
         self.display_name = definition.get('title') or self.name
         self.parameters_schema = definition.get('inputSchema', {})
         Draft202012Validator.check_schema(self.parameters_schema)
         self._validator = Draft202012Validator(self.parameters_schema, registry=Registry())
+
+    @property
+    def manifest_binding(self):
+        return [self.device_id, self.provider_key, self.plugin_manifest_digest]
 
     def validate_parameters(self, **kwargs):
         return not self.get_validation_errors(**kwargs)
@@ -106,4 +112,4 @@ def bound_plugin_tool(state, call):
         return None
     request = ref['request']
     return RuntimePluginTool(device_id=request['device_id'], provider_key=request['provider_key'],
-                             definition={'name': call.name})
+                             definition={'name': call.name}, plugin_manifest_digest=request.get('plugin_manifest_digest'))

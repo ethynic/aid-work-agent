@@ -43,6 +43,7 @@ from .wecom_business import AttachmentReadInput
 from src.config.settings import settings
 from src.db.client_binding_db import ClientUsageLogDB
 from src.local_tools import catalog, repository
+from src.local_tools.plugin_manifests import PLUGIN_CHANGED_CODE, PLUGIN_CHANGED_MESSAGE
 from src.local_tools.pricing import (
     RESUME_RECOGNITION_TOOL_NAME,
     overlay_heal_price,
@@ -340,6 +341,7 @@ class LocalToolProxyTool(BaseTool):
                 'data': {'latest_invocation_id': conflict.invocation_id}, 'invocation_id': None}
         except repository.DeviceOperationUnresolved as error:
             messages = {
+                PLUGIN_CHANGED_CODE: PLUGIN_CHANGED_MESSAGE,
                 'LOCAL_DEVICE_NOT_SELECTED': '已选 Runtime 发生变化，本次操作未派发。',
                 'LOCAL_DEVICE_OFFLINE': '原执行设备离线，未派发；请保持原 Runtime 在线。',
                 'LOCAL_DEVICE_UNSUPPORTED': '原设备不支持此工具，未派发；请检查原设备插件版本。',

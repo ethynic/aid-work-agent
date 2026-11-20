@@ -32,9 +32,7 @@ def signed_registry(root):
         'public_key': key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo).decode('ascii'),
     }]})
 
-    def register(device, *tools, declared=None):
-        directory = root / str(device['id']) / PROVIDER
-        directory.mkdir(parents=True, exist_ok=True)
+    def sign(*tools, declared=None):
         manifest = {'manifest_version': 1, 'provider_id': provider_id, 'provider_version': '1.0.0',
                     'protocol': 'mcp', 'transport': 'stdio', 'execution_target': 'local_required',
                     'tools': list(tools), 'tool_declaration': {'version': 1, 'tools': [
@@ -43,8 +41,6 @@ def signed_registry(root):
                     'publisher_key_id': 'publisher', 'provider_id': provider_id, 'provider_version': '1.0.0',
                     'manifest_digest': f'sha256:{hashlib.sha256(rfc8785.dumps(manifest)).hexdigest()}'}
         envelope['signature'] = 'base64:' + base64.b64encode(key.sign(rfc8785.dumps(envelope))).decode('ascii')
-        write(directory / 'envelope.json', envelope)
-        write(directory / 'runtime-manifest.json', manifest)
-        return directory / 'runtime-manifest.json'
+        return {'envelope': envelope, 'manifest': manifest}
 
-    return register
+    return sign

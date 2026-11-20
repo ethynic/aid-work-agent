@@ -49,6 +49,7 @@ async def original_invocation(proxy, operation, device, arguments):
     options = {}
     if getattr(proxy, 'requires_device_declaration', False):
         options['declared_provider'] = provider
+        options['plugin_manifest_digest'] = proxy.plugin_manifest_digest
     if operation.branch == 'main' and operation.ordinal == 0 and enabled(operation.owner, provider):
         options['automatic_provider'] = provider
     return await operation.owner.bind_invocation(branch=operation.branch,

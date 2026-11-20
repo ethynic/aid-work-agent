@@ -31,6 +31,11 @@ class HeartbeatRequest(BaseModel):
     runtime_version: Optional[str] = None
     capabilities: Optional[Dict[str, Any]] = None
     manifest_digest: Optional[str] = None
+    plugin_manifests: Optional[Dict[str, Any]] = None
+
+
+class ClaimRequest(BaseModel):
+    plugin_manifest_digests: Optional[Dict[str, str]] = None
 
 
 class ClaimResponse(BaseModel):

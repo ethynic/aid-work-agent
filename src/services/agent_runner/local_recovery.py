@@ -91,7 +91,7 @@ class LocalRecoveryProof:
         self.connection_factory = connection_factory or repository.get_db_connection
 
     def can_restore(self, row, state, fact):
-        from src.local_tools.plugin_tool import PLUGIN_CALL_IDS, PLUGIN_PHASE, plugin_invocation_ref
+        from src.local_tools.plugin_tool import PLUGIN_BINDINGS, PLUGIN_CALL_IDS, PLUGIN_PHASE, plugin_invocation_ref
         plugin_ref = plugin_invocation_ref(state, fact.call.id)
         if plugin_ref is not None:
             phase = LocalPhase(state.execution_id, fact.call.id, PLUGIN_PHASE, 0)
@@ -103,7 +103,8 @@ class LocalRecoveryProof:
             except CheckpointFailure as error:
                 raise RunnerError('LOCAL_INVOCATION_OWNER_VERIFICATION_REQUIRED', 409) from error
             return not stored_deadline_expired(invocation)
-        if fact.call.id in state.resources.get(PLUGIN_CALL_IDS, ()):
+        if (fact.call.id in state.resources.get(PLUGIN_CALL_IDS, ())
+                or fact.call.name in state.resources.get(PLUGIN_BINDINGS, {})):
             return fact.invocation_id is None
         from src.local_tools.proxy_tool import LOCAL_PROXY_TOOL_CLASSES, LocalToolProxyTool
         from src.local_tools.domain_flow import supports_owned_device_class, cloud_read_branch, domain_classes

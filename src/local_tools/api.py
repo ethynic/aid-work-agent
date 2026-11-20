@@ -20,6 +20,7 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
 from src.api.auth import get_current_user
+from src.config.settings import settings
 from src.db.client_binding_db import ClientUsageLogDB
 from src.db.models import UserDB
 from src.desktop_automation import audit, payload_resolver
@@ -27,6 +28,7 @@ from src.desktop_automation.adapters import AdapterNotFoundError
 from src.desktop_automation.constants import BUSINESS_KIND_DESKTOP_AUTOMATION, OPERATION_PROTOCOL_V2
 from src.local_tools import catalog, operation_result, pairing, permits, repository
 from src.local_tools.models import (
+    ClaimRequest,
     HeartbeatRequest,
     OperationResultRequest,
     PairRequest,
@@ -37,6 +39,7 @@ from src.local_tools.models import (
     StartedRequest,
     WriteAuthorizeRequest,
 )
+from src.local_tools.plugin_manifests import PLUGIN_PHASE
 from src.local_tools.pricing import RESUME_RECOGNITION_TOOL_NAME, resume_recognition_price
 from src.services import recruiting_match_service, resume_vl_service
 from src.services.boss_visual_service import BossVisualRequestBody, RuntimeVisualCaller, diagnose_visual
@@ -115,26 +118,6 @@ def _require_device(request: Request) -> Dict[str, Any]:
 
 def _iso(value: Any) -> Optional[str]:
     return value.isoformat() if hasattr(value, "isoformat") else (str(value) if value else None)
-
-
-def _device_parallel_tools(capabilities_json: Any) -> Dict[str, List[str]]:
-    """设备心跳上报的并行工具映射（契约 2.20）：{provider_key: [tool,...]}。
-
-    只做最小形态归一（防止异常上报形态让 jsonb 过滤在 SQL 端抛 500）：非 dict 或
-    值非字符串列表的键丢弃；结果为空时调用方匹配不到任何并行作业。
-    """
-    if not isinstance(capabilities_json, dict):
-        return {}
-    raw = capabilities_json.get("parallel_tools")
-    if not isinstance(raw, dict):
-        return {}
-    tools_map: Dict[str, List[str]] = {}
-    for key, tools in raw.items():
-        if isinstance(key, str) and isinstance(tools, list):
-            names = [tool for tool in tools if isinstance(tool, str)]
-            if names:
-                tools_map[key] = names
-    return tools_map
 
 
 def _valid_uuid(value: str) -> bool:
@@ -349,6 +332,9 @@ async def runtime_heartbeat(body: HeartbeatRequest, device: Dict = Depends(_requ
             body.runtime_version,
             body.capabilities,
             body.manifest_digest,
+            tenant_id=device["tenant_id"],
+            plugin_manifests=body.plugin_manifests,
+            plugin_trust_roots=settings.agent_runner.plugin_trust_roots,
         )
         if not row:
             raise _http_error(404, "设备不存在")
@@ -359,6 +345,8 @@ async def runtime_heartbeat(body: HeartbeatRequest, device: Dict = Depends(_requ
             # 契约 2.20 支持协商：服务端实现 parallel_only 领取即恒回 True；
             # 旧客户端忽略该字段，新版 Runtime 读到后才发送 parallel_only
             "parallel_claim": True,
+            **({'missing_plugin_manifests': row['missing_plugin_manifests']}
+               if row.get('missing_plugin_manifests') else {}),
         }
     except HTTPException:
         raise
@@ -368,7 +356,8 @@ async def runtime_heartbeat(body: HeartbeatRequest, device: Dict = Depends(_requ
 
 
 @router.post("/runtime/claim")
-async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dict = Depends(_require_device)):
+async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dict = Depends(_require_device),
+                        body: Optional[ClaimRequest] = None):
     """长轮询领取 invocation（claim_token 明文仅此一次返回）。
     超时返回 {"success": true, "invocation": null}（200，简化客户端）。
 
@@ -394,8 +383,9 @@ async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dic
     provider_keys = catalog.get_provider_keys_for_device(device.get("capabilities_json"))
     parallel_tools: Optional[Dict[str, List[str]]] = None
     if parallel_only:
-        parallel_tools = _device_parallel_tools(device.get("capabilities_json"))
+        parallel_tools = catalog.parallel_tools_for_device(device.get("capabilities_json"))
     wait = max(0, min(wait, CLAIM_MAX_WAIT))
+    plugin_digests = (body.plugin_manifest_digests if body else None) or {}
 
     try:
         # 顺带清理租约过期的 claimed/running（MVP 无后台任务）
@@ -413,14 +403,19 @@ async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dic
                 provider_keys,
                 parallel_only=parallel_only,
                 parallel_tools=parallel_tools,
+                **({"plugin_manifest_digests": plugin_digests} if plugin_digests else {}),
             )
             if invocation:
                 # 校验 tool_name 在该 invocation Provider（行 provider_key 优先）批准的
                 # tools 内；声明设备以 declared_tools 分流（含并行领取路径）
                 row_provider_key = invocation.get("provider_key")
                 invocation_provider = row_provider_key or default_provider_key
+                ref = (invocation.get('business_ref') or {}) if invocation.get('business_kind') == 'agent_runner' else {}
+                is_plugin = ref.get('branch') == PLUGIN_PHASE
+                capabilities = (invocation.get('device_capabilities') if is_plugin
+                                else device.get('capabilities_json'))
                 if not catalog.is_tool_allowed_for_device(
-                    device.get("capabilities_json"), row_provider_key,
+                    capabilities, row_provider_key,
                     invocation["tool_name"], default_provider_key,
                 ):
                     logger.warning(
@@ -441,8 +436,7 @@ async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dic
                         f"后端日志：invocation {invocation['id']} 被设备 {device_id} 领取 "
                         f"tool={invocation['tool_name']} provider={invocation_provider}"
                     )
-                    receipt_version = catalog.execution_receipt_version(
-                        device.get("capabilities_json"), invocation)
+                    receipt_version = catalog.execution_receipt_version(capabilities, invocation)
                     return {
                         "success": True,
                         "invocation_id": str(invocation["id"]),

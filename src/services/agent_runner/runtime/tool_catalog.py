@@ -61,19 +61,20 @@ class ToolCatalog:
                 self._device_tools.update(visible)
         if include_runtime_plugins and selected and identity.source == 'chat' and identity.session_kind == 'web':
             from src.config.settings import settings
-            root = settings.agent_runner.plugin_manifest_dir
+            root = settings.agent_runner.plugin_trust_roots
             if root:
                 await self._load_plugin_tools(root, selected)
 
     async def _load_plugin_tools(self, root, selected):
         from jsonschema.exceptions import SchemaError
         from src.local_tools.catalog import TRUSTED_PROVIDERS, declared_tools_for_device
-        from src.local_tools.plugin_manifests import load_device_tools
+        from src.local_tools.plugin_manifests import MANIFEST_DIGESTS, load_device_tools
         from src.local_tools.plugin_tool import RuntimePluginTool
 
         device_id = str(selected['id'])
-        declared = declared_tools_for_device(selected.get('capabilities_json')) or {}
-        candidates = await asyncio.to_thread(load_device_tools, root, device_id, declared)
+        capabilities = selected.get('capabilities_json') or {}
+        declared = declared_tools_for_device(capabilities) or {}
+        candidates = await asyncio.to_thread(load_device_tools, root, capabilities, declared)
         reserved = {name for provider in TRUSTED_PROVIDERS.values() for name in provider['tools']}
         counts = Counter(definition['name'] for _, definition in candidates)
         for provider_key, definition in candidates:
@@ -85,12 +86,16 @@ class ToolCatalog:
                 logger.warning('Runtime 插件工具名称冲突，provider={}, tool={}', provider_key, name)
                 continue
             try:
-                tool = RuntimePluginTool(device_id=device_id, provider_key=provider_key, definition=definition)
+                tool = RuntimePluginTool(device_id=device_id, provider_key=provider_key, definition=definition,
+                                         plugin_manifest_digest=capabilities[MANIFEST_DIGESTS][provider_key])
             except SchemaError:
                 logger.warning('Runtime 插件工具参数定义无效，provider={}, tool={}', provider_key, name)
                 continue
             self.tool_registry.register(tool)
             self._plugin_tools.add(name)
+
+    def runtime_plugin_bindings(self):
+        return {name: self.tool_registry.get_tool(name).manifest_binding for name in self._plugin_tools}
 
     def _visible_definitions(self):
         from src.local_tools.catalog import project_agent_definitions

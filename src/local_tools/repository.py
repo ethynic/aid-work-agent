@@ -16,8 +16,15 @@ from psycopg2.extras import Json
 from src.core.cache_utils import invalidate_tenant_cache
 from src.db.client_binding_db import ClientUsageLogDB
 from src.db.database import get_db_connection
-from src.local_tools.catalog import LOCAL_ONLY_WEIXIN_MESSAGE, LOCAL_ONLY_WEIXIN_TOOLS, WEIXIN_CHAT_LATEST
+from src.local_tools.catalog import (
+    LOCAL_ONLY_WEIXIN_MESSAGE, LOCAL_ONLY_WEIXIN_TOOLS, WEIXIN_CHAT_LATEST,
+    get_provider_keys_for_device, parallel_tools_for_device,
+)
 from src.local_tools.pricing import tool_credit_price
+from src.local_tools.plugin_manifests import (
+    MANIFEST_DIGESTS, PLUGIN_CHANGED_CODE, PLUGIN_CHANGED_MESSAGE, PLUGIN_PHASE, VERIFIED_MANIFESTS,
+    client_capabilities, sync_plugin_manifests,
+)
 from src.local_tools.security import sha256_hex
 
 # 终态：写 result 时遇到终态直接幂等返回
@@ -420,7 +427,7 @@ def pair_device_from_ticket(
                          replacement_device_id""",
             (ticket["tenant_id"], ticket["user_id"], name, platform, runtime_version,
              token_hash, machine_fingerprint_hash,
-             Json(capabilities) if capabilities is not None else None, target),
+             Json(client_capabilities(capabilities)) if capabilities is not None else None, target),
         )
         device = dict(cursor.fetchone())
         cursor.execute(
@@ -515,7 +522,7 @@ def register_device_from_ticket(
                        CASE WHEN %s IS NOT NULL THEN NOW() END, %s, %s, %s)
                RETURNING *""",
             (tenant, user, name, platform, runtime_version, token_hash,
-             machine_fingerprint_hash, Json(capabilities) if capabilities is not None else None,
+             machine_fingerprint_hash, Json(client_capabilities(capabilities)) if capabilities is not None else None,
              target, str(target) if target is not None else None, registration_id, request_hash, code_hash),
         )
         device = dict(cursor.fetchone())
@@ -676,7 +683,7 @@ def create_device(
                 runtime_version,
                 token_hash,
                 machine_fingerprint_hash,
-                Json(capabilities) if capabilities is not None else None,
+                Json(client_capabilities(capabilities)) if capabilities is not None else None,
             ),
         )
         row = dict(cursor.fetchone())
@@ -691,11 +698,11 @@ def get_device_by_token_hash(token_hash: str) -> Optional[Dict[str, Any]]:
         cursor.execute(
             """
             SELECT id, tenant_id, user_id, name, platform, runtime_version,
-                   capabilities_json, manifest_digest, selected, status, last_seen_at
+                   capabilities_json - %s::text AS capabilities_json, manifest_digest, selected, status, last_seen_at
             FROM local_tool_devices
             WHERE token_hash = %s AND status = 'active'
             """,
-            (token_hash,),
+            (VERIFIED_MANIFESTS, token_hash),
         )
         row = cursor.fetchone()
         return dict(row) if row else None
@@ -736,15 +743,57 @@ def revoke_device(tenant_id: str, user_id: str, device_id: str) -> bool:
         return ok
 
 
+def _fail_stale_plugin_queue(cursor, tenant_id, device_id, digests):
+    result = {'success': False, 'code': PLUGIN_CHANGED_CODE, 'message': PLUGIN_CHANGED_MESSAGE,
+              'data': None, 'retryable': False}
+    cursor.execute('''WITH rejected AS (
+        UPDATE local_tool_invocations
+        SET state='failed', effect='none', error_code=%s, error_message=%s, result_json=%s,
+            finished_at=COALESCE(finished_at,NOW()), lease_expires_at=NULL
+        WHERE tenant_id=%s AND device_id=%s AND state='queued' AND business_kind='agent_runner'
+          AND business_ref->>'branch'=%s
+          AND (business_ref->>'plugin_manifest_digest' IS NULL
+            OR business_ref->>'plugin_manifest_digest' IS DISTINCT FROM (%s::jsonb ->> provider_key))
+        RETURNING id,tenant_id
+    )
+    INSERT INTO local_tool_events (invocation_id,tenant_id,seq,stage,message)
+    SELECT id,tenant_id,COALESCE((SELECT MAX(seq) FROM local_tool_events
+        WHERE invocation_id=rejected.id),0)+1,'failed',%s
+    FROM rejected''', (PLUGIN_CHANGED_CODE, PLUGIN_CHANGED_MESSAGE, Json(result), tenant_id,
+                       device_id, PLUGIN_PHASE, Json(digests), PLUGIN_CHANGED_MESSAGE))
+
+
 def touch_device_seen(
     device_id: str,
     runtime_version: Optional[str] = None,
     capabilities: Optional[Dict[str, Any]] = None,
     manifest_digest: Optional[str] = None,
+    *,
+    tenant_id: Optional[str] = None,
+    plugin_manifests: Optional[Dict[str, Any]] = None,
+    plugin_trust_roots: str = '',
 ) -> Optional[Dict[str, Any]]:
     """心跳：更新 last_seen / 版本 / 能力 / manifest 摘要，返回最新 selected/status"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        capabilities = client_capabilities(capabilities) or None
+        missing = []
+        digests = (capabilities or {}).get(MANIFEST_DIGESTS)
+        reports_capabilities = tenant_id is not None and bool(capabilities)
+        if reports_capabilities:
+            # Fence the reported snapshot and its queued calls against bind/claim.
+            lock_operation_admission(cursor, tenant_id)
+            cursor.execute('''SELECT capabilities_json FROM local_tool_devices
+                WHERE id=%s AND tenant_id=%s AND status='active' FOR UPDATE''', (device_id, tenant_id))
+            previous = cursor.fetchone()
+            if previous is None:
+                return None
+            previous_capabilities = previous['capabilities_json'] or {}
+            if plugin_trust_roots and isinstance(digests, dict) and digests:
+                capabilities, missing = sync_plugin_manifests(plugin_trust_roots, device_id,
+                    capabilities, previous_capabilities, plugin_manifests)
+            if capabilities == previous['capabilities_json']:
+                capabilities = None  # Keep the existing stored JSON when the signed snapshot is unchanged.
         cursor.execute(
             """
             UPDATE local_tool_devices
@@ -764,8 +813,12 @@ def touch_device_seen(
             ),
         )
         row = cursor.fetchone()
+        if row and reports_capabilities:
+            _fail_stale_plugin_queue(cursor, tenant_id, device_id, digests if isinstance(digests, dict) else {})
         conn.commit()
-        return dict(row) if row else None
+        if not row:
+            return None
+        return {**row, 'missing_plugin_manifests': missing} if missing else dict(row)
 
 
 def select_device(tenant_id: str, user_id: str, device_id: str) -> bool:
@@ -1091,6 +1144,7 @@ def claim_next(
     expected_invocation_id: Optional[str] = None,
     parallel_only: bool = False,
     parallel_tools: Optional[Dict[str, List[str]]] = None,
+    plugin_manifest_digests: Optional[Dict[str, str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """领取下一条 queued invocation（事务 + FOR UPDATE SKIP LOCKED 防重复领取）。
 
@@ -1106,9 +1160,9 @@ def claim_next(
     parallel_only（契约 2.20）：True 时仅选取「并行可领」的作业——provider_key 非 NULL
     且 tool_name 属于该设备心跳上报 parallel_tools[provider_key]（jsonb 过滤，映射取自
     设备 capabilities_json，api 层归一后传入）。为 True 但映射缺省/为空时匹配不到任何行。
-    缺省 False 时 SQL 与现状逐字节一致，既有调用方（session_tasks 定向领取等）零影响。
+    缺省 False 时不添加并行过滤，session_tasks 定向领取等沿用既有条件。
     其余行为（advisory 锁、FOR UPDATE SKIP LOCKED、recovery 优先、created_at FIFO、
-    租约、事务）完全不变。
+    租约、事务）完全不变。通用插件要求请求与当前设备的清单摘要都匹配，旧作业沿用入参。
     """
     lane_filter = ""
     params: List[Any] = [device_id, tenant_id]
@@ -1118,28 +1172,54 @@ def claim_next(
     if expected_invocation_id is not None:
         lane_filter += " AND id = %s"
         params.append(expected_invocation_id)
-    provider_filter = ""
-    if provider_keys is not None:
-        provider_filter = " AND (provider_key IS NULL OR provider_key = ANY(%s))"
-        params.append(list(provider_keys))
-    parallel_filter = ""
-    if parallel_only:
-        parallel_filter = (
-            " AND provider_key IS NOT NULL"
-            " AND local_tool_invocations.tool_name = ANY (SELECT jsonb_array_elements_text("
-            "COALESCE(%s::jsonb -> local_tool_invocations.provider_key, '[]'::jsonb)))"
-        )
-        params.append(json.dumps(parallel_tools or {}))
     with get_db_connection() as conn:
         cursor = conn.cursor()
         lock_operation_admission(cursor, tenant_id)
-        if not lock_active_device(cursor, tenant_id, device_id):
+        device_capabilities = None
+        plugin_row = f"business_kind='agent_runner' AND business_ref->>'branch'='{PLUGIN_PHASE}'"
+        if plugin_manifest_digests:
+            cursor.execute('''SELECT capabilities_json - %s::text AS capabilities_json
+                FROM local_tool_devices WHERE id=%s AND tenant_id=%s AND status='active' FOR SHARE''',
+                (VERIFIED_MANIFESTS, device_id, tenant_id))
+            current_device = cursor.fetchone()
+            if current_device is None:
+                return None
+            device_capabilities = current_device['capabilities_json']
+        elif not lock_active_device(cursor, tenant_id, device_id):
             return None
+        plugin_filter = f" AND ({plugin_row}) IS NOT TRUE"
+        if plugin_manifest_digests:
+            plugin_filter = f""" AND CASE WHEN {plugin_row} THEN
+                business_ref->>'plugin_manifest_digest' = (%s::jsonb ->> provider_key)
+                AND business_ref->>'plugin_manifest_digest' = (%s::jsonb ->> provider_key)
+                ELSE TRUE END"""
+            params.extend((Json(plugin_manifest_digests),
+                           Json((device_capabilities or {}).get(MANIFEST_DIGESTS) or {})))
+        provider_filter = ""
+        if plugin_manifest_digests:
+            provider_filter = f""" AND (provider_key IS NULL OR provider_key = ANY(
+                CASE WHEN {plugin_row} THEN %s::text[] ELSE %s::text[] END))"""
+            params.extend((get_provider_keys_for_device(device_capabilities), provider_keys))
+        elif provider_keys is not None:
+            provider_filter = " AND (provider_key IS NULL OR provider_key = ANY(%s))"
+            params.append(list(provider_keys))
+        parallel_filter = ""
+        if parallel_only:
+            tools_mapping = "%s::jsonb"
+            if plugin_manifest_digests:
+                tools_mapping = f"(CASE WHEN {plugin_row} THEN %s::jsonb ELSE %s::jsonb END)"
+                params.append(json.dumps(parallel_tools_for_device(device_capabilities)))
+            parallel_filter = (
+                " AND provider_key IS NOT NULL"
+                " AND local_tool_invocations.tool_name = ANY (SELECT jsonb_array_elements_text("
+                f"COALESCE({tools_mapping} -> local_tool_invocations.provider_key, '[]'::jsonb)))"
+            )
+            params.append(json.dumps(parallel_tools or {}))
         cursor.execute(
             f"""
             SELECT * FROM local_tool_invocations
             WHERE state = 'queued' AND device_id = %s AND tenant_id = %s
-              {lane_filter}{provider_filter}{parallel_filter}
+              {lane_filter}{plugin_filter}{provider_filter}{parallel_filter}
               AND (business_kind IS DISTINCT FROM 'wecom_proxy_monitor_read' OR deadline_at>=clock_timestamp())
               AND (business_kind IS DISTINCT FROM 'agent_runner_recovery' OR business_ref->>'version' IS DISTINCT FROM '3'
                 OR (deadline_at>NOW() AND EXISTS (SELECT 1 FROM agent_runners r
@@ -1200,6 +1280,8 @@ def claim_next(
             (claim_token_hash, lease_seconds, row["id"]),
         )
         invocation = dict(cursor.fetchone())
+        if plugin_manifest_digests:
+            invocation['device_capabilities'] = device_capabilities
         conn.commit()
         return invocation
 

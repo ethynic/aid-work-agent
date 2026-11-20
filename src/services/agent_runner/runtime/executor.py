@@ -26,12 +26,13 @@ from .tools import ToolDispatcher
 
 class ModelAdapter:
     def __init__(self, gateway, defer_names=None, deferred_call_id=None, resource_directory=None,
-                 enable_thinking=None):
+                 enable_thinking=None, plugin_bindings=None):
         self.gateway = gateway
         self.defer_names, self.deferred_call_id = defer_names, deferred_call_id
         self.resource_directory = resource_directory
         # None 走 provider 默认（deepseek 默认开启思考）；False 显式关闭
         self.enable_thinking = enable_thinking
+        self.plugin_bindings = plugin_bindings
 
     @staticmethod
     def _message_has_image_references(message):
@@ -162,7 +163,12 @@ class ModelAdapter:
         return [*messages[:insertion], *additions, *messages[insertion:]] if additions else messages
 
     async def complete(self, state, call_id, tools):
+        from src.local_tools.plugin_tool import PLUGIN_BINDINGS
         from src.services.agent_runner.usage_context import execution_call
+        if self.plugin_bindings:
+            state.resources[PLUGIN_BINDINGS] = self.plugin_bindings
+        else:
+            state.resources.pop(PLUGIN_BINDINGS, None)
         messages = state.messages
         if self.resource_directory is not None and any(
                 self._message_has_image_references(message) for message in messages):
@@ -528,7 +534,8 @@ class RuntimeExecution:
             async for event in AgentEngine().run(self.state,
                 ModelAdapter(self.resources.llm, defer_names, deferred_call_id,
                              resource_directory=self.resources.resource_directory,
-                             enable_thinking=self.resources.enable_thinking), dispatcher,
+                             enable_thinking=self.resources.enable_thinking,
+                             plugin_bindings=self.catalog.runtime_plugin_bindings()), dispatcher,
                 self.control, self.observer):
                 if event["type"] == "execution_completed":
                     yield make_event("progress", data="✅ 任务完成，正在生成回复...")
