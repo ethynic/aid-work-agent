@@ -391,7 +391,7 @@ async def _backfill_terminal_runners(identity: WebCIdentity, session_id: str) ->
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT metadata->>'runner_id' FROM channel_messages WHERE session_id = %s "
+            "SELECT metadata->>'runner_id' AS runner_id FROM channel_messages WHERE session_id = %s "
             "AND metadata->>'runner_id' IS NOT NULL AND COALESCE(metadata->>'kind', '') = ''",
             (session_id,),
         )

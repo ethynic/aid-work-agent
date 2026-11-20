@@ -567,3 +567,100 @@ class TestClarificationPersistence:
         args = mock_persist.call_args.args
         assert args[:2] == ("t1", "t1_web_c_ext_u1_")
         assert args[3] == "请补充你的城市？" and args[4] == "wait_1"
+
+
+class TestBackfillTerminalRunners:
+    """SSE 断开兜底补写回归（2026-11-20 事故：SQL 表达式无别名，PG 返回
+    ?column? 列名 -> row["runner_id"] KeyError -> completed 轮回复永不落库）。"""
+
+    class _PgLikeCursor:
+        """模拟 PG 输出列名行为：SELECT 表达式未加别名时列名为 ?column?。"""
+
+        def __init__(self, runner_ids):
+            self._runner_ids = runner_ids
+            self.executed = []
+
+        def execute(self, sql, params=None):
+            self.executed.append(" ".join(sql.split()))
+
+        def fetchall(self):
+            if "AS runner_id" in " ".join(self.executed):
+                return [{"runner_id": rid} for rid in self._runner_ids]
+            return [{"?column?": rid} for rid in self._runner_ids]
+
+    class _FakeConn:
+        def __init__(self, cursor):
+            self._cursor = cursor
+
+        def cursor(self):
+            return self._cursor
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    @staticmethod
+    def _completed_row(runner_id="run_a"):
+        return {
+            "runner_id": runner_id,
+            "status": "completed",
+            "result": {"output": "报价单已经做好了，你看一下附件。"},
+            "snapshot": {"downloadableFiles": [{
+                "file_id": "file_54d1dcb58330", "name": "报价单.xlsx",
+                "mime_type": "", "size": 8969,
+                "download_url": "/api/files/file_54d1dcb58330/download",
+            }]},
+        }
+
+    @pytest.mark.asyncio
+    async def test_completed_runner_backfilled(self):
+        from unittest.mock import MagicMock
+
+        from src.saas.api.web_c import _backfill_terminal_runners, WebCIdentity
+
+        identity = WebCIdentity("t1", "cfg1", "anon", "uid_0011", "", "sales-assistant")
+        cursor = self._PgLikeCursor(runner_ids=[])
+
+        class FakeClient:
+            async def request(self, *args, **kwargs):
+                return {"runners": [TestBackfillTerminalRunners._completed_row()]}
+
+        with patch("src.saas.api.web_c._runner_client", return_value=FakeClient()), \
+             patch("src.saas.api.web_c.get_db_connection", return_value=self._FakeConn(cursor)), \
+             patch("src.saas.api.web_c._has_final_message", return_value=False), \
+             patch("src.saas.api.web_c._persist_assistant_message", new=MagicMock()) as mock_persist:
+            count = await _backfill_terminal_runners(identity, "t1_web_c_uid_0011_x_sab")
+
+        # 回归守卫：runner_id 表达式必须带别名，否则 PG 返回 ?column? 列名
+        assert any("AS runner_id" in sql for sql in cursor.executed)
+        assert count == 1
+        mock_persist.assert_called_once()
+        args = mock_persist.call_args.args
+        assert args[1] == "t1_web_c_uid_0011_x_sab" and args[2] == "run_a"
+        assert args[3] == "报价单已经做好了，你看一下附件。"
+        # 附件随消息一起补写（downloadableFiles 投影）
+        assert [a["file_id"] for a in args[4]] == ["file_54d1dcb58330"]
+
+    @pytest.mark.asyncio
+    async def test_already_persisted_runner_skipped(self):
+        from unittest.mock import MagicMock
+
+        from src.saas.api.web_c import _backfill_terminal_runners, WebCIdentity
+
+        identity = WebCIdentity("t1", "cfg1", "anon", "uid_0011", "", "sales-assistant")
+        cursor = self._PgLikeCursor(runner_ids=["run_a"])
+
+        class FakeClient:
+            async def request(self, *args, **kwargs):
+                return {"runners": [TestBackfillTerminalRunners._completed_row()]}
+
+        with patch("src.saas.api.web_c._runner_client", return_value=FakeClient()), \
+             patch("src.saas.api.web_c.get_db_connection", return_value=self._FakeConn(cursor)), \
+             patch("src.saas.api.web_c._has_final_message", return_value=False), \
+             patch("src.saas.api.web_c._persist_assistant_message", new=MagicMock()) as mock_persist:
+            count = await _backfill_terminal_runners(identity, "t1_web_c_uid_0011_x_sab")
+
+        assert count == 0
+        mock_persist.assert_not_called()
