@@ -31,6 +31,7 @@ export interface ReleaseEnvelope {
   publisher_key_id: string; signature_algorithm: string; signature: string; created_at: string
 }
 export interface VerifiedPackage { envelope: ReleaseEnvelope; manifest: RuntimeManifest; files: Map<string, Buffer>; outer_digest: string; declaration: ToolDeclaration | undefined }
+export type SignedPluginManifest = Pick<VerifiedPackage, 'envelope' | 'manifest'>
 
 /** 调度声明（契约 2.20）：签名清单可选字段 tool_declaration 的宽松解析结果 */
 export interface ToolDeclaration { version: 1; tools: Array<{ name: string; parallel?: true }> }

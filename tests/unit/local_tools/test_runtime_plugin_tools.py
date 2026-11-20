@@ -1,11 +1,11 @@
 """Registered MCP declarations must stay tied to the internal actor's selected Runtime."""
 
-import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
+import sys
 import pytest
 from src.config.settings import settings
 from src.core.agent_engine import AgentEngine, Outcome
@@ -14,10 +14,11 @@ from src.core.skill_registry import SkillRegistry
 from src.local_tools import repository
 from src.local_tools.device_policy import device_ready_error
 from src.local_tools.lifecycle import current_local_operation, local_operation_scope
-from src.local_tools.plugin_tool import PLUGIN_PHASE, bound_plugin_tool
+from src.local_tools.plugin_manifests import MANIFEST_DIGESTS, PLUGIN_CHANGED_CODE, VERIFIED_MANIFESTS, load_device_tools, sync_plugin_manifests
+from src.local_tools.plugin_tool import PLUGIN_BINDINGS, PLUGIN_PHASE, bound_plugin_tool
 from src.local_tools.proxy_tool import BossSendToTool
 from src.services.agent_runner.local_recovery import LocalRecoveryProof
-from src.services.agent_runner.runtime.executor import CompatibilityControl, CompatibilityObserver, RuntimeExecution
+from src.services.agent_runner.runtime.executor import CompatibilityControl, CompatibilityObserver, ModelAdapter, RuntimeExecution
 from src.services.agent_runner.runtime.profile import RuntimeResources
 from src.services.agent_runner.runtime.tool_catalog import ToolCatalog
 from src.services.agent_runner.runtime.tools import ToolDispatcher
@@ -39,8 +40,18 @@ def make_device(*, selected=False):
 
 @pytest.fixture
 def registrations(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings.agent_runner, 'plugin_manifest_dir', str(tmp_path))
-    return signed_registry(tmp_path)
+    path = str(tmp_path / 'trust-roots.json')
+    monkeypatch.setattr(settings.agent_runner, 'plugin_trust_roots', path)
+    sign = signed_registry(tmp_path)
+
+    def register(device, *tools, declared=None):
+        bundle = sign(*tools, declared=declared)
+        capabilities = {**device['capabilities_json'], MANIFEST_DIGESTS: {PROVIDER: bundle['envelope']['manifest_digest']}}
+        device['capabilities_json'], missing = sync_plugin_manifests(path, device['id'], capabilities, None, {PROVIDER: bundle})
+        assert not missing
+        return bundle
+
+    return register
 
 
 def make_runner(**kwargs):
@@ -52,6 +63,26 @@ def make_runner(**kwargs):
     dispatcher = ToolDispatcher(catalog=catalog, registry=registry, executor=executor,
         control_tools=None, local=None, skills=None, plan_manager=None, subagent_config=None, control=None)
     return catalog, dispatcher
+
+
+def test_cached_projection_requires_original_signature_without_worker_canonicalizer(registrations, monkeypatch):
+    device = make_device(selected=True)
+    expected = definition('target')
+    bundle = registrations(device, expected)
+    path = settings.agent_runner.plugin_trust_roots
+    capabilities = device['capabilities_json']
+    declarations = capabilities['declared_tools']
+    monkeypatch.setitem(sys.modules, 'rfc8785', None)
+    assert load_device_tools(path, capabilities, declarations) == [(PROVIDER, expected)]
+
+    # An old device row could already contain arbitrary values in this key.
+    # Even valid envelope bytes and a copied signature cannot authorize modified tools.
+    material = capabilities[VERIFIED_MANIFESTS][PROVIDER]
+    material['manifest'] = material['manifest'].replace('target', 'modified')
+    assert load_device_tools(path, capabilities, declarations) == []
+    received, missing = sync_plugin_manifests(path, device['id'], capabilities, capabilities, {PROVIDER: bundle})
+    assert missing == [PROVIDER] and VERIFIED_MANIFESTS not in received
+    assert received['declared_tools'] == declarations
 
 
 @pytest.mark.asyncio
@@ -108,7 +139,7 @@ async def test_unsigned_or_unregistered_declaration_never_extends_profile(regist
     await inherited.prime_local_tools(chat, include_runtime_plugins=True)
     assert [item['name'] for item in runner.definitions()] == ['boss_send_to']
 
-    path = registrations(device, definition('target'))
+    bundle = registrations(device, definition('target'))
     strict, strict_runner = make_runner(inherits_tools=False)
     await strict.prime_local_tools(chat, include_runtime_plugins=True)
     assert strict_runner.definitions() == []
@@ -117,9 +148,10 @@ async def test_unsigned_or_unregistered_declaration_never_extends_profile(regist
     await excluded.prime_local_tools(chat, include_runtime_plugins=True)
     assert excluded_runner.definitions() == []
 
-    manifest = json.loads(path.read_text(encoding='utf8'))
-    manifest['tools'][0]['description'] = 'Modified after signing'
-    path.write_text(json.dumps(manifest), encoding='utf8')
+    bundle['manifest']['tools'][0]['description'] = 'Modified after signing'
+    device['capabilities_json'], missing = sync_plugin_manifests(settings.agent_runner.plugin_trust_roots,
+        device['id'], device['capabilities_json'], None, {PROVIDER: bundle})
+    assert missing == [PROVIDER]
     await inherited.prime_local_tools(chat, include_runtime_plugins=True)
     assert [item['name'] for item in runner.definitions()] == ['boss_send_to']
 
@@ -186,6 +218,39 @@ async def test_engine_resumes_uncommitted_plugin_call_after_tool_disappears(regi
 
 
 @pytest.mark.asyncio
+async def test_saved_model_response_cannot_use_replacement_plugin(registrations, monkeypatch):
+    device = make_device(selected=True)
+    registrations(device, definition('original'))
+    monkeypatch.setattr(repository, 'list_devices', lambda tenant, user: [device])
+    catalog, runner = make_runner()
+    chat = Identity('tenant', 'actor', 'conversation')
+    await catalog.prime_local_tools(chat, include_runtime_plugins=True)
+    call = ToolCall('original-plugin', TOOL, {'original': 'original argument'})
+    gateway = SimpleNamespace(chat_with_tools=AsyncMock(return_value={'tool_calls': [call.message_call()]}),
+                              get_model_name=lambda: 'model', get_provider_name=lambda: 'provider')
+    state = ExecutionState(chat, 'runner-id', AgentMode.STANDALONE, '', [])
+    model = ModelAdapter(gateway, plugin_bindings=catalog.runtime_plugin_bindings())
+    reply = await model.complete(state, 'model-id', runner.definitions())
+    assert reply['tool_calls'] == [call.message_call()]
+    assert state.resources[PLUGIN_BINDINGS][TOOL][0] == device['id']
+
+    state.pending = [call]
+    state.tools[call.id] = ToolFact(call)
+    restored = ExecutionState.restore(state.checkpoint())
+    registrations(device, definition('replacement'))
+    await catalog.prime_local_tools(chat, include_runtime_plugins=True)
+    assert runner.definitions()[0]['input_schema']['required'] == ['replacement']
+    runner.executor.execute = AsyncMock()
+    [terminal] = [event async for event in runner.dispatch(restored, restored.pending[0])]
+    assert terminal.content['code'] == PLUGIN_CHANGED_CODE and terminal.content['effect'] == 'none'
+    assert terminal.wait is None
+    restored.resources.pop(PLUGIN_BINDINGS)
+    [unbound] = [event async for event in runner.dispatch(restored, restored.pending[0])]
+    assert unbound.content['code'] == 'LOCAL_NOT_DISPATCHED' and unbound.wait is None
+    runner.executor.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('expires', [False, True])
 async def test_native_call_is_bound_and_ordinary_runtime_receipt_is_returned(registrations, monkeypatch, expires):
     device = make_device(selected=True)
@@ -207,7 +272,10 @@ async def test_native_call_is_bound_and_ordinary_runtime_receipt_is_returned(reg
     async def bind(**request):
         sent.append(request)
         assert device_ready_error(device, TOOL, datetime.now(timezone.utc),
-                                  declared_provider=request['declared_provider']) is None
+                                  declared_provider=request['declared_provider'],
+                                  plugin_manifest_digest=request['plugin_manifest_digest']) is None
+        assert device_ready_error(device, TOOL, datetime.now(timezone.utc), declared_provider=PROVIDER,
+                                  plugin_manifest_digest='sha256:old') == 'plugin_changed'
         assert device_ready_error({**device, 'capabilities_json': {'capabilities': ['tool_declarations_v1'],
                                   'declared_tools': {'unrelated': [TOOL]}}}, TOOL, datetime.now(timezone.utc),
                                   declared_provider=request['declared_provider']) == 'unsupported'
@@ -229,7 +297,8 @@ async def test_native_call_is_bound_and_ordinary_runtime_receipt_is_returned(reg
         result = await runner.executor.execute(TOOL, {**args, '_session_id': 'trusted-session'}, context=context)
     assert sent == [{'branch': PLUGIN_PHASE, 'ordinal': 0, 'tool_name': TOOL, 'device': device,
                      'arguments': args, 'provider_key': PROVIDER, 'deadline_at': None,
-                     'declared_provider': PROVIDER}]
+                     'declared_provider': PROVIDER,
+                     'plugin_manifest_digest': device['capabilities_json'][MANIFEST_DIGESTS][PROVIDER]}]
     assert result['code'] == ('EXECUTION_UNKNOWN' if expires else 'BROWSER_CLOSED')
     if not expires:
         assert result['message'] == '页面已关闭'

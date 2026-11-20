@@ -226,7 +226,8 @@ export class LegacyExecution implements HostAdapter {
     try { token = await loadDeviceToken() } catch { throw new ManagementError(9, '设备凭证不可用，请核对本机身份') }
     await this.pluginStore?.refresh()
     const entries = Object.fromEntries(Object.entries(this.resolveEntries(config)).filter(([, entry]) => existsSync(entry)))
-    const store = this.storeDeclarations()
+    const plugins = this.pluginStore?.declaredPlugins() ?? []
+    const store = this.storeDeclarations(plugins)
     const { manifests: storeManifests, parallelTools } = store
     const api = new ApiClient(server, token)
     const wecomLegacyEnv: Record<string, string> = {}
@@ -295,6 +296,7 @@ export class LegacyExecution implements HostAdapter {
       // logInfo = stderr + %APPDATA% 文件双写，前缀格式不变。
       onEvent: (msg) => logInfo(msg),
       capabilities,
+      pluginManifests: Object.fromEntries(plugins.map(({ provider_key, envelope, manifest }) => [provider_key, { envelope, manifest }])),
       canClaim: () => Object.values(this.resolveEntries(config)).some(entry => existsSync(entry)),
       onConnection: connection,
       // 契约 2.20：并行接单——与能力上报同源（assembleStoreManifests 派生），PollLoop
@@ -331,8 +333,7 @@ export class LegacyExecution implements HostAdapter {
     const entries = resolveProviderEntries(config)
     return this.pluginStore?.resolveEntries(entries) ?? entries
   }
-  private storeDeclarations() {
-    const declared = this.pluginStore?.declaredPlugins() ?? []
+  private storeDeclarations(declared = this.pluginStore?.declaredPlugins() ?? []) {
     return { ...assembleStoreManifests(declared), hasDeclarations: declared.length > 0 }
   }
   private effectiveConfig(config: RuntimeConfig | null, entries = this.resolveEntries(config)): RuntimeConfig {

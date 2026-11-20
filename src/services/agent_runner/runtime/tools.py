@@ -58,9 +58,10 @@ class ToolDispatcher:
             result = await self.child_recovery.recover(state,call)
             await self._finish_plan_task(state,call,result)
             return result
-        from src.local_tools.plugin_tool import PLUGIN_CALL_IDS, bound_plugin_tool, plugin_not_dispatched
+        from src.local_tools.plugin_tool import PLUGIN_BINDINGS, PLUGIN_CALL_IDS, bound_plugin_tool, plugin_not_dispatched
         plugin = bound_plugin_tool(state, call)
-        if (plugin is None and call.id in state.resources.get(PLUGIN_CALL_IDS, ())
+        if (plugin is None and (call.id in state.resources.get(PLUGIN_CALL_IDS, ())
+                or call.name in state.resources.get(PLUGIN_BINDINGS, {}))
                 and not state.tools[call.id].invocation_id):
             # Enqueue and its binding commit together. At this checkpoint there was no dispatch.
             terminal = DispatchResult(plugin_not_dispatched(), success=False)
@@ -251,6 +252,19 @@ class ToolDispatcher:
                              toolArgs=call.arguments, toolCallId=call.id)
             yield DispatchResult(None, wait={"kind": "remote_tool", "tool_call_id": call.id})
             return
+        from src.local_tools.plugin_tool import PLUGIN_BINDINGS, RuntimePluginTool, plugin_not_dispatched
+        expected = state.resources.get(PLUGIN_BINDINGS, {}).get(call.name)
+        plugin = self.registry.get_tool(call.name)
+        is_plugin = isinstance(plugin, RuntimePluginTool)
+        if expected is not None or is_plugin:
+            if not is_plugin or plugin.manifest_binding != expected:
+                from src.local_tools.plugin_manifests import PLUGIN_CHANGED_CODE, PLUGIN_CHANGED_MESSAGE
+                failure = plugin_not_dispatched() if expected is None else {'success': False,
+                    'code': PLUGIN_CHANGED_CODE, 'effect': 'none', 'message': PLUGIN_CHANGED_MESSAGE}
+                terminal = DispatchResult(failure, success=False)
+                await self._finish_plan_task(state, call, terminal)
+                yield terminal
+                return
         runner_state = self._runner_state(state)
         if runner_state.resources.get('server_resolved_effects'):
             from ..server_recovery_reply import previously_resolved_effect

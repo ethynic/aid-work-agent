@@ -10,7 +10,7 @@ interface Installation {
   installation_id: string; plugin_id: string; release_id: string; version: string
   directory: string; outer_digest: string; package_digest: string; manifest_digest: string; enabled: boolean; uninstalled: boolean
 }
-interface ReleaseState { manifest?: RuntimeManifest; declaration?: ToolDeclaration; ready: boolean; reason?: string }
+interface ReleaseState { envelope?: ReleaseEnvelope; manifest?: RuntimeManifest; declaration?: ToolDeclaration; ready: boolean; reason?: string }
 export interface PluginStoreOptions {
   home: string; trust: PublisherTrust[]; platform: PackagePlatform
   probe: (releaseRoot: string, manifest: RuntimeManifest) => Promise<{ ready: boolean; reason?: string }>
@@ -111,13 +111,14 @@ export class PluginStore {
   }
 
   /** 启用且带有效调度声明的已验签插件（派生 manifest 与并行上报的唯一来源） */
-  declaredPlugins(): Array<{ plugin_id: string; provider_key: string; manifest: RuntimeManifest; declaration: ToolDeclaration }> {
+  declaredPlugins(): Array<{ plugin_id: string; provider_key: string; envelope: ReleaseEnvelope; manifest: RuntimeManifest; declaration: ToolDeclaration }> {
     this.assertAvailable()
-    const declared: Array<{ plugin_id: string; provider_key: string; manifest: RuntimeManifest; declaration: ToolDeclaration }> = []
+    const declared: ReturnType<PluginStore['declaredPlugins']> = []
     for (const record of this.records) {
       const state = this.states.get(record.installation_id)
-      if (!record.uninstalled && record.enabled && state?.manifest && state.declaration) {
-        declared.push({ plugin_id: record.plugin_id, provider_key: providerKeyOfPlugin(record.plugin_id), manifest: state.manifest, declaration: state.declaration })
+      if (!record.uninstalled && record.enabled && state?.envelope && state.manifest && state.declaration) {
+        declared.push({ plugin_id: record.plugin_id, provider_key: providerKeyOfPlugin(record.plugin_id),
+          envelope: state.envelope, manifest: state.manifest, declaration: state.declaration })
       }
     }
     return declared
@@ -193,7 +194,7 @@ export class PluginStore {
         const readiness = await this.options.probe(payload, pkg.manifest)
         const next = this.records.filter(record => record.plugin_id !== installation.plugin_id).concat(installation)
         this.commit(next)
-        this.states.set(installation.installation_id, { manifest: pkg.manifest, declaration: pkg.declaration, ...readiness })
+        this.states.set(installation.installation_id, { envelope: pkg.envelope, manifest: pkg.manifest, declaration: pkg.declaration, ...readiness })
         this.options.onChanged?.()
       })
       await this.cleanupOldReleases(installation.plugin_id, previous?.directory)
@@ -300,7 +301,7 @@ export class PluginStore {
         || pkg.envelope.provider_release_id !== record.release_id || pkg.envelope.provider_version !== record.version
         || pkg.envelope.package_digest !== record.package_digest || pkg.envelope.manifest_digest !== record.manifest_digest) throw new Error()
       const payload = join(release, 'payload'); this.checkFiles(payload, pkg)
-      return { manifest: pkg.manifest, declaration: pkg.declaration, ...await this.options.probe(payload, pkg.manifest) }
+      return { envelope: pkg.envelope, manifest: pkg.manifest, declaration: pkg.declaration, ...await this.options.probe(payload, pkg.manifest) }
     } catch { return { ready: false, reason: '插件文件、发布信任或运行依赖需要重新核对' } }
   }
   private checkFiles(root: string, pkg: VerifiedPackage): void {

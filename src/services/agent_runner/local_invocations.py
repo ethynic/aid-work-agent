@@ -30,11 +30,15 @@ class LocalDispatchRejected(Exception):
 def dispatch_rejection_result(reason):
     """Only typed, rollback-proven admission failures enter this business result."""
     stale = isinstance(reason, ResumeContinuationConflict)
+    from src.local_tools.plugin_manifests import PLUGIN_CHANGED_CODE, PLUGIN_CHANGED_MESSAGE
+    message = ('该筛选引用已有后续批次，请使用最新结果；本次未派发。' if stale else
+               '原设备未就绪或仍有待核对操作，本次未派发；请检查原设备及回执。')
+    if str(reason) == PLUGIN_CHANGED_CODE:
+        message = PLUGIN_CHANGED_MESSAGE
     return {'success': False, 'code': 'STALE_CONTINUATION' if stale else str(reason),
         'effect': 'none', 'invocation_id': None,
         'data': {'latest_invocation_id': reason.invocation_id} if stale else None,
-        'message': '该筛选引用已有后续批次，请使用最新结果；本次未派发。' if stale else
-            '原设备未就绪或仍有待核对操作，本次未派发；请检查原设备及回执。'}
+        'message': message}
 
 
 def phase_binding(cursor, row, phase):
@@ -42,7 +46,7 @@ def phase_binding(cursor, row, phase):
     reference = dict(runner_id=row['runner_id'], execution_id=phase.execution_id,
         tool_call_id=phase.tool_call_id, branch=phase.branch, ordinal=phase.ordinal)
     cursor.execute('''SELECT * FROM local_tool_invocations WHERE tenant_id=%s
-        AND business_kind='agent_runner' AND (dedupe_key=%s OR business_ref=%s::jsonb)''',
+        AND business_kind='agent_runner' AND (dedupe_key=%s OR business_ref @> %s::jsonb)''',
         (row['tenant_id'], phase.key(row['runner_id']), json.dumps(reference)))
     matches = cursor.fetchall()
     if len(matches) > 1:
@@ -102,7 +106,7 @@ class LocalInvocationRepository:
     def bind(self, attempt, revision, phase, *, device_id, tool_name, arguments,
              provider_key=None, deadline_at=None, authorization_epoch=None,
              execution_lane='standard', device_policy=None, recovery_deadline=None,
-             automatic_provider=None, recovery_key=None):
+             automatic_provider=None, recovery_key=None, plugin_manifest_digest=None):
         with self.connection_factory() as connection:
             try:
                 return self._bind(attempt, revision, phase, device_id=device_id,
@@ -110,7 +114,7 @@ class LocalInvocationRepository:
                     deadline_at=deadline_at, authorization_epoch=authorization_epoch,
                     execution_lane=execution_lane, device_policy=device_policy,
                     recovery_deadline=recovery_deadline, automatic_provider=automatic_provider,
-                    recovery_key=recovery_key, connection=connection)
+                    recovery_key=recovery_key, plugin_manifest_digest=plugin_manifest_digest, connection=connection)
             except (ResumeContinuationConflict, DeviceOperationUnresolved) as error:
                 # get_db_connection logs rollback errors while preserving the
                 # original exception. Require an explicit successful rollback
@@ -121,7 +125,7 @@ class LocalInvocationRepository:
     def _bind(self, attempt, revision, phase, *, device_id, tool_name, arguments,
               provider_key=None, deadline_at=None, authorization_epoch=None,
               execution_lane='standard', device_policy=None, recovery_deadline=None,
-              automatic_provider=None, recovery_key=None, connection=None):
+              automatic_provider=None, recovery_key=None, plugin_manifest_digest=None, connection=None):
         """Fence, insert/dedupe and associate the phase in one transaction.
 
         A slow invocation unique/device lock may consume the lease. Recheck the
@@ -193,6 +197,8 @@ class LocalInvocationRepository:
                       deadline_at=deadline_at.isoformat() if deadline_at else None,
                       authorization_epoch=authorization_epoch,
                       execution_lane=execution_lane)
+        if plugin_manifest_digest is not None:
+            intent['plugin_manifest_digest'] = plugin_manifest_digest
         intent_json = json.dumps(intent, sort_keys=True, separators=(',', ':'),
                                  ensure_ascii=False, allow_nan=False)
         digest = hashlib.sha256(intent_json.encode()).hexdigest()
@@ -205,6 +211,8 @@ class LocalInvocationRepository:
         reference = dict(runner_id=attempt.runner_id, execution_id=phase.execution_id,
                          tool_call_id=phase.tool_call_id, branch=phase.branch,
                          ordinal=phase.ordinal)
+        if plugin_manifest_digest is not None:
+            reference['plugin_manifest_digest'] = plugin_manifest_digest
         invocation_id = create_invocation_in_tx(
             cursor, row['tenant_id'], row['user_id'], device_id, tool_name,
             arguments, row['session_id'], provider_key=provider_key,

@@ -249,6 +249,22 @@ def declared_tools_for_device(capabilities: Optional[Dict[str, Any]]) -> Optiona
     return tools_map or None
 
 
+def parallel_tools_for_device(capabilities: Any) -> Dict[str, List[str]]:
+    """Normalize heartbeat declarations before the parallel claim JSONB filter."""
+    if not isinstance(capabilities, dict):
+        return {}
+    raw = capabilities.get("parallel_tools")
+    if not isinstance(raw, dict):
+        return {}
+    tools_map: Dict[str, List[str]] = {}
+    for key, tools in raw.items():
+        if isinstance(key, str) and isinstance(tools, list):
+            names = [tool for tool in tools if isinstance(tool, str)]
+            if names:
+                tools_map[key] = names
+    return tools_map
+
+
 BOSS_COMPLETION_CAPABILITY = "runtime_boss_completion_v1"
 
 EXECUTION_RECEIPT_CAPABILITY = "runtime_execution_receipt_v1_1"

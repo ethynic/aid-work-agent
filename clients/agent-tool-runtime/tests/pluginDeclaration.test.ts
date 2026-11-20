@@ -130,7 +130,8 @@ test('商店微信声明优先于存量 v2Send，配对和心跳同源且不向�
     Object.assign(adapter, { pluginStore: {
       async refresh() {},
       resolveEntries: () => ({ weixin: entry }),
-      declaredPlugins: () => [{ plugin_id: manifest.provider_id, provider_key: 'weixin', manifest, declaration }],
+      declaredPlugins: () => [{ plugin_id: manifest.provider_id, provider_key: 'weixin', manifest, declaration,
+        envelope: { manifest_digest: `sha256:${'a'.repeat(64)}` } }],
     } })
     cloud.issueCode('SIGNEDWX')
     await adapter.pair({ server: cloud.baseUrl, device_name: 'fixture', pairing_code: 'SIGNEDWX' })
@@ -141,6 +142,7 @@ test('商店微信声明优先于存量 v2Send，配对和心跳同源且不向�
     const caps = cloud.lastHeartbeatBody(token)!.capabilities as Record<string, unknown>
     assert.deepEqual(caps.provider_manifests, { weixin: expected })
     assert.deepEqual(caps.declared_tools, { weixin: tools.map(({ name }) => name) })
+    assert.deepEqual(caps.plugin_manifest_digests, { weixin: `sha256:${'a'.repeat(64)}` })
     assert.ok(!(caps.capabilities as string[]).includes('weixin_message_send_v2'))
 
     const providers = (adapter as unknown as { providers: ProviderSet }).providers
