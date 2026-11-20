@@ -37,6 +37,78 @@ from probe import dep_eval, has_value  # noqa: E402
 
 
 # --------------------------------------------------------------------------
+# 样版样例残留扫描（最高铁律兜底，仅提示不阻断）
+# --------------------------------------------------------------------------
+# 业务数值片段：带金额/百分比/评分/人数/项数等单位的数字，这类最可能是样例数据。
+# 刻意不含纯年份、章节号（如 "1.2"/"2026年"），避免把中性结构数字当样例。
+_BUSINESS_NUM_RE = re.compile(
+    r'\d[\d,]*(?:\.\d+)?\s*(?:万元|亿元|万|元|%|％|分|人|项|件|个月|个月|倍|个百分点)')
+_YEAR_RE = re.compile(r'\d{4}\s*年')
+
+
+def _doc_text(doc):
+    """拼接文档全部文本（正文 + 表格 + 页眉页脚），供残留扫描。"""
+    parts = [p.text for p in doc.paragraphs]
+    for t in doc.tables:
+        for r in t.rows:
+            parts.extend(c.text for c in r.cells)
+    for s in doc.sections:
+        parts.extend(p.text for p in s.header.paragraphs)
+        parts.extend(p.text for p in s.footer.paragraphs)
+    return "\n".join(parts)
+
+
+def scan_sample_residue(sample_text, out_doc, analysis, answers, values):
+    """找出样版中「带业务单位的数值片段」回填后仍原样保留的那些。
+
+    目的：最高铁律要求样版样例数据不得混入成品。分析阶段若漏把某数值纳入
+    locators，脚本原本无从察觉（验收仍 ok=true）。本扫描给出中性提示清单，
+    让执行者复核这些残留是否属于应替换的样例；固定政策条款里的数值属合法
+    保留，因此只提示、不阻断、不改 ok。
+
+    降噪：出现在 locator text/sample/value_template、字段新值、_meta 里的片段跳过。
+    """
+    declared = set()
+    for fld in analysis.get("fields", []):
+        for loc in fld.get("locators", []):
+            for k in ("text", "sample", "value_template", "label", "pattern"):
+                if loc.get(k):
+                    declared.add(str(loc[k]))
+            if loc.get("label"):
+                declared.add(str(loc["label"]))
+        if fld.get("hint"):
+            declared.add(str(fld["hint"]))
+    for st in analysis.get("list_tables", []):
+        for col in st.get("columns", []):
+            for k in ("sample", "value_template"):
+                if col.get(k):
+                    declared.add(str(col[k]))
+    declared.update(str(v) for v in values.values())
+    declared.add(json.dumps(answers.get("_meta") or {}, ensure_ascii=False))
+    declared_blob = "\n".join(declared)
+
+    out_text = _doc_text(out_doc)
+
+    def norm(s):
+        return re.sub(r'\s+', '', s)
+
+    out_norm = norm(out_text)
+    counts = {}
+    for m in _BUSINESS_NUM_RE.finditer(sample_text):
+        frag = m.group(0).strip()
+        # 跳过纯年份型（如 2026年 被上面正则误捞的情形几乎没有，仍保险）
+        if _YEAR_RE.fullmatch(frag):
+            continue
+        # 该片段已被分析者显式声明（在 locator/新值/meta 里出现）则跳过
+        if norm(frag) in norm(declared_blob) or frag in declared_blob:
+            continue
+        if norm(frag) in out_norm:
+            counts[frag] = counts.get(frag, 0) + 1
+    residue = sorted(counts.items(), key=lambda kv: -kv[1])
+    return [{"fragment": frag, "count": n} for frag, n in residue]
+
+
+# --------------------------------------------------------------------------
 # 文本与 run 处理：所有替换复用原 run 的字符格式
 # --------------------------------------------------------------------------
 def _runs(para):
@@ -625,7 +697,7 @@ def fill(template_path, analysis_path, answers_path, out_path, normalize=False):
         for it in (answers.get(src) or []):
             for col in st.get("columns", []):
                 key = col.get("key")
-                if not key or str(it.get(key) or "").strip() or not col.get("formula"):
+                if not key or has_value(it.get(key)) or not col.get("formula"):
                     continue
                 try:
                     it[key] = eval_expr(col["formula"], make_env(dict(it), []))
@@ -655,13 +727,13 @@ def fill(template_path, analysis_path, answers_path, out_path, normalize=False):
     report["defaults"] = []
     for fld in analysis.get("fields", []):
         key = fld.get("key")
-        if not key or key in explicit_keys or str(values.get(key) or "").strip():
+        if not key or key in explicit_keys or has_value(values.get(key)):
             continue
         if has_value(fld.get("default")):
             values[key] = fld["default"]
             report["defaults"].append({"field": key, "value": fld["default"]})
     for key, expr in (analysis.get("derived_fields") or {}).items():
-        if str(values.get(key) or "").strip():
+        if has_value(values.get(key)):
             continue
         try:
             values[key] = eval_expr(expr, make_env(values, items_all))
@@ -671,6 +743,7 @@ def fill(template_path, analysis_path, answers_path, out_path, normalize=False):
 
     doc = Document(template_path)
     before_sig = layout_signature(doc)
+    sample_text_before = _doc_text(doc)  # 样版原文快照，用于样例残留扫描
     snaps = snapshot_tables(doc, tables_cfg)
     sentinels = {}
     sink = make_sink(sentinels)
@@ -741,6 +814,52 @@ def fill(template_path, analysis_path, answers_path, out_path, normalize=False):
     if report["layout"]["differences"]:
         report["warnings"].append("板式指纹变化: " + "; ".join(report["layout"]["differences"]))
 
+    # 样版样例残留扫描（最高铁律兜底）：分析阶段漏纳入 locators 的样例数值，
+    # 原本会安静留在成品里且验收仍 ok=true。这里给出中性提示清单供复核。
+    # 固定政策条款中的数值属合法保留，故只提示、不阻断、不改 ok。
+    residue = scan_sample_residue(sample_text_before, out, analysis, answers, values)
+    report["sample_residue"] = residue
+    if residue:
+        sample_hints = ", ".join("%s(%d)" % (r["fragment"], r["count"])
+                                 for r in residue[:8])
+        more = " 等" if len(residue) > 8 else ""
+        report["warnings"].append(
+            "样版业务数值仍原样保留 %d 类（可能是分析阶段未纳入 locators 的样例数据，"
+            "请核对是否应替换为真实值；固定政策条款数值可合法保留）：%s%s" %
+            (len(residue), sample_hints, more))
+
+    # 来源审计（最高铁律落地）：核对 answers._meta 里的来源/缺口声明。
+    # 仅作提示性警告，不改变 ok —— 版式固定值/合法沿用可能没有显式来源。
+    # 关键：只有执行者确实声明了 sources 映射时才做差集审计。否则全量差集
+    # 会把所有字段误标为"无来源"（它们可能只是没被声明），造成 100% 虚假告警。
+    meta = answers.get("_meta") or {}
+    declared_sources = meta.get("sources") or {}
+    declared_gaps = meta.get("gaps") or []
+    has_source_decl = bool(declared_sources)
+    auto_keys = set(report["derived"])
+    auto_keys |= {d.get("field") for d in report.get("defaults", []) if isinstance(d, dict)}
+    auto_keys |= set((analysis.get("derived_fields") or {}).keys())
+    ungrounded = ([k for k in values if k not in declared_sources
+                   and k not in auto_keys and not str(k).startswith("_")]
+                  if has_source_decl else [])
+    source_audit = {
+        "source_declaration": "provided" if has_source_decl else "absent",
+        "declared_sources": declared_sources,
+        "declared_gaps": declared_gaps,
+        "ungrounded_fields": ungrounded,
+        "unfilled_gaps": [k for k in declared_gaps if not has_value(values.get(k))],
+    }
+    report["source_audit"] = source_audit
+    if not has_source_decl:
+        report["warnings"].append(
+            "answers.json 未提供 _meta.sources：无法逐字段追溯内容来源；"
+            "按最高铁律应补来源声明（知识库检索 / 用户参考资料 / 用户指令）。")
+    if declared_gaps:
+        # 识别缺口并留白是正确行为，这里只是交付前提醒确认，不是错误。
+        report["warnings"].append(
+            "已识别来源缺口字段（须留待补标注或向用户索取，不得编造）: " +
+            ", ".join(str(k) for k in declared_gaps))
+
     verify = {
         "fields": {k: str(v) for k, v in values.items()},
         "tables": report["tables"],
@@ -750,7 +869,12 @@ def fill(template_path, analysis_path, answers_path, out_path, normalize=False):
             "deferred_by_dependency": len(report.get("deferred") or []),
             "sentinel_left": sentinel_left,
             "placeholder_left": placeholder_left,
+            "sample_residue": len(residue),
             "layout_drift": not report["layout"]["identical"],
+            "source_declaration": source_audit["source_declaration"],
+            "ungrounded_fields": len(ungrounded),
+            "source_gaps": len(declared_gaps),
+            "unfilled_gaps": len(source_audit["unfilled_gaps"]),
             "warnings": len(report["warnings"]),
         },
         "preview_lines": [p.text.strip() for p in out.paragraphs if p.text.strip()][:12],
