@@ -10,7 +10,7 @@
 
 ## 低层打包器及公钥文件
 
-`package.mjs` 接收已构建的 Provider 源码。`--provider boss`、`--provider wecom`、`--provider weixin`、`--provider browser` 分别选择一个 Provider。省略时打包 BOSS、企业微信和微信。验收公钥登记表在 `trust/acceptance-roots.json`，已交付的公开根快照在 `trust/history/`。登记工具只追加公钥，Provider 范围按实际用途设定。
+`package.mjs` 接收已构建的 Provider 源码。`--provider boss`、`--provider wecom`、`--provider weixin`、`--provider browser` 分别选择一个 Provider。省略时打包 BOSS、企业微信和微信。验收公钥登记表由服务端和打包器共用，已交付的公开根快照在 `trust/history/`。登记工具只追加公钥，Provider 范围按实际用途设定。 [验收公钥登记表](../../configs/runtime-plugin-trust/acceptance-roots.json)
 
 浏览器插件携带锁定版本的 Windows x64 `agent-browser` 执行器及上游许可，运行时使用本机 Chrome。用 `--provider browser --test --test-key-id aid-isolated-<唯一值>` 并传入 `--node` 和独立的 `--output` 构建隔离测试包。生成的测试根只授权 `ai.aidwork.browser`。运行该包需要支持按信任根登记 Provider 和插件工具自声明的 Runtime Host。 [浏览器插件设计](../../docs/tools/browser/browser_tool_rebuild_design.md)
 

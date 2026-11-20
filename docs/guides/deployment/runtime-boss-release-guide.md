@@ -66,7 +66,7 @@ Write-Output "可用签名配置：$signer"
 
 两个位置都不可访问时，先找原构建会话或由管理员恢复既有签名者。确认确实无法恢复时再安排发布者轮换与 Runtime 配套验证。第 6 节的随机测试根只用于隔离试验，现有客户 Runtime 需要信任发布者才能导入。
 
-验收公开根默认用仓库的 `clients/runtime-plugin-packaging/trust/acceptance-roots.json`。普通补丁复用稳定发布者和现有公开根。新增或轮换发布者按[公开根登记工具](../../../clients/runtime-plugin-packaging/register-publisher-trust.mjs)单独处理。历史公钥、范围和已交付兼容性需要保留。
+验收公开根默认使用仓库的 `configs/runtime-plugin-trust/acceptance-roots.json`。普通补丁复用稳定发布者和现有公开根。新增或轮换发布者用登记工具处理，保留历史公钥、授权范围和已交付兼容性。 [验收公钥登记表](../../../configs/runtime-plugin-trust/acceptance-roots.json) · [公开根登记工具](../../../clients/runtime-plugin-packaging/register-publisher-trust.mjs)
 
 `-ReleaseId` 缺省前缀分别为 `boss-<版本>`、`wecom-<版本>`，封装会追加对应 Provider 后缀。显式提供时作为本批所选插件的公共前缀，后缀仍分别绑定各自 Provider。
 

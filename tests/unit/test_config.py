@@ -1,4 +1,6 @@
-"""BillingConfig 单元测试（Phase 0：video_gen_usage_factor）"""
+"""配置加载与环境变量优先级测试。"""
+
+from pathlib import Path
 
 import pytest
 
@@ -171,3 +173,35 @@ def test_llm_provider_chain_single_segment_raises(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "qwen/")
     with pytest.raises(ValueError, match="至少需要 2 个"):
         create_settings()
+
+
+def test_agent2_defaults_to_bundled_plugin_acceptance_roots(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNNER_NETWORK", "aid-network2")
+    monkeypatch.delenv("AGENT_RUNNER_PLUGIN_TRUST_ROOTS", raising=False)
+    trust = Path(create_settings().agent_runner.plugin_trust_roots)
+    bundled = Path(__file__).resolve().parents[2] / "configs/runtime-plugin-trust/acceptance-roots.json"
+    assert trust == bundled and trust.is_file()
+
+
+@pytest.mark.parametrize("network", [None, "aid-network", "aid-network3", "aid-prod-net"])
+def test_other_environments_do_not_default_to_acceptance_roots(monkeypatch, network):
+    monkeypatch.delenv("AGENT_RUNNER_NETWORK", raising=False)
+    monkeypatch.delenv("AGENT_RUNNER_PLUGIN_TRUST_ROOTS", raising=False)
+    if network:
+        monkeypatch.setenv("AGENT_RUNNER_NETWORK", network)
+    assert create_settings().agent_runner.plugin_trust_roots == ""
+
+
+@pytest.mark.parametrize("overrides, expected", [
+    (None, "/configured/trust.json"),
+    ("/explicit/trust.json", "/explicit/trust.json"),
+    ("", ""),
+])
+def test_configured_plugin_trust_takes_precedence_on_agent2(monkeypatch, tmp_path, overrides, expected):
+    monkeypatch.setenv("AGENT_RUNNER_NETWORK", "aid-network2")
+    monkeypatch.delenv("AGENT_RUNNER_PLUGIN_TRUST_ROOTS", raising=False)
+    if overrides is not None:
+        monkeypatch.setenv("AGENT_RUNNER_PLUGIN_TRUST_ROOTS", overrides)
+    config = tmp_path / "config.yaml"
+    config.write_text("agent_runner:\n  plugin_trust_roots: /configured/trust.json\n", encoding="utf-8")
+    assert create_settings(config).agent_runner.plugin_trust_roots == expected

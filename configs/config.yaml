@@ -515,7 +515,8 @@ agent_runner:
   # 本地容器验证（2026-10-04）：Web 闭环走 Runner；令牌明文仅在 .env。
   enabled: true
   web_enabled: true
-  # 插件发布者公开信任文件，空值关闭清单同步。可用 AGENT_RUNNER_PLUGIN_TRUST_ROOTS 覆盖。
+  # 插件发布者公开信任文件。空值时仅 agent2（aid-network2）默认使用 configs/runtime-plugin-trust 下的验收公钥。
+  # AGENT_RUNNER_PLUGIN_TRUST_ROOTS 优先，显式为空时关闭清单同步。
   plugin_trust_roots: ""
   # 同池 API/worker 全部升级并完成隔离验收后才显式开启。
   durable_sleep_enabled: false

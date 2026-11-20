@@ -39,7 +39,12 @@ if ($includePlugin -and [string]::IsNullOrWhiteSpace($Signer)) {
 }
 if ([string]::IsNullOrWhiteSpace($TrustRoots)) {
     if ($ReleaseProfile -eq 'production') { throw '生产构建需要 -TrustRoots 指定正式公开信任根' }
-    $TrustRoots = Join-Path $repo 'clients/runtime-plugin-packaging/trust/acceptance-roots.json'
+    $TrustRoots = Join-Path $repo 'configs/runtime-plugin-trust/acceptance-roots.json'
+    # Older SourceRef archives keep the registry at their original path.
+    if (!(Test-Path -LiteralPath $TrustRoots -PathType Leaf)) {
+        $historicalRoots = Join-Path $repo 'clients/runtime-plugin-packaging/trust/acceptance-roots.json'
+        if (Test-Path -LiteralPath $historicalRoots -PathType Leaf) { $TrustRoots = $historicalRoots }
+    }
 }
 $TrustRoots = [IO.Path]::GetFullPath($TrustRoots)
 if ($includePlugin) { $Signer = [IO.Path]::GetFullPath($Signer) }

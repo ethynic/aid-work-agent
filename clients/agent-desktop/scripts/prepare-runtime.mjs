@@ -8,7 +8,7 @@ export const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.u
 export const resourcesRoot = path.join(desktopRoot, 'build/runtime-resources')
 export const nodeSpecification = JSON.parse(readFileSync(path.join(desktopRoot, 'scripts/runtime-node-resources.json'), 'utf8'))
 export const digest = bytes => createHash('sha256').update(bytes).digest('hex')
-export const acceptanceTrustRegistryPath = path.resolve(desktopRoot, '../runtime-plugin-packaging/trust/acceptance-roots.json')
+export const acceptanceTrustRegistryPath = path.resolve(desktopRoot, '../../configs/runtime-plugin-trust/acceptance-roots.json')
 export const runtimeR15TrustSnapshotPath = path.resolve(desktopRoot, '../runtime-plugin-packaging/trust/history/runtime-r15.json')
 // User-restored original r15 trust file; a truncated snapshot cannot redefine history.
 export const runtimeR15TrustSnapshotSha256 = 'bc1bdb8f0b949ec54f941821f1470207d913f6c2fef64c82646b356104d7f328'

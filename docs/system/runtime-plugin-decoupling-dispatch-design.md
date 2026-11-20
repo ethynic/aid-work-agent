@@ -18,7 +18,7 @@
 
 Runtime 在现有认证心跳中报告已启用插件的签名清单摘要。服务端按这台设备检查已同步的清单，只请求缺少或已变化的插件。Runtime 下一次心跳补报已安装包中的原始 `envelope.json` 和 `runtime-manifest.json`。停用、卸载或升级插件后，服务端按当前心跳处理有效清单。插件安装后自动同步。
 
-AID 服务端从环境配置读取发布者公钥，验证签名、插件身份和完整清单摘要。签名包中的原始 MCP 工具名、描述和输入 Schema 是 Runner 工具定义的来源。插件包本身留在 Runtime。 [签名包格式](first-party-cli-mcp-provider-standard.md)
+AID 服务端从环境配置读取发布者公钥，验证签名、插件身份和完整清单摘要。agent2 的主 API 和 Runner worker 根据已有的 `AGENT_RUNNER_NETWORK=aid-network2` 默认使用已挂载的 `/app/configs/runtime-plugin-trust/acceptance-roots.json`，与 Runtime 打包共用一份验收公钥登记表。各环境显式配置的信任路径优先。签名包中的原始 MCP 工具名、描述和输入 Schema 是 Runner 工具定义的来源。插件包本身留在 Runtime。 [签名包格式](first-party-cli-mcp-provider-standard.md)
 
 Runner 读取当前用户已选中的唯一 Runtime，使用该设备当前启用的插件清单生成工具定义，调用也派给这台设备。用户通过现有设备选择功能切换 Runtime，工具定义随设备切换。不同 Runtime 的清单各自同步。服务端同步的清单取自所选 Runtime 安装所用的同一个签名包。现有 `declared_tools` 继续提供设备可执行工具名，完整工具定义从签名清单读取。
 

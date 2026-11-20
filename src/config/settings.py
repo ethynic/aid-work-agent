@@ -1078,6 +1078,10 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
         runner_cfg["web_enabled"] = os.environ["AGENT_RUNNER_WEB_ENABLED"].lower() in ("true", "1", "yes")
     if "AGENT_RUNNER_PLUGIN_TRUST_ROOTS" in os.environ:
         runner_cfg["plugin_trust_roots"] = os.environ["AGENT_RUNNER_PLUGIN_TRUST_ROOTS"]
+    elif not runner_cfg.get("plugin_trust_roots") and os.getenv("AGENT_RUNNER_NETWORK") == "aid-network2":
+        runner_cfg["plugin_trust_roots"] = str(
+            Path(__file__).resolve().parents[2] / "configs/runtime-plugin-trust/acceptance-roots.json"
+        )
     if os.getenv("AGENT_RUNNER_API_URL") is not None:
         runner_cfg["api_url"] = os.environ["AGENT_RUNNER_API_URL"]
     if os.getenv("AGENT_RUNNER_WEB_SERVICE_ID") is not None:
