@@ -259,8 +259,8 @@ class RuntimeExecution:
         self.catalog = ToolCatalog(resources.mode, resources.tool_registry, resources._tool_controls,
             self.visibility, resources.skill_registry, supports_sleep=self.supports_sleep,
             configured_tools=config.get_allowed_tools() if config else (),
-            inherits_tools=resources.mode == AgentMode.MASTER or not config or config.tools.get('inherit', False),
-            excluded_tools=config.get_excluded_tools() if config and resources.mode != AgentMode.MASTER else ())
+            allow_local_runtime_tools=config is not None and config.tools.get('allow_local_runtime_tools') is True,
+            excluded_tools=config.get_excluded_tools() if config else ())
         self.skills = SkillSession(identity.tenant_id, resources.skill_registry, resources.memory)
         history_source = identity.source if identity.session_kind == "channel" else "chat"
         self.history = SessionHistory(resources.memory, history_source,

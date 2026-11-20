@@ -27,6 +27,39 @@ from .test_worker_recovery import logs_schema
 
 pytestmark = pytest.mark.integration
 
+
+@pytest.fixture
+def opted_in_profile(workers, actors, service_database):
+    actor = actors['a']
+    identifier = 'after-sales-runtime-' + uuid.uuid4().hex
+    prompt_id = str(uuid.uuid4())
+    tools = {'inherit': False, 'allowed': ['http_api', 'boss_send_to'], 'additional': ['read'],
+             'allow_local_runtime_tools': True}
+    with service_database.connect() as connection, connection.cursor() as cursor:
+        cursor.execute('''INSERT INTO subagent_definitions(agent_id, name, description, tools, llm_provider)
+            VALUES(%s, '在线电商客服', 'Opted-in Runtime fixture', %s::jsonb, %s::jsonb)''',
+            (identifier, json.dumps(tools), json.dumps({'provider': 'qwen', 'model_codes': {'qwen': workers.models[0]}})))
+        cursor.execute("INSERT INTO prompt_registry(id, scope, scope_id, latest_version) VALUES(%s,'subagent',%s,1)",
+                       (prompt_id, identifier))
+        cursor.execute("INSERT INTO prompt_versions(prompt_id, version, content) VALUES(%s,1,'Test after-sales profile.')",
+                       (prompt_id,))
+        cursor.execute('''INSERT INTO subscriptions(subscription_id, tenant_id, subagent_type, status, payment_status)
+            VALUES(%s,%s,%s,'active','paid')''', ('subscription-' + identifier, actor.tenant_id, identifier))
+        cursor.execute('INSERT INTO user_agent_permissions(user_id, tenant_id, agent_id) VALUES(%s,%s,%s)',
+                       (actor.user_id, actor.tenant_id, identifier))
+        cursor.execute('UPDATE chat_sessions SET subagent_id=%s WHERE session_id=%s', (identifier, actor.session_id))
+    try:
+        yield identifier
+    finally:
+        with service_database.connect() as connection, connection.cursor() as cursor:
+            cursor.execute('UPDATE chat_sessions SET subagent_id=NULL WHERE session_id=%s', (actor.session_id,))
+            cursor.execute('DELETE FROM user_agent_permissions WHERE agent_id=%s', (identifier,))
+            cursor.execute('DELETE FROM subscriptions WHERE subagent_type=%s', (identifier,))
+            cursor.execute('DELETE FROM prompt_versions WHERE prompt_id=%s', (prompt_id,))
+            cursor.execute('DELETE FROM prompt_registry WHERE id=%s', (prompt_id,))
+            cursor.execute('DELETE FROM subagent_definitions WHERE agent_id=%s', (identifier,))
+
+
 _RUNTIME = r'''
 import json
 import sys
@@ -76,7 +109,8 @@ finally:
 
 
 @pytest.mark.parametrize('window', ['before-enqueue', 'before-claim', 'legacy-claim', 'matching-claim', 'disable-queued'])
-def test_invocation_uses_the_release_the_model_saw(window, workers, actors, service_database, monkeypatch):
+def test_invocation_uses_the_release_the_model_saw(window, workers, actors, service_database, monkeypatch,
+                                                opted_in_profile):
     actor = actors['a']
     root = workers.root / 'plugin-update'
     root.mkdir()
@@ -131,7 +165,7 @@ def test_invocation_uses_the_release_the_model_saw(window, workers, actors, serv
                 return first
             first.produce = update_after_advertising
         marker = workers.provider.register(first, Reply(content='Tool outcome received.'))
-        accepted = accept(workers.api, actor, marker)
+        accepted = accept(workers.api, actor, marker, profile_id=opted_in_profile)
         worker, _ = workers.start()
 
         if window == 'disable-queued':
@@ -201,7 +235,8 @@ def test_invocation_uses_the_release_the_model_saw(window, workers, actors, serv
             service_database.rows(f'DELETE FROM {table} WHERE tenant_id=%s', (actor.tenant_id,))
 
 
-def test_pending_claim_uses_current_declarations_after_plugin_sync(workers, actors, service_database, monkeypatch):
+def test_pending_claim_uses_current_declarations_after_plugin_sync(workers, actors, service_database, monkeypatch,
+                                                                  opted_in_profile):
     actor = actors['a']
     root = workers.root / 'plugin-claim-sync'
     root.mkdir()
@@ -270,7 +305,7 @@ def test_pending_claim_uses_current_declarations_after_plugin_sync(workers, acto
                 assert old_waiting.wait(5) and current_waiting.wait(5)
                 assert heartbeat(new, new_tool)['missing_plugin_manifests'] == [PROVIDER]
                 assert 'missing_plugin_manifests' not in heartbeat(new, new_tool, supply_bundle=True)
-                accepted = accept(workers.api, actor, marker)
+                accepted = accept(workers.api, actor, marker, profile_id=opted_in_profile)
                 worker, _ = workers.start()
 
                 def queued_calls():
@@ -307,7 +342,7 @@ def test_pending_claim_uses_current_declarations_after_plugin_sync(workers, acto
 
 
 def test_worker_dispatches_native_tool_to_selected_device_and_returns_standard_receipt(
-        workers, actors, service_database, logs_schema, monkeypatch):
+        workers, actors, service_database, logs_schema, monkeypatch, opted_in_profile):
     actor = actors['a']
     root = workers.root / 'plugin-sync'
     root.mkdir()
@@ -367,7 +402,7 @@ def test_worker_dispatches_native_tool_to_selected_device_and_returns_standard_r
         arguments = {'target': value}
         marker = workers.provider.register(tool_reply(TOOL, arguments, call_id='plugin-call'),
                                            Reply(content='Received the original device result.'))
-        accepted = accept(workers.api, actor, marker)
+        accepted = accept(workers.api, actor, marker, profile_id=opted_in_profile)
         worker, _ = workers.start()
         finished = terminal(service_database, accepted['runner_id'])
         assert finished['status'] == 'completed', json.dumps({
@@ -380,6 +415,8 @@ def test_worker_dispatches_native_tool_to_selected_device_and_returns_standard_r
         advertised = [tool['function'] for tool in requests[0]['tools'] if tool['function']['name'] == TOOL]
         assert advertised == [{'name': TOOL, 'description': chosen_definition['description'],
                                'parameters': chosen_definition['inputSchema']}]
+        names = {tool['function']['name'] for tool in requests[0]['tools']}
+        assert {'http_api', 'boss_send_to'} <= names and 'read' not in names
         context = requests[1]['messages']
         call_id = next(call['id'] for message in context for call in message.get('tool_calls', [])
                        if call['function']['name'] == TOOL)
@@ -411,19 +448,23 @@ def test_worker_dispatches_native_tool_to_selected_device_and_returns_standard_r
         assert value not in json.dumps(spans)
         assert value in json.dumps(requests[1]['messages'])
 
-        assert 'missing_plugin_manifests' not in heartbeat({'capabilities': {**legacy, MANIFEST_DIGESTS: {}}})
-        assert VERIFIED_MANIFESTS not in stored(selected)
-        followup = workers.provider.register(Reply(content='Plugin disabled.'))
-        second = accept(workers.api, actor, followup)
+        service_database.rows("""UPDATE subagent_definitions SET updated_at=NOW(),
+            tools=jsonb_set(tools, '{allow_local_runtime_tools}', 'false') WHERE agent_id=%s""", (opted_in_profile,))
+        assert load_device_tools(path, stored(selected), legacy['declared_tools']) == [(PROVIDER, chosen_definition)]
+        followup = workers.provider.register(Reply(content='Profile opted out.'))
+        second = accept(workers.api, actor, followup, profile_id=opted_in_profile)
         second_worker, _ = workers.start()
         workers.assert_clean_exit(second_worker)
         assert terminal(service_database, second['runner_id'])['status'] == 'completed'
         second_request, = workers.provider.requests(followup)
         assert all(tool['function']['name'] != TOOL for tool in second_request['tools'])
+        assert {'http_api', 'boss_send_to'} <= {tool['function']['name'] for tool in second_request['tools']}
         assert value in json.dumps(second_request['messages'])
         followup_spans = service_database.rows('SELECT input FROM obs_spans WHERE trace_id IN (%s, %s) AND name=%s',
                                                (f'tr_{second["runner_id"]}', f'tr_{second["runner_id"]}:1', 'llm_call'))
         assert len(followup_spans) == 1 and value not in json.dumps(followup_spans)
+        assert 'missing_plugin_manifests' not in heartbeat({'capabilities': {**legacy, MANIFEST_DIGESTS: {}}})
+        assert VERIFIED_MANIFESTS not in stored(selected)
     finally:
         workers.processes.stop(runtime)
         for table in ('local_tool_events', 'local_tool_invocations', 'local_tool_devices', 'client_usage_logs'):

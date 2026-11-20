@@ -88,7 +88,7 @@
                   <div class="flex gap-2">
                     <button @click="saveDefinition"
                       class="px-3 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
-                      :disabled="saving">
+                      :disabled="saving || !canSaveDefinition">
                       {{ saving ? '保存中...' : (pendingCreate ? '保存为自定义数字员工' : '保存定义') }}
                     </button>
                     <button v-if="!pendingCreate" @click="handleExport" :disabled="exporting"
@@ -172,6 +172,11 @@
                                 class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
                               继承默认工具
                             </label>
+                            <label class="flex items-center gap-2 text-sm text-gray-600">
+                              <input type="checkbox" v-model="allowLocalRuntimeTools"
+                                class="w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500" />
+                              允许本机 Runtime 插件工具
+                            </label>
                             <div v-if="!toolsInherit" class="space-y-1.5">
                               <label v-for="tool in availableTools" :key="tool.id"
                                 class="flex items-center gap-3 px-3 py-2 text-sm bg-white rounded-lg border border-gray-200 hover:border-gray-300 cursor-pointer"
@@ -196,6 +201,10 @@
                       <label class="flex items-center gap-2 text-xs text-gray-600 mb-2">
                         <input type="checkbox" v-model="toolsInherit" />
                         继承默认工具
+                      </label>
+                      <label class="flex items-center gap-2 text-xs text-gray-600 mb-2">
+                        <input type="checkbox" v-model="allowLocalRuntimeTools" />
+                        允许本机 Runtime 插件工具
                       </label>
                       <div v-if="!toolsInherit" class="max-h-40 overflow-y-auto space-y-1">
                         <label v-for="tool in availableTools" :key="tool.id"
@@ -683,6 +692,8 @@ const displayUser = computed(() =>
 const agents = ref<AgentDefinition[]>([])
 const selectedAgentId = ref<string | null>(null)
 const selectedAgent = ref<AgentDefinition | null>(null)
+const loadingDefinition = ref(false)
+let definitionRequest = 0
 const searchQuery = ref('')
 const toasts = ref<{ id: number; message: string; type: string }[]>([])
 let toastId = 0
@@ -690,6 +701,8 @@ let toastId = 0
 // Form state
 const form = ref<Record<string, any>>({})
 const toolsInherit = ref(true)
+const allowLocalRuntimeTools = ref(false)
+const toolListKey = ref<'allowed' | 'additional'>('additional')
 const additionalTools = ref<string[]>([])
 const saving = ref(false)
 
@@ -795,6 +808,9 @@ function validateModelCodes(): boolean {
 
 // 从内置数字员工复制创建模式（入口：内置数字员工页「自定义」按钮）
 const pendingCreate = ref<{ source_agent_id: string; source_name: string } | null>(null)
+const canSaveDefinition = computed(() => !loadingDefinition.value && (
+  !!pendingCreate.value || (!!selectedAgentId.value && form.value.agent_id === selectedAgentId.value)
+))
 
 function applyBuiltinPrefill(payload: Record<string, any>) {
   pendingCreate.value = {
@@ -933,10 +949,14 @@ async function loadList() {
 }
 
 async function selectAgent(item: AgentDefinition) {
-  selectedAgentId.value = item.agent_id
+  const agentId = item.agent_id
+  const request = ++definitionRequest
+  selectedAgentId.value = agentId
+  loadingDefinition.value = true
   try {
-    const res = await getDefinition(item.agent_id)
-    if (res.success) {
+    const res = await getDefinition(agentId)
+    if (request !== definitionRequest || selectedAgentId.value !== agentId) return
+    if (res.success && res.data.agent_id === agentId) {
       selectedAgent.value = res.data
       populateForm(res.data)
       await loadVersions()
@@ -944,6 +964,9 @@ async function selectAgent(item: AgentDefinition) {
       await loadSections()
     }
   } catch (e) { console.error('加载详情失败', e) }
+  finally {
+    if (request === definitionRequest) loadingDefinition.value = false
+  }
 }
 
 function populateForm(data: AgentDefinition) {
@@ -951,6 +974,7 @@ function populateForm(data: AgentDefinition) {
     agent_id: data.agent_id,
     name: data.name,
     description: data.description || '',
+    tools: { ...data.tools },
     skills: { ...data.skills },
     reply_style: data.reply_style || null,
     status: data.status || 'active',
@@ -962,8 +986,10 @@ function populateForm(data: AgentDefinition) {
       zhipu: data.llm_model_codes?.zhipu || '',
     },
   }
-  toolsInherit.value = data.tools?.inherit !== false
-  additionalTools.value = data.tools?.additional || []
+  toolsInherit.value = Boolean(data.tools?.inherit)
+  allowLocalRuntimeTools.value = data.tools?.allow_local_runtime_tools === true
+  toolListKey.value = data.tools?.allowed?.length ? 'allowed' : 'additional'
+  additionalTools.value = [...(data.tools?.[toolListKey.value] || [])]
   businessPages.value = (data.business_pages || []).map((p: any) => ({ ...p }))
   recapTasks.value = (data.recap?.tasks || []).map(t => ({
     name: t.name || '',
@@ -1169,7 +1195,7 @@ async function doCreate() {
 }
 
 async function saveDefinition() {
-  if (!validateModelCodes()) return
+  if (!canSaveDefinition.value || !validateModelCodes()) return
   saving.value = true
   try {
     // 组装 llm_model_codes：过滤空值，若全空则传 null
@@ -1178,10 +1204,21 @@ async function saveDefinition() {
     for (const [k, v] of Object.entries(rawCodes)) {
       if (typeof v === 'string' && v.trim()) model_codes[k] = v.trim()
     }
+    const tools = { ...form.value.tools, allow_local_runtime_tools: allowLocalRuntimeTools.value }
+    if (toolsInherit.value !== Boolean(tools.inherit)) tools.inherit = toolsInherit.value
+    const originalList = tools[toolListKey.value] || []
+    if (originalList.length !== additionalTools.value.length ||
+        additionalTools.value.some((tool, index) => tool !== originalList[index])) {
+      tools[toolListKey.value] = [...additionalTools.value]
+      // 清空起效的 allowed 时，避免回退到原先未生效的 additional。
+      if (toolListKey.value === 'allowed' && !additionalTools.value.length && tools.additional?.length) {
+        tools.additional = []
+      }
+    }
     const data: Record<string, any> = {
       name: form.value.name,
       description: form.value.description || null,
-      tools: { inherit: toolsInherit.value, additional: additionalTools.value },
+      tools,
       skills: form.value.skills,
       reply_style: form.value.reply_style || null,
       business_pages: businessPages.value.length > 0 ? businessPages.value : null,
@@ -1227,8 +1264,10 @@ async function saveDefinition() {
     }
 
     if (!selectedAgentId.value) return
+    const editingForm = form.value
     const res = await updateDefinition(selectedAgentId.value, data)
     if (res.success) {
+      if (form.value === editingForm) editingForm.tools = tools
       showToast('定义已保存')
       const autoDone = (res as any).auto_completed as string[] | undefined
       if (autoDone && autoDone.length > 0) {

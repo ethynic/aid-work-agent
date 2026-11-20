@@ -17,6 +17,7 @@ from src.local_tools.lifecycle import current_local_operation, local_operation_s
 from src.local_tools.plugin_manifests import MANIFEST_DIGESTS, PLUGIN_CHANGED_CODE, VERIFIED_MANIFESTS, load_device_tools, sync_plugin_manifests
 from src.local_tools.plugin_tool import PLUGIN_BINDINGS, PLUGIN_PHASE, bound_plugin_tool
 from src.local_tools.proxy_tool import BossSendToTool
+from src.models.subagent import SubagentConfig
 from src.services.agent_runner.local_recovery import LocalRecoveryProof
 from src.services.agent_runner.runtime.executor import CompatibilityControl, CompatibilityObserver, ModelAdapter, RuntimeExecution
 from src.services.agent_runner.runtime.profile import RuntimeResources
@@ -54,11 +55,12 @@ def registrations(tmp_path, monkeypatch):
     return register
 
 
-def make_runner(**kwargs):
+def make_runner(*, allow_local_runtime_tools=True, **kwargs):
     registry = ToolRegistry()
     controls = SimpleNamespace(get=lambda name: None, definitions=lambda **kwargs: [],
                                get_display_name=lambda name, args: None)
-    catalog = ToolCatalog(AgentMode.STANDALONE, registry, controls, SimpleNamespace(available=lambda: []), **kwargs)
+    catalog = ToolCatalog(AgentMode.STANDALONE, registry, controls, SimpleNamespace(available=lambda: []),
+                          allow_local_runtime_tools=allow_local_runtime_tools, **kwargs)
     executor = ToolExecutor(registry)
     dispatcher = ToolDispatcher(catalog=catalog, registry=registry, executor=executor,
         control_tools=None, local=None, skills=None, plan_manager=None, subagent_config=None, control=None)
@@ -140,7 +142,7 @@ async def test_unsigned_or_unregistered_declaration_never_extends_profile(regist
     assert [item['name'] for item in runner.definitions()] == ['boss_send_to']
 
     bundle = registrations(device, definition('target'))
-    strict, strict_runner = make_runner(inherits_tools=False)
+    strict, strict_runner = make_runner(allow_local_runtime_tools=False)
     await strict.prime_local_tools(chat, include_runtime_plugins=True)
     assert strict_runner.definitions() == []
 
@@ -157,7 +159,8 @@ async def test_unsigned_or_unregistered_declaration_never_extends_profile(regist
 
 
 @pytest.mark.asyncio
-async def test_legacy_web_assembly_keeps_existing_tools_without_signed_plugin(registrations, monkeypatch, tmp_path):
+@pytest.mark.parametrize('durable', [False, True])
+async def test_unconfigured_master_keeps_existing_tools_without_plugin(registrations, monkeypatch, tmp_path, durable):
     device = make_device(selected=True)
     device['capabilities_json']['providers'] = ['boss-recruiting', PROVIDER]
     registrations(device, definition('target'))
@@ -166,11 +169,52 @@ async def test_legacy_web_assembly_keeps_existing_tools_without_signed_plugin(re
                         lambda allowed: SkillRegistry())
     resources = RuntimeResources(tenant_id='tenant', user_id='actor', session_id='conversation',
                                  resource_directory=tmp_path)
-    runtime = RuntimeExecution(resources, Identity('tenant', 'actor', 'conversation'))
+    control = CompatibilityControl()
+    control.durable_owner = durable
+    runtime = RuntimeExecution(resources, Identity('tenant', 'actor', 'conversation'), control=control)
     await runtime._prime_local_tools()
     names = {item['name'] for item in runtime.catalog._visible_definitions()}
     assert 'boss_jobs_list' in names
     assert TOOL not in names and not resources.tool_registry.has_tool(TOOL)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('preference', [{}, {'allow_local_runtime_tools': False},
+                                       {'allow_local_runtime_tools': 'true'},
+                                       {'allow_local_runtime_tools': 1},
+                                       {'allow_local_runtime_tools': True}])
+async def test_only_opted_in_internal_profile_adds_plugins_to_strict_tool_list(
+        preference, registrations, monkeypatch, tmp_path):
+    device = make_device(selected=True)
+    device['capabilities_json']['providers'] = ['boss-recruiting', PROVIDER]
+    blocked = 'sample_mcp_excluded'
+    device['capabilities_json']['declared_tools'][PROVIDER].append(blocked)
+    registrations(device, definition('target'), definition('target', name=blocked))
+    monkeypatch.setattr(repository, 'list_devices', lambda tenant, user: [device])
+    monkeypatch.setattr('src.services.agent_runner.runtime.profile.cached_skill_registry',
+                        lambda allowed: SkillRegistry())
+    config = SubagentConfig(name='在线电商客服', dir_name='after-sales', tools={
+        'inherit': False, 'allowed': ['boss_send_to'], 'additional': ['read'], 'excluded': [blocked],
+        **preference,
+    })
+    identity = Identity('tenant', 'actor', 'conversation')
+
+    def make_resources():
+        return RuntimeResources(mode=AgentMode.STANDALONE, subagent_config=config, tenant_id='tenant',
+                                user_id='actor', session_id='conversation', resource_directory=tmp_path)
+
+    control = CompatibilityControl()
+    control.durable_owner = True
+    runtime = RuntimeExecution(make_resources(), identity, control=control)
+    await runtime._prime_local_tools()
+    names = {item['name'] for item in runtime.catalog._visible_definitions()}
+    expected = {'boss_send_to', TOOL} if preference.get('allow_local_runtime_tools') is True else {'boss_send_to'}
+    assert names == expected
+
+    if preference.get('allow_local_runtime_tools') is True:
+        legacy = RuntimeExecution(make_resources(), identity)
+        await legacy._prime_local_tools()
+        assert TOOL not in {item['name'] for item in legacy.catalog._visible_definitions()}
 
 
 @pytest.mark.asyncio

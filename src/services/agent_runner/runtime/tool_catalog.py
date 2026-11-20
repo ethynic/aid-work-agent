@@ -7,7 +7,7 @@ from src.core.agent_engine.contracts import AgentMode
 
 class ToolCatalog:
     def __init__(self, mode, registry, controls, visibility, skill_registry=None, supports_sleep=False,
-                 configured_tools=(), *, inherits_tools=True, excluded_tools=()):
+                 configured_tools=(), *, allow_local_runtime_tools=False, excluded_tools=()):
         self.mode, self.tool_registry, self._tool_controls = mode, registry, controls
         self._get_available_subagents = visibility.available
         self.skill_registry = skill_registry
@@ -17,7 +17,7 @@ class ToolCatalog:
         self._capability_lookup_failed = False
         from src.local_tools.catalog import expand_agent_aliases
         self._configured_tools = set(expand_agent_aliases(configured_tools))
-        self._inherits_tools = inherits_tools
+        self._allow_local_runtime_tools = allow_local_runtime_tools
         self._excluded_tools = set(expand_agent_aliases(excluded_tools))
         self._plugin_tools = set()
 
@@ -59,7 +59,8 @@ class ToolCatalog:
                 ):
                     visible = [name for name in visible if name != 'wecom_session_directory']
                 self._device_tools.update(visible)
-        if include_runtime_plugins and selected and identity.source == 'chat' and identity.session_kind == 'web':
+        if (include_runtime_plugins and self._allow_local_runtime_tools and selected
+                and identity.source == 'chat' and identity.session_kind == 'web'):
             from src.config.settings import settings
             root = settings.agent_runner.plugin_trust_roots
             if root:
@@ -79,7 +80,7 @@ class ToolCatalog:
         counts = Counter(definition['name'] for _, definition in candidates)
         for provider_key, definition in candidates:
             name = definition['name']
-            if name in self._excluded_tools or (not self._inherits_tools and name not in self._configured_tools):
+            if name in self._excluded_tools:
                 continue
             if (counts[name] != 1 or name in reserved or self.tool_registry.has_tool(name)
                     or self._tool_controls.get(name) or name in {'use_skill', 'skill_complete'}):
