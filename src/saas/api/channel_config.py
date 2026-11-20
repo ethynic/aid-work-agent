@@ -185,6 +185,11 @@ def _normalize_web_c_config(config: dict, existing: Optional[dict] = None) -> No
         raise HTTPException(status_code=400, detail="身份模式取值应为 ext / anon / uid")
     config["identity_mode"] = mode
 
+    # 留资归属员工（2026-11-20 方案 2）：留资线索 assigned_to / 通知 kf_assignee
+    # 接收人来源；空串 = 未配置（线索不归属员工，kf_assignee 模式零接收人）。
+    # 归属校验（本租户 + active）在 create/update 处 _validate_web_c_lead_assignee 执行
+    config["lead_assignee_user_id"] = str(config.get("lead_assignee_user_id") or "").strip()
+
     secret = str(config.get("channel_secret") or "").strip()
     if secret.startswith("***"):
         secret = ""
@@ -376,6 +381,7 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
     if body.channel_type == _WEB_C_CHANNEL_TYPE:
         body.config = dict(body.config)
         _normalize_web_c_config(body.config)
+        _validate_web_c_lead_assignee(admin["tenant_id"], body.config)
 
     # 媒体识别开关（2026-11-19）：支持渠道规整布尔值落库（缺省 ASR 开、图片识别关）
     if body.channel_type in MEDIA_SWITCH_CHANNEL_TYPES:
@@ -478,6 +484,7 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
         body.config = dict(body.config)
         # web_c get_by_id 返回明文 config（非敏感字段机制渠道），旧 secret 可直接沿用
         _normalize_web_c_config(body.config, existing.get("config") or {})
+        _validate_web_c_lead_assignee(admin["tenant_id"], body.config)
 
     # 媒体识别开关（2026-11-19）：支持渠道规整布尔值落库（缺省 ASR 开、图片识别关；
     # 前端漏传/存量旧表单整体覆盖时开关值确定，不会静默丢失）
@@ -754,6 +761,21 @@ async def rotate_web_c_secret(config_id: str, request: Request):
         "channel_secret": new_secret,
         "message": "签名密钥已重置，旧签名链接全部失效，请更新官网的签名服务配置",
     }
+
+
+def _validate_web_c_lead_assignee(tenant_id: str, config: dict) -> None:
+    """校验 web_c 留资归属员工：本租户 + active（防跨租户/已删除用户落库）。
+
+    空值 = 未配置，直接放行（清空归属是合法操作）。
+    """
+    user_id = str(config.get("lead_assignee_user_id") or "").strip()
+    if not user_id:
+        return
+    from src.db.models import UserDB
+
+    user = UserDB.get_by_id(user_id) or {}
+    if user.get("tenant_id") != tenant_id or user.get("status") != "active":
+        raise HTTPException(status_code=400, detail="留资归属员工不存在或非本租户在职用户，请重新选择")
 
 
 def _validate_channel_subagent(tenant_id: str, subagent_type: Optional[str]) -> None:

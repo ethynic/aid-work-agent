@@ -122,7 +122,7 @@
               ]"
             >
               渠道层（不限账号）
-              <span class="block text-xs font-normal mt-0.5">任一客服账号的留资都命中</span>
+              <span class="block text-xs font-normal mt-0.5">任一客服账号/官网渠道的留资都命中</span>
             </button>
             <button
               type="button"
@@ -135,18 +135,18 @@
               ]"
             >
               客服账号层
-              <span class="block text-xs font-normal mt-0.5">仅所选客服账号的留资命中</span>
+              <span class="block text-xs font-normal mt-0.5">仅所选客服账号/官网渠道的留资命中</span>
             </button>
           </div>
           <div v-if="form.scope === 'kf_config'" class="mt-3">
             <label class="block text-sm text-default mb-1">
-              客服账号（来自渠道配置的微信客服）<span class="text-danger-500">*</span>
+              客服账号 / 官网渠道<span class="text-danger-500">*</span>
             </label>
             <div v-if="kfConfigOptions.length === 0" class="text-xs text-muted py-2">
-              暂无微信客服账号，请先到「渠道接入」添加
+              暂无微信客服账号或官网渠道，请先到「渠道接入」添加
             </div>
             <BaseSelect v-else v-model="form.kf_config_id">
-              <option value="">请选择客服账号</option>
+              <option value="">请选择客服账号/官网渠道</option>
               <option v-for="opt in kfSelectOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
             </BaseSelect>
           </div>
@@ -445,7 +445,7 @@ const kfSelectOptions = computed(() => {
   const current = form.kf_config_id
   if (current && !opts.some((o) => o.value === current)) {
     const ch = channelNameMap.value[current]
-    opts.unshift({ value: current, label: ch ? `微信客服渠道：${ch}` : `${current}（已失效）` })
+    opts.unshift({ value: current, label: ch ? `渠道：${ch}` : `${current}（已失效）` })
   }
   return opts
 })
@@ -617,10 +617,20 @@ async function loadKfConfigs() {
     const channels = channelsRes?.channels || []
     channelNameMap.value = {}
     for (const c of channels) channelNameMap.value[c.config_id] = c.name || c.config_id
+    // 账号层选项 = wecom_kf 客服账号（open_kfid）+ web_c 官网渠道（config_id，
+    // 无账号维度，渠道配置行即语义终点，2026-11-20 起支持）
     kfConfigOptions.value = (accountsRes?.accounts || []).map((acc: any) => ({
       value: acc.open_kfid,
       label: `${acc.name || acc.open_kfid}（${channelNameMap.value[acc.config_id] || acc.config_id}）`,
     }))
+    for (const c of channels) {
+      if (c.channel_type === 'web_c') {
+        kfConfigOptions.value.push({
+          value: c.config_id,
+          label: `${c.name || c.config_id}（官网渠道）`,
+        })
+      }
+    }
   } catch {
     // 账号列表加载失败不阻断页面，客服账号层选项显示为空并提示
   }

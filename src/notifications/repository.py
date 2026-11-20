@@ -618,14 +618,17 @@ class NotificationRepository:
 
     def _validate_rule_kf_configs(self, cursor, tenant_id, conditions):
         """kf_config 层条件逐个校验归属本租户：允许渠道 config_id（渠道层，
-        存量语义）或该租户 wecom_kf 渠道 config JSON 内的客服账号 open_kfid
-        （账号级）。"""
+        存量语义）、该租户 wecom_kf 渠道 config JSON 内的客服账号 open_kfid
+        （账号级），或 web_c 渠道 config_id（官网渠道条目，web_c 无账号维度，
+        渠道配置行即语义终点；2026-11-20 起支持）。"""
         ids = conditions.get('kf_config_ids', ())
-        cursor.execute("SELECT config_id, config FROM tenant_channel_configs"
-                       " WHERE tenant_id=%s AND channel_type='wecom_kf'", (tenant_id,))
+        cursor.execute("SELECT config_id, channel_type, config FROM tenant_channel_configs"
+                       " WHERE tenant_id=%s AND channel_type IN ('wecom_kf','web_c')", (tenant_id,))
         valid_ids = set()
         for row in cursor.fetchall():
             valid_ids.add(row['config_id'])
+            if row.get('channel_type') != 'wecom_kf':
+                continue
             try:
                 config = json.loads(row['config']) if isinstance(row['config'], str) else (row['config'] or {})
             except (TypeError, ValueError):

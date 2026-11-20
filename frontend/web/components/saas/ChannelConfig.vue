@@ -263,6 +263,17 @@
             </div>
           </div>
 
+          <!-- 留资归属员工（2026-11-20 方案 2）：留资线索 assigned_to + 留资通知
+               「线索归属员工」接收人来源；官网客服无客服账号体系，按渠道配置 -->
+          <div>
+            <label class="text-sm text-muted mb-1 block">留资归属员工</label>
+            <BaseSelect v-model="form.config.lead_assignee_user_id">
+              <option value="">未设置（留资不归属员工，仅租户管理员可收留资通知）</option>
+              <option v-for="u in tenantUsers" :key="u.user_id" :value="u.user_id">{{ tenantUserName(u.user_id) }}</option>
+            </BaseSelect>
+            <p class="mt-1 text-xs text-muted">客户在官网客服留资时，线索归属此员工；通知规则「站内信接收人=线索归属员工」时通知该员工。默认未设置，可在「管理菜单 → 通知规则」配置留资通知。</p>
+          </div>
+
           <!-- 附件上传开关（默认关：纯文字聊天） -->
           <div class="flex items-start gap-2">
             <input
@@ -1368,6 +1379,10 @@ function applyMediaSwitchDefaults() {
   if (supportsMediaSwitches.value) {
     if (form.value.config.asr_enabled === undefined) form.value.config.asr_enabled = true
     if (form.value.config.image_recognition_enabled === undefined) form.value.config.image_recognition_enabled = false
+  }
+  // web_c 留资归属员工（2026-11-20）：存量配置不含键时补空串初值（空串=未配置）
+  if (form.value.channel_type === 'web_c' && form.value.config.lead_assignee_user_id === undefined) {
+    form.value.config.lead_assignee_user_id = ''
   }
 }
 

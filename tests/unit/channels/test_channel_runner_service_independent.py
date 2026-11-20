@@ -741,6 +741,34 @@ async def test_worker_web_c_scope_sets_kf_context_for_lead_capture(bridge):
 
 
 @pytest.mark.asyncio
+async def test_worker_web_c_scope_injects_lead_assignee(bridge):
+    """web_c 渠道配置含 lead_assignee_user_id 时注入 kf_config.tenant_user_id
+    （2026-11-20 方案 2：留资 assigned_to 与通知 kf_assignee 接收人复用）。"""
+    from src.channels.wecom_kf.context import _kf_context, get_kf_context
+    from src.services.agent_runner.channel_context import channel_runtime_scope
+    bridge.store.sessions['web-session'] = {**bridge.store.sessions['session'],
+        'session_id': 'web-session', 'channel_type': 'web_c', 'channel_user_id': 'anon_uid',
+        'channel_chat_id': None, 'user_id': 'web-user-1', 'metadata': {}}
+    bridge.store.configs[('tenant', 'web-config', 'web_c')] = {
+        'subagent_type': 'web-reception',
+        'config': {'enabled': True, 'lead_assignee_user_id': 'emp-1'}}
+    request = RunnerSubmit(source='web_c', session={'kind': 'channel', 'session_id': 'web-session'},
+        channel_user_id='anon_uid', channel_chat_id=None, client_request_id='request', text='request',
+        profile_id='web-reception', request_data={'channel_config_id': 'web-config'})
+    row = {'source': 'web_c', 'session_id': 'web-session', 'tenant_id': 'tenant',
+        'client_request_id': 'request', 'input': request.intent()}
+    token = _kf_context.set({'outer': True})
+    try:
+        async with channel_runtime_scope(row, bridge.store.connection):
+            context = get_kf_context()
+            assert context['kf_config'] == {'tenant_user_id': 'emp-1'}
+            assert context['kf_config_id'] == 'web-config'
+        assert get_kf_context() == {'outer': True}
+    finally:
+        _kf_context.reset(token)
+
+
+@pytest.mark.asyncio
 async def test_worker_web_c_scope_rejects_profile_mismatch(bridge):
     """web_c 渠道级子智能体绑定与请求 profile 不一致时拒绝（防止跨智能体留资）。"""
     from src.services.agent_runner.channel_context import channel_runtime_scope

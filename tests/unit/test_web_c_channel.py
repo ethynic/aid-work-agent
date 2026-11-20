@@ -466,6 +466,91 @@ class TestIdentityModeConfigNormalize:
             assert config["identity_mode"] == mode
 
 
+class TestLeadAssigneeNormalize:
+    """留资归属员工规整（2026-11-20 方案 2）：缺省空串（未配置），前后空白剔除。"""
+
+    def test_normalize_defaults_to_empty(self):
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {}
+        _normalize_web_c_config(config)
+        assert config["lead_assignee_user_id"] == ""
+
+    def test_normalize_strips_and_keeps_value(self):
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"lead_assignee_user_id": " emp-1 "}
+        _normalize_web_c_config(config)
+        assert config["lead_assignee_user_id"] == "emp-1"
+
+    def test_normalize_blank_becomes_empty(self):
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"lead_assignee_user_id": "   "}
+        _normalize_web_c_config(config)
+        assert config["lead_assignee_user_id"] == ""
+
+
+class TestLeadAssigneeValidation:
+    """留资归属员工归属校验：本租户 + active 才放行；空值放行（清空合法）。"""
+
+    @staticmethod
+    def _user(tenant_id="tenant", status="active"):
+        return {"user_id": "emp-1", "tenant_id": tenant_id, "status": status}
+
+    def test_empty_passes(self):
+        from src.saas.api.channel_config import _validate_web_c_lead_assignee
+
+        _validate_web_c_lead_assignee("tenant", {"lead_assignee_user_id": ""})
+
+    def test_tenant_active_user_passes(self):
+        from unittest.mock import patch
+
+        from src.saas.api.channel_config import _validate_web_c_lead_assignee
+
+        with patch("src.db.models.UserDB.get_by_id", return_value=self._user()):
+            _validate_web_c_lead_assignee("tenant", {"lead_assignee_user_id": "emp-1"})
+
+    def test_cross_tenant_user_rejected(self):
+        from unittest.mock import patch
+
+        import pytest
+        from fastapi import HTTPException
+
+        from src.saas.api.channel_config import _validate_web_c_lead_assignee
+
+        with patch("src.db.models.UserDB.get_by_id", return_value=self._user(tenant_id="other")):
+            with pytest.raises(HTTPException) as exc:
+                _validate_web_c_lead_assignee("tenant", {"lead_assignee_user_id": "emp-1"})
+            assert exc.value.status_code == 400
+
+    def test_deleted_user_rejected(self):
+        from unittest.mock import patch
+
+        import pytest
+        from fastapi import HTTPException
+
+        from src.saas.api.channel_config import _validate_web_c_lead_assignee
+
+        with patch("src.db.models.UserDB.get_by_id", return_value=self._user(status="disabled")):
+            with pytest.raises(HTTPException) as exc:
+                _validate_web_c_lead_assignee("tenant", {"lead_assignee_user_id": "emp-1"})
+            assert exc.value.status_code == 400
+
+    def test_unknown_user_rejected(self):
+        from unittest.mock import patch
+
+        import pytest
+        from fastapi import HTTPException
+
+        from src.saas.api.channel_config import _validate_web_c_lead_assignee
+
+        with patch("src.db.models.UserDB.get_by_id", return_value=None):
+            with pytest.raises(HTTPException) as exc:
+                _validate_web_c_lead_assignee("tenant", {"lead_assignee_user_id": "emp-1"})
+            assert exc.value.status_code == 400
+
+
 class TestClarificationPersistence:
     """ask_user 反问落库（2026-11-19 测试反馈：中途追问未落库致接待页/历史缺失）。"""
 

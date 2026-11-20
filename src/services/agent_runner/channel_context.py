@@ -31,7 +31,10 @@ def kf_binding(cursor, request, session):
 
 
 def web_c_binding(cursor, request, session):
-    """校验 web_c 渠道配置绑定，返回 config_id（留资通知规则 kf_config 层匹配用）。
+    """校验 web_c 渠道配置绑定，返回 (config_id, config)。
+
+    config_id 用于留资通知规则 kf_config 层匹配；config 供调用方读取
+    lead_assignee_user_id（留资归属员工，方案 2 注入 kf_config.tenant_user_id）。
 
     web_c 为渠道级绑定（tenant_channel_configs.subagent_type 列），无 kf 账号维度；
     语义与 C 端 _load_web_c_config 对齐：行存在 + enabled 才放行（防枚举不区分细节）。
@@ -53,7 +56,7 @@ def web_c_binding(cursor, request, session):
     profile = row.get('subagent_type') or 'main'
     if profile != (request.profile_id or 'main'):
         raise RunnerError('CHANNEL_PROFILE_MISMATCH', 403)
-    return config_id
+    return config_id, config
 
 
 @asynccontextmanager
@@ -99,7 +102,8 @@ async def channel_runtime_scope(row, connection_factory):
         # record_lead_capture 的 get_kf_context 消费口径，字段按 web_c 语义降维——
         # open_kfid=None（该列是 wecom_kf open_kfid 语义，web_c 线索靠 session_id
         # 关联）、adapter=None（无渠道发送适配器，transfer_to_human/send_advisor_qr
-        # 各自走「渠道不支持/未配置」降级）、kf_config={}（无引流员工，assigned_to 为空）。
+        # 各自走「渠道不支持/未配置」降级）、kf_config 按渠道配置的留资归属员工注入
+        # （未配置为 {}，assigned_to 为空）。
         from .contracts import RunnerSubmit
         from src.channels.wecom_kf.context import _kf_context
         def load():
@@ -111,15 +115,20 @@ async def channel_runtime_scope(row, connection_factory):
                 if not session:
                     raise RunnerError('SESSION_NOT_FOUND', 404)
                 request = RunnerSubmit(client_request_id=row['client_request_id'], **row['input'])
-                config_id = web_c_binding(cursor, request, session)
-                return dict(session), config_id
-        session, config_id = await asyncio.to_thread(load)
+                config_id, config = web_c_binding(cursor, request, session)
+                return dict(session), config_id, config
+        session, config_id, config = await asyncio.to_thread(load)
         metadata = session.get('metadata') or {}
         if isinstance(metadata, str):
             metadata = json.loads(metadata)
+        # 留资归属员工（方案 2，2026-11-20）：渠道配置 lead_assignee_user_id 注入
+        # kf_config.tenant_user_id，record_lead_capture 的 assigned_to/assignee 快照
+        # 与通知 kf_assignee 接收人全链路复用；未配置保持 {}（线索不归属员工）
+        assignee = str(config.get('lead_assignee_user_id') or '').strip()
         token = _kf_context.set({'adapter':None, 'open_kfid':None,
             'external_userid':session.get('channel_user_id') or row['channel_user_id'],
-            'kf_config':{}, 'kf_config_id':config_id,
+            'kf_config':({'tenant_user_id':assignee} if assignee else {}),
+            'kf_config_id':config_id,
             'session_id':row['session_id'], 'tenant_id':row['tenant_id'],
             'user_id':session.get('user_id'), 'channel_user_info':{},
             'lead_capture':metadata.get('lead_capture')})
