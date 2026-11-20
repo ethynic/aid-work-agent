@@ -125,10 +125,13 @@ mkdir -p "$WORK"
 ## 第 1+2 步：一次编排（选样版 + 转换 + 转储 + 缓存检查）
 
 ```
-python3 <技能目录>/scripts/prep.py --work "$WORK" --templates <样版实际路径（单个文件或目录）> \
+python3 <技能目录>/scripts/prep.py --work "$WORK" --templates <样版实际路径或租户模板 file_id（单个文件或目录）> \
     [--template <选定的文件名或绝对路径>] [--pages 1-3] \
     [--cache-dir "$SKILL_TMP_DIR/doc_layout_cache"] [--no-compact]
 ```
+
+> 样版可以直接传租户模板 file_id（如 `file_473d878fde2d`，见「可用模板文件」清单），
+> skill_executor 会自动解析为实际磁盘路径，无需先 cp 或自行拼接路径。
 
 - 样版来自**会话上传信息**（冒号后面是实际上传路径），**始终使用实际上传路径**，不要用原始文件名拼路径。
 - 单份样版自动选定；多份时 `prep.py` 先返回精简目录，选定后再调用并传 `--template`。
@@ -346,7 +349,7 @@ python3 <技能目录>/scripts/fill_doc.py <prep输出的working_template> "$WOR
 
 ## 新增样版
 
-用户上传新的 `.docx` 或 `.pdf`（或给出文件实际路径），直接把它作为 `prep.py --templates`
+用户上传新的 `.docx` 或 `.pdf`（或给出文件实际路径 / file_id），直接把它作为 `prep.py --templates`
 参数传入即可。**不要修改本技能的任何文件，也不要给样版加占位符。** 同内容的样版会命中缓存。
 
 ---

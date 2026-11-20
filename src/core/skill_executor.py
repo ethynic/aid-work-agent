@@ -961,6 +961,21 @@ Follow the instructions in the skill above to complete the user's task."""
                         logger.info(f"Resolved file path: {file_path} -> {candidate}")
                         return candidate.absolute().as_posix()
         
+        # file_id 兜底（2026-11-20 trace 排查）：word/excel/pdf 工具内置
+        # resolve_uploaded_file_path 解析，技能脚本链路此前缺失——租户模板
+        # file_id（注入提示词的「可用模板文件」）传给技能脚本（如
+        # doc-layout-clone prep.py --templates）时被当作相对路径，样版目录
+        # 为空。磁盘查找未命中时按 file_id 解析一次（仅 file_ 前缀生效，
+        # Redis 元数据 + 磁盘扫描，不抛异常）。
+        try:
+            from src.core.storage import resolve_uploaded_file_path
+            resolved_file = resolve_uploaded_file_path(file_path)
+        except ImportError:
+            resolved_file = None
+        if resolved_file:
+            logger.info(f"Resolved file id: {file_path} -> {resolved_file}")
+            return resolved_file
+
         logger.warning(f"Could not resolve file path: {file_path}")
         return None
     
@@ -1045,6 +1060,11 @@ Follow the instructions in the skill above to complete the user's task."""
             '--file',
             '--source',
             '--document',
+            # doc-layout-clone prep.py：--templates 样版目录/文件、--template 样版
+            # 文件名（2026-11-20 trace 排查：租户模板 file_id 未被解析，
+            # templates_count=0 导致未按模板生成）
+            '--templates',
+            '--template',
         ]
         
         # 处理 --param=value 格式

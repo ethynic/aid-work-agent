@@ -1055,3 +1055,86 @@ class TestGuessMimeType:
         assert guess_mime_type(Path("a.XLSX")) == (
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
+
+class TestSourceFileIdResolution:
+    """cp 源路径 file_id 解析兜底（2026-11-20 trace 排查）。
+
+    租户模板文件（subagent_template_files）注入提示词给的是 file_id，
+    word/excel/pdf 工具内置 resolve_uploaded_file_path 解析，cp 此前缺失，
+    模型 cp file_id 报「源文件不存在」，模板复刻路线中断。
+    """
+
+    @staticmethod
+    def _tool() -> "CpTool":
+        from src.tools.file.cp_tool import CpTool
+        return CpTool()
+
+    @pytest.mark.asyncio
+    async def test_file_id_resolved_and_copied(self, tmp_path):
+        """file_id 经 Redis 元数据解析为租户模板路径后可正常复制"""
+        from src.core.storage import normalize_tenant_id
+
+        tpl = tmp_path / "tenants" / normalize_tenant_id("tenant_tpl1") / "templates" / "file_tplabc12345.docx"
+        tpl.parent.mkdir(parents=True)
+        tpl.write_bytes(b"template-bytes")
+
+        def fake_resolve(file_path):
+            if file_path == "file_tplabc12345":
+                return str(tpl)
+            return None
+
+        _set_test_context(user_id="u1", tenant_id="tenant_tpl1")
+        tool = self._tool()
+        with patch("src.core.storage.resolve_uploaded_file_path", side_effect=fake_resolve):
+            with patch.object(tool, "_register_download") as mock_reg:
+                mock_reg.return_value = {
+                    "success": True,
+                    "file_id": "file_destabc1234",
+                    "file_name": "report.docx",
+                    "file_size": 14,
+                    "download_url": "/api/files/file_destabc1234/download",
+                    "file_path": str(_tenant_conv_dir(tmp_path, "tenant_tpl1") / "report.docx"),
+                }
+                result = await tool.execute(
+                    source_file_path="file_tplabc12345",
+                    file_path="report.docx",
+                )
+
+        # cp 成功返回不含 success 键（dict 即成功），验证走通了注册下载
+        assert result.get("file_id") == "file_destabc1234"
+        assert result.get("file_name") == "report.docx"
+
+    @pytest.mark.asyncio
+    async def test_file_id_resolved_to_foreign_tenant_rejected(self, tmp_path):
+        """file_id 解析到其他租户目录 → 租户边界守卫仍然拒绝"""
+        from src.core.storage import normalize_tenant_id
+
+        foreign_tpl = (
+            tmp_path / "tenants" / normalize_tenant_id("tenant_other") / "templates" / "file_tplabc12345.docx"
+        )
+        foreign_tpl.parent.mkdir(parents=True)
+        foreign_tpl.write_bytes(b"foreign")
+
+        _set_test_context(user_id="u1", tenant_id="tenant_mine")
+        with patch(
+            "src.core.storage.resolve_uploaded_file_path",
+            return_value=str(foreign_tpl),
+        ):
+            tool = self._tool()
+            result = await tool.execute(source_file_path="file_tplabc12345")
+
+        assert result["success"] is False
+        assert "禁止访问" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_plain_missing_path_still_not_found(self):
+        """非 file_id 的不存在路径仍报「源文件不存在」（file_id 解析不误伤）"""
+        from src.tools.file.cp_tool import CpTool
+
+        tool = CpTool()
+        result = await tool.execute(
+            source_file_path=str(PROJECT_ROOT / "nonexistent_file_xyz2.txt"),
+        )
+        assert result["success"] is False
+        assert "源文件不存在" in result["error"]

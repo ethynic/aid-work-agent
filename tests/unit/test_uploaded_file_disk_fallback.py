@@ -40,7 +40,9 @@ class TestFindUploadedFileOnDisk:
         target = scene_dir / "file_27ea4f110405.xlsx"
         target.write_text("x")
 
-        monkeypatch.setattr("src.core.storage._TENANTS_ROOT", str(tenants_root))
+        # find_uploaded_file_on_disk 经 configured_storage_root()（env）取根，
+        # 补丁须改 env 而非模块级 _TENANTS_ROOT（旧隔离方式已失效致 8 例存量失败）
+        monkeypatch.setenv("AGENT_RUNNER_STORAGE_ROOT", str(tmp_path))
 
         hgetall, hset, expire, make_key = _make_redis_patches()
         with hgetall, hset as m_hset, expire as m_expire, make_key:
@@ -64,7 +66,9 @@ class TestFindUploadedFileOnDisk:
         target = sub_dir / "file_img000001.png"
         target.write_text("x")
 
-        monkeypatch.setattr("src.core.storage._TENANTS_ROOT", str(tenants_root))
+        # find_uploaded_file_on_disk 经 configured_storage_root()（env）取根，
+        # 补丁须改 env 而非模块级 _TENANTS_ROOT（旧隔离方式已失效致 8 例存量失败）
+        monkeypatch.setenv("AGENT_RUNNER_STORAGE_ROOT", str(tmp_path))
 
         hgetall, hset, expire, make_key = _make_redis_patches()
         with hgetall, hset, expire, make_key:
@@ -84,7 +88,9 @@ class TestFindUploadedFileOnDisk:
         target = scene_dir / "file_kb00000001.xlsx"
         target.write_text("x")
 
-        monkeypatch.setattr("src.core.storage._TENANTS_ROOT", str(tenants_root))
+        # find_uploaded_file_on_disk 经 configured_storage_root()（env）取根，
+        # 补丁须改 env 而非模块级 _TENANTS_ROOT（旧隔离方式已失效致 8 例存量失败）
+        monkeypatch.setenv("AGENT_RUNNER_STORAGE_ROOT", str(tmp_path))
 
         hgetall, hset, expire, make_key = _make_redis_patches()
         with hgetall, hset, expire, make_key:
@@ -99,7 +105,9 @@ class TestFindUploadedFileOnDisk:
 
         tenants_root = tmp_path / "tenants"
         (tenants_root / "tenant_a" / "conversation").mkdir(parents=True)
-        monkeypatch.setattr("src.core.storage._TENANTS_ROOT", str(tenants_root))
+        # find_uploaded_file_on_disk 经 configured_storage_root()（env）取根，
+        # 补丁须改 env 而非模块级 _TENANTS_ROOT（旧隔离方式已失效致 8 例存量失败）
+        monkeypatch.setenv("AGENT_RUNNER_STORAGE_ROOT", str(tmp_path))
 
         hgetall, hset, expire, make_key = _make_redis_patches()
         with hgetall, hset as m_hset, expire, make_key:
@@ -123,7 +131,9 @@ class TestFindUploadedFileOnDisk:
         scene_dir = tenants_root / "tenant_a" / "report"
         scene_dir.mkdir(parents=True)
         (scene_dir / "file_rp000000001.png").write_text("x")
-        monkeypatch.setattr("src.core.storage._TENANTS_ROOT", str(tenants_root))
+        # find_uploaded_file_on_disk 经 configured_storage_root()（env）取根，
+        # 补丁须改 env 而非模块级 _TENANTS_ROOT（旧隔离方式已失效致 8 例存量失败）
+        monkeypatch.setenv("AGENT_RUNNER_STORAGE_ROOT", str(tmp_path))
 
         hgetall, hset, expire, make_key = _make_redis_patches()
         with hgetall, hset as m_hset, expire as m_expire, make_key:
@@ -171,7 +181,9 @@ class TestResolveUploadedFilePath:
         scene_dir.mkdir(parents=True)
         target = scene_dir / "file_diskf000001.xlsx"
         target.write_text("x")
-        monkeypatch.setattr("src.core.storage._TENANTS_ROOT", str(tenants_root))
+        # find_uploaded_file_on_disk 经 configured_storage_root()（env）取根，
+        # 补丁须改 env 而非模块级 _TENANTS_ROOT（旧隔离方式已失效致 8 例存量失败）
+        monkeypatch.setenv("AGENT_RUNNER_STORAGE_ROOT", str(tmp_path))
 
         hgetall, hset, expire, make_key = _make_redis_patches()
         with hgetall, hset, expire, make_key:
@@ -183,9 +195,7 @@ class TestResolveUploadedFilePath:
         """Redis 和磁盘都未命中 -> None"""
         from src.core.storage import resolve_uploaded_file_path
 
-        monkeypatch.setattr(
-            "src.core.storage._TENANTS_ROOT", "/nonexistent_tenants_root"
-        )
+        monkeypatch.setenv("AGENT_RUNNER_STORAGE_ROOT", "/nonexistent_tenants_root")
 
         hgetall, hset, expire, make_key = _make_redis_patches()
         with hgetall, hset, expire, make_key:
@@ -201,7 +211,9 @@ class TestHandlersUseFullSceneFallback:
         scene_dir.mkdir(parents=True)
         target = scene_dir / f"{file_id}.xlsx"
         target.write_text("x")
-        monkeypatch.setattr("src.core.storage._TENANTS_ROOT", str(tenants_root))
+        # find_uploaded_file_on_disk 经 configured_storage_root()（env）取根，
+        # 补丁须改 env 而非模块级 _TENANTS_ROOT（旧隔离方式已失效致 8 例存量失败）
+        monkeypatch.setenv("AGENT_RUNNER_STORAGE_ROOT", str(tmp_path))
 
         hgetall, hset, expire, make_key = _make_redis_patches()
         with hgetall, hset, expire, make_key:
