@@ -58,13 +58,22 @@ class ToolDispatcher:
             result = await self.child_recovery.recover(state,call)
             await self._finish_plan_task(state,call,result)
             return result
-        tool = self.registry.get_tool(call.name)
+        from src.local_tools.plugin_tool import PLUGIN_CALL_IDS, bound_plugin_tool, plugin_not_dispatched
+        plugin = bound_plugin_tool(state, call)
+        if (plugin is None and call.id in state.resources.get(PLUGIN_CALL_IDS, ())
+                and not state.tools[call.id].invocation_id):
+            # Enqueue and its binding commit together. At this checkpoint there was no dispatch.
+            terminal = DispatchResult(plugin_not_dispatched(), success=False)
+            await self._finish_plan_task(state, call, terminal)
+            return terminal
+        tool = plugin or self.registry.get_tool(call.name)
         if tool and getattr(tool, 'execution_target', None) == ExecutionTarget.LOCAL_REQUIRED:
             context = self.control_tools.context.derive(tool_call_id=call.id, agent_execution_id=state.execution_id)
             terminal = None
             async for kind, payload in self.local._run_local_required_tool(call.name, call.arguments,
                     state.identity.tenant_id, state.identity.user_id, context=context, recover=True,
-                    cancel_check=lambda: self.control.command() == 'cancel'):
+                    cancel_check=lambda: self.control.command() == 'cancel',
+                    **({'recovery_tool': plugin} if plugin else {})):
                 if kind == 'verification':
                     terminal = DispatchResult(None, wait=payload)
                 elif kind == 'result':
@@ -187,6 +196,17 @@ class ToolDispatcher:
                     if isinstance(terminal.content,dict) else 'Tool execution failed')
 
     def before_tools(self, state):
+        if self.defer_names is None and getattr(self.control, 'durable_owner', False):
+            from src.local_tools.plugin_tool import PLUGIN_CALL_IDS, RuntimePluginTool
+            # Engine persists this with the dispatching tool fact before issuing any IO.
+            marked = state.resources.get(PLUGIN_CALL_IDS, ())
+            pending_plugins = [call.id for call in state.pending if call.id in marked
+                or (state.tools[call.id].phase == 'prepared'
+                    and isinstance(self.registry.get_tool(call.name), RuntimePluginTool))]
+            if pending_plugins:
+                state.resources[PLUGIN_CALL_IDS] = pending_plugins
+            elif marked:
+                state.resources.pop(PLUGIN_CALL_IDS, None)
         # disabled 配置在注入点直接拦截（对齐 prepare_turn_feedback 的
         # effective_enabled 门），直连 process_message_with_feedback 的调用
         # 不会绕过全局关闭开关

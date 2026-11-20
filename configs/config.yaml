@@ -515,6 +515,8 @@ agent_runner:
   # 本地容器验证（2026-10-04）：Web 闭环走 Runner；令牌明文仅在 .env。
   enabled: true
   web_enabled: true
+  # 服务器信任的插件清单登记目录，路径为空时不读取。可用 AGENT_RUNNER_PLUGIN_MANIFEST_DIR 覆盖。
+  plugin_manifest_dir: ""
   # 同池 API/worker 全部升级并完成隔离验收后才显式开启。
   durable_sleep_enabled: false
   # 原 invocation 所属插件。留空时沿用已有恢复流程。

@@ -7,6 +7,7 @@ import uuid
 
 from src.core.agent_events import mask_tool_args
 from src.db.database import get_db_connection
+from .presentation import PLUGIN_TOOL_NAMES, redact_runtime_plugin_calls
 
 
 DEFAULT_THRESHOLD_MINUTES = 30
@@ -161,7 +162,8 @@ class RunnerAlertRepository:
         latest = next((fact for fact in reversed(facts)
                        if isinstance(fact, dict) and fact.get('phase') == 'completed'
                        and isinstance(fact.get('response'), dict)), None)
-        response = _redact_model_view(latest['response']) if latest else None
+        plugin_names = (execution.get('resources') or {}).get(PLUGIN_TOOL_NAMES, ())
+        response = _redact_model_view(latest['response'], plugin_names) if latest else None
         response_text = None
         context = None
         saved_at = None
@@ -173,7 +175,7 @@ class RunnerAlertRepository:
             response_text = (json.dumps({'content': content, 'tool_calls': calls}, ensure_ascii=False)
                              if calls else content)
             context = _redact_model_view({'system_prompt': execution.get('system_prompt'),
-                                          'messages': execution.get('messages')})
+                                          'messages': execution.get('messages')}, plugin_names)
             if type(latest.get('end_ts')) in (int, float):
                 try:
                     saved_at = datetime.fromtimestamp(latest['end_ts'], timezone.utc).isoformat()
@@ -228,11 +230,12 @@ def _alert_view(row):
             'status': 'current' if row['ended_at'] is None else 'history'}
 
 
-def _redact_model_view(value):
+def _redact_model_view(value, plugin_names=()):
     """Reuse the Runner's existing tool-argument masking before UI projection."""
     copied = copy.deepcopy(value)
     def walk(node):
         if isinstance(node, dict):
+            node = redact_runtime_plugin_calls(node, plugin_names)
             for call in node.get('tool_calls') or []:
                 if not isinstance(call, dict):
                     continue
@@ -246,10 +249,9 @@ def _redact_model_view(value):
                     except (TypeError, ValueError):
                         parsed = {}
                     function['arguments'] = parsed if isinstance(parsed, dict) else {}
-            for child in node.values():
-                walk(child)
+            for key, child in node.items():
+                node[key] = walk(child)
         elif isinstance(node, list):
-            for child in node:
-                walk(child)
-    walk(copied)
-    return mask_tool_args(copied)
+            return [walk(child) for child in node]
+        return node
+    return mask_tool_args(walk(copied))

@@ -3,6 +3,37 @@
 from src.core.agent_events import mask_tool_args
 
 
+PLUGIN_TOOL_NAMES = 'runtime_plugin_tool_names'
+
+
+def redact_runtime_plugin_calls(value, plugin_names):
+    """Project model messages without values from arbitrary plugin-defined inputs."""
+    if not plugin_names or not isinstance(value, dict) or not isinstance(value.get('tool_calls'), list):
+        return value
+    projected = []
+    for call in value['tool_calls']:
+        function = call.get('function') if isinstance(call, dict) else None
+        if isinstance(function, dict) and function.get('name') in plugin_names and 'arguments' in function:
+            arguments = '{}' if isinstance(function['arguments'], str) else {}
+            projected.append({**call, 'function': {**function, 'arguments': arguments}})
+        else:
+            projected.append(call)
+    return {**value, 'tool_calls': projected}
+
+
+def redact_runtime_plugin_event(state, event):
+    names = state.resources.get(PLUGIN_TOOL_NAMES, ())
+    if not names:
+        return
+    if event.get('type') == 'tool_start' and event.get('toolName') in names:
+        event['toolArgs'] = {}
+    elif event.get('type') in {'llm_call', 'tool_messages'}:
+        if 'messages' in event:
+            event['messages'] = [redact_runtime_plugin_calls(message, names) for message in event['messages']]
+        if 'response' in event:
+            event['response'] = redact_runtime_plugin_calls(event['response'], names)
+
+
 def scalar_fields(value, keys):
     if not isinstance(value, dict):
         return {}

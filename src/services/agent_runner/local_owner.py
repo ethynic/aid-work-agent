@@ -119,7 +119,7 @@ class RunnerLocalLifecycle:
     async def bind_invocation(self, *, branch, ordinal, tool_name, device, arguments,
                               provider_key=None, deadline_at=None, authorization_epoch=None,
                               execution_lane='standard', recovery_deadline=None,
-                              automatic_provider=None, recovery_key=None):
+                              automatic_provider=None, recovery_key=None, declared_provider=None):
         """New IO uses fresh permission; existing phase never picks a new device."""
         phase = self._phase(branch, ordinal)
         try:
@@ -145,7 +145,8 @@ class RunnerLocalLifecycle:
                     **({'recovery_deadline': recovery_deadline, 'recovery_key': recovery_key}
                        if recovery_deadline is not None else {}),
                     **({'automatic_provider': automatic_provider} if automatic_provider else {}),
-                    device_policy=lambda current, now: device_ready_error(current, tool_name, now))
+                    device_policy=lambda current, now: device_ready_error(
+                        current, tool_name, now, declared_provider=declared_provider))
                 self._accept(row)
             original = await self.saved_phase(branch=branch, ordinal=ordinal)
             return original['invocation']

@@ -87,6 +87,8 @@ redis>=5.0.0  # Redis client for shared cross-worker state
 # Security
 bcrypt>=4.1.0  # Password hashing
 cryptography>=41.0.0  # Password encryption
+rfc8785==0.1.4  # Canonical JSON for signed Runtime plugin manifests
+jsonschema>=4.20,<5  # Validate Runtime plugin tool arguments
 
 # Audio
 pysilk-mod>=1.6.0  # SILK v3/v2 audio decoding (WeChat mobile voice format)

@@ -5,7 +5,7 @@ import copy
 from collections.abc import Mapping
 import shutil
 from loguru import logger
-from src.core.agent_engine import AgentEngine, Outcome
+from src.core.agent_engine import AgentEngine, AgentMode, Outcome
 from src.core.agent_events import make_event
 from src.tools.context import ExecutionContextFactory
 from .attachments import AttachmentAssembler
@@ -249,9 +249,12 @@ class RuntimeExecution:
         self.visibility = ProfileResolver(resources.subagent_registry, identity.tenant_id)
         from ..continuous import supported
         self.supports_sleep = getattr(self.control,'durable_owner',False) and supported(identity.source,identity.session_kind)
+        config = resources.subagent_config
         self.catalog = ToolCatalog(resources.mode, resources.tool_registry, resources._tool_controls,
             self.visibility, resources.skill_registry, supports_sleep=self.supports_sleep,
-            configured_tools=resources.subagent_config.get_allowed_tools() if resources.subagent_config else ())
+            configured_tools=config.get_allowed_tools() if config else (),
+            inherits_tools=resources.mode == AgentMode.MASTER or not config or config.tools.get('inherit', False),
+            excluded_tools=config.get_excluded_tools() if config and resources.mode != AgentMode.MASTER else ())
         self.skills = SkillSession(identity.tenant_id, resources.skill_registry, resources.memory)
         history_source = identity.source if identity.session_kind == "channel" else "chat"
         self.history = SessionHistory(resources.memory, history_source,
@@ -321,7 +324,8 @@ class RuntimeExecution:
             hint = request_data.get('wecom_task_device') if isinstance(request_data, Mapping) else None
             if hint:
                 provider_devices['wecom'] = str(hint)
-        await self.catalog.prime_local_tools(self.identity, provider_devices)
+        await self.catalog.prime_local_tools(self.identity, provider_devices,
+            include_runtime_plugins=getattr(root, 'durable_owner', False))
 
     async def run(self, text, user=None, attachments=None, request_context=None,
                   extra_system_prompt=None, continuation=None, defer_names=None,
@@ -353,6 +357,11 @@ class RuntimeExecution:
                 await self._prime_local_tools(request_context.request_data if request_context else None)
                 await asyncio.to_thread(self.skills._ensure_tenant_skills_loaded)
                 await self.visibility.prime()
+            from ..presentation import PLUGIN_TOOL_NAMES
+            plugin_names = self.catalog._plugin_tools | self.history.runtime_plugin_tool_names
+            if plugin_names:
+                self.state.resources[PLUGIN_TOOL_NAMES] = sorted(plugin_names.union(
+                    self.state.resources.get(PLUGIN_TOOL_NAMES, ())))
             if state is None and self.initial_followup_inputs:
                 self.state.followup_messages.extend(copy.deepcopy(self.initial_followup_inputs))
                 for message in self.initial_followup_inputs:

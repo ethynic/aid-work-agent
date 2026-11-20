@@ -92,6 +92,8 @@ class ChildObserver:
             self.task_record.update_progress(min(90, state.iteration * 5), f"Processing iteration {state.iteration}")
 
     async def event(self, state, event):
+        from ..presentation import redact_runtime_plugin_event
+        redact_runtime_plugin_event(state, event)
         await self.parent_observer.event(self.parent_state, {**event, "child_execution_id": state.execution_id})
 
 

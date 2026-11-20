@@ -1,12 +1,13 @@
 from __future__ import annotations
 import asyncio
+from collections import Counter
 from typing import List, Dict, Any
 from loguru import logger
 from src.core.agent_engine.contracts import AgentMode
 
 class ToolCatalog:
     def __init__(self, mode, registry, controls, visibility, skill_registry=None, supports_sleep=False,
-                 configured_tools=()):
+                 configured_tools=(), *, inherits_tools=True, excluded_tools=()):
         self.mode, self.tool_registry, self._tool_controls = mode, registry, controls
         self._get_available_subagents = visibility.available
         self.skill_registry = skill_registry
@@ -16,10 +17,16 @@ class ToolCatalog:
         self._capability_lookup_failed = False
         from src.local_tools.catalog import expand_agent_aliases
         self._configured_tools = set(expand_agent_aliases(configured_tools))
+        self._inherits_tools = inherits_tools
+        self._excluded_tools = set(expand_agent_aliases(excluded_tools))
+        self._plugin_tools = set()
 
-    async def prime_local_tools(self, identity, provider_devices=None):
+    async def prime_local_tools(self, identity, provider_devices=None, *, include_runtime_plugins=False):
         """Refresh once per activation, using only the actor's reported capabilities."""
         from src.local_tools import catalog, repository
+        if self._plugin_tools:
+            self.tool_registry.remove_many(self._plugin_tools)
+            self._plugin_tools.clear()
         self._capability_lookup_failed = False
         if not identity.tenant_id or not identity.user_id:
             self._device_tools = set()
@@ -52,6 +59,38 @@ class ToolCatalog:
                 ):
                     visible = [name for name in visible if name != 'wecom_session_directory']
                 self._device_tools.update(visible)
+        if include_runtime_plugins and selected and identity.source == 'chat' and identity.session_kind == 'web':
+            from src.config.settings import settings
+            root = settings.agent_runner.plugin_manifest_dir
+            if root:
+                await self._load_plugin_tools(root, selected)
+
+    async def _load_plugin_tools(self, root, selected):
+        from jsonschema.exceptions import SchemaError
+        from src.local_tools.catalog import TRUSTED_PROVIDERS, declared_tools_for_device
+        from src.local_tools.plugin_manifests import load_device_tools
+        from src.local_tools.plugin_tool import RuntimePluginTool
+
+        device_id = str(selected['id'])
+        declared = declared_tools_for_device(selected.get('capabilities_json')) or {}
+        candidates = await asyncio.to_thread(load_device_tools, root, device_id, declared)
+        reserved = {name for provider in TRUSTED_PROVIDERS.values() for name in provider['tools']}
+        counts = Counter(definition['name'] for _, definition in candidates)
+        for provider_key, definition in candidates:
+            name = definition['name']
+            if name in self._excluded_tools or (not self._inherits_tools and name not in self._configured_tools):
+                continue
+            if (counts[name] != 1 or name in reserved or self.tool_registry.has_tool(name)
+                    or self._tool_controls.get(name) or name in {'use_skill', 'skill_complete'}):
+                logger.warning('Runtime 插件工具名称冲突，provider={}, tool={}', provider_key, name)
+                continue
+            try:
+                tool = RuntimePluginTool(device_id=device_id, provider_key=provider_key, definition=definition)
+            except SchemaError:
+                logger.warning('Runtime 插件工具参数定义无效，provider={}, tool={}', provider_key, name)
+                continue
+            self.tool_registry.register(tool)
+            self._plugin_tools.add(name)
 
     def _visible_definitions(self):
         from src.local_tools.catalog import project_agent_definitions

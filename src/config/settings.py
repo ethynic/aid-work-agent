@@ -740,6 +740,7 @@ class AgentRunnerLimitsConfig(BaseModel):
 class AgentRunnerConfig(BaseModel):
     enabled: bool = False
     web_enabled: bool = False
+    plugin_manifest_dir: str = ""
     durable_sleep_enabled: bool = False
     auto_local_recovery_providers: List[str] = Field(default_factory=list)
     api_url: str = "http://127.0.0.1:8091"
@@ -1070,6 +1071,8 @@ def create_settings(config_path: Optional[Path] = None) -> Settings:
     runner_cfg = yaml_config.setdefault("agent_runner", {})
     if os.getenv("AGENT_RUNNER_WEB_ENABLED") is not None:
         runner_cfg["web_enabled"] = os.environ["AGENT_RUNNER_WEB_ENABLED"].lower() in ("true", "1", "yes")
+    if "AGENT_RUNNER_PLUGIN_MANIFEST_DIR" in os.environ:
+        runner_cfg["plugin_manifest_dir"] = os.environ["AGENT_RUNNER_PLUGIN_MANIFEST_DIR"]
     if os.getenv("AGENT_RUNNER_API_URL") is not None:
         runner_cfg["api_url"] = os.environ["AGENT_RUNNER_API_URL"]
     if os.getenv("AGENT_RUNNER_WEB_SERVICE_ID") is not None:

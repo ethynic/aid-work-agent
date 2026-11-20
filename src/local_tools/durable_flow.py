@@ -47,6 +47,8 @@ async def original_invocation(proxy, operation, device, arguments):
     from src.services.agent_runner.auto_local_recovery import enabled
     provider = getattr(proxy, 'provider_key', None)
     options = {}
+    if getattr(proxy, 'requires_device_declaration', False):
+        options['declared_provider'] = provider
     if operation.branch == 'main' and operation.ordinal == 0 and enabled(operation.owner, provider):
         options['automatic_provider'] = provider
     return await operation.owner.bind_invocation(branch=operation.branch,
