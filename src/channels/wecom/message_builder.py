@@ -155,6 +155,44 @@ class WeComMessageBuilder:
             return WeComMessageBuilder.build_markdown(content, agent_id)
         return WeComMessageBuilder.build_text(content, agent_id)
 
+    # 裸 URL 识别：排除已是 markdown 链接/图片语法目标或标签的 URL
+    # （前面紧跟 ]( 的是链接目标，紧跟 [ 的是链接标签，均不重复包裹）；
+    # 字符类排除 CJK 字符（一-鿿 汉字、　-〿 CJK 标点、
+    # ＀-￯ 全角形式），避免 URL 后紧跟中文时把中文吞进 URL
+    _BARE_URL_PATTERN = re.compile(
+        r'(?<!\]\()(?<!\[)https?://[^\s<>"\'一-鿿㐀-䶿　-〿＀-￯]+',
+        re.IGNORECASE,
+    )
+    # URL 尾部跟随的中英文标点不属于 URL 本体，包裹前需剥离
+    _URL_TRAILING_PUNCT = "。，、；：！？）】》〉」\"'，,;:!?)>]}’”"
+
+
+    @staticmethod
+    def linkify_bare_urls(content: str) -> str:
+        """
+        把文本中的裸 URL 包裹为 markdown 链接语法 [url](url)
+
+        背景：企业微信 PC 端客户端不会把消息里的裸 URL 渲染成可点击链接
+        （手机端会自动识别转链接），导致 PC 用户只能复制粘贴。
+        显式使用 markdown 链接语法后 PC / 手机两端都可点击。
+
+        - 已是 markdown 链接/图片语法一部分的 URL（前缀 ]( 或 [）不重复包裹
+        - URL 尾部跟随的中英文标点（句号、逗号、括号等）剥离出 URL 本体
+        """
+        if not content or "http" not in content.lower():
+            return content
+
+        def _wrap(match: "re.Match") -> str:
+            url = match.group(0)
+            trail = ""
+            # 至少保留 scheme + 1 个字符，防止把整个 URL 剥空
+            while len(url) > len("https://") + 1 and url[-1] in WeComMessageBuilder._URL_TRAILING_PUNCT:
+                trail = url[-1] + trail
+                url = url[:-1]
+            return f"[{url}]({url}){trail}"
+
+        return WeComMessageBuilder._BARE_URL_PATTERN.sub(_wrap, content)
+
     @staticmethod
     def detect_message_type(text: str, default_type: str = "markdown") -> str:
         """

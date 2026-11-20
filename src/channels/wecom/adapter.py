@@ -436,6 +436,10 @@ class WeComAdapter(ChannelAdapter):
             return False
 
         max_bytes = self._msg_config["max_bytes"]
+        # 企微 PC 端不自动把裸 URL 转可点击链接（手机端会），统一包裹为
+        # markdown 链接语法；在拆分前处理，避免拆分把长 URL 切断
+        if self._msg_config["default_type"] == "markdown":
+            text = WeComMessageBuilder.linkify_bare_urls(text)
         parts = WeComMessageBuilder.split_long_message(
             text, max_bytes, self._msg_config["split_on_paragraph"]
         )
