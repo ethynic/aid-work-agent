@@ -3047,8 +3047,11 @@ async def _process_tenant_wecom_kf_messages(
                     try:
                         if unified_msg.user_id:
                             dedup = _get_tenant_dedup(tenant_id)
-                            if not await dedup.is_duplicate(
-                                f"kf_filter_hint:{tenant_id}:{unified_msg.user_id}"
+                            # 节流占位：5 分钟窗口（claim_throttle 按行龄判断；
+                            # is_duplicate 行存在即重复，会被每日 03:00 清理拖成全天窗口）
+                            if await dedup.claim_throttle(
+                                f"kf_filter_hint:{tenant_id}:{unified_msg.user_id}",
+                                ttl_seconds=300,
                             ):
                                 adapter.current_open_kfid = open_kfid
                                 await adapter.send_text(
@@ -3094,8 +3097,10 @@ async def _process_tenant_wecom_kf_messages(
                     try:
                         if unified_msg.user_id:
                             dedup = _get_tenant_dedup(tenant_id)
-                            if not await dedup.is_duplicate(
-                                f"kf_filter_hint:{tenant_id}:{unified_msg.user_id}"
+                            # 节流占位：与 KF_FILTER_HINT 分支同 key 同 5 分钟窗口口径
+                            if await dedup.claim_throttle(
+                                f"kf_filter_hint:{tenant_id}:{unified_msg.user_id}",
+                                ttl_seconds=300,
                             ):
                                 adapter.current_open_kfid = open_kfid
                                 await adapter.send_text(
