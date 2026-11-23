@@ -26,7 +26,7 @@ from src.db.models import UserDB
 from src.desktop_automation import audit, payload_resolver
 from src.desktop_automation.adapters import AdapterNotFoundError
 from src.desktop_automation.constants import BUSINESS_KIND_DESKTOP_AUTOMATION, OPERATION_PROTOCOL_V2
-from src.local_tools import catalog, operation_result, pairing, permits, repository
+from src.local_tools import catalog, operation_result, pairing, permits, repository, weixin_summary
 from src.local_tools.models import (
     ClaimRequest,
     HeartbeatRequest,
@@ -44,6 +44,7 @@ from src.local_tools.pricing import RESUME_RECOGNITION_TOOL_NAME, resume_recogni
 from src.services import recruiting_match_service, resume_vl_service
 from src.services.boss_visual_service import BossVisualRequestBody, RuntimeVisualCaller, diagnose_visual
 from src.saas.db.tenant_db import TenantDB
+from src.saas.services.credit_gate import check_tenant_credit_blocked
 from src.local_tools.security import generate_claim_token, sha256_hex
 from src.utils import sanitize_error_info
 
@@ -130,6 +131,66 @@ def _valid_uuid(value: str) -> bool:
 
 
 # ==================== Web 用户 API ====================
+
+
+@router.post("/weixin-summary/runs")
+async def create_weixin_summary_run(body: weixin_summary.CreateRun, request: Request):
+    user, tenant_id = await _current_user_and_tenant(request)
+    if not body.confirmed or not body.target_name.strip():
+        raise _http_error(400, '请输入完整群名并确认本次总结用途')
+    credit = await asyncio.to_thread(check_tenant_credit_blocked, tenant_id)
+    if credit is not None:
+        raise HTTPException(status_code=credit.status_code, detail={
+            'error': '积分余额已耗尽，无法生成今日总结', 'code': 'NO_CREDIT',
+        })
+    try:
+        return await asyncio.to_thread(
+            weixin_summary.create_run, tenant_id, user['user_id'], str(body.device_id), body.target_name,
+        )
+    except weixin_summary.RunUnavailable as error:
+        code = str(error)
+        message = {
+            'DEVICE_NOT_SELECTED': '运行设备已变化，请刷新页面或到本地工具重新选择设备',
+            'DEVICE_OFFLINE': '选定的 Runtime 当前离线',
+            'WEIXIN_SUMMARY_PLUGIN_UNAVAILABLE': '选定设备未启用支持今日总结的签名微信插件',
+        }[code]
+        raise HTTPException(status_code=409, detail={'error': message, 'code': code}) from None
+    except repository.DeviceOperationUnresolved:
+        raise _http_error(409, '选定设备当前有待核对的操作') from None
+
+
+@router.get("/weixin-summary/runs/{run_id}")
+async def get_weixin_summary_run(run_id: str, request: Request):
+    user, tenant_id = await _current_user_and_tenant(request)
+    if not _valid_uuid(run_id):
+        raise _http_error(404, '微信总结任务不存在')
+    result = await asyncio.to_thread(weixin_summary.get_run, run_id, tenant_id, user['user_id'])
+    if result is None:
+        raise _http_error(404, '微信总结任务不存在')
+    return result
+
+
+@router.post("/runtime/weixin-summary")
+async def runtime_weixin_summary(request: Request):
+    auth = request.headers.get('Authorization', '')
+    grant = auth[7:] if auth.startswith('Bearer ') else ''
+    if len(grant) != 43 or not all(char.isascii() and (char.isalnum() or char in '-_') for char in grant):
+        raise _http_error(401, '微信总结授权无效')
+    upload = await weixin_summary.read_upload(request)
+    if upload is None:
+        raise _http_error(400, '微信总结请求格式无效')
+    run = await asyncio.to_thread(
+        weixin_summary.consume_grant, upload.tenant_id, upload.business_date, sha256_hex(grant),
+    )
+    if not run:
+        raise _http_error(403, '微信总结授权已失效')
+    credit = await asyncio.to_thread(check_tenant_credit_blocked, upload.tenant_id)
+    if credit is not None:
+        return credit
+    summary = await weixin_summary.summarize(upload.messages, upload.tenant_id, run['user_id'])
+    if summary is None:
+        raise _http_error(502, '微信总结生成失败')
+    return {'summary': summary}
 
 
 @router.post("/pairing-tickets")
@@ -411,7 +472,8 @@ async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dic
                 row_provider_key = invocation.get("provider_key")
                 invocation_provider = row_provider_key or default_provider_key
                 ref = (invocation.get('business_ref') or {}) if invocation.get('business_kind') == 'agent_runner' else {}
-                is_plugin = ref.get('branch') == PLUGIN_PHASE
+                is_plugin = (ref.get('branch') == PLUGIN_PHASE
+                             or invocation.get('business_kind') == catalog.WEIXIN_DAILY_SUMMARY_KIND)
                 capabilities = (invocation.get('device_capabilities') if is_plugin
                                 else device.get('capabilities_json'))
                 if not catalog.is_tool_allowed_for_device(

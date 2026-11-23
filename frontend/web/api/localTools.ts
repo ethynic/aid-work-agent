@@ -136,3 +136,32 @@ export async function revokeDevice(deviceId: string): Promise<void> {
   })
   await ensureSuccess(res, '解绑设备失败，请稍后重试')
 }
+
+export interface WeixinSummaryRun {
+  id: string
+  state: string
+  business_date: string
+  target_name?: string
+  summary?: string | null
+  message_count?: number
+  partial?: boolean
+  error_code?: string
+}
+
+export async function createWeixinSummary(targetName: string, deviceId: string, signal: AbortSignal): Promise<WeixinSummaryRun> {
+  const res = await fetch(`${API_BASE}/weixin-summary/runs`, {
+    method: 'POST',
+    headers: { ...getAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target_name: targetName, device_id: deviceId, confirmed: true }),
+    signal,
+  })
+  return ensureSuccess(res, '提交微信总结失败，请稍后重试')
+}
+
+export async function getWeixinSummary(id: string, signal: AbortSignal): Promise<WeixinSummaryRun> {
+  const res = await fetch(`${API_BASE}/weixin-summary/runs/${encodeURIComponent(id)}`, {
+    headers: { ...getAuthHeader() },
+    signal,
+  })
+  return ensureSuccess(res, '查看微信总结失败，请稍后刷新')
+}

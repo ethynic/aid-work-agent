@@ -313,6 +313,36 @@ test('history_read：手动打开的会话可直接读取，既不签发引用�
   assert.equal(calls[0]!.useVisionProxy, false)
 })
 
+test('history_read：仅群聊入口传递类型限制，拒绝返回同名私聊的正文', async () => {
+  const { fn, calls } = mockDriver({
+    title: '同名会话', is_group: false, pages: [[nativeHistoryRow('1', '私聊正文', 'peer')]],
+  })
+  const options = { groupOnly: true, runDriverFn: fn }
+  const result = await createWeixinHistoryReadOperation(options).execute({ target_name: '同名会话' }, silentCtx())
+  assert.equal(result.code, 'TARGET_NOT_FOUND')
+  assert.deepEqual(result.data, {})
+  assert.equal(JSON.parse(calls[0]!.stdin!).group_only, true)
+
+  const legacy = await createWeixinHistoryReadOperation({ runDriverFn: fn }).execute({ target_name: '同名会话' }, silentCtx())
+  assert.equal(legacy.success, true)
+  assert.deepEqual(legacy.data.messages, [{ sender: 'peer', text: '私聊正文' }])
+  assert.equal('group_only' in JSON.parse(calls[1]!.stdin!), false)
+
+  const group = createWeixinHistoryReadOperation({
+    groupOnly: true,
+    runDriverFn: async () => ({
+      title: '项目群', is_group: true, pages: [[nativeHistoryRow('2', '群内安排', 'peer')]],
+    }),
+  })
+  const correctGroup = await group.execute({ target_name: '项目群' }, silentCtx())
+  assert.equal(correctGroup.success, true)
+  assert.deepEqual(correctGroup.data.messages, [{ sender: 'peer', text: '群内安排', sender_name: null }])
+
+  const wrongGroup = await group.execute({ target_name: '其他群' }, silentCtx())
+  assert.equal(wrongGroup.code, 'TARGET_AMBIGUOUS')
+  assert.deepEqual(wrongGroup.data, {})
+})
+
 test('history_read：过去签发的名称引用无法区分重名会话，拒绝调用驱动', async () => {
   const { fn, calls } = mockDriver({ title: '产品群', is_group: true, pages: [[]] })
   const op = createWeixinHistoryReadOperation({

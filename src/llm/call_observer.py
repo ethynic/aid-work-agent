@@ -8,6 +8,8 @@ from contextvars import ContextVar
 from contextlib import contextmanager
 from typing import Protocol
 
+from .llm_call_logger import provider_content_private
+
 
 class CallObserver(Protocol):
     async def call(self, method, *, provider, model, kwargs, owner, purpose): ...
@@ -70,7 +72,7 @@ def release_child_process(environment):
 
 async def observed_call(method, *, provider, model, kwargs, owner='llm', purpose='llm'):
     observer = _observer.get()
-    if observer is None:
+    if observer is None or provider_content_private():
         return await method(**kwargs)
     return await observer.call(method, provider=provider, model=model, kwargs=kwargs,
                                owner=owner, purpose=_purpose.get() if owner=='llm' and _purpose.get() else purpose)

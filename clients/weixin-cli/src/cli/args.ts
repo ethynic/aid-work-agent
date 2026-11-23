@@ -47,7 +47,7 @@ export function hasFlag(args: ParsedArgs, key: string): boolean {
 }
 
 /** 合法 --domain 值（设计 §4.1：search 必须显式指定；M2 落地 chat / chat-history / unread） */
-export const CLI_DOMAINS = ['souyisou', 'article', 'chat', 'chat-history', 'chat-latest', 'unread'] as const
+export const CLI_DOMAINS = ['souyisou', 'article', 'chat', 'chat-history', 'group-history', 'chat-latest', 'unread'] as const
 export type CliDomain = (typeof CLI_DOMAINS)[number]
 
 /**

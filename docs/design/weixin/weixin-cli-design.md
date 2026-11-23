@@ -173,6 +173,8 @@ get_url、official_account_follow）未产品化——实际方向转向会话�
 
 微信后台轮询沿用企微 CLI watch 的单轮串行模式。运行 `aid-weixin watch --target-name "<已打开会话全名>"` 启动一个本机轮询进程，默认间隔 10 秒。第一轮建立进程内水位，后续只输出新增条数。会话切换或视口无法连续对齐时保留水位。云端自动回复和 Runtime 消息批次上报已停用。实现和验收见[开发计划 Phase 4](../../plans/plan-weixin-cli-remove-ocr.md#phase-4-历史与持续观察)。
 
+连接中心的群聊读取复用历史翻页。使用 `aid-weixin read --domain group-history --target-name "<已打开的微信群聊全名>" --json`，驱动核对选中会话的原生身份、完整标题和唯一的 UIA 群成员数标签，成功后才读取消息列表。翻页采样时继续核对群聊标记。原 `chat-history` 行为沿用。新读取域是本机命令，旧版本遇到它会直接报参数错误，签名派发范围沿用既有清单。见[连接中心设计](../../system/connection-center-design.md#211-微信-agent)。
+
 ## 14. 单会话最新消息与本机副本
 
 `aid-weixin read --domain chat-latest --target-name "<当前会话全名>" --json` 通过 UIA 读取已打开的单聊或群聊。从会话末尾向上读，首次建立最多十页的副本。后续最多扫描一百页，核对副本末尾的连续消息后立即停止翻页，只加入锚点之后的消息。锚点未找到或重叠有歧义时保留原副本并返回断层。确实没有新增时返回零条。

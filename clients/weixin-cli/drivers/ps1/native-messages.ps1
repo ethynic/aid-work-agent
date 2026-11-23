@@ -98,6 +98,9 @@ function Get-WeixinNativeRows($Session) {
     if (-not [string]::Equals($titleInfo.title, $Session.Title, [StringComparison]::Ordinal)) {
         Throw-DriverError 'UI_CHANGED' '当前微信会话与目标不一致'
     }
+    if ($Session.RequireGroup -and -not $titleInfo.is_group) {
+        Throw-DriverError 'TARGET_NOT_FOUND' '当前会话未核实为微信群聊'
+    }
     $list = Get-WeixinNativeList $Session 'chat_message_list' 'mmui::RecyclerListView'
     $listRect = $list.Current.BoundingRectangle
     if ($listRect.IsEmpty -or $listRect.Width -le 0 -or $listRect.Height -le 0) {

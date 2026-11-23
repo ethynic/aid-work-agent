@@ -70,6 +70,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20261123-0850 | 连接中心微信 Agent | ✅ 已完成开发，支持手动群聊今日总结，待真机验收。 | [设计](system/connection-center-design.md#211-微信-agent) | [计划](plans/plan-weixin-agent.md) |
 | 20261113-1443 | Runner 检查点恢复 | ✅ 已完成开发（待发版验收），按原检查点续跑并支持会话内补传及核对。 | [设计](system/agent-application-architecture-design.md#58-runner-按检查点继续执行2026-11-13已实现) | [开发计划](plans/plan-runner-server-skill-interruption-recovery.md) |
 | 20261109-1440 | 任务计划提示词展示与管理对话中断 | ✅ 已完成开发。隐藏计划提示词，修复列表和详情查询导致的对话中断。 | [设计](system/scheduled-task-runner-refactor-design.md) | [计划](plans/plan-scheduled-task-result-management.md) |
 | 20261106-1010 | 定时任务结果免登录链接 | ✅ 已完成开发；免登录结果页与三渠道链接通过本地验证，agent2 验收待授权。 | [设计](system/design-task-result-share-link.md) | [计划](plans/plan-task-result-share-link.md) |

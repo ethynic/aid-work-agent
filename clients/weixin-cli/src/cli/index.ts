@@ -34,6 +34,8 @@ const USAGE = `aid-weixin — 微信操作 CLI / MCP Provider（M2）
                             提交一条微信好友申请，视觉定位使用服务端计费代理
   read --domain chat-history --target-name <当前会话全名> [--since-days N] [--max-pages N]
                             在本机读取已打开会话的聊天记录
+  read --domain group-history --target-name <当前群聊全名> [--since-days N] [--max-pages N] [--json]
+                            核实已打开的会话为群聊后，在本机读取聊天记录
   read --domain chat-latest --target-name <当前会话全名> [--json]
                             同步本机加密副本，默认以 JSON 返回有序新增消息
   read --domain unread [--name <名>]

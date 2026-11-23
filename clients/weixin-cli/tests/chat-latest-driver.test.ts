@@ -23,6 +23,28 @@ function run(script: string) {
   return JSON.parse(result.stdout)
 }
 
+test('group-only history refuses a private chat before activation or message collection', { skip: process.platform !== 'win32' }, () => {
+  const script = `
+$ErrorActionPreference='Stop'
+$ast=[Management.Automation.Language.Parser]::ParseFile('${history.replaceAll("'", "''")}',[ref]$null,[ref]$null)
+$driver=$ast.Find({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Invoke-DriverMain'},$false)
+function Invoke-DriverMain($MutexName,[scriptblock]$Body) {
+    $result=try { & $Body } catch { @{code=$_.Exception.Message} }
+    ConvertTo-Json -InputObject $result -Compress
+}
+function Throw-DriverError($Code,$Message) { throw $Code }
+function Get-WeixinCurrentNativeSession($TargetName,$ExpectedSessionIdentity) { return @{Handle=1;Title=$TargetName} }
+function Get-WeixinNativeTitleInfo($Session) { return @{title=$Session.Title;is_group=$false} }
+function Invoke-WeixinActivation($Hwnd) { throw 'ACTIVATION_REACHED' }
+function Get-WeixinNativeRows($Session) { throw 'READ_REACHED' }
+. ([scriptblock]::Create($driver.Extent.Text))
+`
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    { input: JSON.stringify({ target_name: 'fixture', group_only: true, max_pages: 1 }), encoding: 'utf8', timeout: 20_000, windowsHide: true })
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout), { code: 'TARGET_NOT_FOUND' })
+})
+
 test('actual native paginator stops at an overlap, distinguishes identical bodies, and fails on discontinuity', { skip: process.platform !== 'win32' }, () => {
   const cases = run(loadHelpers + `
 function Get-WeixinLatestProcessStart($Session) { if ($script:scenario -eq 'processChanged' -and $script:bottom) { return '456' }; return '123' }

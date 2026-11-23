@@ -14,6 +14,7 @@ from loguru import logger
 from src.config.settings import settings
 from src.core.text_sanitizer import sanitize_messages
 from .error_detail import describe_exception
+from .llm_call_logger import provider_content_private
 from .key_pool import KeyPool
 from .providers.base import BaseLLMProvider
 from .providers.deepseek import DeepSeekProvider
@@ -219,7 +220,7 @@ class LLMGateway:
             # 用 loguru 占位符而非 f-string 嵌入 {e}，避免异常消息含 {"error":...} 时
             # loguru 内部 message.format() 把 {error} 当占位符解析抛 KeyError，遮蔽原始异常
             # err 用 describe_exception 提取，避免 httpx.ConnectError 等 str(e) 为空导致日志空白
-            logger.opt(exception=True).error(
+            logger.opt(exception=not provider_content_private()).error(
                 "[LLM] _call_with_pool error, provider={p}, fn={fn}, duration={d:.2f}s, error: {err}",
                 p=self.provider_name, fn=fn_name, d=call_duration,
                 err=describe_exception(e),
@@ -347,7 +348,7 @@ class LLMGateway:
         except Exception as e:
             chat_duration = time.time() - chat_start
             # 用 loguru 占位符而非 f-string 嵌入 {e}，避免异常消息含 {"error":...} 触发 KeyError
-            logger.opt(exception=True).error(
+            logger.opt(exception=not provider_content_private()).error(
                 "[LLM] chat() failed, duration={d:.2f}s, error: {err}",
                 d=chat_duration, err=describe_exception(e),
             )

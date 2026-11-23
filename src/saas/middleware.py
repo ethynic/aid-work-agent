@@ -133,7 +133,8 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
 
             # 1. 租户级回调路由：/t/{tenant_id}/...
             tenant_match = _TENANT_CALLBACK_PATTERN.match(path)
-            if public_share or public_track:
+            runtime_summary = path == '/api/local-tools/runtime/weixin-summary'
+            if public_share or public_track or runtime_summary:
                 pass
             elif web_c_match:
                 tenant_id = web_c_match.group(1)
