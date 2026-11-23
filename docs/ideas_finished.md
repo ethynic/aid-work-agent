@@ -236,7 +236,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
-| 20261110-1313 | 企业微信首次启动发送与定时消息发送 | ✅ 已完成开发（待真机验收）。 | [首次启动](design/wecom/wecom-conversation-operations-design.md#921-监控配置首次启动发送p0) / [定时发送](design/wecom/wecom-scheduled-send-design.md) | [计划](plans/plan-wecom-scheduled-send.md) |
+| 20261110-1313 | 企业微信首次启动发送与定时消息发送 | ✅ 已完成开发（群标题已复测，待发送验收） | [首次启动](design/wecom/wecom-conversation-operations-design.md#921-监控配置首次启动发送p0) / [定时发送](design/wecom/wecom-scheduled-send-design.md) | [计划](plans/plan-wecom-scheduled-send.md) |
 | 20261106-2052 | wecom-cli 登录探测移除 OCR | ✅ 已完成开发；登录态按窗口枚举判断，扫码截图保留，待真机复验。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-probe-remove-ocr.md) |
 | 20261106-1200 | 企微文本发送双点标定与去 OCR | ✅ 已完成开发；双点缓存复用单聊发送及本地库核验真机通过，未部署。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w24-文本发送双点标定与去-ocr2026-11-06) |
 | 20261107-0001 | 企微会话搜索与进入去 OCR | ✅ 已完成开发；独测、真机及 CR 通过，未部署。 | [设计](design/wecom/wecom-cli-design.md) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w25-会话搜索与进入去-ocr2026-11-07) |
