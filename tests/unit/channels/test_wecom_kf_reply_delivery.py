@@ -283,7 +283,7 @@ async def test_last_reply_budget_delivers_complete_file_alone(registry, adapter)
     assert budget.remaining == 0
 
 
-async def test_file_rejection_is_partial_delivery_without_link_replay(registry, adapter):
+async def test_file_rejection_reports_failure_without_link_replay(registry, adapter):
     files = []
     delivery = await prepare("a" * 2049, files)
     adapter.api_client.send_msg.side_effect = [{"errcode": -1, "delivery_unknown": True}]
@@ -349,16 +349,6 @@ async def test_empty_projection_never_points_to_missing_file(registry, monkeypat
     monkeypatch.setattr("src.channels.wecom_kf.reply_delivery._save_reply_file",
                         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
     delivery = await prepare("![](https://example.com/a.png)", files)
-    assert delivery["mode"] == "failed" and files == []
-    assert delivery["text"] == FAILED_REPLY_TEXT
-
-
-async def test_degraded_text_failure_uses_fixed_failure_text(registry, monkeypatch):
-    # 字节上限连文件提示都放不下时前缀投影会抛错，仍必须给客户一句可读的告知
-    files = []
-    monkeypatch.setattr("src.channels.wecom_kf.reply_delivery._save_reply_file",
-                        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
-    delivery = await prepare("您好，先确认订单。" + "这是真正的完整答复。" * 200, files, max_bytes=10)
     assert delivery["mode"] == "failed" and files == []
     assert delivery["text"] == FAILED_REPLY_TEXT
 

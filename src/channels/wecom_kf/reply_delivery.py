@@ -45,13 +45,8 @@ def _save_reply_file(markdown: str, *, tenant_id: str, user_id: str,
 
 
 def _degraded_text(markdown: str, *, max_bytes: int) -> str:
-    """MD 无法交付时的降级文字：前缀投影去掉文件提示；投影为空或失败时用固定失败话术。"""
-    try:
-        text = strip_file_notice(build_prefix_preview(markdown, max_bytes=max_bytes))
-    except Exception:
-        logger.opt(exception=True).warning("[wecom_kf] 降级前缀文字生成失败，改用固定失败话术")
-        text = ""
-    return text or FAILED_REPLY_TEXT
+    """MD 无法交付时的降级文字：前缀投影去掉文件提示；投影为空时用固定失败话术。"""
+    return strip_file_notice(build_prefix_preview(markdown, max_bytes=max_bytes)) or FAILED_REPLY_TEXT
 
 
 def _find_reply_file(files, markdown, *, tenant_id, session_id, owner_id):
@@ -207,7 +202,8 @@ async def prepare_reply(
         has_table, has_image = await asyncio.to_thread(inspect_reply_markdown, markdown)
     except Exception:
         logger.opt(exception=True).error("[wecom_kf] 完整 Markdown 格式准备失败")
-        return {"mode": "failed", "text": _degraded_text(text, max_bytes=max_bytes)}
+        return {"mode": "failed",
+                "text": await asyncio.to_thread(_degraded_text, text, max_bytes=max_bytes)}
     if not text or not (overflow or has_table or has_image):
         return {}
     delivery = {"tenant_id": tenant_id, "session_id": session_id, "owner_id": owner_id}
@@ -229,7 +225,8 @@ async def prepare_reply(
             files.append(file_info)
     except Exception:
         logger.opt(exception=True).error("[wecom_kf] 完整 Markdown 文件准备失败")
-        return {**delivery, "mode": "failed", "text": _degraded_text(markdown, max_bytes=max_bytes)}
+        return {**delivery, "mode": "failed",
+                "text": await asyncio.to_thread(_degraded_text, markdown, max_bytes=max_bytes)}
     delivery["file_id"] = file_info["file_id"]
     if has_image and prepare_image is not None:
         try:

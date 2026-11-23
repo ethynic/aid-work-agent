@@ -116,7 +116,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261123-1341 | 微信客服渠道回复流程精简 | 🔧 部分完成（开发与独立测试完成，待 CR 与合并） | 含表格或超长回复只发 md；旅行社在微信客服渠道行程直发 Word、报价直发 Excel，减少重复内容与消息条数。 | [设计](channel/wecom_kf/wecom_kf_concise_reply_flow.md) | [计划](plans/plan-wecom-kf-concise-reply-flow.md) |
+| 20261123-1341 | 微信客服渠道回复流程精简 | 🔧 部分完成（已合并 master，待部署真机验收） | 含表格或超长回复只发 md；旅行社在微信客服渠道行程直发 Word、报价直发 Excel，减少重复内容与消息条数。 | [设计](channel/wecom_kf/wecom_kf_concise_reply_flow.md) | [计划](plans/plan-wecom-kf-concise-reply-flow.md) |
 | 20261119-1700 | 渠道媒体识别开关（ASR/图片，四渠道租户可配） | 🔧 部分完成（已提交 master 47a322de，待部署真机验收） | 渠道配置新增 asr_enabled（默认开）/image_recognition_enabled（默认关）两开关：关闭后不下载不识别不产生识别消耗；wecom_kf 智能体期语音/图片按不支持类型提示跳过，人工期/员工语音落占位符，三渠道占位文本进对话；工厂注入 adapter.media_switches + load_media_switches；12 单测绿+前端构建过。视频识别无链路不做（用户裁决）。 | — | — |
 | 20261116-1130 | 官网客服渠道（web_c，C 端 Web 聊天） | 📋 待开发（设计已裁决待评审） | 租户官网按钮/iframe 嵌入，C 端免登录对话；签名链接/匿名双身份，附件上传与留资纳入，复用渠道管线零新表；Phase 1 渠道核心 + Phase 2 官网接待客户查看页（含留资 Tab）。 | [设计](system/web-c-channel-design.md) | — |
 | 20261113-1126 | 长任务企业微信/飞书/钉钉应用通知 | ✅ 已完成开发（已合并 master，2026-11-16；本地 E2E 通过，真机扫码与隔离库集成待环境验收） | web 渠道长任务（≥5 分钟可配）完成/失败时经企微/飞书/钉钉租户自备应用一对一推送 textcard，点击回原会话；OAuth 为主+手机号确认兜底绑定身份；替换 web push 投递渠道（保留停用）。飞书通知已同模式接入（决策 7 追加）。 | [设计](system/wecom-app-task-notification-design.md) | [计划](plans/plan-wecom-app-task-notification.md) |
