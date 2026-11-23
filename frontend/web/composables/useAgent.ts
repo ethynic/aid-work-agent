@@ -7,6 +7,7 @@ import { getSession, getSessionMessages, updateFailedMessageUI, type FailedMessa
 import { RunnerClient, RunnerRequestError, runnerTerminal, runnerResumable, runnerObservationComplete, runnerWaitLeaf, type RunnerCapabilities, type RunnerControlIntent, type RunnerControlView, type RunnerSubmission, type RunnerView, type RunnerWait } from '@/api/runner'
 import { historyMessages, mergeRunnerMessages, visibleFailedMessages } from '@/utils/runnerMessages'
 import { clientCanonicalText } from '@/utils/askForm'
+import { generateUuid } from '@/utils/uuid'
 import { useToast } from 'vue-toastification'
 import { useTenantAuth } from './useTenantAuth'
 import { useCreditCheck } from './useCreditCheck'
@@ -265,7 +266,7 @@ export function useAgent() {
         const updated = await state.runnerClient.cancel(row.runner_id, headers)
         if (currentRunnerContext(state,sid,generation,headers)) observeRunner(state,updated,headers)
       } else {
-        const body: RunnerControlIntent = { client_request_id:crypto.randomUUID(), action,
+        const body: RunnerControlIntent = { client_request_id:generateUuid(), action,
           ...(action === 'resume' && (wait?.kind === 'timer' || wait?.kind === 'continuous_guard')
             ? { wait_id:wait.wait_id, target_execution_id:wait.target_execution_id } : {}) }
         state.pendingControl = { runnerId:row.runner_id, body }
@@ -345,12 +346,12 @@ export function useAgent() {
     try {
       if (action === 'verify' || action === 'stop' || action === 'stop_and_continue') {
         // stop_and_continue：受管停止（v3）+ 服务端停稳后自动接续编排（契约「停止与接续」）。
-        const updated = await state.runnerClient.verifyLocal(row.runner_id, crypto.randomUUID(), headers,
+        const updated = await state.runnerClient.verifyLocal(row.runner_id, generateUuid(), headers,
           action !== 'verify', action === 'stop_and_continue')
         if (!currentRunnerContext(state,sid,generation,headers)) return
         observeRunner(state,updated,headers)
       } else if (action === 'resume') {
-        const body: RunnerControlIntent = { client_request_id:crypto.randomUUID(), action:'resume' }
+        const body: RunnerControlIntent = { client_request_id:generateUuid(), action:'resume' }
         state.pendingControl = { runnerId:row.runner_id, body }
         state.isProcessing.value = true
         await submitControl(state, row.runner_id, body, headers)
@@ -1372,7 +1373,7 @@ export function useAgent() {
       runnerError(effectiveSessionId, issue as Error)
       return
     }
-    const requestId = runnerTransport ? crypto.randomUUID() : undefined
+    const requestId = runnerTransport ? generateUuid() : undefined
     if (retryFiles && !runnerTransport) {
       state.submitSelecting = false
       ownsSelection = false

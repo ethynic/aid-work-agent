@@ -170,6 +170,7 @@ import {
   type ChannelMessage
 } from '@/api/webC'
 import { renderMarkdown } from '@/utils/markdown'
+import { generateUuid } from '@/utils/uuid'
 import ImageGallery from '@/components/ui/ImageGallery.vue'
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -310,10 +311,8 @@ function formatMsgTime(value?: string): string {
 // ============== 消息加载与渲染 ==============
 
 function newClientId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `wc_${crypto.randomUUID()}`
-  }
-  return `wc_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`
+  // 经工具函数兜底：旧内核（Chromium <92）无 crypto.randomUUID
+  return `wc_${generateUuid()}`
 }
 
 /** 本地乐观渲染消息的时间戳（服务端权威校准以 reload 为准） */
