@@ -37,16 +37,32 @@ function Select-WeixinDailyText($Capture, [string]$BusinessDate, [DateTime]$Obse
         if ($row.kind -ceq 'time') {
             $currentDate = $null
             if ($row.clipped) { continue }
-            $minute = ConvertTo-WeixinLatestMinute $row.text $ObservedAt
+            $label = [string]$row.text
+            $isWeekdayLabel = $label -cmatch '^(?:星期|周)(?<day>[一二三四五六日天])\s*(?<time>.+)$'
+            if ($isWeekdayLabel) {
+                $weekday = if ($Matches.day -ceq '天') { '日' } else { $Matches.day }
+                $daysAgo = (7 + [int]$ObservedAt.DayOfWeek - '日一二三四五六'.IndexOf($weekday)) % 7
+                if ($daysAgo -eq 0) { continue }
+                $date = $ObservedAt.Date.AddDays(-$daysAgo)
+                $label = $date.ToString('yyyy年M月d日', [Globalization.CultureInfo]::InvariantCulture) + ' ' + $Matches.time
+            }
+            $minute = ConvertTo-WeixinLatestMinute $label $ObservedAt
             if ($null -eq $minute -or $zone.IsAmbiguousTime($minute) -or $zone.IsInvalidTime($minute)) { continue }
             $localMinute = [DateTime]::SpecifyKind($minute, [DateTimeKind]::Unspecified)
             $knownMinute = [DateTimeOffset]::new($localMinute, $zone.GetUtcOffset($localMinute)).ToOffset($beijing)
+            $knownDate = $knownMinute.ToString('yyyy-MM-dd')
+            # The week is not explicit, so a weekday label can only exclude prior text.
+            if ($isWeekdayLabel -and $knownDate -ceq $today) { continue }
             if ($null -ne $previousMinute -and $knownMinute -lt $previousMinute) {
                 Throw-DriverError 'CONTENT_UNAVAILABLE' '微信消息时间顺序无法核实'
             }
             $previousMinute = $knownMinute
-            $currentDate = $knownMinute.ToString('yyyy-MM-dd')
-            if ([string]::CompareOrdinal($currentDate, $today) -lt 0) { $priorDay = $true }
+            $currentDate = $knownDate
+            if ([string]::CompareOrdinal($currentDate, $today) -lt 0) {
+                $priorDay = $true
+                # Rows before a verified prior-day anchor cannot be from the requested day.
+                $unknownDate = $false
+            }
         } elseif ($row.kind -ceq 'text' -and -not [string]::IsNullOrWhiteSpace($row.text)) {
             if ($row.clipped -or $null -eq $currentDate) { $unknownDate = $true }
             elseif ($currentDate -ceq $today) { $messages.Add([string]$row.text) }

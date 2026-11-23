@@ -91,13 +91,24 @@ $now=[DateTimeOffset]::new(2026,11,23,12,30,0,[TimeSpan]::FromHours(8)).LocalDat
 $previous=$now.AddDays(-1).ToString('yyyy年M月d日 HH:mm')
 $earlier=$now.AddMinutes(-20).ToString('yyyy年M月d日 HH:mm')
 $later=$now.AddMinutes(-10).ToString('yyyy年M月d日 HH:mm')
+$sameWeekday='星期' + '日一二三四五六'.Substring([int]$now.DayOfWeek, 1) + ' 10:30'
 $rows=@((Row text 'unknown-before'),(Row time $previous),(Row text 'previous-day'),
         (Row time $earlier),(Row text 'today-one'),(Row text 'clipped' $true),(Row media 'image'),
-        (Row time '星期一 10:30'),(Row text 'unknown-after'),(Row time $later),(Row text 'today-two'))
+        (Row time $sameWeekday),(Row text 'unknown-after'),(Row time $later),(Row text 'today-two'))
+$monday=[DateTime]::new(2026,11,23,14,30,0,[DateTimeKind]::Local)
+$mondayBusinessDate=([DateTimeOffset]::new($monday)).ToOffset([TimeSpan]::FromHours(8)).ToString('yyyy-MM-dd')
+$saturday=@((Row time '星期六 15:03'),(Row text 'older-one'),(Row time '周六 15:09'),(Row text 'older-two'))
 ConvertTo-Json -Compress -Depth 6 @{
     mixed=Select-WeixinDailyText @{rows=$rows;complete_history=$false;empty_proven=$false} '2026-11-23' $now
     complete=Select-WeixinDailyText @{rows=@((Row time $previous),(Row text 'previous-day'));complete_history=$false;empty_proven=$false} '2026-11-23' $now
     insufficient=Select-WeixinDailyText @{rows=@((Row text 'unknown-day'));complete_history=$false;empty_proven=$false} '2026-11-23' $now
+    weekend=Select-WeixinDailyText @{rows=@((Row text 'unknown-before'),(Row text 'clipped-before' $true))+$saturday;complete_history=$false} $mondayBusinessDate $monday
+    unknownNewer=Select-WeixinDailyText @{rows=$saturday+@((Row time '周一 10:30'),(Row text 'ambiguous-monday'));complete_history=$false} $mondayBusinessDate $monday
+    sameWeekdayOnly=Select-WeixinDailyText @{rows=@((Row time '星期一 10:30'),(Row text 'ambiguous-monday'));complete_history=$true} $mondayBusinessDate $monday
+    sunday=Select-WeixinDailyText @{rows=@((Row time '星期天 09:30'),(Row text 'sunday-one'),(Row time '周日 10:00'),(Row text 'sunday-two'));complete_history=$false} $mondayBusinessDate $monday
+    conflictingOrder=try {
+        Select-WeixinDailyText @{rows=$saturday+@((Row time '星期五 18:00'),(Row text 'out-of-order'));complete_history=$false} $mondayBusinessDate $monday
+    } catch { $_.Exception.Message }
 }
 `
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
@@ -107,5 +118,10 @@ ConvertTo-Json -Compress -Depth 6 @{
     mixed: { messages: ['today-one', 'today-two'], partial: true },
     complete: { messages: [], partial: false },
     insufficient: { messages: [], partial: true },
+    weekend: { messages: [], partial: false },
+    unknownNewer: { messages: [], partial: true },
+    sameWeekdayOnly: { messages: [], partial: true },
+    sunday: { messages: [], partial: false },
+    conflictingOrder: 'CONTENT_UNAVAILABLE',
   })
 })

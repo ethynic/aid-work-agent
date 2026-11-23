@@ -207,6 +207,14 @@
         "ai.aidwork.browser"
       ],
       "test_only": true
+    },
+    {
+      "key_id": "aidwork-acceptance-weixin-v1",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAdg36PFV89EmXico7Vm+WS8a5mpSrWKXO5YJNXCGC2Vc=\n-----END PUBLIC KEY-----\n",
+      "providers": [
+        "ai.aidwork.weixin"
+      ],
+      "test_only": true
     }
   ],
   "profile": "acceptance"
