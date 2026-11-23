@@ -82,6 +82,11 @@ function Get-WeixinCurrentNativeSession {
     $title = if ($ExpectedNativeTitle) { $ExpectedNativeTitle } else { $TargetName }
     $session = @{Handle=$handle; ProcessId=$identity.ProcessId; Title=$title}
     $current = Get-WeixinNativeTitleInfo $session
+    if ($null -eq $current) {
+        try { $null = Get-WeixinNativeList $session 'session_list' 'mmui::XTableView' }
+        catch { Throw-DriverError 'UI_CHANGED' '已找到微信窗口，但无法读取原生会话列表（UIA）' }
+        Throw-DriverError 'UI_CHANGED' '微信会话列表可读，但未读到当前会话标题，请打开目标会话'
+    }
     if (-not [string]::Equals($current.title, $title, [StringComparison]::Ordinal)) {
         Throw-DriverError 'UI_CHANGED' '当前微信会话与目标不一致，请先手动打开目标会话'
     }
