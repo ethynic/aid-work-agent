@@ -238,6 +238,14 @@ async def get_session_messages(request: Request, session_id: str,
         raise HTTPException(status_code=403, detail="无权访问此会话")
     if session.get("channel_type") != _CHANNEL_TYPE:
         raise HTTPException(status_code=403, detail="无权访问此会话")
+    # 服务端兜底：接待页拉取前补写未落库的终态回复/澄清反问（访客离线场景；
+    # 与 C 端 messages 拉取补写同一套幂等实现，扫描器为最终兜底）
+    try:
+        from src.saas.services.web_c_runner_persist import backfill_session_runners
+
+        await backfill_session_runners(tenant_id, session_id)
+    except Exception:
+        logger.opt(exception=True).warning(f"[web_c] 接待页终态补写失败 session={session_id[:40]}")
     result = channel_session_manager.get_messages_paginated(
         session_id=session_id, content_search=content_search,
         page=page, page_size=page_size,

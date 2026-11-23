@@ -148,6 +148,14 @@ _DINGTALK_NOTIFY_ONLY_REQUIRED_FIELDS = {
         "agent_id": "应用AgentId（在应用详情页获取，工作通知发送必须）",
     }
 }
+# notify_only 保存时保留库内旧值的回调字段（wecom/feishu/dingtalk 同模式）：「仅通知」
+# 表单隐藏这些字段、前端不提交；update 整体覆盖 config 若不回填，库内回调凭据会被
+# 清除，改回 agent_only/both 时须重填。仅通知用途不注册回调链路，保留不影响运行。
+_NOTIFY_ONLY_RETAINED_FIELDS = {
+    _WECOM_CHANNEL_TYPE: ("token", "encoding_aes_key"),
+    _FEISHU_CHANNEL_TYPE: ("verification_token", "encrypt_key"),
+    _DINGTALK_CHANNEL_TYPE: ("token", "encoding_aes_key"),
+}
 
 
 def _generate_web_c_secret() -> str:
@@ -450,15 +458,23 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
         body.config = dict(body.config)
         body.config["kf_account"] = (existing.get("config") or {}).get("kf_account") or []
 
-    # wecom/feishu：update 同样按通知用途分支必填（notify_only 免填回调字段；
-    # agent_only/both 保持原必填——update 不做字段保留合并，按本次提交的 config
-    # 校验，notify_usage 非法值同样在此 400）
+    # wecom/feishu/dingtalk：update 同样按通知用途分支必填（notify_only 免填回调字段；
+    # agent_only/both 保持原必填，按本次提交的 config 校验，notify_usage 非法值同样
+    # 在此 400）
     missing = _required_fields_missing(existing["channel_type"], body.config)
     if missing:
         raise HTTPException(
             status_code=400,
             detail=f"缺少必填字段: {', '.join(missing)}",
         )
+
+    # 切到 notify_only：未提交的回调字段保留库内旧值（改回 agent_only/both 免重填）；
+    # 显式提交的值以提交值为准，库内无旧值则不补键
+    if _notify_usage(existing["channel_type"], body.config) == "notify_only":
+        body.config = dict(body.config)
+        for key in _NOTIFY_ONLY_RETAINED_FIELDS[existing["channel_type"]]:
+            if not body.config.get(key) and (existing.get("config") or {}).get(key):
+                body.config[key] = existing["config"][key]
 
     # wechat_mp：appid/original_id 可选（空值规整删除，DB 层缺失回填旧值语义不变）；
     # original_id 有值才校验 gh_ 前缀；callback_token 传入合法明文视为改密

@@ -721,7 +721,9 @@ class TestReviewRegressions:
             load_metadata = fetch_table_metadata_from_db("5", TENANT, None, "legacy")
         analyzer = DataAnalyzer(tenant_id=TENANT)
         await analyzer.load_table(load_metadata)
-        assert analyzer._tables["5"]["value"].tolist() == ([1] if legacy_source else [42])
+        # §5.1 去内存驻留后 _tables 存状态文件路径，经 _read_state 读回断言
+        loaded = analyzer._read_state(analyzer._tables["5"])
+        assert loaded["value"].tolist() == ([1] if legacy_source else [42])
 
     async def test_edit_preserves_database_connector_and_can_load(self):
         import pandas as pd
@@ -743,7 +745,9 @@ class TestReviewRegressions:
             analyzer = DataAnalyzer(tenant_id=TENANT)
             await analyzer.load_table(load_metadata)
         assert "SELECT * FROM sales" in read_sql.call_args.args[0]
-        assert analyzer._tables["5"]["value"].tolist() == [42]
+        # §5.1 去内存驻留后 _tables 存状态文件路径，经 _read_state 读回断言
+        loaded = analyzer._read_state(analyzer._tables["5"])
+        assert loaded["value"].tolist() == [42]
         engine.dispose.assert_called_once()
 
     @pytest.mark.parametrize("endpoint", ["scope", "schema"])
