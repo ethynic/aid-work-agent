@@ -99,6 +99,11 @@
       <p v-if="detailError" role="alert" class="text-sm text-danger-700">{{ detailError }}</p>
       <p v-else-if="detailLoading" class="text-sm text-muted">加载中…</p>
       <div v-else-if="detail" class="space-y-5 text-sm">
+        <div class="flex flex-wrap items-center gap-2">
+          <BaseButton size="sm" intent="secondary" @click="copyAlertDetail">复制告警详情</BaseButton>
+          <BaseButton v-if="detail.runner.session_id" size="sm" intent="secondary" @click="goToTrace">追踪详情</BaseButton>
+          <BaseButton v-if="!detail.alert.ended_at" size="sm" intent="danger-ghost" :disabled="stopping" @click="stopRunner">停止 Runner 任务</BaseButton>
+        </div>
         <dl class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div><dt class="text-muted">Runner ID</dt><dd class="font-mono break-all">{{ detail.alert.runner_id }}</dd></div>
           <div><dt class="text-muted">租户 / 数字员工</dt><dd class="break-all">{{ detail.alert.tenant_id || '未归属租户' }} / {{ detail.alert.profile_id || 'main' }}</dd></div>
@@ -111,8 +116,7 @@
         <p v-if="detail.runner.model_unavailable_reason === 'CURRENT_ATTEMPT_CHANGED'" class="text-warning-700">当前快照已更新，该次上下文不可用。</p>
         <p v-if="detail.runner.context_redacted" class="text-xs text-muted">以下是脱敏摘录：敏感字段已遮盖，普通长字符串仅保留前 200 字符。</p>
         <section><h3 class="font-medium text-default mb-2">最近模型返回（脱敏摘录）</h3><pre class="whitespace-pre-wrap break-words bg-surface-hover p-3 rounded">{{ detail.runner.latest_model_response || '暂无已保存内容' }}</pre></section>
-        <section><h3 class="font-medium text-default mb-2">模型上下文（脱敏摘录）</h3><pre class="whitespace-pre-wrap break-words bg-surface-hover p-3 rounded">{{ displayContext(detail.runner.latest_model_context) }}</pre></section>
-        <p class="text-xs text-muted">以上是最近已保存的事实；缺失内容不会推断为当前执行步骤。</p>
+        <p class="text-xs text-muted">以上是最近已保存的事实；缺失内容不会推断为当前执行步骤。完整模型上下文可通过「复制告警详情」获取。</p>
       </div>
     </BaseModal>
 
@@ -215,6 +219,60 @@ async function openDetail(alertId: string) {
   try { detail.value = await runnerAlertsAPI.detail(alertId) }
   catch (error) { detailError.value = errorMessage(error) }
   finally { detailLoading.value = false }
+}
+
+// ==================== 详情操作：复制 / 追踪 / 停止 ====================
+
+// 参照错误日志「复制全部信息」模式；复制内容含未展示的完整模型上下文摘录，便于粘贴排查
+function copyAlertDetail() {
+  if (!detail.value) return
+  const a = detail.value.alert
+  const r = detail.value.runner
+  const parts = [
+    'Runner 告警详情：',
+    `Runner ID: ${a.runner_id}`,
+    `租户 / 数字员工: ${a.tenant_id || '未归属租户'} / ${a.profile_id || 'main'}`,
+    `本次领取: ${formatTime(a.started_at)}`,
+    `触发告警: ${formatTime(a.alerted_at)}`,
+    `告警结束: ${formatTime(a.ended_at)}`,
+    `执行时长: ${formatDuration(a.elapsed_seconds)}`,
+    `最近模型事实保存时间: ${formatTime(r.model_saved_at)}`,
+    '',
+    `受理时原问题（原始输入）:\n${r.request_text || '暂无已保存内容'}`,
+    '',
+    `最近模型返回（脱敏摘录）:\n${r.latest_model_response || '暂无已保存内容'}`,
+    '',
+    `模型上下文（脱敏摘录）:\n${displayContext(r.latest_model_context)}`,
+  ]
+  navigator.clipboard.writeText(parts.join('\n')).then(() => {
+    toast.success('已复制到剪贴板')
+  }).catch(() => {
+    toast.error('复制失败')
+  })
+}
+
+function goToTrace() {
+  const sessionId = detail.value?.runner.session_id
+  if (sessionId) void router.push(`/portal/monitoring/${encodeURIComponent(sessionId)}`)
+}
+
+const stopping = ref(false)
+async function stopRunner() {
+  const current = detail.value
+  if (!current || current.alert.ended_at) return
+  const confirmed = confirm(`确定停止 Runner 任务 ${current.alert.runner_id} 吗？任务将协作式取消，已执行的工具操作不可撤销。`)
+  if (!confirmed) return
+  stopping.value = true
+  try {
+    await runnerAlertsAPI.cancelRunner(current.alert.runner_id)
+    toast.success('已提交停止请求，任务将协作式取消')
+    await openDetail(current.alert.alert_id)
+    void loadAlerts()
+  } catch (error) {
+    toast.error(errorMessage(error))
+  } finally {
+    stopping.value = false
+  }
 }
 
 // ==================== 告警配置（默认折叠） ====================

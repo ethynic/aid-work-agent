@@ -150,7 +150,8 @@ class RunnerAlertRepository:
             cursor = conn.cursor()
             cursor.execute('''SELECT a.*, EXTRACT(EPOCH FROM
                 (COALESCE(a.ended_at,clock_timestamp())-a.started_at))::bigint AS elapsed_seconds,
-                r.input,r.checkpoint,r.load_class,r.attempt AS current_attempt FROM agent_runner_alerts a
+                r.input,r.checkpoint,r.load_class,r.attempt AS current_attempt,
+                r.session_id FROM agent_runner_alerts a
                 JOIN agent_runners r ON r.runner_id=a.runner_id WHERE a.alert_id=%s''', (alert_id,))
             row = cursor.fetchone()
         if row is None:
@@ -188,6 +189,7 @@ class RunnerAlertRepository:
                 except (OverflowError, OSError, ValueError):
                     pass
         return {'alert': _alert_view(row), 'runner': {
+            'session_id': row['session_id'],
             'request_text': (row['input'] or {}).get('text'),
             'latest_model_response': response_text,
             'latest_model_context': context,

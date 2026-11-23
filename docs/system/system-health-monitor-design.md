@@ -201,7 +201,16 @@ runner 栈已有 `agent-runner-monitor` 容器（`src/services/agent_runner/moni
 - **告警扫描心跳并入快照**：采集器 runner 段新增 `monitor_stalled` / `monitor_last_scan_at`（读 `agent_runner_monitor_status`，缺行/超 3 分钟未成功扫描视为停滞，口径与 `RunnerAlertRepository.monitor_status` 一致）；健康页 Runner 卡新增「告警扫描」行 + 停滞警告横幅；研判阈值表新增 `runner.monitor_stalled`（watch 级）
 - **旧路由保留为重定向**：飞书告警详情链接（`events.py runner_alert_detail_link`）硬编码 `/portal/runner-alerts?runner_id=...`，路由重定向至健康页并透传 query，子组件按 `runner_id` 自动打开详情弹窗；「Runner 告警」菜单项移除
 
+### 11.1 告警详情操作增强（2026-11-23 追加）
+
+详情弹窗顶部操作行三项能力：
+
+- **复制告警详情**：参照错误日志「复制全部信息」模式（`navigator.clipboard` + toast），复制内容含未在页面展示的完整模型上下文脱敏摘录，便于粘贴给开发排查；「模型上下文」区块从页面移除（过长不可读），改由复制承载
+- **追踪详情**：详情响应新增 `session_id`（agent_runners 行），前端跳转 `/portal/monitoring/{session_id}` 会话追踪页
+- **停止 Runner 任务**（仅未结束告警显示）：原生 `confirm()` 后调 `POST /api/platform/runners/{runner_id}/cancel`（platform_admin 全局上下文核验）-> runner 服务新端点 `POST /v1/runners/{runner_id}/admin-cancel`（`manager.admin_cancel`，仅 verify_service 服务对等凭据）-> 按行属主构造 Principal 走 `repository.cancel` **完整协作式取消语义**（cancel_requested + 检查点标记 + 控制收口），不绕过状态机、不直写 `agent_runners`。与 owner cancel 的差异：不持有属主 token，且不受设计 §5.2 scheduled 仅限用户取消的限制（运维 kill 是平台级操作）
+
 ## 10. 修订记录
 
 - 2026-11-10：修正采集器重试占比口径 bug——实现误写 `attempt > 0`（acquire_claim 每次 claim 自增，attempt=1 即首次执行，占比恒为 100%），对齐设计改为 `attempt > 1`；同时排队等待分位（accepted -> execution_started_at）限定 attempt<=1 行，重试行的 execution_started_at 是最后一次 claim 时间、含重试间隔，会拉爆 P95（agent2 实例：单条 attempt=3 任务把 P95 顶到 163s）。修正后 agent2 当日实测 P95 38.8s、重试占比 16.7%，均回归正常。
 - 2026-11-23：Runner 告警页合并进健康页（见 §11）：告警列表/详情/配置迁入子组件，告警扫描心跳（monitor_stalled）并入快照与研判阈值，旧路由保留为重定向防飞书链接断链。
+- 2026-11-23：告警详情操作增强（见 §11.1）：复制详情（含完整上下文摘录）、追踪跳转、平台管理员停止任务（admin-cancel 服务对等转发 + 协作式取消）。
