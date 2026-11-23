@@ -9,7 +9,7 @@ import pytest
 from src.channels.wecom_kf.adapter import WeComKfAdapter
 from src.channels.wecom_kf.budget import WeComKfReplyBudget
 from src.channels.wecom_kf.reply_delivery import prepare_reply, _model_preview
-from src.channels.wecom_kf.reply_format import FILE_NOTICE
+from src.channels.wecom_kf.reply_format import FAILED_REPLY_TEXT, FILE_NOTICE, UNSENT_REPLY_TEXT
 from src.models.message import UnifiedResponse, DownloadableFileInfo
 from src.services.session_record import SessionRecordService
 
@@ -114,7 +114,7 @@ async def test_short_code_image_example_remains_text_in_budget_send(registry, ad
     assert [call.kwargs["msgtype"] for call in adapter.api_client.send_msg.await_args_list] == ["text"]
 
 
-async def test_custom_byte_limit_still_sends_preview_and_full_file(registry, adapter):
+async def test_custom_byte_limit_keeps_preview_and_sends_full_file_only(registry, adapter):
     adapter._max_bytes = 1024
     full = "😀" * 1000
     files = []
@@ -123,7 +123,7 @@ async def test_custom_byte_limit_still_sends_preview_and_full_file(registry, ada
     assert len(delivery["text"].encode("utf-8")) <= 1024
     assert delivery["text"].endswith(FILE_NOTICE)
     assert await adapter.send_message(response(full, files, delivery))
-    assert [call.kwargs["msgtype"] for call in adapter.api_client.send_msg.await_args_list] == ["text", "file"]
+    assert [call.kwargs["msgtype"] for call in adapter.api_client.send_msg.await_args_list] == ["file"]
 
 
 async def test_overflow_default_is_prefix_and_complete_utf8_md(registry, monkeypatch):
@@ -251,8 +251,7 @@ async def test_native_md_priority_before_independent_images_and_files(registry, 
     adapter._send_image_ref_as_image = AsyncMock(return_value=True)
     assert await adapter.send_message(response(full, files, delivery, images=[{"file_id": "independent"}]))
     calls = adapter.api_client.send_msg.await_args_list
-    assert [item.kwargs["msgtype"] for item in calls] == ["text", "file", "link"]
-    assert calls[0].kwargs["content"]["content"] == delivery["text"]
+    assert [item.kwargs["msgtype"] for item in calls] == ["file", "link"]
     assert adapter.api_client.upload_media.call_args.kwargs == {"display_name": "详细答复.md", "mime_type": "text/markdown"}
     adapter._send_image_ref_as_image.assert_awaited_once()
 
@@ -275,21 +274,21 @@ async def test_mismatched_registered_owner_is_never_uploaded(registry, adapter, 
     adapter.api_client.send_msg.assert_not_awaited()
 
 
-async def test_budget_shortage_prioritizes_complete_file_and_reports_partial(registry, adapter):
+async def test_last_reply_budget_delivers_complete_file_alone(registry, adapter):
     files = []
     delivery = await prepare("a" * 2049, files)
     budget = WeComKfReplyBudget(total=1)
-    assert not await adapter.send_message(response("a" * 2049, files, delivery, budget=budget))
+    assert await adapter.send_message(response("a" * 2049, files, delivery, budget=budget))
     assert [item.kwargs["msgtype"] for item in adapter.api_client.send_msg.await_args_list] == ["file"]
     assert budget.remaining == 0
 
 
-async def test_file_rejection_is_partial_delivery_without_link_replay(registry, adapter):
+async def test_file_rejection_reports_failure_without_link_replay(registry, adapter):
     files = []
     delivery = await prepare("a" * 2049, files)
-    adapter.api_client.send_msg.side_effect = [{"errcode": 0}, {"errcode": -1, "delivery_unknown": True}]
+    adapter.api_client.send_msg.side_effect = [{"errcode": -1, "delivery_unknown": True}]
     assert not await adapter.send_message(response("a" * 2049, files, delivery))
-    assert [item.kwargs["msgtype"] for item in adapter.api_client.send_msg.await_args_list] == ["text", "file"]
+    assert [item.kwargs["msgtype"] for item in adapter.api_client.send_msg.await_args_list] == ["file"]
 
 
 async def test_native_upload_failure_explains_download_fallback(registry, adapter, monkeypatch):
@@ -299,7 +298,126 @@ async def test_native_upload_failure_explains_download_fallback(registry, adapte
     monkeypatch.setattr("src.channels.wecom_kf.adapter.build_public_url", lambda url: "https://example.com" + url)
     assert not await adapter.send_message(response("a" * 2049, files, delivery))
     calls = adapter.api_client.send_msg.await_args_list
-    assert len(calls) == 2 and "暂无法直接发送" in calls[1].kwargs["content"]["content"]
+    assert len(calls) == 1 and "暂无法直接发送" in calls[0].kwargs["content"]["content"]
+
+
+async def test_native_upload_failure_without_public_url_sends_preview(registry, adapter, monkeypatch):
+    files = []
+    full = "您好，先确认订单。\n\n" + "这是真正的完整答复。" * 200
+    delivery = await prepare(full, files)
+    adapter.api_client.upload_media.return_value = {"errcode": 40001}
+    monkeypatch.setattr("src.channels.wecom_kf.adapter.build_public_url", lambda url: url)
+    assert not await adapter.send_message(response(full, files, delivery))
+    calls = adapter.api_client.send_msg.await_args_list
+    assert [item.kwargs["msgtype"] for item in calls] == ["text"]
+    sent = calls[0].kwargs["content"]["content"]
+    assert sent == delivery["text"].replace(FILE_NOTICE, "").strip()
+    assert len(sent.encode("utf-8")) <= adapter._max_bytes
+
+
+async def test_md_file_failure_sends_prefix_without_file_notice(registry, adapter, monkeypatch):
+    files = []
+    full = "您好，先确认订单。\n\n" + "这是真正的完整答复。" * 200
+    monkeypatch.setattr("src.channels.wecom_kf.reply_delivery._save_reply_file",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+    delivery = await prepare(full, files)
+    assert delivery["mode"] == "failed" and files == []
+    assert delivery["text"].startswith("您好，先确认订单。")
+    assert "查看发送的文件" not in delivery["text"]
+    assert len(delivery["text"].encode("utf-8")) <= adapter._max_bytes
+    budget = WeComKfReplyBudget(total=5)
+    assert not await adapter.send_message(response(full, files, delivery, budget=budget))
+    calls = adapter.api_client.send_msg.await_args_list
+    assert [item.kwargs["msgtype"] for item in calls] == ["text"]
+    assert calls[0].kwargs["content"]["content"] == delivery["text"]
+    adapter.api_client.upload_media.assert_not_awaited()
+
+
+async def test_malformed_markdown_degrades_to_plain_prefix(registry, monkeypatch):
+    files = []
+    full = "您好，先确认订单。\n\n" + "这是真正的完整答复。" * 200
+    monkeypatch.setattr("src.channels.wecom_kf.reply_delivery.normalize_reply_markdown",
+                        lambda text: (_ for _ in ()).throw(ValueError("bad table")))
+    delivery = await prepare(full, files)
+    assert delivery["mode"] == "failed" and files == []
+    assert delivery["text"].startswith("您好，先确认订单。")
+    assert "查看发送的文件" not in delivery["text"]
+
+
+async def test_empty_projection_never_points_to_missing_file(registry, monkeypatch):
+    files = []
+    monkeypatch.setattr("src.channels.wecom_kf.reply_delivery._save_reply_file",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+    delivery = await prepare("![](https://example.com/a.png)", files)
+    assert delivery["mode"] == "failed" and files == []
+    assert delivery["text"] == FAILED_REPLY_TEXT
+
+
+async def test_image_mode_still_sends_image_then_md(registry, adapter):
+    files = []
+    full = "![示意图](https://example.com/a.png)\n\n说明文字。"
+    delivery = await prepare(full, files, prepare_image=AsyncMock(return_value="image_media"))
+    assert delivery["mode"] == "image"
+    budget = WeComKfReplyBudget()
+    assert await adapter.send_message(response(full, files, delivery, budget=budget))
+    assert [item.kwargs["msgtype"] for item in adapter.api_client.send_msg.await_args_list] == ["image", "file"]
+    assert budget.remaining == 3
+
+
+async def test_image_mode_with_last_budget_sends_md_only(registry, adapter):
+    files = []
+    full = "![示意图](https://example.com/a.png)\n\n说明文字。"
+    delivery = await prepare(full, files, prepare_image=AsyncMock(return_value="image_media"))
+    budget = WeComKfReplyBudget(total=1)
+    assert not await adapter.send_message(response(full, files, delivery, budget=budget))
+    assert [item.kwargs["msgtype"] for item in adapter.api_client.send_msg.await_args_list] == ["file"]
+    assert budget.remaining == 0
+
+
+@pytest.mark.parametrize("rendered", [True, False])
+async def test_image_reply_send_failure_without_public_url_sends_unsent_notice(
+        registry, adapter, monkeypatch, rendered):
+    # rendered=True：image 模式且长图发送失败；False：没有渲染器，投影为空的 notice 模式
+    files = []
+    full = "![](https://example.com/a.png)"
+    renderer = AsyncMock(return_value="image_media") if rendered else None
+    delivery = await prepare(full, files, prepare_image=renderer)
+    assert delivery["mode"] == ("image" if rendered else "notice")
+
+    async def send(**kwargs):
+        return {"errcode": -1} if kwargs["msgtype"] == "image" else {"errcode": 0}
+
+    adapter.api_client.send_msg.side_effect = send
+    adapter.api_client.upload_media.return_value = {"errcode": 40001}
+    monkeypatch.setattr("src.channels.wecom_kf.adapter.build_public_url", lambda url: url)
+    assert not await adapter.send_message(response(full, files, delivery))
+    calls = adapter.api_client.send_msg.await_args_list
+    assert [item.kwargs["msgtype"] for item in calls] == (["image"] if rendered else []) + ["text"]
+    assert calls[-1].kwargs["content"]["content"] == UNSENT_REPLY_TEXT
+
+
+async def test_delivered_image_md_upload_failure_without_public_url_adds_no_text(registry, adapter, monkeypatch):
+    # 长图已含完整内容：md 传不上去又没有链接时不再补发文字
+    files = []
+    full = "![示意图](https://example.com/a.png)\n\n说明文字。"
+    delivery = await prepare(full, files, prepare_image=AsyncMock(return_value="image_media"))
+    adapter.api_client.upload_media.return_value = {"errcode": 40001}
+    monkeypatch.setattr("src.channels.wecom_kf.adapter.build_public_url", lambda url: url)
+    assert not await adapter.send_message(response(full, files, delivery))
+    assert [item.kwargs["msgtype"] for item in adapter.api_client.send_msg.await_args_list] == ["image"]
+
+
+async def test_exhausted_budget_sends_no_fallback_notice(registry, adapter, monkeypatch):
+    # 平台每轮最多 5 条是硬约束：额度用完后降级告知也不能发
+    files = []
+    full = "您好，先确认订单。\n\n" + "这是真正的完整答复。" * 200
+    delivery = await prepare(full, files)
+    adapter.api_client.upload_media.return_value = {"errcode": 40001}
+    monkeypatch.setattr("src.channels.wecom_kf.adapter.build_public_url", lambda url: url)
+    budget = WeComKfReplyBudget(total=1)
+    assert budget.consume(1)
+    assert not await adapter.send_message(response(full, files, delivery, budget=budget))
+    adapter.api_client.send_msg.assert_not_awaited()
 
 
 def fake_gateway(monkeypatch, content="您好，您可以先核对订单状态。", usage=None):
