@@ -4921,3 +4921,11 @@
     ALTER TABLE tdoc_credentials ADD COLUMN IF NOT EXISTS union_id TEXT;
     ALTER TABLE tdoc_credentials ADD COLUMN IF NOT EXISTS nick TEXT;
     ALTER TABLE tdoc_credentials ADD COLUMN IF NOT EXISTS scope TEXT;
+
+- datetime: "2026-11-23 16:18:33"
+  remark: "清理 chunks_fts 遗留触发器与表（2026-08-14 全文检索已迁移到 chunks.text_vec，触发器未随迁移清理，纯写放大且干扰备份部分恢复）"
+  statements: |
+    DROP TRIGGER IF EXISTS chunks_sync_fts_insert ON chunks;
+    DROP TRIGGER IF EXISTS chunks_sync_fts_update ON chunks;
+    DROP TRIGGER IF EXISTS chunks_sync_fts_delete ON chunks;
+    DROP TABLE IF EXISTS chunks_fts;
