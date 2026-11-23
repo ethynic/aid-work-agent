@@ -181,6 +181,25 @@ def _collect_runner_section() -> "tuple[Dict[str, Any], List[str]]":
         cur.execute("SELECT COUNT(*) AS cnt FROM agent_runner_alerts WHERE ended_at IS NULL")
         section["active_alerts"] = int(cur.fetchone()["cnt"])
 
+        # runner-monitor 告警扫描心跳（agent_runner_monitor_status 由 runner-monitor
+        # 容器每 60s 刷新；缺行/超 3 分钟未成功扫描 = 告警链路停滞，判定口径与
+        # RunnerAlertRepository.monitor_status 一致：无记录也视为停滞）
+        from src.services.agent_runner.runner_alerts import MONITOR_KEY
+
+        cur.execute(
+            "SELECT last_successful_scan_at, "
+            "last_successful_scan_at IS NULL OR "
+            "last_successful_scan_at < clock_timestamp() - INTERVAL '3 minutes' AS stalled "
+            "FROM agent_runner_monitor_status WHERE monitor_key = %s",
+            (MONITOR_KEY,),
+        )
+        row = cur.fetchone()
+        section["monitor_stalled"] = bool(row["stalled"]) if row else True
+        section["monitor_last_scan_at"] = (
+            row["last_successful_scan_at"].isoformat(timespec="seconds")
+            if row and row["last_successful_scan_at"] else None
+        )
+
     # 槽位 = 部署配置口径（与 worker 容器共用同一 .env）；
     # 配置值非容器实况（副本崩溃不扣减），仅作容量对照展示。
     # 2026-11-13 重工具服务化 §9：单一 runner-worker 服务，执行体容量

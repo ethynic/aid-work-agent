@@ -139,6 +139,16 @@ class TestDiscretize:
         snap = _make_snapshot(runner={"runner_stalled": True})
         assert discretize(snap)["runner.runner_stalled"] == "error"
 
+    def test_monitor_stalled_watch(self):
+        snap = _make_snapshot(runner={"monitor_stalled": True})
+        assert discretize(snap)["runner.monitor_stalled"] == "watch"
+
+    def test_monitor_stalled_missing_is_normal(self):
+        # 旧快照无该字段（采集器升级过渡期）按正常处理，不让状态哈希抖动
+        snap = _make_snapshot()
+        snap["runner"].pop("monitor_stalled", None)
+        assert discretize(snap)["runner.monitor_stalled"] == "normal"
+
     def test_system_cpu_bands(self):
         snap = _make_snapshot(system={"cpu_percent": 85.0})
         assert discretize(snap)["system.cpu_percent"] == "watch"

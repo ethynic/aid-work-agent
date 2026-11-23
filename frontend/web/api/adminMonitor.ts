@@ -28,6 +28,9 @@ export interface RunnerSection {
   retried_share_today: number | null
   stalled_rounds: number
   runner_stalled: boolean
+  // runner-monitor 告警扫描心跳（2026-11-23 合并 Runner 告警页；旧快照可能缺字段）
+  monitor_stalled?: boolean
+  monitor_last_scan_at?: string | null
   active_alerts: number
   worker_slots?: number
   // 2026-11-13 重工具服务化 §9：池路由退役，单 worker 服务 + 重工具服务指标

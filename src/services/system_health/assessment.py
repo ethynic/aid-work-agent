@@ -42,6 +42,9 @@ THRESHOLDS: Dict[str, Dict[str, Any]] = {
     "runner.wait_p95_seconds": {"watch": 120, "critical": 600},
     "runner.retried_share_today": {"watch": 0.2, "critical": 0.5},
     "runner.runner_stalled": {"watch": None, "critical": True},
+    # 告警扫描停滞（runner-monitor 心跳缺失/超 3 分钟）：告警链路风险，观察级
+    # 而非硬故障（与 RunnerAlerts 页面原 warning 横幅同级别）
+    "runner.monitor_stalled": {"watch": True, "critical": None},
     "runner.active_alerts": {"watch": 1, "critical": 3},
     # 系统资源
     "system.cpu_percent": {"watch": 80, "critical": 95},
@@ -137,6 +140,10 @@ def discretize(snapshot: Dict[str, Any]) -> Dict[str, str]:
             states["runner.runner_stalled"] = "error"
         else:
             states["runner.runner_stalled"] = "normal"
+        if runner.get("monitor_stalled"):
+            states["runner.monitor_stalled"] = "watch"
+        else:
+            states["runner.monitor_stalled"] = "normal"
 
     sys_ = snapshot.get("system") or {}
     if sys_.get("available") and "error" not in sys_:
