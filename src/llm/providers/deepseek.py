@@ -14,7 +14,7 @@ from loguru import logger
 from .base import BaseLLMProvider, ensure_chat_completion_shape
 from ..errors import ProviderHTTPError, ProviderResponseInvalid, read_error_body
 from ..error_detail import describe_exception
-from ..llm_call_logger import generate_request_id, log_llm_invoke
+from ..llm_call_logger import generate_request_id, log_llm_invoke, provider_response_text
 
 
 class DeepSeekProvider(BaseLLMProvider):
@@ -102,12 +102,12 @@ class DeepSeekProvider(BaseLLMProvider):
                 except ValueError:
                     # 200 但 body 不是合法 JSON：有响应的不可解析结果，保留正文摘要
                     raise ProviderResponseInvalid(
-                        f"DeepSeek 响应 JSON 解析失败: {response.text[:500]}"
+                        f"DeepSeek 响应 JSON 解析失败: {provider_response_text(response.text[:500])}"
                     ) from None
                 if not isinstance(result, dict):
                     # 200 但 body 不是 JSON 对象（如字面量 null），带上响应体便于定位
                     raise ProviderResponseInvalid(
-                        f"DeepSeek 响应非 JSON 对象: {response.text[:500]}"
+                        f"DeepSeek 响应非 JSON 对象: {provider_response_text(response.text[:500])}"
                     )
                 # 结构校验失败（choices 缺失/null 元素/message 形态等）同属
                 # 「有响应但不可解析」：先校验结构再做字段访问，杜绝
@@ -141,7 +141,7 @@ class DeepSeekProvider(BaseLLMProvider):
             )
             logger.error("DeepSeek API请求失败: {}", describe_exception(e))
             raise ProviderHTTPError(
-                f"DeepSeek API请求失败: {e.response.text}", status_code=e.response.status_code,
+                f"DeepSeek API请求失败: {provider_response_text(e.response.text)}", status_code=e.response.status_code,
             ) from None
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -233,7 +233,7 @@ class DeepSeekProvider(BaseLLMProvider):
             )
             logger.error("DeepSeek 流式API请求失败: {}", describe_exception(e))
             raise ProviderHTTPError(
-                f"DeepSeek 流式API请求失败: {e.response.text}", status_code=e.response.status_code,
+                f"DeepSeek 流式API请求失败: {provider_response_text(e.response.text)}", status_code=e.response.status_code,
             ) from None
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000

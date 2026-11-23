@@ -29,6 +29,7 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'daily-report', name: 'tenant-daily-report', component: () => import('@/components/reports/PersonalDailyReport.vue') },
       // 企业微信Agent 工作区（三入口合并，Tab 切换；旧路径重定向保住收藏与按名跳转）
       { path: 'wecom-agent/:tab(conversations|daily|proxy|scheduled)?', name: 'tenant-wecom-agent', component: () => import('@/components/wecomConversation/WecomAgentHub.vue') },
+      { path: 'weixin-agent', name: 'tenant-weixin-agent', component: () => import('@/components/weixinConversation/WeixinAgent.vue') },
       { path: 'wecom-conversations', name: 'tenant-wecom-conversations', redirect: to => ({ name: 'tenant-wecom-agent', params: { tenant_id: to.params.tenant_id, tab: 'conversations' }, query: to.query }) },
       { path: 'wecom-conversations/daily', name: 'tenant-wecom-daily', redirect: to => ({ name: 'tenant-wecom-agent', params: { tenant_id: to.params.tenant_id, tab: 'daily' } }) },
       { path: 'wecom-conversations/proxy', name: 'tenant-wecom-proxy', redirect: to => ({ name: 'tenant-wecom-agent', params: { tenant_id: to.params.tenant_id, tab: 'proxy' } }) },

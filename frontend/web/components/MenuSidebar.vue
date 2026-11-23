@@ -1124,6 +1124,7 @@ const connectionSubMenuItems = computed(() => {
     { key: 'local_tools', path: `${base}/local-tools`, label: '本地工具', icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z', adminOnly: false },
     // 企业微信Agent：三入口合并（会话记录/每日总结/代理任务，页内 Tab 切换）
     { key: 'wecom_agent', path: `${base}/wecom-agent`, label: '企业微信Agent', icon: 'M12 3a8 8 0 018 8v6H4v-6a8 8 0 018-8zM9 21h6M9 11h6', adminOnly: false },
+    { key: 'weixin_agent', path: `${base}/weixin-agent`, label: '微信 Agent', icon: 'M8 10h.01M12 10h.01M16 10h.01M20 11.5c0 4.1-3.6 7.5-8 7.5a8.9 8.9 0 01-3-.5L4 20l1.4-4.2A7 7 0 014 11.5C4 7.4 7.6 4 12 4s8 3.4 8 7.5z', adminOnly: false },
     // 外部系统：链接（管理员与普通员工均可见）
     { key: 'external_systems', path: `${base}/connections/external-systems`, label: '外部系统', icon: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71', adminOnly: false },
   ]
@@ -1166,6 +1167,7 @@ const isConnectionActive = computed(() => {
     `${base}/wecom-agent/daily`,
     `${base}/wecom-agent/proxy`,
     `${base}/wecom-agent/scheduled`,
+    `${base}/weixin-agent`,
   ].includes(route.path)
 })
 

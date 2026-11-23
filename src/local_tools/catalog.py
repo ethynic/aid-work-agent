@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional
 LOCAL_ONLY_WEIXIN_TOOLS = frozenset({"weixin_history_read", "weixin_unread_list", "weixin_session_observe"})
 LOCAL_ONLY_WEIXIN_MESSAGE = "此微信读取工具仅支持本机 CLI 或 MCP"
 WEIXIN_CHAT_LATEST = "weixin_chat_latest"
+WEIXIN_GROUP_DAILY_SUMMARY = "weixin_group_daily_summary"
+WEIXIN_DAILY_SUMMARY_KIND = "weixin_daily_summary"
 
 TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "runtime-recovery": {"provider_id":"ai.aidwork.runtime-recovery", "min_provider_version":"1.0.0",

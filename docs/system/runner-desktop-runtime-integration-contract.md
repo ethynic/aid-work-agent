@@ -30,6 +30,10 @@ Device 心跳处理是服务端同步结果的唯一写入者。验签后按认�
 
 2026-11-17 补充，已签名微信插件以自身清单声明 `weixin_message_send`。Runtime 配对和心跳均消费同一声明，旧直配变体仅用于遗留入口。商店版微信子进程取得配对服务地址，用同一地址下的本机客户端激活绑定访问计费视觉定位。Device API、计费接口和旧 V2 提交回执格式沿用既有协议。见[发送入口收敛计划](../plans/plan-weixin-cli-remove-ocr.md#phase-3c-发送入口收敛)。
 
+2026-11-23 · 契约 2.23，微信 Agent 点选的单次总结例外。Web 发起端提交确认时显示的 `device_id`，在登录用户与租户范围内核对该设备仍被选定，再基于当前签名声明，创建 `business_kind='weixin_daily_summary'` 的普通串行调用。任务参数为 `target_name`、北京时间日期 `business_date`、`tenant_id` 与一次性 `grant`。服务端是该次允许范围的唯一写入者。设备和旧 CLI 协议沿用，缺少新工具的插件不会收到该任务。
+
+微信 CLI 签名串行只读工具 `weixin_group_daily_summary` 是 UIA 正文的唯一生产者。只调用当前 Runtime 配对服务 `POST /api/local-tools/runtime/weixin-summary`，一次性凭证放 Authorization，正文仅限本次已核对群聊当天文字，上传参数 `tenant_id`、`business_date`、`messages`。专属端点验明匹配运行中的未过期调用后原子消费凭证，正文只在本次请求内使用。创建作业及消耗凭证后调用模型前沿现有积分门禁。反向代理的专属路由直接转发请求体，上限 160 KiB。失败回执及结果的摘要、条数、部分读取标志由 CLI 投影。通用历史、未读、观察和同步工具仍沿既有正文边界。该工具不进入通用 Runner 模型工具集。旧插件和既有其他业务能力沿用原协议。实施见[计划](../plans/plan-weixin-agent.md)。
+
 ### BOSS 筛选容错与本机操作恢复共同检查点
 
 2026-11-12 · 本节登记契约 2.20 的既有事实与 2026-11-18 无人值守恢复增量（代码已实现，Windows 实机验收与正式发版待完成）。适用 BOSS 网页任务。规则见 [筛选输入](../design/recruiting/resume-job-matching-design.md#boss-筛选参数容错)、[恢复交互](agent-application-architecture-design.md#boss-本机操作恢复) 和 [计划](../plans/plan-boss-filter-input-and-local-recovery.md)。

@@ -30,6 +30,8 @@ export type ErrorCode =
   | 'UI_CHANGED'
   | 'RESULT_TIMEOUT'
   | 'CONTENT_UNAVAILABLE'
+  | 'SUMMARY_COVERAGE_UNAVAILABLE'
+  | 'SUMMARY_FAILED'
   // 目标（好友/群/公众号）
   | 'TARGET_NOT_FOUND'
   | 'TARGET_AMBIGUOUS'
@@ -39,6 +41,7 @@ export type ErrorCode =
   | 'RISK_CONTROL'
   // 计费（服务端代理模式：402 余额不足，见 docs/design/weixin/weixin-cli-billing.md）
   | 'INSUFFICIENT_CREDIT'
+  | 'NO_CREDIT'
   // 生命周期
   | 'BUSY'
   | 'CANCELLED'

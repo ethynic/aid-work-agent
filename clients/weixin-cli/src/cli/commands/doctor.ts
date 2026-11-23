@@ -109,7 +109,8 @@ export async function runDoctorChecks(opts: DoctorCommandOptions = {}): Promise<
     checks,
     artifact_dir: dir,
     runtime_readiness: checks.some((c) => c.severity === 'gate' && !c.ok)
-      ? { ready: false, reason: '桌面运行条件未满足或窗口恢复失败' } : diagnosis.runtime_readiness,
+      ? { ready: false, reason: opts.restoreWindow && !diagnosis.runtime_readiness.ready
+          ? diagnosis.guidance : '桌面运行条件未满足或窗口恢复失败' } : diagnosis.runtime_readiness,
     window_state: diagnosis.window_state, login_state: diagnosis.login_state, guidance: diagnosis.guidance,
     ...(opts.restoreWindow ? { restore: { restored: diagnosis.restored, ...(diagnosis.error_code ? { error_code: diagnosis.error_code } : {}) } } : {}),
   }

@@ -40,6 +40,14 @@ function Throw-DriverError([string]$Code, [string]$Message) {
     throw ("WXDRIVE|" + $Code + "|" + $Message)
 }
 
+function Test-WeixinWhatsNewWindow($Identity) {
+    try {
+        $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr]$Identity.Hwnd)
+        $item = $root.Current
+        return $item.ProcessId -eq $Identity.ProcessId -and $item.ClassName -ceq 'mmui::WhatsNewWindow'
+    } catch { return $false }
+}
+
 function Resolve-WeixinMainWindowHwnd {
     # probe-lib 的 Select-WeixinMainWindow 依赖 Process.MainWindowHandle，主窗口句柄
     # 可能被弹窗抢走导致选错；此处逐窗口校验 ClassName=='Qt51514QWindowIcon' 且标题为
@@ -50,7 +58,7 @@ function Resolve-WeixinMainWindowHwnd {
         if (-not (Test-WeixinExecutablePath ([string]$w.ProcessPath))) { continue }
         $id = Get-WindowIdentityByHwnd ([int64]$w.Hwnd)
         if ($null -ne $id -and [string]$id.ClassName -eq 'Qt51514QWindowIcon' -and
-            [string]$id.Title -eq $script:WeixinTitle) {
+            [string]$id.Title -eq $script:WeixinTitle -and -not (Test-WeixinWhatsNewWindow $id)) {
             $valid += [int64]$id.Hwnd
         }
     }

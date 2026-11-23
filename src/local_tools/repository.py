@@ -18,7 +18,7 @@ from src.db.client_binding_db import ClientUsageLogDB
 from src.db.database import get_db_connection
 from src.local_tools.catalog import (
     LOCAL_ONLY_WEIXIN_MESSAGE, LOCAL_ONLY_WEIXIN_TOOLS, WEIXIN_CHAT_LATEST,
-    get_provider_keys_for_device, parallel_tools_for_device,
+    WEIXIN_DAILY_SUMMARY_KIND, WEIXIN_GROUP_DAILY_SUMMARY, get_provider_keys_for_device, parallel_tools_for_device,
 )
 from src.local_tools.pricing import tool_credit_price
 from src.local_tools.plugin_manifests import (
@@ -750,8 +750,8 @@ def _fail_stale_plugin_queue(cursor, tenant_id, device_id, digests):
         UPDATE local_tool_invocations
         SET state='failed', effect='none', error_code=%s, error_message=%s, result_json=%s,
             finished_at=COALESCE(finished_at,NOW()), lease_expires_at=NULL
-        WHERE tenant_id=%s AND device_id=%s AND state='queued' AND business_kind='agent_runner'
-          AND business_ref->>'branch'=%s
+        WHERE tenant_id=%s AND device_id=%s AND state='queued'
+          AND ((business_kind='agent_runner' AND business_ref->>'branch'=%s) OR business_kind=%s)
           AND (business_ref->>'plugin_manifest_digest' IS NULL
             OR business_ref->>'plugin_manifest_digest' IS DISTINCT FROM (%s::jsonb ->> provider_key))
         RETURNING id,tenant_id
@@ -760,7 +760,7 @@ def _fail_stale_plugin_queue(cursor, tenant_id, device_id, digests):
     SELECT id,tenant_id,COALESCE((SELECT MAX(seq) FROM local_tool_events
         WHERE invocation_id=rejected.id),0)+1,'failed',%s
     FROM rejected''', (PLUGIN_CHANGED_CODE, PLUGIN_CHANGED_MESSAGE, Json(result), tenant_id,
-                       device_id, PLUGIN_PHASE, Json(digests), PLUGIN_CHANGED_MESSAGE))
+                       device_id, PLUGIN_PHASE, WEIXIN_DAILY_SUMMARY_KIND, Json(digests), PLUGIN_CHANGED_MESSAGE))
 
 
 def touch_device_seen(
@@ -1176,7 +1176,8 @@ def claim_next(
         cursor = conn.cursor()
         lock_operation_admission(cursor, tenant_id)
         device_capabilities = None
-        plugin_row = f"business_kind='agent_runner' AND business_ref->>'branch'='{PLUGIN_PHASE}'"
+        plugin_row = (f"(business_kind='agent_runner' AND business_ref->>'branch'='{PLUGIN_PHASE}')"
+                      f" OR business_kind='{WEIXIN_DAILY_SUMMARY_KIND}'")
         if plugin_manifest_digests:
             cursor.execute('''SELECT capabilities_json - %s::text AS capabilities_json
                 FROM local_tool_devices WHERE id=%s AND tenant_id=%s AND status='active' FOR SHARE''',
@@ -1221,6 +1222,7 @@ def claim_next(
             WHERE state = 'queued' AND device_id = %s AND tenant_id = %s
               {lane_filter}{plugin_filter}{provider_filter}{parallel_filter}
               AND (business_kind IS DISTINCT FROM 'wecom_proxy_monitor_read' OR deadline_at>=clock_timestamp())
+              AND (business_kind IS DISTINCT FROM '{WEIXIN_DAILY_SUMMARY_KIND}' OR deadline_at>clock_timestamp())
               AND (business_kind IS DISTINCT FROM 'agent_runner_recovery' OR business_ref->>'version' IS DISTINCT FROM '3'
                 OR (deadline_at>NOW() AND EXISTS (SELECT 1 FROM agent_runners r
                   WHERE r.runner_id=local_tool_invocations.business_ref->>'runner_id' AND r.tenant_id=local_tool_invocations.tenant_id
@@ -1297,6 +1299,8 @@ def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str, *,
         owner = cursor.fetchone()
         if not owner or owner.get('tool_name') in LOCAL_ONLY_WEIXIN_TOOLS:
             return None
+        if owner.get('business_kind') == WEIXIN_DAILY_SUMMARY_KIND and str(owner['device_id']) != device_id:
+            return None
         if owner.get('business_kind') == WECOM_SCHEDULED_SEND:
             if str(owner['device_id']) != device_id or not lock_active_device(cursor, tenant_id, device_id):
                 return None
@@ -1334,9 +1338,10 @@ def mark_started(invocation_id: str, tenant_id: str, claim_token_hash: str, *,
             UPDATE local_tool_invocations
             SET state = 'running', started_at = NOW()
             WHERE id = %s AND tenant_id = %s AND claim_token_hash = %s AND state = 'claimed'
+              AND (business_kind IS DISTINCT FROM %s OR (deadline_at>clock_timestamp() AND lease_expires_at>clock_timestamp()))
             RETURNING *
             """,
-            (invocation_id, tenant_id, claim_token_hash),
+            (invocation_id, tenant_id, claim_token_hash, WEIXIN_DAILY_SUMMARY_KIND),
         )
         row = cursor.fetchone()
         conn.commit()
@@ -1444,6 +1449,22 @@ def write_runtime_result(invocation_id, tenant_id, claim_token_hash, success, co
                 False, device_id=device_id)
         return write_result(invocation_id, tenant_id, claim_token_hash, False, code,
             '微信本机同步失败', 'none', None, retryable, device_id=device_id)
+    if invocation and invocation.get('tool_name') == WEIXIN_GROUP_DAILY_SUMMARY:
+        from .weixin_summary import normalize_success
+
+        public = normalize_success(data) if success else None
+        if success and (public is None or (public['message_count'] and
+                not (invocation.get('business_ref') or {}).get('grant_consumed'))):
+            code = 'INTERNAL_ERROR'
+        if code not in {'OK', 'UI_CHANGED', 'TARGET_NOT_FOUND', 'TARGET_AMBIGUOUS', 'CONTENT_UNAVAILABLE',
+                        'SUMMARY_COVERAGE_UNAVAILABLE', 'SUMMARY_FAILED', 'CANCELLED', 'BUSY',
+                        'WEIXIN_NOT_FOUND', 'NOT_LOGGED_IN', 'WINDOW_AMBIGUOUS', 'FOREGROUND_LOST',
+                        'EXECUTION_UNKNOWN', 'TOOL_NOT_ALLOWED', 'RESULT_TIMEOUT', 'NO_CREDIT'}:
+            code = 'INTERNAL_ERROR'
+        accepted = success and code == 'OK' and public is not None
+        return write_result(invocation_id, tenant_id, claim_token_hash, accepted, code,
+            '微信总结已完成' if accepted else '微信总结未完成', 'none', public if accepted else None,
+            False, device_id=device_id)
     if invocation and invocation.get('business_kind') == 'agent_runner_recovery':
         from .recovery_observation import write_result as write_observation_result
         return write_observation_result(invocation_id, tenant_id, claim_token_hash, success,

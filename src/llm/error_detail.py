@@ -7,12 +7,17 @@ anyio.BrokenResourceError 被 httpcore/httpx 逐层包装后消息丢失，日�
 """
 
 
+from .llm_call_logger import provider_content_private
+
+
 def describe_exception(e: BaseException, max_cause_depth: int = 3) -> str:
     """返回异常的可诊断单行描述。
 
     包含：类型 + repr、args、httpx request（method + URL）、cause 链
     （逐层类型 + repr + args），定位 TCP/TLS 哪一阶段失败。
     """
+    if provider_content_private():
+        return type(e).__name__
     segments = [f"{type(e).__name__} {e!r}"]
     if getattr(e, "args", None):
         segments.append(f"args={e.args!r}")

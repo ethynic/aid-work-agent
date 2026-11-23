@@ -12,7 +12,9 @@ function Get-WeixinDiagnosticWindows {
     foreach ($window in @(Get-VisibleWindowList -IncludeHidden -ProcessIds $processIds)) {
         if (-not (Test-WeixinExecutablePath $window.ProcessPath)) { continue }
         $identity = Get-WindowIdentityByHwnd $window.Hwnd
-        if (Test-WeixinMainIdentity $identity $window.Hwnd) { $matches += $identity }
+        if ((Test-WeixinMainIdentity $identity $window.Hwnd) -and -not (Test-WeixinWhatsNewWindow $identity)) {
+            $matches += $identity
+        }
     }
     return @($matches | Sort-Object Hwnd -Unique)
 }

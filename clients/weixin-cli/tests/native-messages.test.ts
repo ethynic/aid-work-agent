@@ -112,7 +112,8 @@ function Throw-DriverError($code,$message){ throw "WXDRIVE|$code|$message" }
 function Resolve-WeixinMainWindowHwnd(){ return 123 }
 function Get-WindowIdentityByHwnd($h){ @{ProcessId=42} }
 function Test-WeixinMainIdentity($identity,$h){ $h -eq 123 -and $identity.ProcessId -eq 42 }
-function Get-WeixinNativeTitleInfo($session){ @{title='合成会话';is_group=$true} }
+function Get-WeixinNativeTitleInfo($session){ if (-not $script:hideTitle) { @{title='合成会话';is_group=$true} } }
+function Get-WeixinNativeList($Session,$Id,$Class) { if ($script:hideList) { throw 'no UIA session list' }; return @{} }
 function Get-WeixinNativeSelectedSessionId($session){
     $script:selectionCalls++
     if ($script:sameTitleSwitch -and $script:selectionCalls -gt 1) { return '123:42:17.2' }
@@ -155,6 +156,12 @@ $script:sameTitleSwitch=$false
 $script:selectionCalls=0
 $session=Get-WeixinCurrentNativeSession -TargetName '合成会话'
 $wrongName=try { Get-WeixinCurrentNativeSession -TargetName '另一个会话' } catch { $_.Exception.Message }
+$script:hideTitle=$true
+$missingTitle=try { Get-WeixinCurrentNativeSession -TargetName '合成会话' } catch { $_.Exception.Message }
+$script:hideList=$true
+$missingList=try { Get-WeixinCurrentNativeSession -TargetName '合成会话' } catch { $_.Exception.Message }
+$script:hideTitle=$false
+$script:hideList=$false
 $wrongSelection=try { Get-WeixinCurrentNativeSession -TargetName '合成会话' -ExpectedSessionIdentity '123:42:17.2' } catch { $_.Exception.Message }
 $script:probeCalls=0
 $script:drift=$false
@@ -171,7 +178,8 @@ $script:sameTitleSwitch=$true
 $wrongSnapshot=try { Get-WeixinNativeMessageSnapshot -Session $session } catch { $_.Exception.Message }
 ConvertTo-Json -InputObject @{
     observed=$observed;failure=$failure;peer_nickname=$peerNickname;has_evidence=[bool]$result.png
-    wrong_name=$wrongName;wrong_selection=$wrongSelection;wrong_snapshot=$wrongSnapshot;session_identity=$result.session_identity
+    wrong_name=$wrongName;missing_title=$missingTitle;missing_list=$missingList
+    wrong_selection=$wrongSelection;wrong_snapshot=$wrongSnapshot;session_identity=$result.session_identity
 } -Compress
 `, 'utf8')
       const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', script],
@@ -182,7 +190,9 @@ ConvertTo-Json -InputObject @{
       assert.equal(data.peer_nickname, null)
       assert.equal(data.has_evidence, false)
       assert.equal(data.session_identity, '123:42:17.1')
-      assert.match(data.wrong_name, /^WXDRIVE\|UI_CHANGED\|/)
+      assert.match(data.wrong_name, /^WXDRIVE\|UI_CHANGED\|.*会话与目标不一致/)
+      assert.match(data.missing_title, /^WXDRIVE\|UI_CHANGED\|.*未读到当前会话标题/)
+      assert.match(data.missing_list, /^WXDRIVE\|UI_CHANGED\|.*无法读取原生会话列表（UIA）/)
       assert.match(data.wrong_selection, /^WXDRIVE\|UI_CHANGED\|.*选中会话/)
       assert.match(data.wrong_snapshot, /^WXDRIVE\|UI_CHANGED\|.*选中会话/)
       assert.match(data.failure, /^WXDRIVE\|UI_CHANGED\|/)

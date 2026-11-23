@@ -93,6 +93,7 @@ function renderHistory(messages: HistoryMessage[], target: string): string {
 }
 
 export function createWeixinHistoryReadOperation(deps: {
+  groupOnly?: boolean
   runDriverFn?: RunPowerShellDriverFn
   verifyRefFn?: VerifyTargetRefFn
   writeFileFn?: (path: string, contents: string) => Promise<void>
@@ -130,6 +131,7 @@ export function createWeixinHistoryReadOperation(deps: {
           stdin: JSON.stringify({
             target_name: targetName,
             max_pages: maxPages,
+            group_only: deps.groupOnly ? true : undefined,
             since_days: args.since_days === undefined ? undefined : Math.ceil(args.since_days),
           }),
           timeoutMs: HISTORY_TIMEOUT_MS,
@@ -141,6 +143,9 @@ export function createWeixinHistoryReadOperation(deps: {
         const { title, is_group: isGroup, pages } = capture.data
         if (title !== targetName) {
           throw new CodedOperationError('TARGET_AMBIGUOUS', '原生历史标题与当前会话不一致')
+        }
+        if (deps.groupOnly && !isGroup) {
+          throw new CodedOperationError('TARGET_NOT_FOUND', '当前会话未核实为微信群聊')
         }
         const messages = mergeHistoryPages(pages).map((row) => toHistoryMessage(row, isGroup))
         const truncated = messages.length > INLINE_MESSAGE_LIMIT
