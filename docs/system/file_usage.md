@@ -142,6 +142,14 @@ storage/
 
 **源文件**：`src/api/data_analysis.py`（`upload_excel` 端点）
 
+**规范化派生文件**（2026-11-23 起）：`data_sources/{file_id}_n.xlsx`（CSV 为 `{file_id}_n.csv`）。
+用户上传含说明行/数据区合并单元格的表格并在确认弹框中选择修复后，由
+`src/services/data_analysis/excel_validator.py` 的 `normalize_workbook` 生成：
+删除表头前的说明行、展开数据区合并单元格、仅保留用户勾选的 sheet。原文件保持
+原样（下载/审计口径不变），schema 的 `source.file_path` 指向派生文件，分析加载
+（`data_analyzer._load_from_path`）读取派生文件。重复确认覆盖重建（幂等）。
+设计见 `docs/subagent/data-analysis/excel-upload-validation-design.md`。
+
 ### 3.6 技能环境变量文件
 
 租户级技能的个性化配置。

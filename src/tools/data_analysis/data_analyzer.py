@@ -185,10 +185,25 @@ class DataAnalyzer:
                 f"请检查源文件/数据库连接器是否仍存在"
             )
 
+        # 值级确定性清洗（'10万'/'-'/杂空格日期等 -> 标准值），报告并入表元信息
+        # 供分析 LLM 使用（excel-upload-validation-design.md §7）。清洗失败退回
+        # 原始 df 不阻断（fail-open）。缺失标记置空同时消除混合列导致 parquet
+        # 写入 ArrowInvalid 的隐患（2026-11-20 生产事故同因）。
+        column_quality = {}
+        try:
+            from src.services.data_analysis.value_cleaner import clean_dataframe
+            df, column_quality = clean_dataframe(df)
+        except Exception:
+            logger.opt(exception=True).warning(f"[DataAnalyzer] 值清洗失败，使用原始数据 table={table_id}")
+
         # 状态介导落盘后立即释放内存（§5.1 去驻留：同时只有 1 张表在内存）
         row_count, column_count = len(df), len(df.columns)
         self._tables[table_id] = self._write_state(df, f"table_{_safe_state_stem(table_id)}")
         self._table_rows[table_id] = row_count
+        if column_quality:
+            metadata = dict(metadata) if isinstance(metadata, dict) else metadata
+            if isinstance(metadata, dict):
+                metadata["column_quality"] = column_quality
         self._table_meta[table_id] = metadata
         logger.info(f"[DataAnalyzer] 加载表 {table_id}: {row_count} 行, {column_count} 列")
         return table_id

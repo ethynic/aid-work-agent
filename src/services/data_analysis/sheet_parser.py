@@ -109,8 +109,22 @@ class SheetParser:
 
     def _dataframe_to_sheet_info(self, df: pd.DataFrame, sheet_name: str) -> Dict[str, Any]:
         """将 DataFrame 转换为 sheet 信息字典"""
+        from src.services.data_analysis.value_cleaner import (
+            clean_dataframe,
+            column_warnings_from_quality,
+        )
+
         # 列名
         columns = list(df.columns)
+
+        # 值级确定性清洗（与分析加载侧同口径，见
+        # excel-upload-validation-design.md §7.4）；报告并入 sheet_info
+        try:
+            df, column_quality = clean_dataframe(df)
+        except Exception as e:
+            # 清洗失败不阻断上传，退回原始 df（fail-open，与既有解析行为一致）
+            logger.warning(f"[sheet_parser] 值清洗失败，退回原始数据 sheet={sheet_name}: {e}")
+            column_quality = {}
 
         # 采样数据（前 SAMPLE_ROW_COUNT 行）
         sample_df = df.head(SAMPLE_ROW_COUNT)
@@ -129,6 +143,8 @@ class SheetParser:
             "columns": columns,
             "sample_data": sample_data,
             "data_types": data_types,
+            "column_quality": column_quality,
+            "column_warnings": column_warnings_from_quality(column_quality),
         }
 
     def _infer_type(self, series: pd.Series) -> str:

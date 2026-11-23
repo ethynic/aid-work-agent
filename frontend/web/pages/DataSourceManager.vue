@@ -489,6 +489,70 @@
       </template>
     </BaseModal>
 
+    <!-- Modal: 上传校验结果（修复确认 / 错误引导） -->
+    <BaseModal v-model="showValidationModal" title="表格结构校验结果" size="lg">
+      <div class="py-2 space-y-3">
+        <div class="text-xs text-muted bg-info-50 border border-info-200 rounded-lg px-3 py-2">
+          规范的数据表：<span class="text-default">第一行是表头（仅一行、不含合并单元格），第二行起是数据</span>。
+          系统已检测到以下情况，确认无误后即可导入。
+        </div>
+
+        <div
+          v-for="s in validationSheets"
+          :key="s.sheet_name"
+          class="border rounded-lg px-3 py-3"
+          :class="{
+            'border-danger-300 bg-danger-50': s.verdict === 'error',
+            'border-warning-300 bg-warning-50': s.verdict === 'fixable',
+            'border-default bg-surface': s.verdict === 'ok',
+          }"
+        >
+          <div class="flex items-center gap-2">
+            <input
+              v-if="s.verdict !== 'error'"
+              type="checkbox"
+              v-model="validationSelection[s.sheet_name]"
+              class="w-3.5 h-3.5 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+            />
+            <BaseBadge :intent="s.verdict === 'ok' ? 'success' : s.verdict === 'fixable' ? 'warning' : 'danger'">
+              {{ s.verdict === 'ok' ? '可导入' : s.verdict === 'fixable' ? '可自动修复' : '无法导入' }}
+            </BaseBadge>
+            <span class="text-sm font-medium text-default">{{ s.sheet_name }}</span>
+          </div>
+
+          <ul v-if="s.issues.length" class="mt-2 space-y-1">
+            <li v-for="(issue, i) in s.issues" :key="i" class="text-xs text-default">· {{ issue }}</li>
+          </ul>
+
+          <ul v-if="s.column_warnings.length" class="mt-2 space-y-1">
+            <li v-for="(w, i) in s.column_warnings" :key="'w' + i" class="text-xs text-muted">· {{ w }}（导入后 AI 分析时会自动处理并如实说明）</li>
+          </ul>
+
+          <!-- fixable 预览：规范化后 AI 看到的样子 -->
+          <div v-if="s.verdict === 'fixable' && s.preview" class="mt-3">
+            <div class="text-xs text-muted mb-1">修复后预览（AI 将按以下结构读取，前 5 行）：</div>
+            <div class="table-scroll-wrapper">
+              <BaseTable
+                :columns="previewColumns(s)"
+                :data="previewRows(s)"
+                row-key="__idx"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div v-if="allSheetsError" class="text-xs text-danger-600">
+          所有工作表都无法导入。请按上方提示修改 Excel 后重新上传（可删除无问题说明行、取消表头合并单元格）。
+        </div>
+      </div>
+      <template #footer>
+        <BaseButton intent="secondary" @click="showValidationModal = false">取消</BaseButton>
+        <BaseButton v-if="!allSheetsError" @click="confirmImport">
+          确认导入（{{ selectedSheetCount }} 张表）
+        </BaseButton>
+      </template>
+    </BaseModal>
+
     <!-- Hidden file input -->
     <input ref="fileInput" type="file" accept=".xlsx,.xls,.csv" style="display:none" @change="handleFileSelect" />
     </template>
@@ -516,6 +580,9 @@ import {
   listRemoteTables,
   importTables,
   uploadExcelStream,
+  confirmUploadStream,
+  type SheetValidation,
+  type UploadStreamCallbacks,
   listSchemas,
   saveSchema,
   updateSchema,
@@ -1112,6 +1179,10 @@ function resetUploadState() {
   uploadFilename.value = ''
   uploadCancelling.value = false
   uploadAbortHandle = null
+  showValidationModal.value = false
+  validationSheets.value = []
+  validationSelection.value = {}
+  pendingConfirmFileId.value = ''
 }
 
 function cancelUpload() {
@@ -1120,6 +1191,119 @@ function cancelUpload() {
   uploadAbortHandle.cancel()
   uploading.value = false
   resetUploadState()
+}
+
+// ===== 校验结果弹框（修复确认 / 错误引导） =====
+const showValidationModal = ref(false)
+const validationSheets = ref<SheetValidation[]>([])
+const validationSelection = ref<Record<string, boolean>>({})
+const pendingConfirmFileId = ref('')
+
+const allSheetsError = computed(() =>
+  validationSheets.value.length > 0 && validationSheets.value.every(s => s.verdict === 'error')
+)
+const selectedSheetCount = computed(() =>
+  validationSheets.value.filter(s => s.verdict !== 'error' && validationSelection.value[s.sheet_name]).length
+)
+
+function openValidationModal(sheets: SheetValidation[], fileId: string) {
+  validationSheets.value = sheets
+  pendingConfirmFileId.value = fileId
+  const selection: Record<string, boolean> = {}
+  for (const s of sheets) {
+    selection[s.sheet_name] = s.verdict !== 'error'
+  }
+  validationSelection.value = selection
+  showValidationModal.value = true
+}
+
+function previewColumns(s: SheetValidation) {
+  return (s.preview?.columns || []).map((c, i) => ({ key: 'c' + i, label: c || `列${i + 1}` }))
+}
+
+function previewRows(s: SheetValidation) {
+  return (s.preview?.rows || []).map((row, idx) => {
+    const obj: Record<string, any> = { __idx: idx }
+    row.forEach((v, i) => { obj['c' + i] = v || '' })
+    return obj
+  })
+}
+
+async function confirmImport() {
+  const sheets = validationSheets.value
+    .filter(s => s.verdict !== 'error' && validationSelection.value[s.sheet_name])
+    .map(s => ({
+      sheet_name: s.sheet_name,
+      header_row: s.header_row || 1,
+      selected: true,
+    }))
+  const unselected = validationSheets.value
+    .filter(s => s.verdict !== 'error' && !validationSelection.value[s.sheet_name])
+    .map(s => ({ sheet_name: s.sheet_name, header_row: s.header_row || 1, selected: false }))
+  if (sheets.length === 0) {
+    alert('请至少勾选一个要导入的工作表')
+    return
+  }
+
+  showValidationModal.value = false
+  // 复用上传进度弹框继续展示规范化 + schema 推断进度
+  uploading.value = true
+  uploadStage.value = '正在按确认结果整理表格...'
+  uploadCompletedSheets.value = []
+
+  const payload = { file_id: pendingConfirmFileId.value, sheets: [...sheets, ...unselected] }
+  uploadAbortHandle = confirmUploadStream(payload, uploadStreamCallbacks())
+}
+
+/** 上传/确认共用的 SSE 回调集合 */
+function uploadStreamCallbacks(): UploadStreamCallbacks {
+  return {
+    onConnected: (filename: string) => {
+      uploadFilename.value = filename
+      uploadStage.value = '文件已接收，准备解析...'
+    },
+    onProgress: (_stage: string, message: string) => {
+      uploadStage.value = message
+    },
+    onValidation: (sheets: SheetValidation[]) => {
+      validationSheets.value = sheets
+    },
+    onSheetProgress: (current: number, total: number, sheetName: string) => {
+      uploadSheetInfo.value = { current, total, sheetName }
+    },
+    onSheetDone: (current: number, total: number, sheetName: string, tableName: string) => {
+      uploadSheetInfo.value = { current, total, sheetName }
+      uploadCompletedSheets.value.push({ current, sheetName, tableName })
+    },
+    onNeedsConfirmation: (fileId: string, _filename: string) => {
+      uploading.value = false
+      uploadAbortHandle = null
+      uploadFilename.value = ''
+      openValidationModal(validationSheets.value, fileId)
+    },
+    onComplete: (schemas) => {
+      uploading.value = false
+      uploadAbortHandle = null
+      if (schemas && schemas.length > 0) {
+        openSchemaReview(schemas)
+      } else {
+        alert('未能识别出有效的数据表结构')
+      }
+      resetUploadState()
+    },
+    onError: (message: string, validation?: { sheets: SheetValidation[] }) => {
+      uploading.value = false
+      uploadAbortHandle = null
+      if (validation?.sheets?.length) {
+        // 结构校验整体拒绝：仅关进度弹框，打开校验弹框展示引导（不清 validation 状态）
+        uploadFilename.value = ''
+        openValidationModal(validation.sheets, '')
+        return
+      }
+      alert(message || '上传失败')
+      resetUploadState()
+    },
+  }
 }
 
 async function handleFileSelect(e: Event) {
@@ -1134,38 +1318,7 @@ async function handleFileSelect(e: Event) {
   uploadFilename.value = file.name
   uploadStage.value = '上传文件中...'
 
-  uploadAbortHandle = uploadExcelStream(file, {
-    onConnected: (filename) => {
-      uploadFilename.value = filename
-      uploadStage.value = '文件已接收，准备解析...'
-    },
-    onProgress: (_stage, message) => {
-      uploadStage.value = message
-    },
-    onSheetProgress: (current, total, sheetName) => {
-      uploadSheetInfo.value = { current, total, sheetName }
-    },
-    onSheetDone: (current, total, sheetName, tableName) => {
-      uploadSheetInfo.value = { current, total, sheetName }
-      uploadCompletedSheets.value.push({ current, sheetName, tableName })
-    },
-    onComplete: (schemas) => {
-      uploading.value = false
-      uploadAbortHandle = null
-      if (schemas && schemas.length > 0) {
-        openSchemaReview(schemas)
-      } else {
-        alert('未能识别出有效的数据表结构')
-      }
-      resetUploadState()
-    },
-    onError: (message) => {
-      uploading.value = false
-      uploadAbortHandle = null
-      alert(message || '上传失败')
-      resetUploadState()
-    },
-  })
+  uploadAbortHandle = uploadExcelStream(file, uploadStreamCallbacks())
 }
 
 // ===== Connectors tab =====
