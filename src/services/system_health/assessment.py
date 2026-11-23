@@ -31,6 +31,12 @@ ASSESS_INTERVAL_SECONDS = 60
 ASSESSMENT_TTL_SECONDS = 600
 ASSESS_MAX_TOKENS = 800
 
+# 耗时 P50/P95 研判的最小样本门槛：样本不足（如测试环境全天仅个位数请求）时
+# P95≈最大值，会稳定误报「超临界」——不参与派生指标与 LLM 输入（2026-11-23）。
+# 页面仍展示原始值，仅研判口径受门槛约束；规则层本就不离散该指标（THRESHOLDS
+# 中 business.duration_p95_ms 仅作为 LLM 阈值参考），行为兼容。
+P95_MIN_SAMPLES = 20
+
 # 阈值表：与规则层/页面红黄高亮同源（设计 §9.2：阈值表来自配置，避免两套口径）。
 # 观察项 -> (watch 阈值, critical 阈值)；值为 None 的指标跳过离散（从哈希中缺席，
 # 不参与组合——指标缺失是稳定状态，不应让哈希抖动）。
@@ -94,7 +100,7 @@ def _derived_metrics(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     if bandwidth and all(r is not None for r in rates):
         derived["system.net_load_ratio"] = round(max(rates) * 8 / bandwidth, 4)
     biz = snapshot.get("business") or {}
-    if biz.get("duration_p95_ms") is not None:
+    if biz.get("duration_p95_ms") is not None and biz.get("duration_samples", 0) >= P95_MIN_SAMPLES:
         derived["business.duration_p95_ms"] = biz["duration_p95_ms"]
     return derived
 
@@ -240,13 +246,20 @@ def apply_error_floor(verdict: Dict[str, Any], states: Dict[str, str]) -> None:
 
 
 def _build_llm_prompt(states: Dict[str, str], snapshot: Dict[str, Any]) -> str:
+    biz_raw = dict(snapshot.get("business") or {})
+    # 小样本门槛：耗时样本不足时剔除 P50/P95 原始值，防止 LLM 拿 P95≈最大值
+    # 对照阈值表误判「超临界」（2026-11-23 agent2：全天 7 条请求 P95 144s 误报）
+    duration_insufficient = biz_raw.get("duration_samples", 0) < P95_MIN_SAMPLES
+    if duration_insufficient:
+        biz_raw["duration_p50_ms"] = None
+        biz_raw["duration_p95_ms"] = None
     compact = {
         "states": states,
         "metrics": {
             "runner": {k: v for k, v in (snapshot.get("runner") or {}).items() if k != "error"},
             "system": {k: v for k, v in (snapshot.get("system") or {}).items() if k not in ("_io_prev", "_net_prev")},
             "middleware": {k: v for k, v in (snapshot.get("middleware") or {}).items() if k != "error"},
-            "business": {k: v for k, v in (snapshot.get("business") or {}).items() if k != "error"},
+            "business": {k: v for k, v in biz_raw.items() if k != "error"},
         },
         "thresholds": THRESHOLDS,
     }
@@ -257,7 +270,9 @@ def _build_llm_prompt(states: Dict[str, str], snapshot: Dict[str, Any]) -> str:
         "thresholds 是阈值表。请综合研判，重点捕捉组合异常（例如 CPU 高且队列不推进"
         "指向同步阻塞，CPU 低且队列不推进指向事件循环卡死；模型 P95 高但 Runner 队列"
         "正常则问题在模型侧而非调度侧）。\n"
-        "只输出一个 JSON 对象，不要任何其他文字，字段：\n"
+        + ("注意：business.duration 样本量不足（<{}），P50/P95 已置空，不要对任务耗时报异常。\n".format(P95_MIN_SAMPLES)
+           if duration_insufficient else "")
+        + "只输出一个 JSON 对象，不要任何其他文字，字段：\n"
         '{"overall": "normal|watch|critical", "summary": "一句话结论（不超过80字）", '
         '"items": [{"group": "runner|system|middleware|business", "status": "normal|watch|critical", '
         '"note": "该组判读（不超过50字）"}], '

@@ -14,7 +14,10 @@ from src.services.system_health.collector import (
     retried_share_of,
 )
 from src.services.system_health.assessment import (
+    P95_MIN_SAMPLES,
     THRESHOLDS,
+    _build_llm_prompt,
+    _derived_metrics,
     _parse_llm_verdict,
     apply_error_floor,
     discretize,
@@ -110,7 +113,8 @@ def _make_snapshot(**overrides):
         },
         "business": {
             "online_sessions_5m": 5, "requests_today": 100,
-            "error_rate_today": 0.0, "duration_p50_ms": 1000,
+            "error_rate_today": 0.0, "duration_samples": 100,
+            "duration_p50_ms": 1000,
             "duration_p95_ms": 5000, "errors_last_hour": 0,
         },
         "middleware": {
@@ -245,6 +249,51 @@ class TestApplyErrorFloor:
         apply_error_floor(verdict, states)
         assert verdict["overall"] == "watch"
         assert verdict["items"][0]["status"] == "watch"
+
+
+# ==================== assessment: P95 小样本门槛（2026-11-23） ====================
+
+
+class TestP95MinSamples:
+    """耗时 P50/P95 样本不足时不参与研判（派生指标与 LLM 输入双剔除）。"""
+
+    def test_derived_p95_gated_below_threshold(self):
+        snap = _make_snapshot(business={"duration_samples": P95_MIN_SAMPLES - 1,
+                                        "duration_p95_ms": 144000})
+        assert "business.duration_p95_ms" not in _derived_metrics(snap)
+
+    def test_derived_p95_passes_at_threshold(self):
+        snap = _make_snapshot(business={"duration_samples": P95_MIN_SAMPLES,
+                                        "duration_p95_ms": 144000})
+        assert _derived_metrics(snap)["business.duration_p95_ms"] == 144000
+
+    def test_derived_p95_absent_value_missing(self):
+        snap = _make_snapshot(business={"duration_samples": 100, "duration_p95_ms": None})
+        assert "business.duration_p95_ms" not in _derived_metrics(snap)
+
+    def test_prompt_strips_p50_p95_when_insufficient(self):
+        snap = _make_snapshot(business={"duration_samples": 3,
+                                        "duration_p50_ms": 63000,
+                                        "duration_p95_ms": 144000})
+        prompt = _build_llm_prompt(discretize(snap), snap)
+        assert '"duration_p95_ms": null' in prompt
+        assert '"duration_p50_ms": null' in prompt
+        assert "样本量不足" in prompt
+
+    def test_prompt_keeps_values_when_sufficient(self):
+        snap = _make_snapshot(business={"duration_samples": P95_MIN_SAMPLES,
+                                        "duration_p95_ms": 144000})
+        prompt = _build_llm_prompt(discretize(snap), snap)
+        assert '"duration_p95_ms": 144000' in prompt
+        assert "样本量不足" not in prompt
+
+    def test_prompt_legacy_snapshot_without_samples_field(self):
+        # 升级过渡期：旧快照无 duration_samples 字段视为样本不足，保守剔除
+        snap = _make_snapshot()
+        snap["business"].pop("duration_samples")
+        prompt = _build_llm_prompt(discretize(snap), snap)
+        assert '"duration_p95_ms": null' in prompt
+        assert "样本量不足" in prompt
 
 
 # ==================== assessment: LLM 解析 ====================

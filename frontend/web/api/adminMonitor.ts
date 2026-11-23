@@ -69,6 +69,7 @@ export interface BusinessSection {
   online_sessions_5m: number
   requests_today: number
   error_rate_today: number | null
+  duration_samples?: number | null
   duration_p50_ms: number | null
   duration_p95_ms: number | null
   errors_last_hour: number

@@ -207,7 +207,10 @@
             </div>
             <div class="flex justify-between">
               <span class="text-muted">任务耗时 P50 / P95</span>
-              <span class="text-default">{{ fmtMs(business?.duration_p50_ms) }} / {{ fmtMs(business?.duration_p95_ms) }}</span>
+              <span class="text-default">
+                {{ fmtMs(business?.duration_p50_ms) }} / {{ fmtMs(business?.duration_p95_ms) }}
+                <span v-if="(business?.duration_samples ?? 0) < 20" class="text-xs text-muted">（样本 {{ business?.duration_samples ?? 0 }}，不足以研判）</span>
+              </span>
             </div>
             <div class="flex justify-between">
               <span class="text-muted">错误日志（1 小时）</span>
