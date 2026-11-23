@@ -11,6 +11,9 @@ from .presentation import PLUGIN_TOOL_NAMES, redact_runtime_plugin_calls
 
 
 DEFAULT_THRESHOLD_MINUTES = 30
+# profile_id 哨兵值：租户级覆盖（对该租户全部数字员工生效）。
+# 解析优先级：精确 profile_id > 租户级 '*' > 平台默认。
+TENANT_WIDE_PROFILE = '*'
 MONITOR_KEY = 'runner-long-running'
 SCAN_LIMIT = 1024
 
@@ -29,8 +32,11 @@ class RunnerAlertRepository:
     def threshold_in_tx(cursor, tenant_id, profile_id):
         if tenant_id is None:
             return DEFAULT_THRESHOLD_MINUTES
+        # 单条查询同时覆盖精确 profile 与租户级 '*'：ORDER BY 让精确命中优先
         cursor.execute('''SELECT threshold_minutes FROM agent_runner_alert_thresholds
-            WHERE tenant_id=%s AND profile_id=%s''', (tenant_id, profile_id))
+            WHERE tenant_id=%s AND profile_id IN (%s,%s)
+            ORDER BY (profile_id=%s) LIMIT 1''',
+            (tenant_id, profile_id, TENANT_WIDE_PROFILE, TENANT_WIDE_PROFILE))
         row = cursor.fetchone()
         return row['threshold_minutes'] if row else DEFAULT_THRESHOLD_MINUTES
 
@@ -144,7 +150,8 @@ class RunnerAlertRepository:
             cursor = conn.cursor()
             cursor.execute('''SELECT a.*, EXTRACT(EPOCH FROM
                 (COALESCE(a.ended_at,clock_timestamp())-a.started_at))::bigint AS elapsed_seconds,
-                r.input,r.checkpoint,r.load_class,r.attempt AS current_attempt FROM agent_runner_alerts a
+                r.input,r.checkpoint,r.load_class,r.attempt AS current_attempt,
+                r.session_id FROM agent_runner_alerts a
                 JOIN agent_runners r ON r.runner_id=a.runner_id WHERE a.alert_id=%s''', (alert_id,))
             row = cursor.fetchone()
         if row is None:
@@ -182,6 +189,7 @@ class RunnerAlertRepository:
                 except (OverflowError, OSError, ValueError):
                     pass
         return {'alert': _alert_view(row), 'runner': {
+            'session_id': row['session_id'],
             'request_text': (row['input'] or {}).get('text'),
             'latest_model_response': response_text,
             'latest_model_context': context,

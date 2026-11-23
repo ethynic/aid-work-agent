@@ -3,6 +3,7 @@ import { credentialGet } from '@/platform/credentialStore'
 import { installIdentityChangeHook } from '@/platform/identityHooks'
 import { installLogoutHook, type LogoutPreparation } from '@/platform/logoutHooks'
 import { getTenantScopedKey } from '@/api/tenantStorage'
+import { generateUuid } from '@/utils/uuid'
 import { notificationApi, NotificationApiError, type NotificationTarget } from './api'
 
 const BINDING_KEY = 'task-notifications:binding:v1'
@@ -34,7 +35,7 @@ function transitionActive(): boolean {
   return false
 }
 function identityTransition(): () => void {
-  const nonce = crypto.randomUUID()
+  const nonce = generateUuid()
   const write = () => localStorage.setItem(TRANSITION_KEY, JSON.stringify({ nonce, expires_at: Date.now() + TRANSITION_LIFETIME_MS }))
   write()
   // An in-flight transition renews its own lease. Closing/crashing the tab stops renewal.
@@ -294,7 +295,7 @@ export async function enableNotifications(expected: BrowserBinding | null): Prom
       recoveredVersion = targets.find(target => target.installation_ref === installation)?.binding_version
       assertContext()
     }
-    if (!installation) { installation = crypto.randomUUID(); localStorage.setItem(INSTALLATION_KEY, installation) }
+    if (!installation) { installation = generateUuid(); localStorage.setItem(INSTALLATION_KEY, installation) }
     const json = sub.toJSON()
     assertContext()
     const target = await notificationApi.saveTarget({ channel: 'web_push', provider: 'web_push', installation_ref: installation,

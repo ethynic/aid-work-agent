@@ -6,6 +6,8 @@
  * 后端模块 src/saas/api/web_c.py（设计 docs/system/web-c-channel-design.md）。
  */
 
+import { generateUuid } from '@/utils/uuid'
+
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/c/web_c`
 
 // ============== 匿名身份持久化（localStorage + cookie 双写，互为兜底） ==============
@@ -21,20 +23,9 @@ function anonCookieKey(configId: string): string {
 }
 
 function generateAnonUid(): string {
-  // crypto.randomUUID 含版本位（4）与 variant 位，匹配后端 anon_ uuid4 校验
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `anon_${crypto.randomUUID()}`
-  }
-  // 兜底：手工拼 uuid4 形态
-  const hex = '0123456789abcdef'
-  let out = ''
-  for (let i = 0; i < 36; i++) {
-    if (i === 8 || i === 13 || i === 18 || i === 23) out += '-'
-    else if (i === 14) out += '4'
-    else if (i === 19) out += hex[(Math.floor(Math.random() * 16) & 0x3) | 0x8]
-    else out += hex[Math.floor(Math.random() * 16)]
-  }
-  return `anon_${out}`
+  // generateUuid 走 RFC 4122 v4 形态（版本位/variant 位），匹配后端 anon_ uuid4 校验；
+  // 旧内核（360 极速浏览器等 Chromium <92）无 crypto.randomUUID，经工具函数兜底
+  return `anon_${generateUuid()}`
 }
 
 function readCookie(name: string): string {
