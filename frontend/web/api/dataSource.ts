@@ -209,6 +209,15 @@ export async function importTables(
 
 // ===== Upload =====
 
+export interface SheetValidation {
+  sheet_name: string
+  verdict: 'ok' | 'fixable' | 'error'
+  header_row?: number | null
+  issues: string[]
+  column_warnings: string[]
+  preview?: { columns: string[]; rows: (string | null)[][] }
+}
+
 export async function uploadExcel(file: File): Promise<{ schemas: SchemaInfo[] }> {
   const formData = new FormData()
   formData.append('file', file)
@@ -228,14 +237,91 @@ export async function uploadExcel(file: File): Promise<{ schemas: SchemaInfo[] }
 export interface UploadStreamCallbacks {
   onConnected?: (filename: string) => void
   onProgress?: (stage: string, message: string) => void
+  onValidation?: (sheets: SheetValidation[]) => void
   onSheetProgress?: (current: number, total: number, sheetName: string) => void
   onSheetDone?: (current: number, total: number, sheetName: string, tableName: string) => void
+  /** 存在可自动修复的 sheet，等待用户确认（流已结束；校验明细已在 onValidation 推送） */
+  onNeedsConfirmation?: (fileId: string, filename: string) => void
   onComplete: (schemas: SchemaInfo[]) => void
-  onError: (message: string) => void
+  onError: (message: string, validation?: { sheets: SheetValidation[] }) => void
 }
 
 /**
- * 流式上传 Excel/CSV，通过 SSE 接收解析与推断进度。
+ * 读取上传/确认 SSE 流并分发事件（uploadExcelStream 与 confirmUploadStream 共用）。
+ */
+async function consumeUploadSSE(
+  response: Response,
+  callbacks: UploadStreamCallbacks
+): Promise<void> {
+  if (!response.body) {
+    callbacks.onError('浏览器不支持流式读取')
+    return
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() || ''
+
+      for (const frame of frames) {
+        const line = frame.split('\n').find(l => l.startsWith('data: '))
+        if (!line) continue
+        const payload = line.slice('data: '.length).trim()
+        if (!payload) continue
+
+        let event: any
+        try {
+          event = JSON.parse(payload)
+        } catch {
+          continue
+        }
+
+        switch (event.type) {
+          case 'connected':
+            callbacks.onConnected?.(event.filename)
+            break
+          case 'progress':
+            callbacks.onProgress?.(event.stage, event.message)
+            break
+          case 'validation':
+            callbacks.onValidation?.(event.sheets || [])
+            break
+          case 'needs_confirmation':
+            callbacks.onNeedsConfirmation?.(event.file_id, event.filename || '')
+            return
+          case 'sheet_progress':
+            callbacks.onSheetProgress?.(event.current, event.total, event.sheet_name)
+            break
+          case 'sheet_done':
+            callbacks.onSheetDone?.(event.current, event.total, event.sheet_name, event.table_name)
+            break
+          case 'complete':
+            callbacks.onComplete(event.schemas || [])
+            return
+          case 'error':
+            callbacks.onError(event.message || '文件解析失败', event.validation)
+            return
+        }
+      }
+    }
+    // 流提前关闭且未收到 complete
+    callbacks.onError('连接中断，未收到完整结果')
+  } catch (e: any) {
+    if (e?.name === 'AbortError') return
+    callbacks.onError(e?.message || '读取流失败')
+  }
+}
+
+/**
+ * 流式上传 Excel/CSV，通过 SSE 接收校验、解析与推断进度。
  * 返回 cancel 句柄，调用方可在中途取消。
  */
 export function uploadExcelStream(
@@ -272,65 +358,58 @@ export function uploadExcelStream(
       return
     }
 
-    if (!response.body) {
-      callbacks.onError('浏览器不支持流式读取')
+    await consumeUploadSSE(response, callbacks)
+  })()
+
+  return {
+    cancel: () => {
+      try { abortController.abort() } catch {}
+    },
+  }
+}
+
+/**
+ * 用户确认修复决策后继续上传管线（规范化 -> 解析 -> schema 推断）。
+ * SSE 事件与 uploadExcelStream 一致（无 validation 阶段）。
+ */
+export function confirmUploadStream(
+  payload: {
+    file_id: string
+    sheets: { sheet_name: string; header_row: number; selected: boolean }[]
+  },
+  callbacks: UploadStreamCallbacks
+): { cancel: () => void } {
+  const abortController = new AbortController()
+
+  ;(async () => {
+    let response: Response
+    try {
+      response = await fetch(`${API_BASE}/upload/confirm`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeader(),
+        },
+        body: JSON.stringify(payload),
+        signal: abortController.signal,
+      })
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return
+      callbacks.onError(e?.message || '确认失败')
       return
     }
 
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder('utf-8')
-    let buffer = ''
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-
-        const frames = buffer.split('\n\n')
-        buffer = frames.pop() || ''
-
-        for (const frame of frames) {
-          const line = frame.split('\n').find(l => l.startsWith('data: '))
-          if (!line) continue
-          const payload = line.slice('data: '.length).trim()
-          if (!payload) continue
-
-          let event: any
-          try {
-            event = JSON.parse(payload)
-          } catch {
-            continue
-          }
-
-          switch (event.type) {
-            case 'connected':
-              callbacks.onConnected?.(event.filename)
-              break
-            case 'progress':
-              callbacks.onProgress?.(event.stage, event.message)
-              break
-            case 'sheet_progress':
-              callbacks.onSheetProgress?.(event.current, event.total, event.sheet_name)
-              break
-            case 'sheet_done':
-              callbacks.onSheetDone?.(event.current, event.total, event.sheet_name, event.table_name)
-              break
-            case 'complete':
-              callbacks.onComplete(event.schemas || [])
-              return
-            case 'error':
-              callbacks.onError(event.message || '文件解析失败')
-              return
-          }
-        }
-      }
-      // 流提前关闭且未收到 complete
-      callbacks.onError('连接中断，未收到完整结果')
-    } catch (e: any) {
-      if (e?.name === 'AbortError') return
-      callbacks.onError(e?.message || '读取流失败')
+    if (!response.ok) {
+      let msg = `确认失败 (${response.status})`
+      try {
+        const err = await response.json()
+        if (err?.error) msg = err.error
+      } catch {}
+      callbacks.onError(msg)
+      return
     }
+
+    await consumeUploadSSE(response, callbacks)
   })()
 
   return {
