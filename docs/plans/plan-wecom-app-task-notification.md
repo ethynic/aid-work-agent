@@ -22,7 +22,7 @@
 | 六轮：企微应用与通知配置合并（2026-11-15，设计 §3 决策 7 追加） | 「企业微信」应用配置加「通知用途」三模式（notify_usage），通知凭据两级回退借用 | 🔧 进行中（开发+单测完成，独立测试/CR 待走） | 详见下方「六轮」节；notifications+channels+channel_config_db+factory+api 用例 1555 过（7 失败经基线核实为 master 预存，与本轮无关）；前端 build + vitest notifications 140 全绿 |
 | 七轮：飞书通知接入（2026-11-15，设计 §3 决策 7 追加） | 飞书通知完全复刻企微租户级模式：飞书渠道通知用途三模式 + 手机号识别绑定（无 OAuth）+ FeishuAppAdapter | 🔧 进行中（开发+单测完成，独立测试/CR 待走） | 详见下方「七轮」节；notifications/channels/factory/db/api 单测全绿（channels 5 失败为宿主机预存环境项：Redis 禁用致 idempotency 2 + kf_account_referral 3，与本轮无关）；前端 build + vitest notifications 148 全绿 |
 | 八轮：钉钉通知接入（2026-11-16，设计 §3 决策 7 追加） | 钉钉通知完全复刻飞书租户级模式：钉钉渠道通知用途三模式（notify_only 需 app_key/app_secret/agent_id 三项）+ 手机号识别绑定（无 OAuth）+ DingTalkAppAdapter（asyncsend_v2 action_card） | 🔧 进行中（开发+单测完成，独立测试/CR 待走） | 详见下方「八轮」节；notifications+channel_config_db+usage_validation+factory 单测 822 全绿；前端 build + vitest notifications 157 全绿 |
-| 九轮：仅通知保存保留回调凭据 + 指引修正（2026-11-23） | 存量企微/飞书/钉钉应用改选「仅通知」保存不再清除库内回调字段，改回免重填；仅通知下接入指引去掉回调配置步骤 | ✅ 完成（2026-11-23，待合并与部署） | 详见下方「九轮」节；独立验证通过：后端 37 过、回归 927 过、前端 5 过、build 通过，审查无 P0/P1；本地真实业务库复验三类渠道回切 200 |
+| 九轮：仅通知保存保留回调凭据 + 指引修正（2026-11-23） | 存量企微/飞书/钉钉应用改选「仅通知」保存不再清除库内回调字段，改回免重填；仅通知下接入指引去掉回调配置步骤 | ✅ 完成（2026-11-23） | dd0736fc；详见下方「九轮」节；独立验证通过：后端 37 过、回归 927 过、前端 5 过、build 通过，审查无 P0/P1；本地真实业务库复验三类渠道回切 200；真机未部署 |
 
 ## 五轮：租户级配置改造（2026-11-13，设计 §3 决策 7）
 
