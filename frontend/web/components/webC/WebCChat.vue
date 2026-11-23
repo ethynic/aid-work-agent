@@ -136,6 +136,7 @@
               </svg>
             </label>
             <textarea
+              ref="inputEl"
               v-model="inputText"
               class="flex-1 resize-none border border-default rounded-xl px-3 py-2 text-sm text-default focus:outline-none focus:ring-1 focus:ring-primary-400 bg-canvas"
               :rows="1"
@@ -212,6 +213,13 @@ const streamFailed = ref(false)
 const isTerminal = ref(true)
 const streamingActive = ref(false)
 const scrollContainer = ref<HTMLElement | null>(null)
+const inputEl = ref<HTMLTextAreaElement | null>(null)
+
+/** 回焦输入框：流式期间 textarea 被 disabled 导致焦点丢失，每轮结束后自动归还 */
+async function focusInput() {
+  await nextTick()
+  inputEl.value?.focus()
+}
 
 let observeAbort = new AbortController()
 const activeRunnerId = ref('')
@@ -497,6 +505,7 @@ async function submit() {
       submitting.value = false
       streamingActive.value = false
       isTerminal.value = true
+      void focusInput()
       return
     }
     if (reply.runner_id) {
@@ -507,6 +516,7 @@ async function submit() {
       submitting.value = false
       streamingActive.value = false
       isTerminal.value = true
+      void focusInput()
     }
   } catch (e) {
     submitting.value = false
@@ -514,6 +524,7 @@ async function submit() {
     isTerminal.value = true
     streamFailed.value = !waitingText.value
     errorMessage.value = e instanceof Error ? e.message : '发送失败'
+    void focusInput()
   }
 }
 
@@ -521,6 +532,7 @@ async function cancel() {
   // 停止按钮：服务端 cancel 终止当前执行，本地复位输入状态
   const runnerId = activeRunnerId.value
   resetStreamState()
+  void focusInput()
   if (runnerId) {
     try {
       await cancelRunner(tenantId.value, configId.value, identity.value, runnerId)
@@ -656,6 +668,7 @@ async function observeRunner(runnerId: string) {
     submitting.value = false
     // 服务端权威校准（同时触发终态补写）
     await reloadMessages()
+    void focusInput()
   }
 }
 </script>
