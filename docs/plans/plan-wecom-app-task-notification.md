@@ -22,6 +22,7 @@
 | 六轮：企微应用与通知配置合并（2026-11-15，设计 §3 决策 7 追加） | 「企业微信」应用配置加「通知用途」三模式（notify_usage），通知凭据两级回退借用 | 🔧 进行中（开发+单测完成，独立测试/CR 待走） | 详见下方「六轮」节；notifications+channels+channel_config_db+factory+api 用例 1555 过（7 失败经基线核实为 master 预存，与本轮无关）；前端 build + vitest notifications 140 全绿 |
 | 七轮：飞书通知接入（2026-11-15，设计 §3 决策 7 追加） | 飞书通知完全复刻企微租户级模式：飞书渠道通知用途三模式 + 手机号识别绑定（无 OAuth）+ FeishuAppAdapter | 🔧 进行中（开发+单测完成，独立测试/CR 待走） | 详见下方「七轮」节；notifications/channels/factory/db/api 单测全绿（channels 5 失败为宿主机预存环境项：Redis 禁用致 idempotency 2 + kf_account_referral 3，与本轮无关）；前端 build + vitest notifications 148 全绿 |
 | 八轮：钉钉通知接入（2026-11-16，设计 §3 决策 7 追加） | 钉钉通知完全复刻飞书租户级模式：钉钉渠道通知用途三模式（notify_only 需 app_key/app_secret/agent_id 三项）+ 手机号识别绑定（无 OAuth）+ DingTalkAppAdapter（asyncsend_v2 action_card） | 🔧 进行中（开发+单测完成，独立测试/CR 待走） | 详见下方「八轮」节；notifications+channel_config_db+usage_validation+factory 单测 822 全绿；前端 build + vitest notifications 157 全绿 |
+| 九轮：仅通知保存保留回调凭据 + 指引修正（2026-11-23） | 存量企微/飞书/钉钉应用改选「仅通知」保存不再清除库内回调字段，改回免重填；仅通知下接入指引去掉回调配置步骤 | ✅ 完成（2026-11-23，待合并与部署） | 详见下方「九轮」节；独立验证通过：后端 37 过、回归 927 过、前端 5 过、build 通过，审查无 P0/P1；本地真实业务库复验三类渠道回切 200 |
 
 ## 五轮：租户级配置改造（2026-11-13，设计 §3 决策 7）
 
@@ -66,6 +67,14 @@
 - 注册与白名单：service.py 注册 DingTalkAppAdapter；PROVIDER_ALLOWED_EVENT_TYPES 加 'dingtalk_app'（completed/failed）；PreferenceRequest channel/provider 加 dingtalk_app；repository 增 dingtalk_bind_profile（共用 _bind_profile）。
 - 前端：NotificationSettings.vue 徽标改 x/4 可用 + 加钉钉通知行；新增 DingTalkNotifyCard.vue 行组件（逐文件对照 FeishuTaskNotifyCard 复刻改接口——手机号识别自动绑定、未命中行下方提示、suggest 失败 503 静默、解绑后不自动重识别）；ChannelConfig.vue 通知用途单选扩展到 dingtalk（notify_only 联动补填 agent_id 字段、保存剔除 token/encoding_aes_key 旧值、无回调字段需隐藏）；api/notifications.ts 补 dingtalk 绑定/偏好封装与错误码。
 - 已知边界：getbymobile 不返回姓名（绑定姓名快照恒空，设置页显示「已绑定」不带姓名）；asyncsend_v2 异步受理——errcode=0 记 accepted 不代表已送达（getsendresult 本期不查）；钉钉 userid 失效场景少，未知 errcode 统一 permanent 靠手机号重绑兜底；suggest 手机号按库内存量原样传（无 +86 规整），匹配失败提示用户核对手机号。
+
+## 九轮：仅通知保存保留回调凭据与指引修正（2026-11-23，决策 7 修复追加）
+
+- 问题：存量应用（已填回调 Token / EncodingAESKey）改选「仅通知」保存后，前端不提交表单已隐藏的回调字段，update 整体覆盖 config 把库内回调凭据清除；关掉弹窗或刷新后改回「仅智能体接入 / 智能体接入 + 通知」，回调输入框为空，保存报「缺少必填字段: token（回调Token…）」。另外仅通知下顶部「接入步骤」指引无条件显示，仍引导「将下方回调地址填入 URL 栏」，与已隐藏的回调地址区块矛盾。
+- 后端（src/saas/api/channel_config.py）：update 切到 notify_only 时，未提交的回调字段回填库内旧值（`_NOTIFY_ONLY_RETAINED_FIELDS`：wecom token/encoding_aes_key、feishu verification_token/encrypt_key、dingtalk token/encoding_aes_key）；显式提交以提交值为准，库内无旧值不补键；agent_only/both 必填校验不变。仅通知用途不注册回调链路，保留不影响运行；保留逻辑在服务端，已交付旧前端同样受益。
+- 前端（ChannelConfig.vue）：仅通知下接入指引换用 `notifyOnlySteps`（去掉回调配置步骤并说明无需配置回调地址；保留各渠道发送前提——飞书「机器人」能力并发布、成员在可用范围，钉钉「工作通知」接口权限）；保存逻辑不变（隐藏字段不提交，旧值由后端保留），相关注释同步。
+- 验证：tests/unit/api/test_channel_config_usage_validation.py 新增 6 例（先红后绿）；新增 frontend/web/__tests__/components/ChannelConfig.notifyUsage.test.ts 5 例；独立验证（子智能体）复核：后端 37 过、指定回归 927 过、前端 5 过、build 与 compileall/import 通过，变异检验确认新增用例有效，审查无 P0/P1。本地真实业务库（真实路由 + token 鉴权）复验 wecom/feishu/dingtalk 改仅通知后回调字段保留、回切 200；本地真实页面走查仅通知下指引/字段/回调地址显示与保存（仅前端，本地 API 进程为旧代码）。tests/unit/wechat_mp 与 test_kf_account_referral 的失败经基线对比为无库模式预存，与本轮无关。
+- 遗留（预存，非本轮引入）：钉钉 agent_only/both 后端仍必填 token/encoding_aes_key，而表单无这两个输入项——新建钉钉对话接入配置、以及直接以仅通知新建的钉钉配置改回对话接入，都会 400 且无处填写；需另行决策（后端必填表与表单对齐或补表单项）。
 
 ## Phase 1 — 身份绑定（设计 §4.1）
 
