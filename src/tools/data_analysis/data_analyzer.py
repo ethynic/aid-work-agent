@@ -209,14 +209,28 @@ class DataAnalyzer:
             return "csv"
 
     def _write_state(self, df: "pd.DataFrame", stem: str) -> str:
-        """DataFrame 写状态文件（parquet 优先），返回路径；不保留内存引用。"""
+        """DataFrame 写状态文件（parquet 优先，写失败降级 CSV），返回路径；不保留内存引用。"""
         os.makedirs(self.state_dir, exist_ok=True)
         engine = self._state_engine()
         path = os.path.join(self.state_dir, f"{stem}.{engine}")
         if engine == "parquet":
-            df.to_parquet(path, index=False)
-        else:
-            df.to_csv(path, index=False, encoding="utf-8-sig")
+            try:
+                df.to_parquet(path, index=False)
+                return path
+            except Exception as e:
+                # 混合列（如数字 + “—”占位符，pd.read_excel 读成 object）pyarrow 无法
+                # 推断统一列类型报 ArrowInvalid（2026-11-20 生产事故）。降级 CSV 保持
+                # object 列原值落盘——与去内存驻留（07317bc3f）之前内存中 object 列的
+                # 行为对齐；_read_state 按返回路径后缀自动选 read_csv，无需调用方感知
+                logger.opt(exception=True).warning(
+                    f"[DataAnalyzer] 状态 parquet 写入失败（列含混合类型），降级 CSV: {e}"
+                )
+                try:
+                    os.remove(path)  # 清理 to_parquet 失败残留的半截文件
+                except OSError:
+                    pass
+                path = os.path.join(self.state_dir, f"{stem}.csv")
+        df.to_csv(path, index=False, encoding="utf-8-sig")
         return path
 
     @staticmethod
