@@ -30,15 +30,21 @@ function Send-WeComClick { param($Hwnd, $ScreenX, $ScreenY)
     if ($Hwnd -ne 101) { throw 'focus reset and title selection must use the original window' }
     if ($ScreenX -eq 620 -and $ScreenY -eq 710) {
         [void]$script:ClickOrder.Add('input')
-        if (-not $script:KeepEdit) { $script:Edit = $false }
     } elseif ($ScreenX -eq 440 -and $ScreenY -eq 38) {
+        if ($script:ResetObservations -lt 3 -or $script:KeepEdit) { throw 'title must not be clicked while the old editor is visible' }
         [void]$script:ClickOrder.Add('group-title')
         $script:TitleClicks++
-        $script:Edit = $true
     } else { throw 'unexpected click location' }
 }
 function Get-WeComTitleEditWindow { param($Hwnd, $ScreenX, $ScreenY)
-    if ($script:Edit) { return [IntPtr]303 }
+    if ($script:TitleClicks -eq 0) {
+        if ($script:ClickOrder.Count -ne 1) { throw 'must click the input before waiting for the old editor to close' }
+        $script:ResetObservations++
+        if ($script:KeepEdit -or $script:ResetObservations -lt 3) { return [IntPtr]302 }
+    } else {
+        $script:OpenObservations++
+        if (-not $script:NoEditor -and $script:OpenObservations -ge 3) { return [IntPtr]303 }
+    }
     return [IntPtr]::Zero
 }
 function Send-WeComTitleDoubleClick { param($Hwnd, $ScreenX, $ScreenY)
@@ -47,6 +53,10 @@ function Send-WeComTitleDoubleClick { param($Hwnd, $ScreenX, $ScreenY)
 }
 function Send-WeComAttachChordKey { param($Hwnd, $Vk)
     $script:Chords++
+    if ($script:IsGroup) {
+        if ($Hwnd -ne 303 -or $script:OpenObservations -lt 3) { throw 'chords must target only the newly visible editor' }
+        [void]$script:ClickOrder.Add(('chord-{0:X}' -f [int]$Vk))
+    }
     if ($Vk -eq 0x43 -and -not $script:NoCopy) {
         [WeComWin32]::Text = 'Peer'
         [WeComWin32]::Owner = if ($script:RemoteTakeover) { 404 } else { 202 }
@@ -58,13 +68,14 @@ function Start-Sleep { param($Milliseconds) }
 function Throw-DriverError { param($Code, $Message) throw ('WECOMDRIVE|' + $Code + '|' + $Message) }
 function Write-DriverLog { param($Message) [void]$script:Logs.Add($Message) }
 function Assert-True($Value, [string]$Why) { if (-not $Value) { throw $Why } }
-function Run-Case([bool]$RemoteTakeover, [bool]$NoCopy, [string]$Section = 'contact', [bool]$KeepEdit = $false) {
+function Run-Case([bool]$RemoteTakeover, [bool]$NoCopy, [string]$Section = 'contact', [bool]$KeepEdit = $false, [bool]$NoEditor = $false) {
     [WeComWin32]::Sequence = 10; [WeComWin32]::Owner = 404; [WeComWin32]::Text = 'old-rich-data'
     [TitleClipboard]::Reads = 0
     $script:RemoteTakeover = $RemoteTakeover; $script:NoCopy = $NoCopy
     $script:Logs = New-Object Collections.ArrayList; $script:TitleClicks = 0; $script:Chords = 0
     $script:ClickOrder = New-Object Collections.ArrayList
-    $script:Edit = ($Section -eq 'group'); $script:KeepEdit = $KeepEdit
+    $script:IsGroup = ($Section -eq 'group'); $script:KeepEdit = $KeepEdit; $script:NoEditor = $NoEditor
+    $script:ResetObservations = 0; $script:OpenObservations = 0
     $title = $null; $failure = ''
     try { $title = Get-WeComCopiedTitle -Hwnd 101 -Section $Section -Point @{ x = 440; y = 38; input_x = 620; input_y = 710; source = 'glm' } }
     catch { $failure = $_.Exception.Message }
@@ -90,9 +101,12 @@ $r = Run-Case $false $true
 Assert-True ($r.failure -like '*title_copy_unconfirmed*' -and $r.titleClicks -eq 1 -and
     $r.chords -eq 1 -and $r.reads -eq 0) 'a copy chord without a new sequence must not prove the title'
 $r = Run-Case $false $false 'group'
-Assert-True ($r.failure -eq '' -and $r.title -ceq 'Peer' -and $r.order -ceq 'input,group-title' -and
-    $r.titleClicks -eq 1 -and $r.chords -eq 2) 'reset stale group edit before selecting and copying the actual title'
+Assert-True ($r.failure -eq '' -and $r.title -ceq 'Peer' -and $r.order -ceq 'input,group-title,chord-41,chord-43' -and
+    $r.titleClicks -eq 1 -and $r.chords -eq 2) 'wait for both delayed editor transitions and explicitly select all before copying'
 $r = Run-Case $false $false 'group' $true
 Assert-True ($r.failure -like '*title_edit_not_reset*' -and $r.order -ceq 'input' -and
     $r.chords -eq 0) 'persistent edit mode must fail without selecting or typing into a stale editor'
-Write-Output 'PS_TITLE_COPY_DIAGNOSTICS_OK cases=5'
+$r = Run-Case $false $false 'group' $false $true
+Assert-True ($r.failure -like '*title_edit_not_focused*' -and $r.order -ceq 'input,group-title' -and
+    $r.chords -eq 0) 'missing new editor must fail after one click and before any selection or copy'
+Write-Output 'PS_TITLE_COPY_DIAGNOSTICS_OK cases=6'

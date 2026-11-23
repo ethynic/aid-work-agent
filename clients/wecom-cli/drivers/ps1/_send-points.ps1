@@ -135,15 +135,23 @@ function Get-WeComTitleEditWindow([int64]$Hwnd, [int]$ScreenX, [int]$ScreenY) {
     return [IntPtr][int64]$edits[0]
 }
 
+function Wait-WeComTitleEditWindow([int64]$Hwnd, [int]$ScreenX, [int]$ScreenY, [switch]$Closed) {
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $edit = Get-WeComTitleEditWindow -Hwnd $Hwnd -ScreenX $ScreenX -ScreenY $ScreenY
+        if (($edit -eq [IntPtr]::Zero) -eq $Closed.IsPresent) { return $edit }
+        Start-Sleep -Milliseconds 40
+    } while ($clock.ElapsedMilliseconds -lt 1000)
+    if ($Closed) { throw 'title_edit_not_reset' }
+    throw 'title_edit_not_focused'
+}
+
 function Get-WeComGroupTitleEditWindow([int64]$Hwnd, [int]$ScreenX, [int]$ScreenY) {
-    $edit = Get-WeComTitleEditWindow -Hwnd $Hwnd -ScreenX $ScreenX -ScreenY $ScreenY
-    if ($edit -ne [IntPtr]::Zero) { throw 'title_edit_not_reset' }
+    # 上一步已经点击输入区，等旧编辑框退出后再点击标题。
+    [void](Wait-WeComTitleEditWindow -Hwnd $Hwnd -ScreenX $ScreenX -ScreenY $ScreenY -Closed)
     # 一次点击会从未选中态选中完整群名；重复点击可能取消全选。
     [void](Send-WeComClick -Hwnd $Hwnd -ScreenX $ScreenX -ScreenY $ScreenY)
-    Start-Sleep -Milliseconds 150
-    $edit = Get-WeComTitleEditWindow -Hwnd $Hwnd -ScreenX $ScreenX -ScreenY $ScreenY
-    if ($edit -eq [IntPtr]::Zero) { throw 'title_edit_not_focused' }
-    return $edit
+    return (Wait-WeComTitleEditWindow -Hwnd $Hwnd -ScreenX $ScreenX -ScreenY $ScreenY)
 }
 
 function Write-WeComTitleCopyTrace($Clock, [string]$Phase, [int]$MainPid) {
