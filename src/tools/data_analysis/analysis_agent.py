@@ -1465,7 +1465,8 @@ class AnalysisAgent:
                 }
                 columns_info.append(ci)
 
-            return {
+            # 值级清洗报告（如有转换/置空）随工具结果返回，供 LLM 如实交代口径
+            result = {
                 "success": True,
                 "table_id": loaded_id,
                 "table_name": table_meta.get("table_name", ""),
@@ -1475,6 +1476,14 @@ class AnalysisAgent:
                 "columns": columns_info,
                 "hint": f"表已加载，可使用 table_id '{loaded_id}' 作为 source 参数进行分析",
             }
+            loaded_meta = self.analyzer._table_meta.get(loaded_id) or {}
+            quality = loaded_meta.get("column_quality") or {}
+            if quality:
+                from src.services.data_analysis.value_cleaner import quality_summary_for_llm
+                summary = quality_summary_for_llm(quality)
+                if summary:
+                    result["column_quality_note"] = summary
+            return result
 
         except Exception as e:
             logger.error(f"load_table failed: {e}")
