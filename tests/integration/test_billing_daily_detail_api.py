@@ -900,6 +900,7 @@ class TestClientUsageRowsMerged:
 
     def test_client_rows_included_with_command_arguments(self, temp_tenant_for_detail):
         from src.saas.api import billing_balance
+        from src.db.client_binding_db import ClientUsageLogDB
         from src.db.database import get_db_connection
 
         tenant_id = temp_tenant_for_detail
@@ -916,6 +917,14 @@ class TestClientUsageRowsMerged:
                    VALUES (%s, 'boss-local-runtime', 'sess_client_1', 'boss_tool', 'success',
                            'boss_filter', 'boss-recruiting', 0.5, 0.5, %s)""",
                 (tenant_id, detail),
+            )
+            # 定时发送沿用旧 boss_tool 台账，会话和命令仍可识别真实来源。
+            ClientUsageLogDB.insert_tool_usage_row(
+                cursor,
+                tenant_id=tenant_id,
+                tool_name="wecom_message_send",
+                credit_cost=0.5,
+                session_id="wecom_scheduled_send:2",
             )
             # 遥测行 cost=0：不应并入明细
             cursor.execute(
@@ -960,11 +969,11 @@ class TestClientUsageRowsMerged:
             items = response["items"]
             client_items = [it for it in items if it.get("usage_type") == "client"]
             chat_items = [it for it in items if it.get("usage_type") == "chat"]
-            assert len(client_items) == 1, "只有 cost>0 的 client 行并入，遥测行不进"
+            assert len(client_items) == 2, "只有 cost>0 的 client 行并入，遥测行不进"
             assert len(chat_items) >= 1, "chat 行仍应返回"
             assert response["total"] == len(items)
 
-            ci = client_items[0]
+            ci = next(it for it in client_items if it["command"] == "boss_filter")
             assert ci["record_id"].startswith("client-"), "client 行 record_id 加前缀防撞 key"
             assert ci["command"] == "boss_filter"
             assert ci["source_type"] == "BOSS 工具", "boss_tool stage 应映射为中文标签"
@@ -973,6 +982,10 @@ class TestClientUsageRowsMerged:
             assert ci["user_display"] == "detail_test_u9", "无 users 行时 user_display 兜底 detail.user_id"
             assert "prompt_tokens" not in ci, "client 行不挂 token 字段"
             assert "breakdown_items" not in ci, "client 行不挂 breakdown 分项"
+            scheduled = next(it for it in client_items if it["session_id"] == "wecom_scheduled_send:2")
+            assert scheduled["command"] == "wecom_message_send"
+            assert scheduled["source_type"] == "企业微信定时发送"
+            assert scheduled["credit_cost"] == 0.5
             # chat 行仍带完整字段
             ch = chat_items[0]
             assert ch["model"] == "test-model"
