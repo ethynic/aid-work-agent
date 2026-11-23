@@ -11,8 +11,8 @@ from loguru import logger
 
 from src.channels.wecom_kf.message import markdown_to_plain_text
 from src.channels.wecom_kf.reply_format import (
-    FILE_NOTICE, REPLY_FILE_NAME, build_prefix_preview,
-    inspect_reply_markdown, map_reply_image_sources, normalize_reply_markdown, reply_plain_text,
+    FAILED_REPLY_TEXT, FILE_NOTICE, REPLY_FILE_NAME, build_prefix_preview, inspect_reply_markdown,
+    map_reply_image_sources, normalize_reply_markdown, reply_plain_text, strip_file_notice,
 )
 from src.core.storage import get_conversation_dir
 from src.services.files.download_registry import register_download_metadata
@@ -42,6 +42,16 @@ def _save_reply_file(markdown: str, *, tenant_id: str, user_id: str,
     return {"file_id": file_id, "file_name": REPLY_FILE_NAME,
             "file_size": metadata["size"], "mime_type": "text/markdown",
             "download_url": f"/api/files/{file_id}/download"}
+
+
+def _degraded_text(markdown: str, *, max_bytes: int) -> str:
+    """MD 无法交付时的降级文字：前缀投影去掉文件提示；投影为空或失败时用固定失败话术。"""
+    try:
+        text = strip_file_notice(build_prefix_preview(markdown, max_bytes=max_bytes))
+    except Exception:
+        logger.opt(exception=True).warning("[wecom_kf] 降级前缀文字生成失败，改用固定失败话术")
+        text = ""
+    return text or FAILED_REPLY_TEXT
 
 
 def _find_reply_file(files, markdown, *, tenant_id, session_id, owner_id):
@@ -197,7 +207,7 @@ async def prepare_reply(
         has_table, has_image = await asyncio.to_thread(inspect_reply_markdown, markdown)
     except Exception:
         logger.opt(exception=True).error("[wecom_kf] 完整 Markdown 格式准备失败")
-        return {"mode": "failed", "text": "完整回复文件暂时无法生成，请稍后重试。"}
+        return {"mode": "failed", "text": _degraded_text(text, max_bytes=max_bytes)}
     if not text or not (overflow or has_table or has_image):
         return {}
     delivery = {"tenant_id": tenant_id, "session_id": session_id, "owner_id": owner_id}
@@ -219,7 +229,7 @@ async def prepare_reply(
             files.append(file_info)
     except Exception:
         logger.opt(exception=True).error("[wecom_kf] 完整 Markdown 文件准备失败")
-        return {**delivery, "mode": "failed", "text": "完整回复文件暂时无法生成，请稍后重试。"}
+        return {**delivery, "mode": "failed", "text": _degraded_text(markdown, max_bytes=max_bytes)}
     delivery["file_id"] = file_info["file_id"]
     if has_image and prepare_image is not None:
         try:
@@ -234,8 +244,9 @@ async def prepare_reply(
         summary = await _model_preview(markdown, record_service=record_service, question=question)
     preview = summary
     if preview is None or len(preview.encode("utf-8")) > max_bytes:
-        # Every file-bound reply (overflow, table or image) presents the
-        # projected plain text; a bare notice remains only when it is empty.
+        # Every file-bound reply (overflow, table or image) keeps the projected
+        # plain text in channelDelivery.text; it is sent only when the MD
+        # cannot be delivered.
         preview = await asyncio.to_thread(build_prefix_preview, markdown, max_bytes=max_bytes)
     if preview.strip() == FILE_NOTICE.strip():
         mode = "notice"

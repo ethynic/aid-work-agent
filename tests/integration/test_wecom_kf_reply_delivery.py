@@ -157,8 +157,8 @@ async def test_real_route_prepares_persists_and_sends_with_verbose_disabled(full
         assert [call.kwargs['msgtype'] for call in calls] == ['text']
         assert 'channelDelivery' not in metadata
     else:
-        assert [call.kwargs['msgtype'] for call in calls] == ['text', 'file']
-        assert len(calls[0].kwargs['content']['content']) <= 500
+        assert [call.kwargs['msgtype'] for call in calls] == ['file']
+        assert len(metadata['channelDelivery']['text']) <= 500
         assert metadata['channelDelivery']['mode'] in {'prefix','notice'}
         file_id = metadata['downloadableFiles'][0]['file_id']
         md = Path(storage.hgetall('uploaded_file:' + file_id)['path']).read_text(encoding='utf-8')
@@ -167,7 +167,7 @@ async def test_real_route_prepares_persists_and_sends_with_verbose_disabled(full
         assert usage.assistant_message == full
 
 
-async def test_smaller_configured_byte_budget_still_delivers_prefix(storage):
+async def test_smaller_configured_byte_budget_sends_full_file_only(storage):
     adapter = WeComKfAdapter(corp_id='test', secret='test', max_bytes=1024)
     adapter._tenant_id = 'tenant_a'
     adapter.current_open_kfid = 'kf_a'
@@ -181,8 +181,8 @@ async def test_smaller_configured_byte_budget_still_delivers_prefix(storage):
         content={'text':full, '_kf_delivery':delivery, '_kf_reply_budget':WeComKfReplyBudget()},
         downloadable_files=[DownloadableFileInfo(**file) for file in files])
     assert await adapter.send_message(response)
-    assert [call.kwargs['msgtype'] for call in adapter.api_client.send_msg.await_args_list] == ['text','file']
-    assert len(adapter.api_client.send_msg.await_args_list[0].kwargs['content']['content'].encode('utf-8')) <= 1024
+    assert [call.kwargs['msgtype'] for call in adapter.api_client.send_msg.await_args_list] == ['file']
+    assert len(delivery['text'].encode('utf-8')) <= 1024
 
 
 async def test_real_llm_gateway_physical_call_sets_usage_once(storage, monkeypatch):
