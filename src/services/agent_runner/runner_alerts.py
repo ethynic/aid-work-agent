@@ -11,6 +11,9 @@ from .presentation import PLUGIN_TOOL_NAMES, redact_runtime_plugin_calls
 
 
 DEFAULT_THRESHOLD_MINUTES = 30
+# profile_id 哨兵值：租户级覆盖（对该租户全部数字员工生效）。
+# 解析优先级：精确 profile_id > 租户级 '*' > 平台默认。
+TENANT_WIDE_PROFILE = '*'
 MONITOR_KEY = 'runner-long-running'
 SCAN_LIMIT = 1024
 
@@ -29,8 +32,11 @@ class RunnerAlertRepository:
     def threshold_in_tx(cursor, tenant_id, profile_id):
         if tenant_id is None:
             return DEFAULT_THRESHOLD_MINUTES
+        # 单条查询同时覆盖精确 profile 与租户级 '*'：ORDER BY 让精确命中优先
         cursor.execute('''SELECT threshold_minutes FROM agent_runner_alert_thresholds
-            WHERE tenant_id=%s AND profile_id=%s''', (tenant_id, profile_id))
+            WHERE tenant_id=%s AND profile_id IN (%s,%s)
+            ORDER BY (profile_id=%s) LIMIT 1''',
+            (tenant_id, profile_id, TENANT_WIDE_PROFILE, TENANT_WIDE_PROFILE))
         row = cursor.fetchone()
         return row['threshold_minutes'] if row else DEFAULT_THRESHOLD_MINUTES
 

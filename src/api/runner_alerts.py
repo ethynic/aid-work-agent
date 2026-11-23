@@ -17,7 +17,8 @@ router = APIRouter(prefix='/api/platform', tags=['Runner 运行告警'])
 class ThresholdUpdate(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
     tenant_id: str = Field(min_length=1, max_length=128)
-    profile_id: str = Field(min_length=1, max_length=128)
+    # 允许空串：空 = 租户级覆盖（对该租户全部数字员工生效），规范化为 '*'
+    profile_id: str = Field(max_length=128)
     minutes: int = Field(ge=1)
 
 
@@ -109,9 +110,11 @@ async def put_runner_alert_threshold(request: Request):
     except (ValidationError, ValueError):
         _invalid_request()
     _bounded_id(body.tenant_id)
-    _bounded_id(body.profile_id)
+    profile_id = '*' if not body.profile_id.strip() else body.profile_id.strip()
+    if profile_id != '*':
+        _bounded_id(profile_id)
     await _read(RunnerAlertRepository().set_threshold, body.tenant_id,
-                body.profile_id, body.minutes)
+                profile_id, body.minutes)
     return {'success': True}
 
 
@@ -119,6 +122,9 @@ async def put_runner_alert_threshold(request: Request):
 async def delete_runner_alert_threshold(request: Request):
     await _require_platform_context(request)
     tenant_id = _bounded_id(request.query_params.get('tenant_id'))
-    profile_id = _bounded_id(request.query_params.get('profile_id'))
+    raw_profile_id = request.query_params.get('profile_id') or ''
+    profile_id = '*' if not raw_profile_id.strip() else raw_profile_id.strip()
+    if profile_id != '*':
+        _bounded_id(profile_id)
     await _read(RunnerAlertRepository().delete_threshold, tenant_id, profile_id)
     return {'success': True}

@@ -45,7 +45,7 @@
     <!-- 告警配置（平台管理员运维入口，默认折叠） -->
     <div v-if="showConfig" class="grid grid-cols-1 xl:grid-cols-2 gap-4">
       <BaseCard title="执行时长阈值">
-        <p class="text-sm text-muted mb-4">平台默认 {{ defaultMinutes }} 分钟；租户与数字员工覆盖阈值在下一次扫描时生效。</p>
+        <p class="text-sm text-muted mb-4">平台默认 {{ defaultMinutes }} 分钟；覆盖阈值在下一次扫描时生效。数字员工 ID 留空 = 对该租户全部数字员工生效（优先级：数字员工 &gt; 租户级 &gt; 平台默认）。</p>
         <p v-if="thresholdError" role="alert" class="text-sm text-danger-700 mb-3">{{ thresholdError }}</p>
         <form class="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end mb-4" @submit.prevent="saveThreshold">
           <label class="form-field sm:col-span-2">
@@ -53,8 +53,8 @@
             <BaseInput v-model="thresholdTenant" required placeholder="租户 ID" />
           </label>
           <label class="form-field">
-            <span class="form-label">数字员工 ID</span>
-            <BaseInput v-model="thresholdProfile" required placeholder="profile_id" />
+            <span class="form-label">数字员工 ID（可选）</span>
+            <BaseInput v-model="thresholdProfile" placeholder="留空 = 全部数字员工" />
           </label>
           <label class="form-field">
             <span class="form-label">分钟</span>
@@ -67,7 +67,7 @@
         <div class="table-scroll-wrapper">
           <BaseTable :columns="thresholdColumns" :data="thresholdRows" row-key="key" table-fixed>
             <template #tenant_id="{ row }"><span class="break-all">{{ row.tenant_id }}</span></template>
-            <template #profile_id="{ row }"><span class="break-all">{{ row.profile_id }}</span></template>
+            <template #profile_id="{ row }"><span class="break-all">{{ displayThresholdProfile(row.profile_id) }}</span></template>
             <template #actions="{ row }"><BaseButton intent="danger-ghost" :disabled="savingThreshold" @click="removeThreshold(row as RunnerAlertThreshold)">恢复默认</BaseButton></template>
             <template #empty>{{ loadingSettings ? '加载中…' : '暂无覆盖阈值' }}</template>
           </BaseTable>
@@ -179,6 +179,8 @@ function formatTime(value: string | null | undefined) { return value ? formatDat
 function formatDuration(seconds: number) { return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` }
 function displayContext(value: unknown) { return value == null ? '暂无已保存内容' : typeof value === 'string' ? value : JSON.stringify(value, null, 2) }
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : '请求失败，请稍后重试' }
+// 哨兵值 '*' 表示租户级覆盖（对该租户全部数字员工生效）
+function displayThresholdProfile(profileId: string) { return profileId === '*' ? '全部（租户级）' : profileId }
 
 async function loadAlerts() {
   loading.value = true
@@ -246,14 +248,15 @@ async function loadThresholds() {
 }
 async function saveThreshold() {
   const minutes = Number(thresholdMinutes.value)
-  if (!thresholdTenant.value.trim() || !thresholdProfile.value.trim() || !Number.isInteger(minutes) || minutes < 1) {
-    thresholdError.value = '请填写租户 ID、数字员工 ID 和正整数分钟数。'
+  const profileId = thresholdProfile.value.trim()
+  if (!thresholdTenant.value.trim() || !Number.isInteger(minutes) || minutes < 1) {
+    thresholdError.value = '请填写租户 ID 和正整数分钟数（数字员工 ID 留空即对该租户全部数字员工生效）。'
     return
   }
   savingThreshold.value = true
   thresholdError.value = ''
   try {
-    await runnerAlertsAPI.saveThreshold({ tenant_id: thresholdTenant.value.trim(), profile_id: thresholdProfile.value.trim(), minutes })
+    await runnerAlertsAPI.saveThreshold({ tenant_id: thresholdTenant.value.trim(), profile_id: profileId, minutes })
     toast.success('阈值已保存')
     await loadThresholds()
   } catch (error) { thresholdError.value = errorMessage(error) }

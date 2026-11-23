@@ -82,12 +82,31 @@ def test_threshold_override_is_read_after_runner_lock():
     assert connection.committed is False
 
 
+def test_tenant_wide_threshold_fallback_applies_to_all_profiles():
+    """精确 profile 未命中时，同一条查询回退租户级 '*' 覆盖。"""
+    started = datetime(2026, 11, 6, tzinfo=timezone.utc)
+    connection = Connection([{'runner_id': 'r', 'attempt': 2, 'status': 'running',
+                              'tenant_id': 't', 'profile_id': 'p',
+                              'execution_started_at': started,
+                              'database_now': started + timedelta(minutes=20)},
+                             {'threshold_minutes': 25}])
+    repository = RunnerAlertRepository(lambda: connection)
+    assert repository.inspect_candidate({'runner_id': 'r', 'attempt': 2,
+                                         'execution_started_at': started}) is False
+    assert len(connection.statements) == 2
+    assert "profile_id IN (%s,%s)" in connection.statements[1][0]
+    assert "ORDER BY (profile_id=%s)" in connection.statements[1][0]
+    assert connection.statements[1][1] == ('t', 'p', '*', '*')
+    assert connection.committed is False
+
+
 def test_alert_and_notification_share_the_same_commit(monkeypatch):
     from src.notifications import producer
     started = datetime(2026, 11, 6, tzinfo=timezone.utc)
     runner = {'runner_id': 'r', 'attempt': 2, 'status': 'running',
               'tenant_id': 't', 'profile_id': 'p', 'execution_started_at': started,
               'database_now': started + timedelta(minutes=31)}
+    # 第二个 None：阈值（精确与租户级 '*' 均未命中）
     connection = Connection([runner, None, {'alert_id': 'a', 'notification_ref': None}])
     calls = []
     monkeypatch.setattr(producer, 'publish_platform_runner_alert_in_tx',
