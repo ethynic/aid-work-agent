@@ -58,6 +58,10 @@ async def get_email_settings(current_user: dict = Depends(get_current_user)):
             "imap_server": config["imap_server"],
             "imap_port": config["imap_port"],
             "imap_encryption": config.get("imap_encryption", "ssl"),
+            "updated_at": (
+                config["updated_at"].isoformat()
+                if config.get("updated_at") else None
+            ),
         }
 
         return {"success": True, "data": safe_config, "bound": True}
@@ -115,6 +119,7 @@ async def save_email_settings(
             return {
                 "success": False,
                 "error": f"测试邮件发送失败: {error}",
+                "error_code": test_result.get("error_code"),
             }
 
         # 3. 测试成功，保存到数据库

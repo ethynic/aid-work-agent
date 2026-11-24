@@ -99,7 +99,7 @@ def resolve_mailbox_or_die():
     cfg = resolve_mailbox()
     if cfg is None:
         print("ERROR: 尚未配置发件邮箱，无法发送邮件。")
-        print("  请在「邮箱设置」中配置你的个人邮箱；")
+        print("  请在「连接中心 → 连接邮箱」中连接你的个人邮箱；")
         print("  或联系租户管理员在企业设置页配置租户邮箱。")
         sys.exit(3)
     return cfg

@@ -189,14 +189,14 @@ def imap_connect(mailbox):
     host = mailbox.get("imap_server")
     if not host:
         print("ERROR: 邮箱配置缺少 IMAP 服务器信息，无法监控回复。"
-              "请到「邮箱设置」检查 IMAP 配置。")
+              "请到「连接中心 → 连接邮箱」重新连接并检查 IMAP 配置。")
         sys.exit(4)
     port = int(mailbox.get("imap_port") or 993)
     enc = (mailbox.get("imap_encryption") or "ssl").strip().lower()
     user = mailbox.get("smtp_user") or mailbox["email_address"]
     password = mailbox.get("smtp_password") or ""
     if not password:
-        print("ERROR: 邮箱配置缺少密码，请到「邮箱设置」重新保存。")
+        print("ERROR: 邮箱配置缺少密码，请到「连接中心 → 连接邮箱」重新连接。")
         sys.exit(4)
     if enc == "ssl":
         mail = imaplib.IMAP4_SSL(host, port, timeout=30)

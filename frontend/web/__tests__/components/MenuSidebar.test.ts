@@ -660,6 +660,35 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(flyoutText).not.toContain('渠道配置')
   })
 
+  it('连接中心：普通租户用户可见「连接邮箱」，点击跳转 /connections/email', async () => {
+    // 普通用户（非管理员）
+    routeState.path = '/t/test-tenant/chat'
+    tenantIsLoggedIn.value = true
+    tenantAdmin.value = { username: 'user1', role: 'user' }
+    tenant.value = { company_name: '测试租户' }
+
+    const wrapper = mountAndTrack()
+    await flushPromises()
+
+    const trigger = findButtonByText(wrapper, '连接中心')
+    expect(trigger).toBeTruthy()
+    await trigger.trigger('mouseenter')
+    await flushPromises()
+
+    const flyout = findFlyout()
+    expect(flyout).not.toBeNull()
+    const item = Array.from(flyout!.querySelectorAll('button'))
+      .find(b => b.textContent?.trim() === '连接邮箱')
+    expect(item).toBeTruthy()
+
+    item!.click()
+    await nextTick()
+    await flushPromises()
+
+    expect(routerPush).toHaveBeenLastCalledWith('/t/test-tenant/connections/email')
+    expect(findFlyout()).toBeNull()
+  })
+
   it('连接中心：管理员子菜单包含配置入口和企业微信工作台', async () => {
     const wrapper = mountTenantSidebar()
     await flushPromises()

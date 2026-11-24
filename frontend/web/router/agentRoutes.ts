@@ -18,6 +18,7 @@ export const agentRoutes: RouteRecordRaw[] = [
       { path: 'knowledge/tdoc-imports', name: 'tenant-knowledge-tdoc-imports', component: () => import('@/components/knowledge/TencentDocsImport.vue') },
       { path: 'connections', name: 'tenant-connections', component: () => import('@/components/connections/ConnectionCenter.vue') },
       { path: 'connections/external-systems', name: 'tenant-external-systems', component: () => import('@/components/connections/ExternalSystems.vue') },
+      { path: 'connections/email', name: 'tenant-connect-mailbox', component: () => import('@/components/connections/ConnectMailbox.vue') },
       { path: 'channels', name: 'tenant-channels', component: () => import('@/components/saas/ChannelConfig.vue') },
       { path: 'wechat-mp', name: 'tenant-wechat-mp', component: () => import('@/components/saas/WechatMpContent.vue') },
       { path: 'hongtao-shop', name: 'tenant-hongtao-shop', component: () => import('@/components/saas/HongtaoShopSync.vue') },

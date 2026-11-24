@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>连接邮箱 · 交互设计稿（待确认）</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ============================================================
+     原型导航条：仅设计稿使用，不属于产品界面
+     ============================================================ -->
+<header class="proto-bar" id="proto-bar">
+  <div class="proto-title">
+    <span class="proto-tag">交互设计稿</span>
+    <strong>连接邮箱（连接中心）</strong>
+    <span class="proto-state">待确认</span>
+  </div>
+
+  <div class="proto-group" role="group" aria-label="场景">
+    <span class="proto-label">场景</span>
+    <button class="chip" data-scene="entry">入口 · 连接中心菜单</button>
+    <button class="chip" data-scene="empty">未连接</button>
+    <button class="chip" data-scene="connected">已连接</button>
+    <button class="chip" data-scene="replace">更换邮箱</button>
+    <button class="chip" data-scene="reconnect">重新连接</button>
+    <button class="chip" data-scene="disconnect">断开确认</button>
+    <button class="chip" data-scene="error">加载失败</button>
+    <span class="proto-label">个人邮箱</span>
+    <button class="chip" data-scene="qq">连接 · QQ邮箱</button>
+    <button class="chip" data-scene="qq-help">QQ · 获取授权码</button>
+    <button class="chip" data-scene="163">连接 · 163邮箱</button>
+    <button class="chip" data-scene="invalid">表单校验</button>
+    <button class="chip" data-scene="connecting">连接中</button>
+    <button class="chip" data-scene="failed">连接失败</button>
+    <span class="proto-label">企业邮箱</span>
+    <button class="chip" data-scene="exmail">连接 · 腾讯企业邮箱</button>
+    <button class="chip" data-scene="exmail-help">腾讯 · 怎么填写和开通</button>
+    <button class="chip" data-scene="exmail-failed">腾讯 · 连接失败</button>
+    <button class="chip" data-scene="qiye">连接 · 网易企业邮箱</button>
+    <button class="chip" data-scene="qiye-help">网易 · 怎么填写和开通</button>
+    <button class="chip" data-scene="qiye-failed">网易 · 连接失败</button>
+    <button class="chip" data-scene="custom">自定义邮箱</button>
+    <button class="chip" data-scene="custom-advanced">自定义 · 高级设置</button>
+  </div>
+
+  <div class="proto-group" role="group" aria-label="界面宽度">
+    <span class="proto-label">宽度</span>
+    <button class="chip" data-width="1440">1440</button>
+    <button class="chip" data-width="1280">1280</button>
+    <button class="chip" data-width="1024">1024</button>
+    <button class="chip" data-width="768">768</button>
+    <button class="chip" data-width="390">390</button>
+    <button class="chip" data-width="auto">自适应</button>
+  </div>
+
+  <div class="proto-group">
+    <button class="chip" id="btn-notes" aria-pressed="false">显示设计说明</button>
+  </div>
+</header>
+
+<div class="stage">
+  <!-- 模拟产品界面：宽度由导航条控制，浮层都限制在这一区域内 -->
+  <div class="frame is-auto" id="frame">
+
+    <div class="app" id="app">
+      <aside class="sidebar" id="sidebar" aria-label="侧边栏">
+        <div class="sidebar-brand">
+          <div class="brand-logo" data-icon="monitor"></div>
+          <h2 class="sidebar-title">智能办公助手</h2>
+          <button type="button" class="icon-btn icon-btn-sm" id="btn-collapse" title="收起侧边栏" aria-label="收起侧边栏" data-icon="collapse"></button>
+        </div>
+
+        <div class="sidebar-scroll">
+          <div class="sidebar-nav">
+            <button type="button" class="nav-new"><span data-icon="plus"></span><span>新会话</span></button>
+            <button type="button" class="nav-item">
+              <span class="nav-label"><span data-icon="grid"></span><span>我的数字员工</span></span>
+            </button>
+            <div class="nav-item is-static nav-flyout">
+              <span class="nav-label"><span data-icon="chart"></span><span>经验中心</span></span><span class="chev" data-icon="chevRight"></span>
+            </div>
+            <div class="nav-item is-static nav-flyout">
+              <span class="nav-label"><span data-icon="book"></span><span>知识中心</span></span><span class="chev" data-icon="chevRight"></span>
+            </div>
+            <button type="button" class="nav-item is-active nav-flyout" id="connection-trigger" aria-expanded="false" aria-haspopup="true" data-note="1">
+              <span class="nav-label"><span data-icon="plug"></span><span>连接中心</span></span><span class="chev" data-icon="chevRight"></span>
+            </button>
+            <div class="nav-item is-static nav-flyout">
+              <span class="nav-label"><span data-icon="sliders"></span><span>管理菜单</span></span><span class="chev" data-icon="chevRight"></span>
+            </div>
+          </div>
+
+          <div class="sidebar-tabs" aria-hidden="true"><span class="is-active">最近</span><span>定时任务</span></div>
+          <div class="session-list" aria-hidden="true">
+            <div class="session-row"><span>第三季度报价方案</span><span data-icon="chat"></span></div>
+            <div class="session-row"><span>华东区客户跟进周报</span><span data-icon="chat"></span></div>
+            <div class="session-row"><span>整理昨天的会议纪要</span><span data-icon="chat"></span></div>
+          </div>
+        </div>
+
+        <div class="sidebar-user"><span class="avatar">张</span><span class="user-name">张伟</span><span data-icon="dots"></span></div>
+      </aside>
+      <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
+
+      <!-- 连接中心子菜单浮层（沿用现有菜单位置，「连接邮箱」为新增项） -->
+      <div class="flyout" id="flyout-connection" aria-label="连接中心" hidden>
+        <button type="button" class="flyout-item"><span data-icon="plug"></span><span>API配置</span></button>
+        <button type="button" class="flyout-item"><span data-icon="signal"></span><span>渠道配置</span></button>
+        <button type="button" class="flyout-item"><span data-icon="doc"></span><span>公众号内容</span></button>
+        <button type="button" class="flyout-item"><span data-icon="monitor"></span><span>本地工具</span></button>
+        <button type="button" class="flyout-item"><span data-icon="bot"></span><span>企业微信Agent</span></button>
+        <button type="button" class="flyout-item"><span data-icon="chat"></span><span>微信 Agent</span></button>
+        <button type="button" class="flyout-item"><span data-icon="link"></span><span>外部系统</span></button>
+        <button type="button" class="flyout-item is-active"><span data-icon="mail"></span><span>连接邮箱</span><span class="proto-flag">新增</span></button>
+      </div>
+
+      <div class="main">
+        <header class="app-header">
+          <button type="button" class="icon-btn" id="btn-sidebar" title="切换侧边栏" aria-label="切换侧边栏" data-icon="menu"></button>
+          <h1 class="app-title">连接邮箱</h1>
+          <div class="header-actions">
+            <span class="operator-chip"><span class="operator-avatar">张</span><span>张伟</span></span>
+          </div>
+        </header>
+
+        <main class="page" id="page"></main>
+      </div>
+    </div>
+
+    <!-- 浮层：连接邮箱弹窗 -->
+    <div class="overlay" id="connect-overlay" hidden>
+      <div class="modal" id="connect-modal" role="dialog" aria-modal="true" aria-labelledby="connect-title" tabindex="-1">
+        <div class="modal-header">
+          <h3 class="modal-title" id="connect-title"><span id="connect-title-icon"></span><span id="connect-title-text"></span></h3>
+          <button type="button" class="modal-close" id="connect-close" aria-label="关闭" data-icon="close"></button>
+        </div>
+        <form class="modal-form" id="connect-form" novalidate>
+          <div class="modal-body" id="connect-body"></div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="connect-cancel">取消</button>
+            <button type="submit" class="btn btn-primary" id="connect-submit"><span class="spinner" id="connect-spinner" hidden></span><span id="connect-submit-text">连接</span></button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 浮层：场景提示、设计说明（仅设计稿使用） -->
+    <div class="scene-hint" id="scene-hint" hidden></div>
+    <aside class="notes" id="notes" aria-label="设计说明" hidden></aside>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

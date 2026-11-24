@@ -36,6 +36,7 @@
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
 | 20261124-1600 | 租户环境变量按智能体隔离（external_push 串推修复） | 🔧 部分完成（代码+单测完成待部署） | 去除「租户任意智能体兜底」，env 仅按智能体（副本继承父定义）精确读取，未配置即放弃推送；根因三 trace 串推 qbweb。 | — | — |
+| 20261124-1359 | 连接中心 · 连接邮箱（个人与企业邮箱品牌快速连接） | ✅ 已完成开发（已合并 master，待 agent2 验证） | 个人邮箱配置搬到连接中心，QQ、163、腾讯和网易企业邮箱快速连接，Outlook、iCloud 预留。 | [设计](system/design-connect-mailbox-design.md) / [交互设计稿](prototypes/connect-mailbox/index.html) | [计划](plans/plan-connect-mailbox.md) |
 | 20261118-1130 | 教程文档中心（docs/guides 集中管理 + Portal 使用教程页） | 🔧 部分完成 | 29 篇教程/手册物理迁移到 docs/guides/ 四分类（deployment/channels/clients/development），全仓引用更新；Portal 新增 /portal/guides 页：自动解析文档目录树+文档内 TOC，复用 marked 渲染栈；后端 catalog/doc API 平台管理员鉴权+.dockerignore 白名单。遗留：portal 登录真实页面冒烟待联调环境。 | [设计](design/guides-center/guides-center-design.md) | [计划](plans/plan-guides-center.md) |
 | 20261117-1600 | 就业咨询智能体数据源同步（聊易就业+水城创业网） | 🔧 部分完成（P1+P2 开发完成待真机验收；P3 为管理员配置与验收无代码） | 宏陶模式两 module（lyjy_employment+sccy_policy）纯知识库路线：六分类映射、目录全量+内容增量双层 run、deadline→expires_at、岗位电话可给/求职者 PII 零同步、portal 开通+租户配频率、iframe 区域匹配。 | [调研](research/employment-agent-db-sync-research.md) | [计划](plans/plan-employment-kb-sync.md) |
 | 20261116-1430 | 官网客服渠道（web_c） | 🔧 部分完成（11-20 留资通知补齐：渠道配置加留资归属员工+通知规则账号层支持官网渠道条目，2d8daf5a 已推送待部署；11-19 修 ask_user 停车输入卡死+中途反问落库+接待页按会话拆行+uid_ 徽标误标匿名四问题，另 demo 页/iframe 嵌入片段手机端适配 083202c4，均待部署验收） | C 端免登录聊天渠道：签名/匿名双身份、SSE 透传流式、附件上传与代理下载、留资/防滥用/计费接入；租户侧「官网接待客户」查看页。uid 模式额外会话 chat_id 改 NULL+metadata 标记（聊易生产撞线）；单测/SQL 集成回归通过。 | [设计](system/web-c-channel-design.md) | — |

@@ -311,7 +311,7 @@ def resolve_email_credentials():
         raise ValueError("邮件入口缺少 AID_USER_ID 环境变量（应由 skill_executor 注入）")
     user_email = EmailCredentialDB.get_user_email_model(user_id)
     if not user_email:
-        raise ValueError("当前用户未绑定邮箱，请先在设置中绑定邮箱")
+        raise ValueError("当前用户未绑定邮箱，请先在「连接中心 → 连接邮箱」中连接邮箱")
     return user_email
 
 
