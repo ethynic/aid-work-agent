@@ -304,7 +304,7 @@ def load_sso_configs(tenant_id: str) -> List[Dict[str, Any]]:
         cfg = load_sso_config(
             tenant_id,
             name,
-            env_vars=env_map.get(name, env_map.get("*", {})),
+            env_vars=env_map.get(name, {}),
             allowed_skills=skills_map.get(name, []),
         )
         if cfg is None:
@@ -417,7 +417,13 @@ def resolve_base_agent_id(tenant_id: str, subagent_name: str) -> str:
 
 
 def load_tenant_env_vars(tenant_id: str, subagent_name: str = "") -> Dict[str, str]:
-    """租户环境变量：子智能体精确 -> 租户任意智能体兜底（忽略空值）"""
+    """租户环境变量：仅按子智能体精确读取（忽略空值），无租户级兜底
+
+    2026-11-24 定版：环境变量按智能体隔离，不再用租户内其他智能体的配置
+    兜底——未配置即未配置（副本实例经 resolve_base_agent_id 继承父定义的
+    配置）。此前「租户任意智能体兜底」会把 A 智能体的凭证借给同租户所有
+    未配置的智能体，导致对话内容推到错误的外部系统。
+    """
     db_tid = db_tenant_id(tenant_id)
     base_name = resolve_base_agent_id(tenant_id, subagent_name) if subagent_name else ""
     env_vars: Dict[str, str] = {}
@@ -428,42 +434,30 @@ def load_tenant_env_vars(tenant_id: str, subagent_name: str = "") -> Dict[str, s
             for var in SubagentEnvVarDB.get_vars(db_tid, base_name):
                 if var.get("var_name") and var.get("var_value"):
                     env_vars[var["var_name"]] = var["var_value"]
-        for var in SubagentEnvVarDB.get_all_vars_for_tenant(db_tid):
-            name = var.get("var_name")
-            if name and var.get("var_value") and name not in env_vars:
-                env_vars[name] = var["var_value"]
     except Exception as e:
         logger.warning(f"[tenant_api_doc] 读取租户环境变量失败 tenant={tenant_id}: {e}")
     return env_vars
 
 
 def load_tenant_env_vars_map(tenant_id: str) -> Dict[str, Dict[str, str]]:
-    """一次查询租户全部环境变量，按子智能体分组（结果含 `*` 键为租户级兜底）
+    """一次查询租户全部环境变量，按子智能体分组（智能体隔离，无租户级兜底）
 
-    语义与 load_tenant_env_vars 一致：同一变量子智能体精确配置优先，缺失的用
-    租户任意智能体配置兜底。列表场景批量预取，避免逐智能体 N+1 查询。
+    语义与 load_tenant_env_vars 一致：每个智能体只用自己（或父定义）的配置，
+    不再合并租户级 `*` 兜底。列表场景批量预取，避免逐智能体 N+1 查询。
     """
     grouped: Dict[str, Dict[str, str]] = {}
-    tenant_wide: Dict[str, str] = {}
     try:
         from src.db.subagent_env_var import SubagentEnvVarDB
 
         for var in SubagentEnvVarDB.get_all_vars_for_tenant(db_tenant_id(tenant_id)):
             name = var.get("var_name")
             value = var.get("var_value")
-            if not name or not value:
-                continue
             agent = var.get("subagent_name") or ""
-            if agent:
-                grouped.setdefault(agent, {})[name] = value
-            tenant_wide.setdefault(name, value)
+            if not name or not value or not agent:
+                continue
+            grouped.setdefault(agent, {})[name] = value
     except Exception as e:
         logger.warning(f"[tenant_api_doc] 读取租户环境变量失败 tenant={tenant_id}: {e}")
-    for agent, exact in grouped.items():
-        merged = dict(tenant_wide)
-        merged.update(exact)
-        grouped[agent] = merged
-    grouped["*"] = tenant_wide
     return grouped
 
 
@@ -485,7 +479,8 @@ def render_doc_placeholders(
     if not doc_text or "${" not in doc_text:
         return doc_text
 
-    # 租户级环境变量（subagent_env_vars）：子智能体精确 -> 租户任意智能体兜底。
+    # 租户级环境变量（subagent_env_vars）：仅按子智能体（副本解析为父定义名）
+    # 精确读取，无租户级兜底（2026-11-24 按智能体隔离定版）。
     # recap 等后台任务无请求上下文（env_vars 不注入 os.environ），必须按 tenant 显式查库
     if env_vars is None:
         env_vars = load_tenant_env_vars(tenant_id, subagent_name)

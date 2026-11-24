@@ -16,6 +16,7 @@ from src.services.tenant_api_doc import (
     resolve_doc_text,
     resolve_base_agent_id,
     load_tenant_env_vars,
+    load_tenant_env_vars_map,
     render_doc_placeholders,
     find_unresolved_placeholders,
     db_tenant_id,
@@ -165,7 +166,7 @@ class TestDocScan:
         )
         monkeypatch.setattr(
             "src.services.tenant_api_doc.load_tenant_env_vars_map",
-            lambda tid: {"*": {}},
+            lambda tid: {},
         )
         # 订阅读取返回 None（fail-open）：既有用例保持未过滤语义，过滤行为单独测
         monkeypatch.setattr(
@@ -535,6 +536,38 @@ class TestRenderDocPlaceholders:
         assert "erp10607.aidingyi.cn" in rendered
         assert find_unresolved_placeholders(rendered) == []
 
+    def test_no_tenant_wide_fallback_across_agents(self):
+        """2026-11-24 定版：环境变量按智能体隔离，同租户其他智能体的配置不再兜底
+
+        缺陷背景：travel-consultant 配置的 APP_ID/AGENT_TOKEN 被同租户未配置
+        的 sales-assistant-v2/副本实例借用，对话内容全部推到旅游咨询顾问的
+        qbweb 应用（tr_runner_b73af3e8 等 3 条 trace）。
+        """
+        mock_db = MagicMock()
+        mock_db.get_vars.return_value = []  # 当前智能体未配置
+        mock_db.get_all_vars_for_tenant.return_value = [
+            {"var_name": "APP_ID", "var_value": "10607", "subagent_name": "travel-consultant"},
+            {"var_name": "AGENT_TOKEN", "var_value": "secret-agent", "subagent_name": "travel-consultant"},
+        ]
+        with patch("src.db.subagent_env_var.SubagentEnvVarDB", mock_db):
+            env = load_tenant_env_vars("tenant_x", "sales-assistant-v2")
+            rendered = render_doc_placeholders(_TEMPLATE, "tenant_x", "sales-assistant-v2")
+        assert env == {}
+        assert "${APP_ID}" in rendered
+        assert "10607" not in rendered
+
+    def test_env_vars_map_isolates_by_agent(self):
+        """load_tenant_env_vars_map 按智能体分组，无 `*` 租户级兜底键"""
+        mock_db = MagicMock()
+        mock_db.get_all_vars_for_tenant.return_value = [
+            {"var_name": "APP_ID", "var_value": "10607", "subagent_name": "travel-consultant"},
+            {"var_name": "AGENT_TOKEN", "var_value": "secret", "subagent_name": ""},
+        ]
+        with patch("src.db.subagent_env_var.SubagentEnvVarDB", mock_db):
+            grouped = load_tenant_env_vars_map("tenant_x")
+        assert "*" not in grouped
+        assert grouped == {"travel-consultant": {"APP_ID": "10607"}}
+
 
 class TestDbTenantId:
     def test_adds_missing_prefix(self):
@@ -587,7 +620,7 @@ class TestLoadSsoConfigWithTemplate:
              patch("src.services.tenant_api_doc._allowed_skills_map",
                    side_effect=lambda names: {n: [] for n in names}), \
              patch("src.services.tenant_api_doc.load_tenant_env_vars_map",
-                   return_value={"*": {}}), \
+                   return_value={}), \
              patch("src.services.tenant_api_doc.load_sso_config", side_effect=[cfg, None]) as m_cfg:
             configs = load_sso_configs("tenant_x")
         assert configs == [cfg]
@@ -600,7 +633,7 @@ class TestLoadSsoConfigWithTemplate:
              patch("src.services.tenant_api_doc._allowed_skills_map",
                    side_effect=lambda names: {n: [] for n in names}), \
              patch("src.services.tenant_api_doc.load_tenant_env_vars_map",
-                   return_value={"*": {}}), \
+                   return_value={}), \
              patch("src.services.tenant_api_doc.load_rendered_doc",
                    return_value=_RENDERED_TEMPLATE):
             configs = load_sso_configs("tenant_x")
@@ -622,7 +655,7 @@ class TestLoadSsoConfigWithTemplate:
              patch("src.services.tenant_api_doc._allowed_skills_map",
                    side_effect=lambda names: {n: [] for n in names}), \
              patch("src.services.tenant_api_doc.load_tenant_env_vars_map",
-                   return_value={"*": {}}), \
+                   return_value={}), \
              patch("src.services.tenant_api_doc.load_sso_config",
                    side_effect=[broken, ready]):
             configs = load_sso_configs("tenant_x")
@@ -635,7 +668,7 @@ class TestLoadSsoConfigWithTemplate:
              patch("src.services.tenant_api_doc._allowed_skills_map",
                    side_effect=lambda names: {n: [] for n in names}), \
              patch("src.services.tenant_api_doc.load_tenant_env_vars_map",
-                   return_value={"*": {}}), \
+                   return_value={}), \
              patch("src.services.tenant_api_doc.load_rendered_doc",
                    return_value=_RENDERED_TEMPLATE):
             configs = load_sso_configs("tenant_x")
