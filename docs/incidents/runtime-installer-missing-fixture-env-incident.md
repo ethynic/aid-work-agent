@@ -1,6 +1,6 @@
 # Runtime安装向导点击安装后直接退出
 
-日期：2026-10-14。修复与交付记录见[干净安装计划Phase6](../plans/plan-runtime-clean-install.md)。
+日期：2026-10-14。修复与交付记录见 [Runtime 架构设计 §7](../system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)的开发完成记录（干净安装 Phase 6；原开发计划已清理）。
 
 ## 已确认事实
 

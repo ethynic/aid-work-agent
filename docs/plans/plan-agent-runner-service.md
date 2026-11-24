@@ -596,7 +596,7 @@ M6a 已完成，M6b/M6c 从本重构任务拆出，后续开发与进度更新�
 
 ### M6a：微信客服原渠道接通用 Runner HTTP
 
-本阶段保留 AgentRunner/AgentEngine 重构，恢复微信客服原渠道实现和用户行为。开发详情、进度与验证记录统一在[原渠道恢复计划](plan-wecom-kf-channel-restore.md)维护。接入独立 API/worker 是要求；仅调用兼容 Agent 壳中的新 Engine 不能代替服务接入。
+本阶段保留 AgentRunner/AgentEngine 重构，恢复微信客服原渠道实现和用户行为。开发详情与验证记录见 [AgentRunner 架构设计](../system/agent-application-architecture-design.md)文首的微信客服接入范围与完成记录（原恢复计划已清理）。接入独立 API/worker 是要求；仅调用兼容 Agent 壳中的新 Engine 不能代替服务接入。
 
 | 边界 | 唯一责任方 | 接入要求 |
 |---|---|---|

@@ -1,6 +1,6 @@
 # 通用浏览器工具重构选型调研
 
-2026-11-19 · 已完成原包双端受控验证、Linux 沙盒接入冒烟与 Windows 实站验证。本期复用 `agent-browser` 官方发行二进制，首期面向 Windows Runtime。以下源码盘点用于理解和比对官方 MCP 的行为。关联[重构设计](../tools/browser/browser_tool_rebuild_design.md)及[开发计划](../plans/plan-browser-tool-rebuild.md)。
+2026-11-19 · 已完成原包双端受控验证、Linux 沙盒接入冒烟与 Windows 实站验证。本期复用 `agent-browser` 官方发行二进制，首期面向 Windows Runtime。以下源码盘点用于理解和比对官方 MCP 的行为。关联[重构设计](../tools/browser/browser_tool_rebuild_design.md)（含开发完成记录）。
 
 Runtime 的签名离线包和 stdio MCP 宿主可用于接入本机浏览器。此前 ChatGPT「Browser Use 集成研究」与「CDP网页信息格式」中的页面结构、元素引用和按需截图仍可参考。 [Runtime 插件与 MCP 源码实录](runtime-master-plugin-communication-20261111.md)
 
@@ -61,7 +61,7 @@ Runtime 的签名离线包和 stdio MCP 宿主可用于接入本机浏览器。�
 
 Windows 原版 `agent-browser 0.43.0` 的 stdio MCP 实测，`core` 列出 33 个工具，含导航、语义快照、交互、读取及 JavaScript 执行。`core,debug` 跨页共列出 73 个工具，新增上传、批处理、上游 Chat 和插件执行；上传入参包含 `selector` 和 `files`。将 `agent_browser_upload` 直接传给 `--tools` 会被拒绝，该选项接受预设分组。固定版本源码中 MCP 通过 `current_exe()` 调用同一二进制里的命令，交付时需保留对应命令和浏览器实现。原版二进制内含 Chat 模块；如果发行物要移除该模块，需要从固定源码构建裁剪版。裁剪版尚未构建。 [固定版本 MCP 源码](https://github.com/vercel-labs/agent-browser/blob/v0.43.0/cli/src/mcp.rs) · [固定版本程序入口](https://github.com/vercel-labs/agent-browser/blob/v0.43.0/cli/src/main.rs)
 
-Runtime 共享核心已有 stdio 握手和工具调用。签名插件安装时探测入口的 `version --json`、`doctor --json`，并比对签名清单中的入口、工具和 schema 摘要。上游 MCP 本身具备协议握手，现有 Runtime 插件的包和回执契约仍需要接线。设备工具声明参与现有云端派发放行，模型可见的工具定义另由产品入口提供。Runtime 安装与本机调用的验收范围见[本期实施计划](../plans/plan-browser-tool-rebuild.md)。 [第一方 MCP Provider 标准](../system/first-party-cli-mcp-provider-standard.md) · [Runtime 插件派发设计](../system/runtime-plugin-decoupling-dispatch-design.md)
+Runtime 共享核心已有 stdio 握手和工具调用。签名插件安装时探测入口的 `version --json`、`doctor --json`，并比对签名清单中的入口、工具和 schema 摘要。上游 MCP 本身具备协议握手，现有 Runtime 插件的包和回执契约仍需要接线。设备工具声明参与现有云端派发放行，模型可见的工具定义另由产品入口提供。Runtime 安装与本机调用的验收范围见[重构设计](../tools/browser/browser_tool_rebuild_design.md)的「首轮 Runtime 安装与调用边界」及其开发完成记录。 [第一方 MCP Provider 标准](../system/first-party-cli-mcp-provider-standard.md) · [Runtime 插件派发设计](../system/runtime-plugin-decoupling-dispatch-design.md)
 
 ## 上游 MCP 源码与能力盘点
 

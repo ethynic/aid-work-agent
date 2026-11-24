@@ -350,7 +350,7 @@
 
 ## 14. 客户机只读取证附件（2026-10-31）
 
-交付与验证登记：[专项计划](../plans/plan-boss-widget-incident-evidence-collection.md)。附件源为 [采集脚本](evidence/boss-widget-stuck-hidden-20261030/collect-boss-widget-evidence.ps1)、[双击入口](evidence/boss-widget-stuck-hidden-20261030/run-collect-boss-evidence.cmd)、[客户说明](evidence/boss-widget-stuck-hidden-20261030/取证说明.txt)。
+交付与验证记录（原专项计划已清理，Git 历史可查）：取证脚本于 2026-10-31 完成——显式字段白名单、事故时段筛选和缺失/错误计数，不接入 Runtime，PowerShell 5.1；隔离夹具验证独测 23 项通过、1 项环境跳过，独立 CR 无阻断；客户回收 22 条事故观察且无解析错误。附件源为 [采集脚本](evidence/boss-widget-stuck-hidden-20261030/collect-boss-widget-evidence.ps1)、[双击入口](evidence/boss-widget-stuck-hidden-20261030/run-collect-boss-evidence.cmd)、[客户说明](evidence/boss-widget-stuck-hidden-20261030/取证说明.txt)。
 
 用户只需在**原故障电脑、原 Windows 用户**下解压附件并双击入口，返回同目录生成的 `boss-widget-evidence-*.json`。不用重新制造故障、操作 BOSS 或重启 Runtime。采集仅投影 BOSS 临时绑定及 10 月 30 日 10:40–11:20 的恢复记录，不读取 Runtime 配置，不联网；源文件不修改，输出排除图片、姓名、消息、Cookie、设备令牌、自由文本诊断及原始本机路径。只返回生成的 JSON，不打包原缓存或 Runtime home。
 
@@ -430,7 +430,7 @@
 
 用户授权按§16.5方向修正并走开发流程。先核实必要前提：原日志L7933–7965的goto、L8321–8358/L8568–8605的筛选探查均已取得快照、成功定位并把合法页面坐标交给native click，才在discover因hidden拒绝；详情滚轮同样已取得区域。没有历史x/y和像素，不能追认旧屏幕映射一定正确，但不能再把本次失败解释为CDP完全无法读元素位置。首次send-to搜索入口42候选歧义仍独立保留。
 
-已更新[原设计§10.11](../design/recruiting/boss-resume-assistant-native-cdp-design.md#1011-解除物理输入对-legacy-widget-的依赖2026-10-31)及[原计划§16](../plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md#16-普通物理输入内容区定位修正2026-10-31)。普通点击、滚轮、点击后键入及拖动以UIA唯一顶层Document物理内容区映射屏幕位置，不再枚举、等待或要求legacy widget可见；保持原target激活、视口新鲜度、内容边界、主窗根命中、光标/几何及键盘焦点检查，未新增恢复机制或改用CDP输入。
+已更新[原设计§10.11](../design/recruiting/boss-resume-assistant-native-cdp-design.md#1011-解除物理输入对-legacy-widget-的依赖2026-10-31)（原开发计划第 16 节已清理，Git 历史可查）。普通点击、滚轮、点击后键入及拖动以UIA唯一顶层Document物理内容区映射屏幕位置，不再枚举、等待或要求legacy widget可见；保持原target激活、视口新鲜度、内容边界、主窗根命中、光标/几何及键盘焦点检查，未新增恢复机制或改用CDP输入。
 
 隔离Chrome主动隐藏全部legacy HWND，**第一次UIA读取之前即隐藏**，投递前/后fresh枚举排除新建可见widget假通过；菜单/筛选点击、中文emoji键入和真实滚轮均生效。独测deviceScale1.5及真实浏览器缩放后同样完成，拖动以网页收到按键态pointermove核验。native54、BOSS相关153及独立反例10项通过；独立CR三项P2已修正复核，无未解决P0/P1/P2。完整范围与原始失败修正登记见计划；[持久验收摘要](evidence/boss-widget-stuck-hidden-20261030/content-input-validation-20261031.json)关联最终源码hash。
 
@@ -440,7 +440,7 @@
 
 ## 18. 本机真实BOSS回归：输入可用，标准搜索定位仍失败（2026-11-02）
 
-用户授权打开BOSS真机回归，手动登录后使用修复源码重新编译的CLI及Node22.23.3执行。8个生产源码摘要与10-31验收版本一致，未安装新插件/Runtime。完整步骤见[原计划W4](../plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md#w4本机真实boss回归2026-11-02)，[脱敏证据](evidence/boss-widget-stuck-hidden-20261030/real-boss-regression-20261102.json)。
+用户授权打开BOSS真机回归，手动登录后使用修复源码重新编译的CLI及Node22.23.3执行。8个生产源码摘要与10-31验收版本一致，未安装新插件/Runtime。完整步骤原记于开发计划 W4（已清理，Git 历史可查），[脱敏证据](evidence/boss-widget-stuck-hidden-20261030/real-boss-regression-20261102.json)。
 
 - **普通操作通过**：沟通/推荐页菜单往返、13行筛选档位探查、3职位下拉、3–5年＋本科＋10–20K提交均有状态后验。简历读取1份成功/0失败，原生滚轮采4段拼接774×3714，确认到底、无可疑接缝，详情已关闭。
 - **标准会话搜索未通过**：boss_open_chat在搜索入口定位时报64候选歧义，尚未投递键入。相同快照含3个document，只将主文档交给原定位器时入口唯一；临时探针进一步用原session.clickAndType在该搜索框完成测试词键入、精确值核验、清空和收起。后者只证明原生键入组件正常，不能冒称标准会话搜索已恢复。
@@ -452,6 +452,6 @@
 
 用户补充沟通页首位广告及客户置顶场景。现场确认首项为`batch-chat-intention`，真实会话在后续`geek-item-wrap → geek-item → geek-name`，URL仍是沟通页。旧列表定位仅按文字/坐标带找姓名，离线可复现广告同名被算成第二目标、置顶短提示被当姓名；这是上游业务对象识别问题，与辅助widget隐藏不同。当前没有证据证明原事故中广告曾被实际点击或是widget隐藏触发原因。
 
-已实施主文档搜索范围、真实会话/姓名字段识别和联系人状态错误码修复；另在真机发现姓名高亮拆节点导致header截断，合并实测唯一`name-box`完整姓名，继续保留目标身份后验。没有新增恢复机制。实现与边界见[原设计§10.6.1](../design/recruiting/boss-resume-assistant-native-cdp-design.md#1061-沟通页混排与搜索定位修正2026-11-02)、[原计划§17](../plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md#17-沟通页混排与搜索定位修正2026-11-02)。
+已实施主文档搜索范围、真实会话/姓名字段识别和联系人状态错误码修复；另在真机发现姓名高亮拆节点导致header截断，合并实测唯一`name-box`完整姓名，继续保留目标身份后验。没有新增恢复机制。实现与边界见[原设计§10.6.1](../design/recruiting/boss-resume-assistant-native-cdp-design.md#1061-沟通页混排与搜索定位修正2026-11-02)（原开发计划第 17 节已清理，Git 历史可查）。
 
 **验收**：广告保留，标准open-chat两次搜索打开及完整姓名验证通过，read-chat成功，target与沟通URL不变；主控67项、独立254项＋9探针通过，CR无阻断。真实置顶仅结构fixture，未真机置顶/发送消息。中间光标回读拒点、header截断及旧fixture三项失败均登记在计划，未隐去。未提交或部署。[脱敏证据](evidence/boss-widget-stuck-hidden-20261030/chat-mixed-validation-20261102.json)。这补齐§18发现的搜索定位缺陷，不改变原事故首次隐藏触发仍未知的结论。

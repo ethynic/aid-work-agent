@@ -1,6 +1,6 @@
 # 浏览器 MCP 第一方插件设计
 
-关联[实施计划](../../plans/plan-browser-tool-rebuild.md)、[原包验证与接入调研](../../research/browser-tool-rebuild-research.md)、[第一方 Provider 规范](../../system/first-party-cli-mcp-provider-standard.md)和 [Runner / Desktop / Runtime 共同契约](../../system/runner-desktop-runtime-integration-contract.md)。
+关联[原包验证与接入调研](../../research/browser-tool-rebuild-research.md)、[第一方 Provider 规范](../../system/first-party-cli-mcp-provider-standard.md)和 [Runner / Desktop / Runtime 共同契约](../../system/runner-desktop-runtime-integration-contract.md)。
 
 ## 已确认范围
 
@@ -27,3 +27,7 @@ AID 第一方离线包随包交付原版 Windows x64 执行器和许可。插件
 本机先验证隔离的验收 Runtime。由仓库当前 Host 构建验收实例，使用单独的运行目录及仅覆盖浏览器插件的临时 Ed25519 测试根。已安装的 0.0.38 Host 按三种既有插件固定信任范围，本轮保留其安装资源和配对状态。
 
 Runtime 心跳报告签名声明中的原生工具名，模型工具目录由 AID 产品侧管理。本阶段通过本机测试 Device API 验证真实 Runtime 的任务领取、浏览器操作及回执。生产 Agent 工具投影和正式发布信任分别验收。 [工具声明与派发契约](../../system/runner-desktop-runtime-integration-contract.md)
+
+## 开发完成记录
+
+2026-11-24 补记；原开发计划已清理，Git 历史可查。✅ 开发完成（2026-11-19）。Phase 0 验证原包直接复用、体积与 Chat 隔离；Phase 1 接线原生 MCP 与第一方 Provider（原生 35 项，保留原工具名及输入 schema，Chat 调用拒绝）；Phase 2 隔离签名与离线验包通过，真实 Host 导入后已启用、就绪；Phase 3 本地 Device API 派发、可见 Chrome、批处理、上传和 Chat 拒绝通过；Phase 4 配套 Runtime 1.3.0 与浏览器 0.1.0 出包，八项 Host 检查通过。遗留：生产 Agent 工具投影和正式发布信任分别验收。

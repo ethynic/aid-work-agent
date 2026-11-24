@@ -545,7 +545,7 @@ node --test dist/tests/input-locator.test.js dist/tests/powershell-input.indepen
 | W6 | 真正Runner与Runtime持续任务联动 | 两配置prompt/model/tools经实际Gateway到Runtime/MCP/CLI合成库，换Worker续游标、竞争唤醒/停止/unknown及用量幂等独测通过；真实群/多天另验 | 隔离集成完成 |
 | W7 | 多任务共用企业微信设备 | 本轮只串行操作一个群。另验多会话任务与单任务多群，复用既有设备队列/锁，保证搜索/切群/发送的连续操作不相互串扰 | 待并发验收 |
 | W8 | 时延与读取故障恢复 | 约10秒轮询另计CLI耗时，实际单次发送约20–27秒，不能承诺10秒回复；记录各阶段时延并定位瓶颈。补CLI无结构化输出、断连后的游标保留和pending恢复 | 待处理 |
-| W9 | 测试入口强制隔离 | 按[独立计划](plan-test-database-isolation-runtime-assertions.md)完成无DB默认、精确库/清理证明及Runtime旧断言修复，独测/CR通过，真实Docker另验 | 已完成开发 |
+| W9 | 测试入口强制隔离 | 按[独立设计](../design/devtools/test-database-isolation-design.md)完成无DB默认、精确库/清理证明及Runtime旧断言修复，独测/CR通过，真实Docker另验 | 已完成开发 |
 | W10 | 长期本机证据保留 | 新poll无持久水位/截图且解密产物清理；既有send/search artifact与receipt随操作增长，生产前确定保留/磁盘策略，不自动删除未知发送凭据 | 待运维策略 |
 
 W1的[历史补丁](patches/wecom-search-clipboard-recovery-pending.patch)已于2026-10-26应用并进一步修复，仅供追溯，不要对当前工作树重复应用。修复不持久化用户剪贴板原文，历史原内容未保存不能补称已找回。
@@ -654,7 +654,7 @@ proposal5已通过窄修独测/CR后精确应用，聚合`a19be208eff8da4902e72d
 
 ### W14本地Web最终验收（2026-10-29 15:31，北京时间）
 
-用户自行登录后指出原ask_user卡片选项导致白屏。实际定位为sr-only输入焦点的包含块错误，已按[ask实施计划§9](plan-ask-user-interactive-question.md#9-选项焦点滚动修复2026-10-29)窄修并独立验证；与工具装配/Runner权限无关。随后主控在新会话发出自然语言有界只读请求，不指定工具名，要求简述实际企微/BOSS能力并只读取3条。MAIN正确陈述两类能力并选择wecom_read_sessions，未执行任何BOSS操作。
+用户自行登录后指出原ask_user卡片选项导致白屏。实际定位为sr-only输入焦点的包含块错误，已按 [ask 设计 §12](../system/design-ask-user-interactive-question.md#12-旧版快捷选项整体退役2026-10-23)的「Web选项焦点定位补充」窄修并独立验证；与工具装配/Runner权限无关。随后主控在新会话发出自然语言有界只读请求，不指定工具名，要求简述实际企微/BOSS能力并只读取3条。MAIN正确陈述两类能力并选择wecom_read_sessions，未执行任何BOSS操作。
 
 Runner `runner_3489164b16b04f7f9612fc24466f68d1` completed；唯一invocation `c5914698-70c7-42ff-b3b6-6067e448a962` succeeded/OK，channel=local-db、navigated=false，3会话/3消息、失败0，sender_platform=wecom2/unknown1/wechat0。任务总耗时23.744746秒，包含模型两次推理与本机调用，不是纯CLI耗时。没有正文或完整联系人标识写入本文。scheduled_tasks仍0，原会话仍6 completed/1 waiting，卡片未提交/忽略。
 

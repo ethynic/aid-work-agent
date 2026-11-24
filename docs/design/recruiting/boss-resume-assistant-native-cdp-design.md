@@ -4,7 +4,7 @@
 > 日期：2026-07-22  
 > 类型：Windows CLI 工具（Electron GUI 已随路线收敛删除，见 §16 决策 6）  
 > 关联调研：[BOSS 直聘智能招聘 Agent 可行性调研](../../research/boss-recruiting-agent-research.md)  
-> 开发计划：[原生 CDP 开发计划](../../plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md)
+> 开发状态（2026-11-24 补记）：原开发计划的 W1～W4（解除 widget 依赖与原生输入，2026-10-31～11-02）、C1～C3（沟通混排与搜索定位修正，2026-11-02）、R1（BOSS 0.3.29 提交与签名出包，`148f7945` 已推送）均已开发完成并通过独立测试与 CR。本机真实 BOSS 导航、筛选、读简历与原生键入通过，广告保留下的搜索读取通过；W4 当时标准会话搜索仍定位失败，随后由 C1～C3 修正（§10.6.1）。遗留：仅插件出包，未安装部署。原开发计划已清理（Git 历史可查），分项记录见 §10.6.1、§10.7.1、§10.7.2、§10.11。
 
 ## 当前恢复控制边界（2026-10-18纠正）
 
@@ -450,7 +450,7 @@ Win32 通道实现要点：
 - **当前搜索组件**：入口、输入框、联系人分类/结果定位均限定沟通页主文档，复用已实测组件与文本/几何定位；不能把后台推荐iframe的图标/文本算入候选。输入落地优先检查定位到的INPUT的inputValue（含空值-1），不以全页同字出现冒充成功；已验证的contenteditable兼容也须限制到输入区域。
 - **结果身份**：搜索结果定位后仍须fresh会话头部等于目标，错误目标不能到发送步骤。11-02现场姓名高亮拆为普通文本＋`hightrare`子节点，原最左文本法截断末字；现在合并头部唯一可见`name-box`内的文本（DOM顺序），多个姓名框返回不可读，旧无该字段的布局保留原解析。只修有现场和测试支撑的定位点，不扩大失败重试范围。
 
-前期回归已区分：原快照全document搜索入口61–64候选、仅主文档唯一；这证明跨文档污染，但尚未证明广告就是该歧义的唯一原因。现场无选中会话时URL仍是chat，现有错误映射将其报告WRONG_PAGE，属于状态语义错误。具体实施与独立验证见[原计划§17](../../plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md#17-沟通页混排与搜索定位修正2026-11-02)。不改原生输入宿主、服务端或已交付旧客户端。
+前期回归已区分：原快照全document搜索入口61–64候选、仅主文档唯一；这证明跨文档污染，但尚未证明广告就是该歧义的唯一原因。现场无选中会话时URL仍是chat，现有错误映射将其报告WRONG_PAGE，属于状态语义错误。具体实施与独立验证记录见下段。不改原生输入宿主、服务端或已交付旧客户端。
 
 **开发与验收**：主控相关67项、独立相邻254项及9个额外探针通过，独立CR无未解决P0/P1/P2。本机广告保留，标准`boss_open_chat`两次均`via=search`且完整姓名后验通过，`boss_read_chat`成功，URL及target未变。真实置顶变体尚未采样，只做结构fixture；未真发消息，未提交或部署。[脱敏证据](../../incidents/evidence/boss-widget-stuck-hidden-20261030/chat-mixed-validation-20261102.json)。
 
@@ -470,13 +470,13 @@ Win32 通道实现要点：
 
 `boss_resume_next` 的列表滚动继续使用既有 CDP 通道。当前设备上的 Snapshot bounds/PNG 为2504×1474，而同快照根 HTML clientRect 为1252×737；Input.dispatchMouseEvent 的坐标与滚轮步长为主 frame viewport CSS px。直接把 bounds 中心(1252,737)传给 Input 落在 CSS 视口右下边界，列表不推进；按同节点实测比例换算到(626,368.5)、deltaY=368.5 后，单次滚轮使推荐文档偏移0→737。比例来自 fresh 几何，不来自 Windows DPI。[CDP Input 协议](https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/pdl/domains/Input.pdl)
 
-局部方案：只让续筛 Reader 的快照开启既有 `DOMSnapshot.captureSnapshot(includeDOMRects=true)`；测量主文档唯一根 HTML 同节点 bounds/clientRects，要求有效正尺寸、与当前视口一致、原点与主文档偏移为0且两轴比例一致。缺失或冲突立即拒绝滚动；每次确认重试重新采集、重算。其余快照默认不采 DOMRects，Win32 点击/详情滚轮及其他 CDP 输入不改；不新增方法、权限或共享 wire。两次延迟签名无变化仍为 `no_progress`，不宣称列表到底；30屏、取消与1000历史保护保留。实批滚动验收必须读到首屏以外的新候选人，不能仅统计 wheel 次数。[修复计划与验证](../../plans/desktop-automation/plan-boss-card-coordinate-precision.md)
+局部方案：只让续筛 Reader 的快照开启既有 `DOMSnapshot.captureSnapshot(includeDOMRects=true)`；测量主文档唯一根 HTML 同节点 bounds/clientRects，要求有效正尺寸、与当前视口一致、原点与主文档偏移为0且两轴比例一致。缺失或冲突立即拒绝滚动；每次确认重试重新采集、重算。其余快照默认不采 DOMRects，Win32 点击/详情滚轮及其他 CDP 输入不改；不新增方法、权限或共享 wire。两次延迟签名无变化仍为 `no_progress`，不宣称列表到底；30屏、取消与1000历史保护保留。实批滚动验收必须读到首屏以外的新候选人，不能仅统计 wheel 次数。开发完成记录（2026-10-11；原开发计划已清理，Git 历史可查）：✅ 开发完成。原始几何口径修复与边界回归 3 项在旧代码全部失败、修复后相关 55 项通过；独立测试 436 项与 85 组额外边界通过，CR 无阻断；Runtime 调度真机续筛首批 3 人加两次续读各 3 人、共 9 人无重复。同批完成 Win32 DPI 坐标桥接修复（439 项全量通过，CR 两项 P1 闭环）与共用 MCP stdio 有限接收预算（core 33、Runtime/Host 79 项通过，CR 无阻断）。
 
 ### 10.7.2 嵌套详情 iframe 的祖先滚动偏移（2026-10-11）
 
 续筛滚动修复后发现共享 `accumulateOwnerOffset` 仅累加父owner的文档绝对bounds，漏扣owner所在文档的滚动。真机推荐doc2 scrollY=2948、owner=(336,80)，嵌套详情doc3自身scrollY=0、CANVAS=(0,0,1468,1394)，旧累计offset=(336,3028)，导致可见画布误判为不在视口；父滚动737时旧裁剪起点817，还会产出裁短的有效PNG。当前批次图片不能作为完整简历验收，`bottomReached` 也不证明裁剪区域正确。
 
-修正公式：祖先offset逐层累加 `owner.bounds[0,1] − ownerDocument.scrollOffsetX/Y`；调用方再加leaf节点bounds并减leaf自己的滚动一次。祖先与leaf分别扣减、不重复；无祖先的主文档offset仍(0,0)。owner唯一性、祖先循环、缺可见layout检查保留，通道与阈值不变。回归覆盖多层双轴/小数/dense/sparse以及父偏移0/737/2948下同一完整画布区域，再独立测试及CR。[修复计划](../../plans/desktop-automation/plan-boss-card-coordinate-precision.md#phase-7嵌套-iframe-祖先滚动偏移)
+修正公式：祖先offset逐层累加 `owner.bounds[0,1] − ownerDocument.scrollOffsetX/Y`；调用方再加leaf节点bounds并减leaf自己的滚动一次。祖先与leaf分别扣减、不重复；无祖先的主文档offset仍(0,0)。owner唯一性、祖先循环、缺可见layout检查保留，通道与阈值不变。回归覆盖多层双轴/小数/dense/sparse以及父偏移0/737/2948下同一完整画布区域，再独立测试及CR。开发完成记录（2026-10-11）：独立全量 452/452、额外 25 组及 CR 通过；37 个完整画布样本与长图抽查通过。
 
 ### 10.9 沟通会话消息读取与未读清单（真机实验，2026-08-27，开发待做）
 
@@ -530,7 +530,7 @@ CLI `open-chat <姓名>` / MCP `boss_open_chat`（contact 必填）：切换到�
 
 ### 10.11 解除物理输入对 legacy widget 的依赖（2026-10-31）
 
-关联[10-30事故复盘第16节](../../incidents/boss-agent2-widget-stuck-hidden-20261030.md#16-客户回收元数据同一目标整窗原生点击可用2026-10-31)、[原开发计划第16节](../../plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md#16-普通物理输入内容区定位修正2026-10-31)。已完成实现及独立隔离验证；11-02本机真实BOSS导航/筛选/读简历/原生键入通过，标准会话搜索仍定位失败，持续隐藏触发未复现；具体范围与局限以计划W3/W4为准。
+关联[10-30事故复盘第16节](../../incidents/boss-agent2-widget-stuck-hidden-20261030.md#16-客户回收元数据同一目标整窗原生点击可用2026-10-31)。开发完成记录（原开发计划已清理，Git 历史可查）：✅ 开发完成（2026-10-31～11-02）。独立 native 54 项、BOSS 相关 153 项及 10 个反例通过，隔离冷启动/缩放/拖动真验，CR 三项 P2 关闭；全量旧失败与挂起为基线既有。11-02 本机真实 BOSS 导航、筛选、读简历与原生键入通过，标准会话搜索当时仍定位失败（后由 §10.6.1 修正），持续隐藏触发未复现。
 
 **前提核验**：原日志 goto 的 L7933–7965、filter_options 的 L8321–8358/L8568–8605 均在 DOMSnapshot 读取、按钮定位及页面坐标参数校验成功后进入 native click，才因 widget hidden 在 discover 阶段拒绝；wheel 同样在取得详情区域后被拒。历史未保存 x/y 与快照响应，不能追认旧屏幕换算正确。首次 send-to 搜索入口42候选歧义不属于本修复。
 

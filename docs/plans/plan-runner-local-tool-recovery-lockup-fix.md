@@ -33,7 +33,7 @@
 - agent2本次现场部署目录HEAD为 `abcd8e91`。已只读核对容器中的 `src/local_tools/repository.py`、`src/services/agent_runner/local_owner.py`，SHA256与排查时本地文件一致。
 - 扩展静态审查固定使用本地Git对象 `99c62216`，避免共享工作区切分支后把旧代码当成线上基线。该对象包括已实施的恢复、模型识别和Runtime性能增量，不表示客户机实际BOSS插件逐字等于该提交。
 - 编写时共享工作区在 `feature/ask-user-question-card`，HEAD `ae31f2b1`；本会话不切分支，不处理他人改动。实施前由开发核对当时主线、部署版本、Runtime/插件release与digest，再整合文档；禁止用当前较旧分支回退已完成修复。
-- 现有方案：复用[Runner架构](../system/agent-application-architecture-design.md)、[共同契约](../system/runner-desktop-runtime-integration-contract.md)、[BOSS恢复设计](../design/recruiting/boss-overlay-heal-design.md)、[既有续筛恢复计划](plan-boss-resume-next-recovery-fix.md)。`99c62216` 中既有恢复计划已到Phase 10；当前分支若只显示Phase 1～5，不代表后续功能未实现。
+- 现有方案：复用[Runner架构](../system/agent-application-architecture-design.md)、[共同契约](../system/runner-desktop-runtime-integration-contract.md)、[BOSS恢复设计](../design/recruiting/boss-overlay-heal-design.md)、既有续筛恢复修复（原计划已清理，记录见[增量设计 §5.6](../system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量)）。`99c62216` 中该修复已到Phase 10；当前分支若只显示Phase 1～5，不代表后续功能未实现。
 
 ### 1.2 证据等级
 

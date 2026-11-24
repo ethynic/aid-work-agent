@@ -48,15 +48,15 @@
 
 2026-10-22复审修复兼容检查点：Runner私有工具代次/累计BIGINT及历史产物退休由同一修复角色负责；snapshot可选history_revision仅为历史更新水位，Web拉取既有历史，旧消费者可忽略，Device/Host不变。实现与独测/CR结论统一见[休眠计划第17节](plan-agent-runner-durable-sleep.md#17-复审修复与验证2026-10-22)，本地Runner/Web独测及CR已通过，未部署；本条不宣称Desktop或真机Runtime已验收。
 
-2026-10-20恢复检查点：按共同契约2.5保持v2纯读独立，新增显式v3停止本Runtime受管旧工具进程的路径，可覆盖无generation且结果永久丢失的存量BOSS调用；不重放原业务，不要求Windows重启。源码与dist已冻结，独立120项及宽窄UI通过，CR无阻断；唯一实现责任、精确范围及结果见[BOSS恢复计划Phase10](plan-boss-resume-next-recovery-fix.md)。旧2.3/v1证据仅历史，未发行或部署。
+2026-10-20恢复检查点：按共同契约2.5保持v2纯读独立，新增显式v3停止本Runtime受管旧工具进程的路径，可覆盖无generation且结果永久丢失的存量BOSS调用；不重放原业务，不要求Windows重启。源码与dist已冻结，独立120项及宽窄UI通过，CR无阻断；唯一实现责任、精确范围及结果见[Runner 增量设计 §5.6](../system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量)（原 BOSS 恢复计划已清理）。旧2.3/v1证据仅历史，未发行或部署。
 
-2026-10-20恢复增量检查点：按[共同契约恢复增量](../system/runner-desktop-runtime-integration-contract.md#2026-10-20-本地未知调用恢复与web结束等待兼容增量)开发Web结束等待、迟到回执对账与设备冲突阻断；唯一代码写入者为恢复开发子智能体，无Runtime客户端或Device wire变更。进度与独立验证唯一记录在[BOSS恢复计划Phase 6～8](plan-boss-resume-next-recovery-fix.md)，本计划仅引用。
+2026-10-20恢复增量检查点：按[共同契约恢复增量](../system/runner-desktop-runtime-integration-contract.md#2026-10-20-本地未知调用恢复与web结束等待兼容增量)开发Web结束等待、迟到回执对账与设备冲突阻断；唯一代码写入者为恢复开发子智能体，无Runtime客户端或Device wire变更。进度与独立验证记录在[Runner 增量设计 §5.6](../system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量)（原 BOSS 恢复计划已清理），本计划仅引用。
 
 2026-10-20共同检查点：按共同契约2.2及[BOSS计划23](desktop-automation/plan-boss-operation-verification-visual-recovery.md#23-runtime配对身份复用纠正2026-10-20)消除额外视觉token配置。主控唯一维护runtimeHost.ts、Desktop Supervisor、BOSS视觉client/localRecovery和版本元数据；backend身份角色唯一维护src/local_tools/api.py、boss_visual_service及必要台账代码。新增设备视觉入口，原H1/H3及配对/claim/permit不改；设备凭据只给受信BOSS，其他Provider隔离。独立TEST/CR后重打包，不部署。
 
-2026-10-14共同检查点：用户批准[干净安装计划](plan-runtime-clean-install.md)，共同契约2.1。安装角色负责安装代际与进程清理，服务端角色负责协议3及数据库，主控负责Main/H3自动激活与renderer。替代新版历史资源恢复门，旧协议1/2不变；验证以该计划为准。
+2026-10-14共同检查点：用户批准干净安装方案（已完成，记录见[Runtime 架构设计 §7](../system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)），共同契约2.1。安装角色负责安装代际与进程清理，服务端角色负责协议3及数据库，主控负责Main/H3自动激活与renderer。替代新版历史资源恢复门，旧协议1/2不变；验证记录见该设计。
 
-同日追加安装确认：主控接管NSIS/PowerShell唯一写入，旧客户端运行时确定才退出安装，取消保持旧运行；不改H3/wire/Device。增量验证统一见干净安装计划Phase5。
+同日追加安装确认：主控接管NSIS/PowerShell唯一写入，旧客户端运行时确定才退出安装，取消保持旧运行；不改H3/wire/Device。增量验证记录见[Runtime 架构设计 §7](../system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)（干净安装 Phase 5）。
 
 2026-10-12 r7共同检查点：[恢复计划Phase10](plan-runtime-upgrade-recovery.md#phase10-最终交付与服务端状态复核2026-10-12)已交付自助诊断/管理修复/归档新配对；主控维护Core/Runtime/Main和UI，资源角色仅维护资源helper，独立角色只读验证。H1/Device/binding不变，Runtime-only H3可选端口与私有connection v1、续装控制保持单一写入者；实际包和独立验证通过，未部署服务器。
 
@@ -66,13 +66,13 @@
 
 2026-10-12 r4 共同检查点：[恢复计划Phase 4/5](plan-runtime-upgrade-recovery.md)由当前主控唯一维护NSIS、core.dispose、managed-entry和Supervisor/Main；补恢复步骤自足性、无pending免调用、最终目录退出核验及历史记录下空闲管理进程退出。直属Main/Host私有生命周期v1绑定实例与generation；H1、Device、binding和业务结果语义不变，UAC恢复保持原DPAPI/HKCU归属。
 
-2026-10-12 升级退出检查点：[试用包Phase 5](plan-runtime-ui-boss-trial-bundle.md)当前主控唯一维护公共NSIS退出检查和只读诊断；X保留托盘常驻语义，不再允许安装器默认终止旧进程。旧运行marker恢复仍按原停止/未知事实边界，需要现场核验，不改Host/Device wire、许可或自动重放。
+2026-10-12 升级退出检查点：试用包 Phase 5（已完成，记录见[Runtime 架构设计 §7](../system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)）当前主控唯一维护公共NSIS退出检查和只读诊断；X保留托盘常驻语义，不再允许安装器默认终止旧进程。旧运行marker恢复仍按原停止/未知事实边界，需要现场核验，不改Host/Device wire、许可或自动重放。
 
-2026-10-12 BOSS 冷启动增量检查点：[试用包计划Phase 4](plan-runtime-ui-boss-trial-bundle.md)登记当前主控唯一写入共享store入口选择及Runtime组合层；可选bootstrapKeys默认兼容，仅BOSS已验签manifest保留冷启动入口，不把doctor未登录当未安装。Device/H1 wire、binding、许可和版本保持。
+2026-10-12 BOSS 冷启动增量检查点：试用包 Phase 4（已完成，记录见[Runtime 架构设计 §7](../system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)）登记当前主控唯一写入共享store入口选择及Runtime组合层；可选bootstrapKeys默认兼容，仅BOSS已验签manifest保留冷启动入口，不把doctor未登录当未安装。Device/H1 wire、binding、许可和版本保持。
 
-2026-10-12 共同检查点：[老用户试用组合包](plan-runtime-ui-boss-trial-bundle.md)由当前主控唯一写入公共 Electron main、自启适配/测试及打包白名单/NSIS钩子，复用既有 Host/BOSS。仅登录启动与正常管理 start；不改 wire/binding/许可/core，v2.0与候选0.3保持；未签名验收版独立home，不能冒充正式迁移。
+2026-10-12 共同检查点：老用户试用组合包（已完成，记录见[Runtime 架构设计 §7](../system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)）由当前主控唯一写入公共 Electron main、自启适配/测试及打包白名单/NSIS钩子，复用既有 Host/BOSS。仅登录启动与正常管理 start；不改 wire/binding/许可/core，v2.0与候选0.3保持；未签名验收版独立home，不能冒充正式迁移。
 
-2026-10-11 MCP 大结果回传检查点：唯一写入者为 [BOSS/Runtime 修复会话](desktop-automation/plan-boss-card-coordinate-precision.md)，仅修改共享 core `src/legacy/providerManager.ts` 及 Runtime 传输测试/fixture/helper。SDK 1.30.0 的 10MiB 默认接收预算由有限 128MiB 替代，受信内部选项仅可收紧到 1–128MiB；增加脱敏超限诊断，超限关闭与 unknown 禁重放不变。旧构造调用兼容；不改 Device/管理 wire、binding、许可、公共壳、依赖或 H4 新产物协议。契约 v2.0 / wire 候选0.3不变；进度与验证以链接计划 Phase 5 为唯一来源。
+2026-10-11 MCP 大结果回传检查点：唯一写入者为 BOSS/Runtime 修复会话（已完成，记录见[BOSS 原生 CDP 设计 §10.7.1](../design/recruiting/boss-resume-assistant-native-cdp-design.md#1071-推荐列表续筛的-css-输入桥接2026-10-11)），仅修改共享 core `src/legacy/providerManager.ts` 及 Runtime 传输测试/fixture/helper。SDK 1.30.0 的 10MiB 默认接收预算由有限 128MiB 替代，受信内部选项仅可收紧到 1–128MiB；增加脱敏超限诊断，超限关闭与 unknown 禁重放不变。旧构造调用兼容；不改 Device/管理 wire、binding、许可、公共壳、依赖或 H4 新产物协议。契约 v2.0 / wire 候选0.3不变；进度与验证记录见该设计的开发完成记录。
 
 2026-10-11 共同检查点：BOSS 续筛业务契约 v1 见[续筛计划](desktop-automation/plan-boss-screening-continuation.md)。本任务主控独占 `clients/shared/local-tool-host-core/src/legacy/providers.ts`、`providerManager.ts` 的新工具注册、续筛能力前置门禁及对应测试；新增 `boss_resume_next`，原工具兼容，旧 Provider 明确拒绝新工具。不修改管理 wire、binding、许可、公共壳或本计划第二部分。
 
@@ -233,7 +233,7 @@ Phase9连接恢复审计及源码补漏以[恢复计划的状态矩阵](plan-run
 主控唯一修改Runtime页面/Controller及测试、Desktop版本元数据和交付说明；H1/H3/Device及恢复事务语义不变。不支持插件时不误查询、不假刷新，恢复步骤首屏可见且不受检查忙碌禁用；详见[恢复计划Phase11](plan-runtime-upgrade-recovery.md#phase11-实施前共同检查点2026-10-13)。独立真实包故障/恢复交互与审查待完成。
 
 
-2026-10-20恢复纠正（优先于上方历史Phase10完成记录）：按[共同契约2.5](../system/runner-desktop-runtime-integration-contract.md)保留独立纯读，并新增显式停止本Runtime受管旧工具进程的路径，覆盖存量无generation且回执永久丢失的BOSS调用；不重放原业务、不要求Windows重启。独立120项及宽窄UI通过，CR无阻断；唯一进度见[BOSS恢复计划](../plans/plan-boss-resume-next-recovery-fix.md)，未部署。
+2026-10-20恢复纠正（优先于上方历史Phase10完成记录）：按[共同契约2.5](../system/runner-desktop-runtime-integration-contract.md)保留独立纯读，并新增显式停止本Runtime受管旧工具进程的路径，覆盖存量无generation且回执永久丢失的BOSS调用；不重放原业务、不要求Windows重启。独立120项及宽窄UI通过，CR无阻断；完成记录见[Runner 增量设计 §5.6](../system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量)（原 BOSS 恢复计划已清理），未部署。
 
 ## 12. 安装升级简化实施计划（2026-10-30）
 
@@ -437,7 +437,7 @@ Runtime沿原已安装客户端完成替换配对，旧设备revoked/unselected�
 
 **优先级：P1，用户明确要求补齐的必做项；2026-11-02已按第15节实施通用查看导出与Main留存，专用跨层取证及实包仍未完成。** 纳入后续 Runtime 稳定性迭代，具体版本/日期待排，不能因临时脚本已经交付而关闭本项。若延期，必须保留顶部D1～D3待开发状态与未交付原因，不能静默降为可选优化。
 
-设计唯一来源：[Runtime架构第14节](../system/runtime-plugin-host-architecture-design.md#14-客户端内置诊断留存与一键导出2026-10-31待开发)。事故输入：[BOSS隐藏窗口复盘](../incidents/boss-agent2-widget-stuck-hidden-20261030.md)。[临时取证附件](plan-boss-widget-incident-evidence-collection.md)只服务当前事故，不是永久客户端架构。
+设计唯一来源：[Runtime架构第14节](../system/runtime-plugin-host-architecture-design.md#14-客户端内置诊断留存与一键导出2026-10-31待开发)。事故输入：[BOSS隐藏窗口复盘](../incidents/boss-agent2-widget-stuck-hidden-20261030.md)。临时取证附件（已交付，记录见[BOSS 隐藏窗口复盘 §14](../incidents/boss-agent2-widget-stuck-hidden-20261030.md#14-客户机只读取证附件2026-10-31)）只服务当前事故，不是永久客户端架构。
 
 ### 14.1 交付目标与实施顺序
 

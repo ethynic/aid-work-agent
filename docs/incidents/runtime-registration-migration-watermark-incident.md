@@ -1,6 +1,6 @@
 # Runtime协议3配对持续500：迁移水位跳过注册字段
 
-日期：2026-10-14。修复进度及发布边界见[干净安装计划Phase7](../plans/plan-runtime-clean-install.md)。
+日期：2026-10-14。修复结果及发布边界见 [Runtime 架构设计 §7](../system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)的开发完成记录（干净安装 Phase 7；原开发计划已清理）。
 
 ## 事实
 

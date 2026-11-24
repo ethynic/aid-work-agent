@@ -2,7 +2,7 @@
 
 > 日期：2026-08-31
 >
-> 状态：✅ 已完成开发（2026-09-01，三智能体流程通过；测试结果见[开发计划](../plans/plan-agent-runtime-security-debt-closure.md) Phase C）
+> 状态：✅ 已完成开发（2026-09-01，三智能体流程通过；原开发计划已清理，Git 历史可查，测试结果见文末「开发完成记录」）
 >
 > 依据：当前 `master` `5311f0a3`，已包含 `500c4991`、`1c815881`、`d517e859`
 >
@@ -208,7 +208,6 @@ pending[trace_id] = max(pending.get(trace_id, 0), incoming)
 | `tests/unit/tools/test_scheduled_task_tool.py` | 旧用例补可信租户上下文和属主参数断言 |
 | 可选观测库集成测试 | 数据库实际 `GREATEST` 行为验证 |
 | `docs/system/agent-runtime-safety-hardening-design.md` | 开发完成后同步最终状态 |
-| `docs/plans/plan-agent-runtime-security-debt-closure.md` | 开发过程中更新勾选状态 |
 
 ## 8. 明确非目标
 
@@ -217,3 +216,22 @@ pending[trace_id] = max(pending.get(trace_id, 0), incoming)
 - 不把 `obs_traces` 变成计费权威。
 - 不增加分布式锁、数据库锁或新队列；`GREATEST` 已能在单条 SQL 原子更新内解决乱序覆盖。
 - 不借机清理 scheduler、trace 或测试目录的其他问题。
+
+## 9. 开发完成记录
+
+2026-11-24 补记；原开发计划已清理，Git 历史可查。✅ 开发完成（2026-09-01，三智能体流程：开发 → 测试 → CodeReview 全部通过）。无数据库迁移、无新依赖、无计费行为变化。
+
+实际测试结果（2026-09-01）：
+
+| 范围 | 结果 |
+|---|---|
+| `tests/unit/tools/test_scheduled_task_tool.py` | 15 passed（修复前基线 4 passed / 11 failed） |
+| `tests/unit/test_trace_total_cost.py` | 12 passed（10 个既有用例调整 + 2 个新增单调性用例） |
+| `tests/unit/api/test_scheduled_task_identity.py` + `test_scheduled_task_log_boundary.py` | 8 passed |
+| scheduler + trace/session_record/monitor 相邻回归 | 169 passed |
+| `tests/unit/mid_term/`（引用 session_record） | 367 passed |
+| `tests/unit/tools/` 全目录 | 1690 passed / 12 failed / 2 skipped；12 个失败经干净 HEAD worktree 基线比对全部为存量（基线 23 failed），0 新增 |
+| `python -c "import src.main"` | exit 0 |
+| 单调性判别力验证 | stash 生产改动回旧实现后 5 项单调性/SQL 测试全部失败，恢复后全绿 |
+
+未做项：PostgreSQL 顺序模拟乱序写集成测试——本地无观测库连接（`LOGS_DATABASE_URL` 未配置），仓库亦无观测库集成测试先例；SQL 结构与进程内逻辑已由单测强制覆盖。
