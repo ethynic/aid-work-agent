@@ -116,23 +116,25 @@ sudo docker run --rm \
     -w /app node:22-alpine \
     sh -c "npm config set registry https://registry.npmmirror.com && npm install --no-audit --no-fund --prefer-offline"
 
-# 3. 前端类型检查 + 依赖边界检查（不产出 dist，nginx 服务不受影响；
-#    先于后端重启执行，类型/边界错误能在此中止，避免白白停一次服务）
-echo "[3] 前端类型检查 + 边界检查..."
-sudo docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm run typecheck
-sudo docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
-    node scripts/check-dependency-boundaries.mjs --scope=web
-
-# 4. 前端编译到 dist.new（后台执行，与后端重启并行）。
+# 3. 前端校验 + 编译到 dist.new（后台执行，与后端重启并行）。
+#    2026-11-24 优化：typecheck/边界检查原本串行卡在后端重启之前（约 2 分钟）。
+#    它们不产出 dist、不影响 nginx，只需在 dist 原子切换（步骤 9）前通过即可，
+#    故移入后台校验链与后端重启并行，省约 2 分钟。
+#    校验链：typecheck -> 边界检查 -> vite build -> 产物校验，任一失败都不会
+#    生成 dist.new，步骤 8 的 wait 会失败并在切换前中止，前端保持旧版零空窗。
+#    代价：类型/边界错误时后端已重启（多一次服务重启），属可接受取舍。
 #    旧 dist 一直保留到原子切换，编译期间前端零空窗。
-echo "[4] 前端编译 dist.new（后台）..."
+echo "[3] 前端校验 + 编译 dist.new（后台，与后端重启并行）..."
 sudo rm -rf "$DIST_DIR.new"
 mkdir -p "$(dirname "$BUILD_LOG")"
 (
-  sudo docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+  sudo docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm run typecheck \
+  && sudo docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+      node scripts/check-dependency-boundaries.mjs --scope=web \
+  && sudo docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
       sh -c "npm config set registry https://registry.npmmirror.com && npx vite build --outDir dist.new" \
-    && sudo docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
-        node scripts/verify-web-build.mjs /app/dist.new
+  && sudo docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+      node scripts/verify-web-build.mjs /app/dist.new
 ) > "$BUILD_LOG" 2>&1 &
 FRONTEND_PID=$!
 
