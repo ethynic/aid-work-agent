@@ -16,13 +16,43 @@ type DailySummaryArgs = z.infer<typeof requestSchema>
 const historySchema = z.object({ messages: z.array(z.string().min(1)).max(500), partial: z.boolean() })
 const summarySchema = z.object({ summary: z.string().min(1).max(4000) })
 
-export function createWeixinGroupDailySummaryOperation(deps: {
+export interface SummaryDependencies {
   runDriverFn?: RunPowerShellDriverFn
   fetchFn?: typeof fetch
   serverUrl?: string
-} = {}): WeixinOperation<DailySummaryArgs> {
-  const runDriver = deps.runDriverFn ?? runPowerShellDriver
+}
+
+export async function requestWeixinSummary(
+  deps: SummaryDependencies, grant: string, body: Record<string, unknown>, signal: AbortSignal,
+): Promise<string> {
   const fetchSummary = deps.fetchFn ?? fetch
+  try {
+    const base = new URL(deps.serverUrl ?? process.env.AID_WEIXIN_SERVER_URL ?? '')
+    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname)
+    if (base.username || base.password || (base.protocol !== 'https:' && !(loopback && base.protocol === 'http:'))) {
+      throw new Error('Invalid paired service')
+    }
+    const endpoint = new URL('/api/local-tools/runtime/weixin-summary', base)
+    const response = await fetchSummary(endpoint, {
+      method: 'POST', redirect: 'error',
+      headers: { Authorization: `Bearer ${grant}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(65_000)]),
+    })
+    if (response.status === 403 && (await response.json())?.code === 'NO_CREDIT') {
+      throw new CodedOperationError('NO_CREDIT', '积分余额已耗尽')
+    }
+    if (!response.ok) throw new Error('Summary service refused the request')
+    return summarySchema.parse(await response.json()).summary
+  } catch (error) {
+    if (signal.aborted) throw new CancelledError()
+    if (error instanceof CodedOperationError && error.code === 'NO_CREDIT') throw error
+    throw new CodedOperationError('SUMMARY_FAILED', '微信群聊总结生成失败')
+  }
+}
+
+export function createWeixinGroupDailySummaryOperation(deps: SummaryDependencies = {}): WeixinOperation<DailySummaryArgs> {
+  const runDriver = deps.runDriverFn ?? runPowerShellDriver
   return {
     name: 'weixin_group_daily_summary',
     async execute(args, ctx) {
@@ -48,30 +78,9 @@ export function createWeixinGroupDailySummaryOperation(deps: {
 
         if (ctx.signal.aborted) throw new CancelledError()
         ctx.progress({ stage: 'execute', message: '正在生成今日总结' })
-        let summary: string
-        try {
-          const base = new URL(deps.serverUrl ?? process.env.AID_WEIXIN_SERVER_URL ?? '')
-          const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname)
-          if (base.username || base.password || (base.protocol !== 'https:' && !(loopback && base.protocol === 'http:'))) {
-            throw new Error('Invalid paired service')
-          }
-          const endpoint = new URL('/api/local-tools/runtime/weixin-summary', base)
-          const response = await fetchSummary(endpoint, {
-            method: 'POST', redirect: 'error',
-            headers: { Authorization: `Bearer ${args.grant}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tenant_id: args.tenant_id, business_date: args.business_date, messages }),
-            signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(65_000)]),
-          })
-          if (response.status === 403 && (await response.json())?.code === 'NO_CREDIT') {
-            throw new CodedOperationError('NO_CREDIT', '积分余额已耗尽')
-          }
-          if (!response.ok) throw new Error('Summary service refused the request')
-          summary = summarySchema.parse(await response.json()).summary
-        } catch (error) {
-          if (ctx.signal.aborted) throw new CancelledError()
-          if (error instanceof CodedOperationError && error.code === 'NO_CREDIT') throw error
-          throw new CodedOperationError('SUMMARY_FAILED', '微信今日总结生成失败')
-        }
+        const summary = await requestWeixinSummary(
+          deps, args.grant, { tenant_id: args.tenant_id, business_date: args.business_date, messages }, ctx.signal,
+        )
         return { message: '微信今日总结已生成', data: { summary, message_count: messages.length, partial } }
       })
       // Native errors can contain UI diagnostics and validation errors can contain inputs.

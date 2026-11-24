@@ -135,6 +135,7 @@ function Invoke-WeixinLatestCapture($Session, $Request) {
     if ($started -cne $Request.process_started_at) { Throw-DriverError 'UI_CHANGED' '微信进程已变化' }
     if (-not (Invoke-WeixinActivation -Hwnd $Session.Handle)) { Throw-DriverError 'UI_CHANGED' '微信窗口无法激活' }
     $bottom = Move-WeixinLatestBottom $Session
+    $bottomObservedAt = Get-Date
     $rows = @()
     $last = $null
     $anchorEnd = -1
@@ -214,7 +215,7 @@ function Invoke-WeixinLatestCapture($Session, $Request) {
     return @{
         title=$Session.Title;session_identity=$Session.Identity;process_started_at=$started
         rows=@($rows);anchor_end=$anchorEnd;pages_scanned=$pages;empty_proven=($bottom.rows.Count -eq 0)
-        complete_history=$completeHistory
+        complete_history=$completeHistory;bottom_observed_at=$bottomObservedAt
         anchor_context=$anchorContext
     }
 }

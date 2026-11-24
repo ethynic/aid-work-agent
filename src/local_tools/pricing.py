@@ -15,14 +15,14 @@ client-billing-integration-design.md §4.1），本模块只做取价，不碰 D
 """
 
 from src.config.settings import settings
-from .catalog import WEIXIN_CHAT_LATEST, WEIXIN_GROUP_DAILY_SUMMARY
+from .catalog import WEIXIN_CHAT_LATEST, WEIXIN_SUMMARY_TOOLS
 
 
 def tool_credit_price(tool_name: str) -> float:
     """工具单次积分价格：总开关关 → 0；未列入价目表 → default_credit_price（默认 0）"""
     if tool_name in {'wecom_send_status', 'wecom_group_poll', 'wecom_read_sessions', WEIXIN_CHAT_LATEST}:
         return 0.0  # Local receipt reconciliation has no model or per-tool charge.
-    if tool_name == WEIXIN_GROUP_DAILY_SUMMARY:
+    if tool_name in WEIXIN_SUMMARY_TOOLS:
         return 0.0  # Only the model's actual usage is billed.
     cfg = settings.boss_tool_billing
     if not cfg.enabled:

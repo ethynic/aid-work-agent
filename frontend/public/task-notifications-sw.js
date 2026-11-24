@@ -35,7 +35,9 @@ self.addEventListener('push', event => {
     const sessionTitle = String(payload.session_title || '').replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim().slice(0, 80) || '未命名会话'
     const shareUrl = ['completed', 'failed'].includes(payload.event_kind)
       && typeof payload.share_url === 'string' && SHARE_PATH.test(payload.share_url) ? payload.share_url : null
-    const title = payload.event_kind === 'test' ? '浏览器通知测试'
+    const batchOutcome = ({ succeeded: '已完成', partial: '部分完成', failed: '执行失败' })[payload.weixin_batch_status]
+    const title = typeof batchOutcome === 'string' ? `${sessionTitle} · ${batchOutcome}`
+      : payload.event_kind === 'test' ? '浏览器通知测试'
       : payload.event_kind === 'waiting_input' ? `${sessionTitle}等待你的回答`
       : payload.event_kind === 'manual_rejected' ? `${sessionTitle}手动执行未成功`
       : payload.event_kind === 'paused' ? `${sessionTitle}已自动暂停`

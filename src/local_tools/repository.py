@@ -18,7 +18,8 @@ from src.db.client_binding_db import ClientUsageLogDB
 from src.db.database import get_db_connection
 from src.local_tools.catalog import (
     LOCAL_ONLY_WEIXIN_MESSAGE, LOCAL_ONLY_WEIXIN_TOOLS, WEIXIN_CHAT_LATEST,
-    WEIXIN_DAILY_SUMMARY_KIND, WEIXIN_GROUP_DAILY_SUMMARY, get_provider_keys_for_device, parallel_tools_for_device,
+    WEIXIN_DAILY_SUMMARY_KIND, WEIXIN_GROUP_RANGE_SUMMARY, WEIXIN_SUMMARY_TOOLS,
+    get_provider_keys_for_device, parallel_tools_for_device,
 )
 from src.local_tools.pricing import tool_credit_price
 from src.local_tools.plugin_manifests import (
@@ -1212,6 +1213,7 @@ def claim_next(
                 params.append(json.dumps(parallel_tools_for_device(device_capabilities)))
             parallel_filter = (
                 " AND provider_key IS NOT NULL"
+                f" AND local_tool_invocations.tool_name <> '{WEIXIN_GROUP_RANGE_SUMMARY}'"
                 " AND local_tool_invocations.tool_name = ANY (SELECT jsonb_array_elements_text("
                 f"COALESCE({tools_mapping} -> local_tool_invocations.provider_key, '[]'::jsonb)))"
             )
@@ -1449,7 +1451,7 @@ def write_runtime_result(invocation_id, tenant_id, claim_token_hash, success, co
                 False, device_id=device_id)
         return write_result(invocation_id, tenant_id, claim_token_hash, False, code,
             '微信本机同步失败', 'none', None, retryable, device_id=device_id)
-    if invocation and invocation.get('tool_name') == WEIXIN_GROUP_DAILY_SUMMARY:
+    if invocation and invocation.get('tool_name') in WEIXIN_SUMMARY_TOOLS:
         from .weixin_summary import normalize_success
 
         public = normalize_success(data) if success else None

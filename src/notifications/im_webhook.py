@@ -47,6 +47,8 @@ class ImWebhookAdapterBase:
         text = f'【AI通知】{title}\n{body}'
         # scheduled 终态附免登录结果链接；旧通知回填失败时仍用登录定位符。
         link = scheduled_result_link(message)
+        if message['parameters'].get('weixin_batch_status') and not link:
+            raise ValueError('WEIXIN_SUMMARY_PUBLIC_URL_REQUIRED')
         if link:
             text += f'\n查看本次执行结果：{link}'
         alert_link = runner_alert_detail_link(message)

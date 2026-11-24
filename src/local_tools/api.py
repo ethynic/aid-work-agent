@@ -15,7 +15,7 @@ import uuid as _uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
@@ -26,7 +26,7 @@ from src.db.models import UserDB
 from src.desktop_automation import audit, payload_resolver
 from src.desktop_automation.adapters import AdapterNotFoundError
 from src.desktop_automation.constants import BUSINESS_KIND_DESKTOP_AUTOMATION, OPERATION_PROTOCOL_V2
-from src.local_tools import catalog, operation_result, pairing, permits, repository, weixin_summary
+from src.local_tools import catalog, operation_result, pairing, permits, repository, weixin_summary, weixin_tracking, weixin_tracking_schedule
 from src.local_tools.models import (
     ClaimRequest,
     HeartbeatRequest,
@@ -179,18 +179,123 @@ async def runtime_weixin_summary(request: Request):
     upload = await weixin_summary.read_upload(request)
     if upload is None:
         raise _http_error(400, '微信总结请求格式无效')
-    run = await asyncio.to_thread(
-        weixin_summary.consume_grant, upload.tenant_id, upload.business_date, sha256_hex(grant),
-    )
+    for_range = isinstance(upload, weixin_summary.RangeUpload)
+    if for_range:
+        run = await asyncio.to_thread(
+            weixin_summary.consume_range_grant, upload.tenant_id, upload.start_at, upload.end_at, sha256_hex(grant),
+        )
+    else:
+        run = await asyncio.to_thread(
+            weixin_summary.consume_grant, upload.tenant_id, upload.business_date, sha256_hex(grant),
+        )
     if not run:
         raise _http_error(403, '微信总结授权已失效')
     credit = await asyncio.to_thread(check_tenant_credit_blocked, upload.tenant_id)
     if credit is not None:
         return credit
-    summary = await weixin_summary.summarize(upload.messages, upload.tenant_id, run['user_id'])
+    summary = await weixin_summary.summarize(
+        upload.messages, upload.tenant_id, run['user_id'], **({'for_range': True} if for_range else {}),
+    )
     if summary is None:
         raise _http_error(502, '微信总结生成失败')
     return {'summary': summary}
+
+
+
+_WEIXIN_TRACKING_ERRORS = {
+    'BATCH_NOT_FOUND': (404, '微信总结批次不存在'),
+    'GROUP_NOT_FOUND': (404, '找不到所选跟踪群'),
+    'SCHEDULE_NOT_FOUND': (404, '定时总结不存在'),
+    'GROUP_DUPLICATE': (409, '已保存同名跟踪群'),
+    'GROUP_NOT_RETRYABLE': (409, '仅可重试本次执行中失败的群聊'),
+    'INVALID_RANGE': (400, '请选择最近 168 小时内的非空时间段'),
+    'DEVICE_NOT_SELECTED': (409, '运行设备已变化或解绑，请核对本地工具中的设备'),
+    'DEVICE_OFFLINE': (409, '运行设备当前离线'),
+    'WEIXIN_RANGE_PLUGIN_UNAVAILABLE': (409, '运行设备未启用支持时间段总结的签名微信插件'),
+    'NO_CREDIT': (403, '积分余额已耗尽，无法生成微信总结'),
+    'RULE_UNAVAILABLE': (409, '这条群机器人规则已停用或未配置总结适用的终态事件'),
+}
+
+
+async def _weixin_tracking_call(request, operation, *args):
+    user, tenant_id = await _current_user_and_tenant(request)
+    try:
+        return await asyncio.to_thread(operation, tenant_id, user['user_id'], *args)
+    except weixin_tracking.Unavailable as error:
+        code = str(error)
+        status, message = _WEIXIN_TRACKING_ERRORS[code]
+        raise HTTPException(status_code=status, detail={'error': message, 'code': code}) from None
+    except repository.DeviceOperationUnresolved:
+        raise HTTPException(status_code=409, detail={
+            'error': '运行设备当前有待核对的操作', 'code': 'DEVICE_OPERATION_UNRESOLVED',
+        }) from None
+
+
+@router.get('/weixin-agent/groups')
+async def list_weixin_groups(request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking.groups)
+
+
+@router.post('/weixin-agent/groups')
+async def add_weixin_group(body: weixin_tracking.GroupName, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking.save_group, body.name)
+
+
+@router.put('/weixin-agent/groups/{group_id}')
+async def update_weixin_group(group_id: _uuid.UUID, body: weixin_tracking.GroupName, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking.save_group, body.name, str(group_id))
+
+
+@router.delete('/weixin-agent/groups/{group_id}', status_code=204, response_class=Response)
+async def remove_weixin_group(group_id: _uuid.UUID, request: Request):
+    await _weixin_tracking_call(request, weixin_tracking.remove_group, str(group_id))
+    return Response(status_code=204)
+
+
+@router.post('/weixin-agent/batches')
+async def start_weixin_batch(body: weixin_tracking.BatchRequest, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking.create_batch, body)
+
+
+@router.get('/weixin-agent/batches')
+async def list_weixin_batches(request: Request, group_id: _uuid.UUID | None = None, offset: int = Query(0, ge=0)):
+    return await _weixin_tracking_call(request, weixin_tracking.list_batches, str(group_id) if group_id else None, offset)
+
+
+@router.get('/weixin-agent/batches/{batch_id}')
+async def get_weixin_batch(batch_id: _uuid.UUID, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking.get_batch, str(batch_id))
+
+
+@router.post('/weixin-agent/batches/{batch_id}/retry/{group_id}')
+async def retry_weixin_group(batch_id: _uuid.UUID, group_id: _uuid.UUID, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking.retry_group, str(batch_id), str(group_id))
+
+
+@router.get('/weixin-agent/schedules')
+async def list_weixin_schedules(request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking_schedule.list_schedules)
+
+
+@router.get('/weixin-agent/notification-rules')
+async def list_weixin_notification_rules(request: Request):
+    _, tenant_id = await _current_user_and_tenant(request)
+    return await asyncio.to_thread(weixin_tracking_schedule.rules, tenant_id)
+
+
+@router.post('/weixin-agent/schedules')
+async def create_weixin_schedule(body: weixin_tracking_schedule.Definition, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking_schedule.save_schedule, body)
+
+
+@router.put('/weixin-agent/schedules/{schedule_id}')
+async def update_weixin_schedule(schedule_id: _uuid.UUID, body: weixin_tracking_schedule.Definition, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking_schedule.save_schedule, body, str(schedule_id))
+
+
+@router.patch('/weixin-agent/schedules/{schedule_id}')
+async def change_weixin_schedule_state(schedule_id: _uuid.UUID, body: weixin_tracking_schedule.ScheduleState, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking_schedule.set_paused, str(schedule_id), body.paused)
 
 
 @router.post("/pairing-tickets")

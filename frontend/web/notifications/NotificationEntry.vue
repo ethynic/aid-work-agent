@@ -39,14 +39,21 @@ async function resolve(): Promise<void> {
   if (!token) { await login(); return }
   const authHeaders = { Authorization: `Bearer ${token}`, ...(tenant ? { 'X-Tenant-Id': tenant } : {}) }
   try {
-    const result = await notificationRequest<{ notification_ref: string; event_type: string; resource: { tenant_id?: string | null; session_id?: string; subagent_id?: string; instance_id?: string; runner_id?: string; task_id?: string; scheduled_task_id?: string | null } | null }>(`/messages/${encodeURIComponent(String(route.query.ref))}`, {}, authHeaders)
+    const result = await notificationRequest<{ notification_ref: string; event_type: string; resource: { tenant_id?: string | null; session_id?: string; subagent_id?: string; instance_id?: string; runner_id?: string; batch_id?: string; task_id?: string; scheduled_task_id?: string | null } | null }>(`/messages/${encodeURIComponent(String(route.query.ref))}`, {}, authHeaders)
     const resource = result.resource
-    if (!resource?.session_id && !resource?.task_id) { error.value = '测试通知已成功到达，本通知没有关联会话。'; loading.value = false; return }
+    if (!resource?.session_id && !resource?.task_id && !resource?.batch_id) { error.value = '测试通知已成功到达，本通知没有关联会话。'; loading.value = false; return }
     if (resource.tenant_id == null && !tenant) {
       await router.replace({ path: '/portal/notification-session', query: { ref: String(route.query.ref) } })
       return
     }
     if (!resource.tenant_id || !/^[a-zA-Z0-9_-]{1,128}$/.test(resource.tenant_id) || (tenant && resource.tenant_id !== tenant)) throw new Error('通知所属租户与当前账号不匹配。')
+    if (resource.batch_id) {
+      await router.replace({
+        path: `/t/${encodeURIComponent(resource.tenant_id)}/weixin-agent`,
+        query: { tab: 'history', batch: resource.batch_id },
+      })
+      return
+    }
     // scheduled 事件 → 任务视图（设计 §8.2）：task.paused 资源（scheduled_task）
     // 自带 task_id；runner_result/runner_waiting 资源由资源解析透出
     // scheduled_task_id（scheduled_tasks.session_id 子查询，Phase 5 二轮评审第

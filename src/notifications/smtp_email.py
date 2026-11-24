@@ -41,6 +41,8 @@ class SmtpEmailAdapter:
         title, body = render_message_text(message['event_type'], message['parameters'])
         # scheduled 终态附免登录结果链接；旧通知回填失败时仍用登录定位符。
         link = scheduled_result_link(message)
+        if message['parameters'].get('weixin_batch_status') and not link:
+            raise ValueError('WEIXIN_SUMMARY_PUBLIC_URL_REQUIRED')
         if link:
             body = f'{body}\n\n查看本次执行结果：{link}'
         return {'schema_version': 1, 'notification_ref': message['notification_ref'],
