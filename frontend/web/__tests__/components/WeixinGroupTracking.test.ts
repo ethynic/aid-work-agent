@@ -105,12 +105,25 @@ it('filters only batches, leaves both original groups visible and retries only t
 
 it('opens a direct batch link at the detail with no history rows above it, and shows skipped notification and uncertain coverage', async () => {
   vi.mocked(api.getBatch).mockResolvedValue({
-    ...batch, notification_status: 'skipped', groups: [{ ...batch.groups[0]!, partial: true }],
+    ...batch, notification_status: 'skipped', groups: [{
+      ...batch.groups[0]!, partial: true,
+      summary: [
+        '# 群聊总结', '', '## 关键讨论', '', '- **项目进展**已确认', '', '## 待办事项', '',
+        '| 事项 | 负责人 |', '| --- | --- |', '| 确认交付日期 | 项目组 |', '', '![附件](/preview.png)',
+      ].join('\n'),
+    }],
   })
   const { wrapper, router, click } = await setup('?tab=history&batch=batch-1')
   try {
     expect(wrapper.find('#weixin-history-batch-1').exists()).toBe(false)
     expect(document.activeElement?.id).toBe('weixin-batch-title')
+    const groupHeader = wrapper.get('header h3')
+    expect(groupHeader.text()).toBe('合成产品群')
+    expect(wrapper.get('.weixin-summary-markdown h1').text()).toBe('群聊总结')
+    expect(wrapper.get('.weixin-summary-markdown h2').text()).toBe('关键讨论')
+    expect(wrapper.get('.weixin-summary-markdown li strong').text()).toBe('项目进展')
+    expect(wrapper.get('.weixin-summary-markdown table tbody td').text()).toBe('确认交付日期')
+    expect(wrapper.find('.weixin-summary-markdown img').exists()).toBe(false)
     expect(wrapper.text()).toContain('通知按规则跳过')
     expect(wrapper.text()).toContain('实际覆盖起止时间无法确认')
     await click('返回总结历史')

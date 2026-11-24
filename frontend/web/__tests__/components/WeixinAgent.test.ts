@@ -45,7 +45,7 @@ describe('微信 Agent', () => {
     })
     vi.mocked(getWeixinSummary).mockResolvedValue({
       id: 'run-1', state: 'succeeded', business_date: '2026-11-23',
-      target_name: '项目交付群', partial: true, summary: '周五前确认交付安排。', message_count: 2,
+      target_name: '项目交付群', partial: true, summary: '**周五前确认交付安排。**\n安排项目评审。', message_count: 2,
     })
     const wrapper = await mountPage()
     try {
@@ -59,8 +59,10 @@ describe('微信 Agent', () => {
       await flushPromises()
       expect(createWeixinSummary).toHaveBeenCalledWith('  项目交付群  ', 'device-1', expect.any(AbortSignal))
       expect(getWeixinSummary).toHaveBeenCalledWith('run-1', expect.any(AbortSignal))
-      expect(wrapper.text()).toContain('项目交付群的总结')
-      expect(wrapper.text()).toContain('周五前确认交付安排。')
+      expect(wrapper.get('#weixin-summary-result').text()).toBe('总结结果')
+      expect(wrapper.text()).toContain('项目交付群')
+      expect(wrapper.get('.weixin-summary-markdown strong').text()).toBe('周五前确认交付安排。')
+      expect(wrapper.find('.weixin-summary-markdown br').exists()).toBe(true)
       expect(wrapper.text()).toContain('只总结了可确认属于今天的部分消息')
       expect(wrapper.text()).toContain('使用 2 条文字消息')
       expect(wrapper.get('input[type="checkbox"]').element).toHaveProperty('checked', false)

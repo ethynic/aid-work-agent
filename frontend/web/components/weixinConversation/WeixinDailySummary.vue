@@ -43,7 +43,11 @@
 
         <BaseCard v-if="runId">
           <section aria-labelledby="weixin-summary-result" class="space-y-3">
-            <h2 id="weixin-summary-result" class="m-0 break-words text-base font-semibold text-default">{{ run?.target_name ? `${run.target_name}的总结` : '总结结果' }}</h2>
+            <h2 id="weixin-summary-result" class="m-0 text-base font-semibold text-default">总结结果</h2>
+            <div v-if="run?.target_name" class="flex min-w-0 items-start gap-2 rounded-md bg-canvas px-3 py-2">
+              <BaseBadge intent="info" size="sm" class="shrink-0">微信群</BaseBadge>
+              <span class="min-w-0 break-all text-sm font-medium text-default">{{ run.target_name }}</span>
+            </div>
             <p v-if="run?.business_date" class="m-0 text-sm text-muted">{{ run.business_date }} · 北京时间</p>
             <div v-if="pollError" class="flex flex-wrap items-center gap-2">
               <p class="m-0 text-sm text-danger-700" role="alert">{{ pollError }}</p>
@@ -54,7 +58,7 @@
             </p>
             <template v-else-if="run.state === 'succeeded'">
               <p v-if="run.partial" class="m-0 text-sm text-warning-700">只总结了可确认属于今天的部分消息。</p>
-              <p v-if="run.summary" class="m-0 whitespace-pre-wrap break-words text-sm leading-7 text-default">{{ run.summary }}</p>
+              <WeixinSummaryMarkdown v-if="run.summary" :source="run.summary" />
               <p v-else class="m-0 text-sm text-muted">在已读取范围内，没有可以总结的当天文字消息。</p>
               <p v-if="run.summary && run.message_count !== undefined" class="m-0 text-sm text-muted">本次总结使用 {{ run.message_count }} 条文字消息。</p>
             </template>
@@ -71,10 +75,12 @@ import { computed, inject, onScopeDispose, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { createWeixinSummary, getWeixinSummary, listDevices, type LocalToolDevice, type WeixinSummaryRun } from '@/api/localTools'
 import AppHeader from '@/components/AppHeader.vue'
+import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseCard from '@/components/ui/BaseCard.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import WeixinSummaryMarkdown from './WeixinSummaryMarkdown.vue'
 
 const route = useRoute()
 const router = useRouter()
