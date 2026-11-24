@@ -22,6 +22,7 @@
  */
 
 import { getAuthHeader } from './auth'
+import { generateUuid } from '@/utils/uuid'
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || '/api'}/weixin-marketing`
 
@@ -555,11 +556,8 @@ export function isRetryEvidenceRequired(err: unknown): err is WeixinApiError {
 }
 
 function newIdempotencyKey(prefix: string): string {
-  const uuid =
-    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(16).slice(2)}`
-  return `${prefix}-${uuid}`
+  // 经工具函数兜底：旧内核（Chromium <92）无 crypto.randomUUID
+  return `${prefix}-${generateUuid()}`
 }
 
 interface Envelope<T> {

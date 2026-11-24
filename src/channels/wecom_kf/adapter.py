@@ -38,6 +38,7 @@ from src.channels.wecom_kf.message import (
     table_to_plain_text,
 )
 from src.channels.wecom_kf.renderer import WeComKfRenderer
+from src.channels.wecom_kf.reply_format import UNSENT_REPLY_TEXT, strip_file_notice
 from src.core.redis_client import redis_client
 from src.core.storage import ensure_tenant_storage_dir
 from src.models.message import MessageType, UnifiedMessage, UnifiedResponse
@@ -423,11 +424,13 @@ class WeComKfAdapter(ChannelAdapter):
         media_id = upload.get("media_id") if upload.get("errcode", 0) == 0 else None
         body = delivery.get("text", "")
         body_ok = True
-        complete_budget = budget is None or budget.can_reserve(2)
-        if complete_budget:
-            if budget is not None:
-                budget.consume(1)
-            if delivery.get("mode") == "image":
+        delivered = False
+        if delivery.get("mode") == "image":
+            # 含图片仍是「长图 + md」两条；其余模式只发 md，前缀文字留在
+            # channelDelivery.text 作降级与排查用，正常不发送。
+            if budget is None or budget.can_reserve(2):
+                if budget is not None:
+                    budget.consume(1)
                 # After a send starts, rejection/timeout is never turned into
                 # another text send. The complete MD remains the second message.
                 result = await self.api_client.send_msg(
@@ -435,13 +438,10 @@ class WeComKfAdapter(ChannelAdapter):
                     msgtype="image", content={"media_id": delivery["media_id"]},
                 )
                 body_ok = result.get("errcode", 0) == 0
-            elif len(body) <= 500 and len(body.encode("utf-8")) <= self._max_bytes:
-                body_ok = await self._send_text_single(body, message.reply_to)
+                delivered = body_ok
             else:
                 body_ok = False
-        else:
-            body_ok = False
-            budget.record_suppressed("reply_preview")
+                budget.record_suppressed("reply_preview")
         if budget is not None and not budget.consume(1):
             budget.record_suppressed("full_reply_md", file_id=file_info.file_id)
             return False
@@ -455,6 +455,10 @@ class WeComKfAdapter(ChannelAdapter):
         fallback = f"完整回复文件暂无法直接发送，请通过链接查看《{file_info.file_name}》：\n{url}"
         if url.startswith(("https://", "http://")) and len(fallback.encode("utf-8")) <= self._max_bytes:
             await self._send_text_single(fallback, message.reply_to)
+        elif not delivered:
+            # 没有可用的下载链接：改发前缀文字（去掉文件提示）；没有可用文字时（image 模式、
+            # 投影为空）告知文件暂无法发送，不让客户收到指向不存在文件的提示或什么都收不到
+            await self._send_text_single(strip_file_notice(body) or UNSENT_REPLY_TEXT, message.reply_to)
         # The native file wasn't accepted: expose partial delivery, not success.
         return False
 

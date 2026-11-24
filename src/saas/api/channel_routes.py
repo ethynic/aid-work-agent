@@ -64,10 +64,11 @@ _KF_PULL_LOCK_TTL = 900        # 拉取任务互斥锁 TTL（任务含逐条 LLM
 _KF_PULL_PENDING_TTL = 900     # 任务运行中新回调到达标记 TTL（须 >= 锁 TTL：任务实际时长可能接近锁上限，过期会让补偿拉取静默丢失）
 _KF_SYNC_RETRYABLE_ERRCODES = {45009, 45011}  # 微信接口频率限制类错误码
 _KF_SYNC_MAX_RETRIES = 3       # 限频重试次数，退避 2s/4s/8s
-# 渠道级额外提示词（经 process_and_persist → prompt_augmentations 注入 system prompt，
-# 通路闲置已久首次启用）：让 Agent 感知渠道形态、面向手机端精简回复
+# 渠道级额外提示词（经 process_and_persist → prompt_augmentations，以 user 消息追加到本轮消息末尾）：
+# 开头是固定渠道标识，供子智能体提示词按渠道走分支（如旅行社的「微信客服渠道分支」）；
+# 标识之后让 Agent 感知渠道形态、面向手机端精简回复
 _KF_CHANNEL_EXTRA_SYSTEM_PROMPT = (
-    "当前会话来自企业微信客服渠道：用户在手机微信内阅读，回复务必精简、面向手机端，避免长篇分节说明。"
+    "【渠道：微信客服】当前会话来自企业微信客服渠道：用户在手机微信内阅读，回复务必精简、面向手机端，避免长篇分节说明。"
 )
 
 

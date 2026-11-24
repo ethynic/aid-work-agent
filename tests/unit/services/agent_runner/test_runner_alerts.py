@@ -82,12 +82,31 @@ def test_threshold_override_is_read_after_runner_lock():
     assert connection.committed is False
 
 
+def test_tenant_wide_threshold_fallback_applies_to_all_profiles():
+    """精确 profile 未命中时，同一条查询回退租户级 '*' 覆盖。"""
+    started = datetime(2026, 11, 6, tzinfo=timezone.utc)
+    connection = Connection([{'runner_id': 'r', 'attempt': 2, 'status': 'running',
+                              'tenant_id': 't', 'profile_id': 'p',
+                              'execution_started_at': started,
+                              'database_now': started + timedelta(minutes=20)},
+                             {'threshold_minutes': 25}])
+    repository = RunnerAlertRepository(lambda: connection)
+    assert repository.inspect_candidate({'runner_id': 'r', 'attempt': 2,
+                                         'execution_started_at': started}) is False
+    assert len(connection.statements) == 2
+    assert "profile_id IN (%s,%s)" in connection.statements[1][0]
+    assert "ORDER BY (profile_id=%s)" in connection.statements[1][0]
+    assert connection.statements[1][1] == ('t', 'p', '*', '*')
+    assert connection.committed is False
+
+
 def test_alert_and_notification_share_the_same_commit(monkeypatch):
     from src.notifications import producer
     started = datetime(2026, 11, 6, tzinfo=timezone.utc)
     runner = {'runner_id': 'r', 'attempt': 2, 'status': 'running',
               'tenant_id': 't', 'profile_id': 'p', 'execution_started_at': started,
               'database_now': started + timedelta(minutes=31)}
+    # 第二个 None：阈值（精确与租户级 '*' 均未命中）
     connection = Connection([runner, None, {'alert_id': 'a', 'notification_ref': None}])
     calls = []
     monkeypatch.setattr(producer, 'publish_platform_runner_alert_in_tx',
@@ -176,7 +195,7 @@ def test_abandoned_finalization_closes_alert_even_when_public_event_fails(monkey
 def _detail_row(*, current_attempt):
     started = datetime(2026, 11, 6, tzinfo=timezone.utc)
     return {'alert_id': 'a', 'runner_id': 'r', 'attempt': 2, 'current_attempt': current_attempt,
-            'tenant_id': 't', 'profile_id': 'p', 'started_at': started,
+            'tenant_id': 't', 'profile_id': 'p', 'session_id': 'session_x', 'started_at': started,
             'alerted_at': started + timedelta(minutes=30), 'ended_at': None,
             'elapsed_seconds': 1800, 'threshold_minutes': 30,
             'input': {'text': '完整原问题'},
@@ -191,6 +210,7 @@ def _detail_row(*, current_attempt):
 def test_historical_alert_does_not_show_later_attempt_model_context():
     result = RunnerAlertRepository(lambda: Connection([_detail_row(current_attempt=3)])).detail('a')
     assert result['runner']['request_text'] == '完整原问题'
+    assert result['runner']['session_id'] == 'session_x'
     assert result['runner']['latest_model_response'] is None
     assert result['runner']['latest_model_context'] is None
     assert result['runner']['model_unavailable_reason'] == 'CURRENT_ATTEMPT_CHANGED'
@@ -204,6 +224,44 @@ def test_current_alert_masks_tool_credentials_and_marks_truncated_context():
     assert '***' in str(runner['latest_model_response'])
     assert '…' in runner['latest_model_context']['messages'][0]['content']
     assert runner['context_redacted'] is True
+
+
+def test_admin_cancel_verifies_service_and_cancels_with_owner_principal(monkeypatch):
+    from src.services.agent_runner.manager import RunnerManager
+    from src.services.agent_runner.contracts import RunnerError, Principal
+
+    row = {'runner_id': 'r', 'attempt': 1, 'status': 'running', 'source': 'chat',
+           'session_kind': 'web', 'session_id': 'session_x', 'tenant_id': 't',
+           'user_id': 'u', 'actor_kind': 'web', 'actor_id': 'u'}
+    manager = RunnerManager(repository=None, authorizer=SimpleNamespace(
+        verify_service=lambda service_id, service_token, source: None
+        if service_token and service_id == 'main'
+        else (_ for _ in ()).throw(RunnerError('SERVICE_UNAUTHORIZED', 401))), profiles=None)
+    captured = {}
+    monkeypatch.setattr(manager, 'repository', SimpleNamespace(
+        get=lambda runner_id: (captured.__setitem__('get', runner_id), row)[1],
+        cancel=lambda principal, runner_id: (
+            captured.__setitem__('principal', principal),
+            captured.__setitem__('cancel_runner_id', runner_id), row)[2]))
+    # 本测试聚焦属主 Principal 构造与服务凭据校验，public_runner 投影另行覆盖
+    import src.services.agent_runner.manager as manager_module
+    monkeypatch.setattr(manager_module, 'public_runner', lambda runner: {'public': runner['runner_id']})
+    result = manager.admin_cancel('r', {'service_id': 'main', 'service_token': 'tok'})
+    assert result == {'public': 'r'}
+    principal = captured['principal']
+    assert isinstance(principal, Principal)
+    # 属主身份按行构造，assert_owner 的七元组逐项与行一致
+    assert principal.identity.user_id == 'u'
+    assert principal.identity.tenant_id == 't'
+    assert principal.identity.session_id == 'session_x'
+    assert principal.identity.source == 'chat'
+    assert principal.identity.session_kind == 'web'
+    assert principal.actor_kind == 'web'
+    assert principal.actor_id == 'u'
+    assert captured['cancel_runner_id'] == 'r'
+    # 服务凭据缺失时拒绝（verify_service 生效）
+    with pytest.raises(RunnerError):
+        manager.admin_cancel('r', {'service_id': 'main', 'service_token': ''})
 
 
 def test_new_database_initializers_include_runner_alert_schema():

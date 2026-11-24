@@ -18,6 +18,7 @@ export interface RunnerAlert {
 export interface RunnerAlertDetail {
   alert: RunnerAlert
   runner: {
+    session_id: string | null
     request_text: string | null
     latest_model_response: string | null
     latest_model_context: unknown | null
@@ -70,6 +71,8 @@ export const runnerAlertsAPI = {
     return request<{ success: boolean; items: RunnerAlert[]; total: number; page: number; page_size: number; monitor: RunnerMonitorStatus }>(`/runner-alerts?${query}`)
   },
   detail: (alertId: string) => request<{ success: boolean } & RunnerAlertDetail>(`/runner-alerts/${encodeURIComponent(alertId)}`),
+  // 平台管理员停止运行中的 Runner 任务（协作式取消，服务端转发 admin-cancel）
+  cancelRunner: (runnerId: string) => request<{ success: boolean }>(`/runners/${encodeURIComponent(runnerId)}/cancel`, { method: 'POST' }),
   thresholds: () => request<{ success: boolean; default_minutes: number; overrides: RunnerAlertThreshold[] }>('/runner-alert-thresholds'),
   saveThreshold: (body: RunnerAlertThreshold) => request<{ success: boolean }>('/runner-alert-thresholds', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),

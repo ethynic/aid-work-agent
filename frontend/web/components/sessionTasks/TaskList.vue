@@ -56,6 +56,7 @@
 import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useMobile } from '@/composables/useMobile'
+import { generateUuid } from '@/utils/uuid'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
@@ -118,7 +119,7 @@ async function save() {
   if (!requiredReady.value) { createError.value = '必要要素尚未齐全，请按清单补充后再保存'; return }
   const binding = bindings.value.find(b => b.id === selected.value); if (!binding || !editor.value) return
   const gen = draftGeneration; saving.value = true; createError.value = ''
-  try { const body = { scenario_key: 'weixin.conversation.v1', device_id: binding.device_id, account_binding_id: binding.account_binding_id, conversation_binding_id: binding.id, spec: editor.value.getSpec() }; const serialized = JSON.stringify(body); if (saveAttempt?.body !== serialized) saveAttempt = { body: serialized, key: crypto.randomUUID() }; const result = await sessionTasksApi.create(body, saveAttempt.key, draftController?.signal); if (alive && gen === draftGeneration && creating.value) { creating.value = false; goDetail(result.task_id) } }
+  try { const body = { scenario_key: 'weixin.conversation.v1', device_id: binding.device_id, account_binding_id: binding.account_binding_id, conversation_binding_id: binding.id, spec: editor.value.getSpec() }; const serialized = JSON.stringify(body); if (saveAttempt?.body !== serialized) saveAttempt = { body: serialized, key: generateUuid() }; const result = await sessionTasksApi.create(body, saveAttempt.key, draftController?.signal); if (alive && gen === draftGeneration && creating.value) { creating.value = false; goDetail(result.task_id) } }
   catch(e) { if (alive && gen === draftGeneration && (e as Error).name !== 'AbortError') createError.value = errorMessage(e) }
   finally { if (alive && gen === draftGeneration) saving.value = false }
 }

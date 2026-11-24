@@ -152,6 +152,13 @@ def create_app(*, config=None, manager=None):
         enabled()
         return {"success": True, "runner": await asyncio.to_thread(manager.cancel, runner_id, credentials(request))}
 
+    @app.post("/v1/runners/{runner_id}/admin-cancel")
+    async def admin_cancel(runner_id: str, request: Request):
+        # 平台管理员运维停止：主 API 平台路由核验 platform_admin 后以服务
+        # 对等凭据转发（manager.admin_cancel 内仅 verify_service）。
+        enabled()
+        return {"success": True, "runner": await asyncio.to_thread(manager.admin_cancel, runner_id, credentials(request))}
+
     @app.post('/v1/runners/{runner_id}/controls',status_code=202)
     async def submit_control(runner_id: str,body: RunnerControl,request: Request):
         enabled()

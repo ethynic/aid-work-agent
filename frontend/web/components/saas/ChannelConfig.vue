@@ -1394,12 +1394,13 @@ const DINGTALK_NOTIFY_ONLY_AGENT_FIELD: { key: string; label: string; placeholde
 const channelFields = computed(() => {
   const fields = channelFieldMap[form.value.channel_type] || []
   if (isNotifyOnly.value && form.value.channel_type === 'wecom') {
-    // 企微仅通知用途：无回调链路，回调 Token / EncodingAESKey 免填（保存时剔除旧值）
+    // 企微仅通知用途：无回调链路，回调 Token / EncodingAESKey 免填（保存时不提交，
+    // 库内旧值由后端保留）
     return fields.filter(f => f.key !== 'token' && f.key !== 'encoding_aes_key')
   }
   if (isNotifyOnly.value && form.value.channel_type === 'feishu') {
     // 飞书仅通知用途：纯服务端 API 发消息，Verification Token / Encrypt Key 免填
-    //（encrypt_key 本就可选），保存时剔除旧值
+    //（encrypt_key 本就可选），保存时不提交，库内旧值由后端保留
     return fields.filter(f => f.key !== 'verification_token' && f.key !== 'encrypt_key')
   }
   if (isNotifyOnly.value && form.value.channel_type === 'dingtalk') {
@@ -1446,7 +1447,9 @@ watch(
 
 // ==================== 配置指引（简短版，弹窗内） ====================
 
-const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: string }> = {
+// notifyOnlySteps：「仅通知」用途不接对话、无回调链路，指引只保留取发消息凭据与发送前提，
+// 不再引导配置回调地址（否则会让人误以为仅通知也要填回调）
+const quickGuideMap: Record<string, { title: string; steps: string[]; notifyOnlySteps?: string[]; docUrl: string }> = {
   wecom: {
     title: '企业微信接入步骤',
     steps: [
@@ -1455,6 +1458,11 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '在应用详情页找到「接收消息」→ 点击「设置 API 接收」',
       '将下方回调地址填入 URL 栏，生成 Token 和 EncodingAESKey',
       '先在此页面保存凭证，再到企业微信后台点击保存完成验证',
+    ],
+    notifyOnlySteps: [
+      '前往企业微信管理后台 →「应用管理」→「创建应用」',
+      '记录 CorpID、AgentId、Secret',
+      '「仅通知」不接对话，无需配置回调地址；填写后保存即可',
     ],
     docUrl: 'https://work.weixin.qq.com/wework_admin/frame',
   },
@@ -1480,6 +1488,12 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '记录 AppKey、AppSecret（钉钉回调签名只用 AppSecret，不需要 Token / EncodingAESKey）',
       '仅任务通知（不接对话）时，「通知用途」选「仅通知」，需 AppKey / AppSecret / AgentId 三项',
     ],
+    notifyOnlySteps: [
+      '前往钉钉开放平台 →「开发者后台」→ 创建应用',
+      '开通「工作通知」接口权限（仅通知发送必须）',
+      '记录 AppKey、AppSecret、AgentId（仅通知需这三项）',
+      '「仅通知」不接对话，无需配置回调地址；填写后保存即可',
+    ],
     docUrl: 'https://open.dingtalk.com/',
   },
   wechat_mp: {
@@ -1503,6 +1517,12 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '将下方回调地址填入请求地址',
       '记录 App ID、App Secret、Verification Token、Encrypt Key',
       '仅任务通知（不接对话）时，「通知用途」选「仅通知」，只需 App ID / App Secret 两项',
+    ],
+    notifyOnlySteps: [
+      '前往飞书开放平台 →「开发者后台」→ 创建企业自建应用',
+      '启用「机器人」能力并发布应用，需要接收通知的成员须在应用可用范围内',
+      '记录 App ID、App Secret（仅通知只需这两项）',
+      '「仅通知」不接对话，无需配置回调地址；填写后保存即可',
     ],
     docUrl: 'https://open.feishu.cn/',
   },
@@ -1528,7 +1548,13 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
   },
 }
 
-const currentGuide = computed(() => quickGuideMap[form.value.channel_type] || { title: '', steps: [], docUrl: '' })
+// 「仅通知」用途换用不含回调配置步骤的指引（isNotifyOnly 仅对 wecom/feishu/dingtalk 成立，
+// 三者均已定义 notifyOnlySteps）
+const currentGuide = computed(() => {
+  const guide = quickGuideMap[form.value.channel_type]
+  if (guide && isNotifyOnly.value) return { ...guide, steps: guide.notifyOnlySteps as string[] }
+  return guide || { title: '', steps: [], docUrl: '' }
+})
 
 // ==================== 回调地址 ====================
 
@@ -2142,7 +2168,8 @@ async function saveChannel(): Promise<boolean> {
       subagent_type: form.value.subagent_type || undefined
     }
     // 企微/飞书/钉钉应用：写入通知用途（缺省 agent_only，存量行为不变）；
-    // 仅通知用途无回调链路，剔除回调字段旧值（表单已隐藏或本就无回调字段）
+    // 仅通知用途无回调链路，隐藏的回调字段不随保存提交（库内旧值由后端保留，
+    // 改回 agent_only/both 时免重填）
     if (form.value.channel_type === 'wecom' || form.value.channel_type === 'feishu' || form.value.channel_type === 'dingtalk') {
       payload.config.notify_usage = notifyUsage.value
       if (notifyUsage.value === 'notify_only') {

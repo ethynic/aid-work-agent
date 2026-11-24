@@ -4,10 +4,11 @@
 终态落库投影、submit() 拆分受理回归、渠道注册接线（工厂/枚举/防滥用白名单）。
 """
 
+import asyncio
 import hashlib
 import hmac
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -578,15 +579,15 @@ class TestClarificationPersistence:
         assert _clarification_question(child) == ("q", "w2")
 
     def test_persist_skips_when_question_or_wait_id_missing(self):
-        from src.saas.api.web_c import _persist_clarification_message
+        from src.saas.services.web_c_runner_persist import persist_clarification_message
 
-        with patch("src.saas.api.web_c.get_db_connection") as mock_conn:
-            assert _persist_clarification_message("t1", "s1", "run_1", "", "wait_1") is False
-            assert _persist_clarification_message("t1", "s1", "run_1", "q", "") is False
+        with patch("src.saas.services.web_c_runner_persist.get_db_connection") as mock_conn:
+            assert persist_clarification_message("t1", "s1", "run_1", "", "wait_1") is False
+            assert persist_clarification_message("t1", "s1", "run_1", "q", "") is False
             mock_conn.assert_not_called()
 
     def test_persist_inserts_then_dedupes_by_wait_id(self):
-        from src.saas.api.web_c import _persist_clarification_message
+        from src.saas.services.web_c_runner_persist import persist_clarification_message
 
         class FakeCursor:
             def __init__(self, exists_result):
@@ -618,16 +619,16 @@ class TestClarificationPersistence:
         # 首次：SELECT 无记录 -> INSERT 成功 -> UPDATE 会话时间戳
         cursor = FakeCursor(exists_result=None)
         cursor.rowcount = 1
-        with patch("src.saas.api.web_c.get_db_connection", return_value=FakeConn(cursor)):
-            assert _persist_clarification_message("t1", "t1_web_c_uid_0011_x_sab", "run_1",
+        with patch("src.saas.services.web_c_runner_persist.get_db_connection", return_value=FakeConn(cursor)):
+            assert persist_clarification_message("t1", "t1_web_c_uid_0011_x_sab", "run_1",
                                                   "请补充你的城市？", "wait_1") is True
         assert any("INSERT INTO channel_messages" in sql for sql in cursor.executed)
         assert any("ON CONFLICT DO NOTHING" in sql for sql in cursor.executed)
 
         # 已存在（SELECT 命中）-> 不再 INSERT
         cursor2 = FakeCursor(exists_result={"exists": 1})
-        with patch("src.saas.api.web_c.get_db_connection", return_value=FakeConn(cursor2)):
-            assert _persist_clarification_message("t1", "t1_web_c_uid_0011_x_sab", "run_1",
+        with patch("src.saas.services.web_c_runner_persist.get_db_connection", return_value=FakeConn(cursor2)):
+            assert persist_clarification_message("t1", "t1_web_c_uid_0011_x_sab", "run_1",
                                                   "请补充你的城市？", "wait_1") is False
         assert len(cursor2.executed) == 1 and cursor2.executed[0].startswith("SELECT 1")
 
@@ -654,42 +655,16 @@ class TestClarificationPersistence:
         assert args[3] == "请补充你的城市？" and args[4] == "wait_1"
 
 
-class TestBackfillTerminalRunners:
-    """SSE 断开兜底补写回归（2026-11-20 事故：SQL 表达式无别名，PG 返回
-    ?column? 列名 -> row["runner_id"] KeyError -> completed 轮回复永不落库）。"""
-
-    class _PgLikeCursor:
-        """模拟 PG 输出列名行为：SELECT 表达式未加别名时列名为 ?column?。"""
-
-        def __init__(self, runner_ids):
-            self._runner_ids = runner_ids
-            self.executed = []
-
-        def execute(self, sql, params=None):
-            self.executed.append(" ".join(sql.split()))
-
-        def fetchall(self):
-            if "AS runner_id" in " ".join(self.executed):
-                return [{"runner_id": rid} for rid in self._runner_ids]
-            return [{"?column?": rid} for rid in self._runner_ids]
-
-    class _FakeConn:
-        def __init__(self, cursor):
-            self._cursor = cursor
-
-        def cursor(self):
-            return self._cursor
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
+class TestBackfillSessionRunners:
+    """会话级终态补写（2026-11-23 事故回归：落库仅由访客行为触发，访客关页
+    后回复含文件永不落库；现实现 DB 直读 agent_runners，不依赖 Runner API）。"""
 
     @staticmethod
     def _completed_row(runner_id="run_a"):
         return {
             "runner_id": runner_id,
+            "tenant_id": "t1",
+            "session_id": "t1_web_c_uid_0011_x_sab",
             "status": "completed",
             "result": {"output": "报价单已经做好了，你看一下附件。"},
             "snapshot": {"downloadableFiles": [{
@@ -699,53 +674,174 @@ class TestBackfillTerminalRunners:
             }]},
         }
 
+    @staticmethod
+    def _waiting_row(runner_id="run_b"):
+        return {
+            "runner_id": runner_id,
+            "tenant_id": "t1",
+            "session_id": "t1_web_c_uid_0011_x_sab",
+            "status": "waiting",
+            "result": {},
+            "snapshot": {"waiting": {"kind": "clarification", "wait_id": "wait_9",
+                                     "question": "请补充出行人数？"}},
+        }
+
     @pytest.mark.asyncio
-    async def test_completed_runner_backfilled(self):
+    async def test_completed_and_waiting_backfilled(self):
         from unittest.mock import MagicMock
 
-        from src.saas.api.web_c import _backfill_terminal_runners, WebCIdentity
+        from src.saas.services import web_c_runner_persist as svc
 
-        identity = WebCIdentity("t1", "cfg1", "anon", "uid_0011", "", "sales-assistant")
-        cursor = self._PgLikeCursor(runner_ids=[])
+        rows = [self._completed_row(), self._waiting_row()]
+        with patch.object(svc, "_load_runner_rows", return_value=rows), \
+             patch.object(svc, "has_final_message", return_value=False), \
+             patch.object(svc, "persist_assistant_message", new=MagicMock()) as mock_persist, \
+             patch.object(svc, "persist_clarification_message", new=MagicMock(return_value=True)) as mock_clarify:
+            count = await svc.backfill_session_runners("t1", "t1_web_c_uid_0011_x_sab")
 
-        class FakeClient:
-            async def request(self, *args, **kwargs):
-                return {"runners": [TestBackfillTerminalRunners._completed_row()]}
-
-        with patch("src.saas.api.web_c._runner_client", return_value=FakeClient()), \
-             patch("src.saas.api.web_c.get_db_connection", return_value=self._FakeConn(cursor)), \
-             patch("src.saas.api.web_c._has_final_message", return_value=False), \
-             patch("src.saas.api.web_c._persist_assistant_message", new=MagicMock()) as mock_persist:
-            count = await _backfill_terminal_runners(identity, "t1_web_c_uid_0011_x_sab")
-
-        # 回归守卫：runner_id 表达式必须带别名，否则 PG 返回 ?column? 列名
-        assert any("AS runner_id" in sql for sql in cursor.executed)
-        assert count == 1
-        mock_persist.assert_called_once()
+        assert count == 2
         args = mock_persist.call_args.args
-        assert args[1] == "t1_web_c_uid_0011_x_sab" and args[2] == "run_a"
+        assert args[0] == "t1" and args[1] == "t1_web_c_uid_0011_x_sab" and args[2] == "run_a"
         assert args[3] == "报价单已经做好了，你看一下附件。"
         # 附件随消息一起补写（downloadableFiles 投影）
         assert [a["file_id"] for a in args[4]] == ["file_54d1dcb58330"]
+        clarify_args = mock_clarify.call_args.args
+        assert clarify_args[:2] == ("t1", "t1_web_c_uid_0011_x_sab")
+        assert clarify_args[3] == "请补充出行人数？" and clarify_args[4] == "wait_9"
 
     @pytest.mark.asyncio
     async def test_already_persisted_runner_skipped(self):
         from unittest.mock import MagicMock
 
-        from src.saas.api.web_c import _backfill_terminal_runners, WebCIdentity
+        from src.saas.services import web_c_runner_persist as svc
 
-        identity = WebCIdentity("t1", "cfg1", "anon", "uid_0011", "", "sales-assistant")
-        cursor = self._PgLikeCursor(runner_ids=["run_a"])
-
-        class FakeClient:
-            async def request(self, *args, **kwargs):
-                return {"runners": [TestBackfillTerminalRunners._completed_row()]}
-
-        with patch("src.saas.api.web_c._runner_client", return_value=FakeClient()), \
-             patch("src.saas.api.web_c.get_db_connection", return_value=self._FakeConn(cursor)), \
-             patch("src.saas.api.web_c._has_final_message", return_value=False), \
-             patch("src.saas.api.web_c._persist_assistant_message", new=MagicMock()) as mock_persist:
-            count = await _backfill_terminal_runners(identity, "t1_web_c_uid_0011_x_sab")
+        rows = [self._completed_row()]
+        with patch.object(svc, "_load_runner_rows", return_value=rows), \
+             patch.object(svc, "has_final_message", return_value=True), \
+             patch.object(svc, "persist_assistant_message", new=MagicMock()) as mock_persist:
+            count = await svc.backfill_session_runners("t1", "t1_web_c_uid_0011_x_sab")
 
         assert count == 0
         mock_persist.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_completed_skips_when_wait_id_missing(self):
+        from unittest.mock import MagicMock
+
+        from src.saas.services import web_c_runner_persist as svc
+
+        waiting = self._waiting_row()
+        waiting["snapshot"] = {"waiting": {"kind": "clarification", "question": "q"}}
+        with patch.object(svc, "_load_runner_rows", return_value=[waiting]), \
+             patch.object(svc, "persist_clarification_message", new=MagicMock()) as mock_clarify:
+            count = await svc.backfill_session_runners("t1", "s1")
+
+        assert count == 0
+        mock_clarify.assert_not_called()
+
+
+class TestWebCRunnerPersistSweeper:
+    """background 兜底扫描器：访客离线时 completed 回复（含文件）与 waiting 反问补写。"""
+
+    @staticmethod
+    def _row(**overrides):
+        row = {
+            "runner_id": "run_s1",
+            "tenant_id": "t1",
+            "session_id": "t1_web_c_uid_0011_x_sab",
+            "status": "completed",
+            "result": {"output": "两份文件都做好了。"},
+            "snapshot": {"downloadableFiles": [{
+                "file_id": "file_a", "file_name": "行程方案.xlsx",
+                "file_size": 8995, "mime_type": "",
+                "download_url": "/api/files/file_a/download",
+            }]},
+        }
+        row.update(overrides)
+        return row
+
+    @pytest.mark.asyncio
+    async def test_sweep_persists_completed_and_waiting(self):
+        from unittest.mock import MagicMock
+
+        from src.saas.services import web_c_runner_persist as svc
+
+        waiting = self._row(runner_id="run_s2", status="waiting",
+                            result={}, snapshot={"waiting": {
+                                "kind": "clarification", "wait_id": "wait_5",
+                                "question": "需要确定日期吗？"}})
+        sweeper = svc.WebCRunnerPersistSweeper()
+        with patch.object(svc, "_load_recent_runner_rows",
+                          return_value=[self._row(), waiting]), \
+             patch.object(svc, "has_final_message", return_value=False), \
+             patch.object(svc, "persist_assistant_message", new=MagicMock()) as mock_persist, \
+             patch.object(svc, "persist_clarification_message", new=MagicMock(return_value=True)):
+            count = await sweeper.sweep_once()
+
+        assert count == 2
+        args = mock_persist.call_args.args
+        # file_name 兜底：snapshot 字段为 file_name，投影应回填 name
+        assert args[4][0]["name"] == "行程方案.xlsx"
+        assert args[4][0]["size"] == 8995
+
+    @pytest.mark.asyncio
+    async def test_sweep_skips_persisted_and_missing_fields(self):
+        from unittest.mock import MagicMock
+
+        from src.saas.services import web_c_runner_persist as svc
+
+        sweeper = svc.WebCRunnerPersistSweeper()
+        rows = [self._row(), self._row(runner_id="", tenant_id=None)]
+        with patch.object(svc, "_load_recent_runner_rows", return_value=rows), \
+             patch.object(svc, "has_final_message", return_value=True), \
+             patch.object(svc, "persist_assistant_message", new=MagicMock()) as mock_persist:
+            count = await sweeper.sweep_once()
+
+        assert count == 0
+        mock_persist.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sweep_completed_persist_error_does_not_break_round(self):
+        from unittest.mock import MagicMock
+
+        from src.saas.services import web_c_runner_persist as svc
+
+        sweeper = svc.WebCRunnerPersistSweeper()
+        with patch.object(svc, "_load_recent_runner_rows", return_value=[self._row()]), \
+             patch.object(svc, "has_final_message", return_value=False), \
+             patch.object(svc, "persist_assistant_message",
+                          new=MagicMock(side_effect=RuntimeError("db down"))):
+            count = await sweeper.sweep_once()
+
+        assert count == 0  # 单条失败仅记日志，不中断本轮其余行
+
+    @pytest.mark.asyncio
+    async def test_start_stop_lifecycle(self):
+        from src.saas.services import web_c_runner_persist as svc
+
+        sweeper = svc.WebCRunnerPersistSweeper()
+        assert await sweeper.start() is True
+        # 重复启动幂等
+        assert await sweeper.start() is True
+        await sweeper.stop()
+        assert sweeper._task is None
+
+    @pytest.mark.asyncio
+    async def test_sweep_once_error_swallowed_in_loop(self):
+        """_run_loop 单轮异常自吞（下轮重试），不令扫描器任务退出。"""
+        from src.saas.services import web_c_runner_persist as svc
+
+        sweeper = svc.WebCRunnerPersistSweeper()
+        calls = {"n": 0}
+
+        async def fake_sweep():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("boom")
+
+        with patch.object(sweeper, "sweep_once", new=fake_sweep):
+            task = asyncio.get_running_loop().create_task(sweeper._run_loop())
+            await asyncio.sleep(0.05)
+            assert not task.done()  # 首轮异常后仍存活
+            await sweeper.stop()
+

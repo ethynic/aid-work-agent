@@ -99,6 +99,7 @@ DB 层 `client_usage_logs.tenant_id` 近 14 天 **无一行 NULL**（写入侧 `
 - **`/usage/daily-detail`**：返回 `items` 合并两类行，新增 `usage_type: 'chat' | 'client'`；chat 行形状不变；client 行返回 `{time, usage_type, source: stage 中文映射（boss_tool→BOSS 工具 / official_profile→协会采集·官网…）, command: model 列, arguments: detail.arguments, credit_cost, session_id}`。token 三列与 breakdown 仅对 chat 行返回（维持 platform_admin 可见规则）。
 - **前端 `TenantTokenUsage.vue`**：详情弹框加「类型」列（智能体对话 / 客户端调用）；client 行以「来源 + 命令 + 参数」替代「会话标题 + 消息」展示，参数超长折叠；每日清单可选增加「客户端调用」列。余额卡片、日均、预估天数逻辑不动（renewal 已是双表口径）。
 - 兼容：`GET /api/client/v1/credits/detail` 不动（客户端侧已有自己的明细视图）。
+- 企业微信定时发送复用现有 `boss_tool` 台账写入。每日明细识别 `wecom_scheduled_send:` 会话下的 `wecom_message_send`，将来源显示为「企业微信定时发送」，适用于已记账的记录。见[定时发送计费设计](../wecom/wecom-scheduled-send-design.md#决策-26定时发送采用什么计费口径)。
 
 ### 4.4 P4 标准接入规范 + 通用上报端点（面向未来客户端）
 
