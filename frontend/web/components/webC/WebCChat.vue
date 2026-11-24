@@ -1,5 +1,5 @@
 <template>
-  <div class="h-screen chat-root flex flex-col bg-canvas" :class="{ 'embed-mode': isEmbed }">
+  <div ref="rootEl" class="h-screen chat-root flex flex-col bg-canvas" :class="{ 'embed-mode': isEmbed }">
     <!-- 页头（iframe embed 模式隐藏，设计 §4.5） -->
     <header v-if="!isEmbed" class="flex items-center gap-3 px-4 py-3 bg-surface border-b border-default">
       <div class="w-9 h-9 rounded-full bg-primary-50 text-primary-600 flex items-center justify-center shrink-0">
@@ -157,6 +157,11 @@
     <div v-if="errorMessage" class="fixed bottom-20 left-1/2 -translate-x-1/2 bg-danger-50 text-danger-700 text-xs px-3 py-2 rounded-lg shadow z-20">
       {{ errorMessage }}
     </div>
+
+    <!-- 真机诊断启用进度提示（3 秒内连点 10 次启用，见 onPageTap） -->
+    <div v-if="tapHint" class="fixed bottom-2 left-2 bg-surface border border-default rounded px-2 py-1 text-xs text-muted z-50">
+      {{ tapHint }}
+    </div>
   </div>
 </template>
 
@@ -216,6 +221,50 @@ const isTerminal = ref(true)
 const streamingActive = ref(false)
 const scrollContainer = ref<HTMLElement | null>(null)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
+const rootEl = ref<HTMLElement | null>(null)
+const tapHint = ref('')
+
+// ============== 真机诊断开关（2026-11-24 iOS 微信右侧裁切排查） ==============
+// 3 秒内连点页面 10 次启用 vConsole 布局诊断（真机-only 问题无法在桌面复现，
+// 靠测试同学点「复制诊断」回传视口/缩放数据）。启用后 sessionStorage 记忆，
+// 本次会话内刷新/跳转不丢；会话结束自动失效，不影响普通用户。
+const DIAG_TAPS = 10
+const DIAG_WINDOW_MS = 3000
+const DIAG_STORAGE_KEY = 'webc_vconsole'
+let tapCount = 0
+let tapFirstAt = 0
+let tapHintTimer: ReturnType<typeof setTimeout> | null = null
+let diagnosticsOn = false
+
+function enableDiagnostics() {
+  if (diagnosticsOn) return
+  diagnosticsOn = true
+  tapHint.value = ''
+  if (tapHintTimer) { clearTimeout(tapHintTimer); tapHintTimer = null }
+  try { sessionStorage.setItem(DIAG_STORAGE_KEY, '1') } catch { /* 隐私模式等场景忽略 */ }
+  void import('@/utils/webCDiagnostics').then(m =>
+    m.setupWebCDiagnostics({
+      getTextarea: () => inputEl.value,
+      getScrollContainer: () => scrollContainer.value,
+    }))
+}
+
+function onPageTap() {
+  if (diagnosticsOn) return
+  const now = Date.now()
+  if (now - tapFirstAt > DIAG_WINDOW_MS) tapCount = 0
+  if (tapCount === 0) tapFirstAt = now
+  tapCount++
+  if (tapCount >= DIAG_TAPS) {
+    enableDiagnostics()
+    return
+  }
+  if (tapCount >= 4) {
+    tapHint.value = `再点 ${DIAG_TAPS - tapCount} 次启用诊断`
+    if (tapHintTimer) clearTimeout(tapHintTimer)
+    tapHintTimer = setTimeout(() => { tapHint.value = '' }, 1500)
+  }
+}
 
 /** 回焦输入框：流式期间 textarea 被 disabled 导致焦点丢失，每轮结束后自动归还 */
 async function focusInput() {
@@ -231,6 +280,7 @@ onBeforeUnmount(() => {
   observeAbort.abort()
   submitting.value = false
   streamingActive.value = false
+  rootEl.value?.removeEventListener('click', onPageTap)
 })
 
 const canSubmit = computed(() => (inputText.value.trim().length > 0 || pendingAttachments.value.length > 0))
@@ -238,6 +288,11 @@ const canSubmit = computed(() => (inputText.value.trim().length > 0 || pendingAt
 const isUidMode = computed(() => identityMode.value === 'uid')
 
 onMounted(async () => {
+  // 真机诊断：会话内已启用过（sessionStorage 记忆）则直接恢复；否则监听连点手势
+  try {
+    if (sessionStorage.getItem(DIAG_STORAGE_KEY) === '1') enableDiagnostics()
+  } catch { /* sessionStorage 不可用忽略 */ }
+  rootEl.value?.addEventListener('click', onPageTap)
   identity.value = buildIdentityQuery(configId.value, route.query as Record<string, unknown>)
   try {
     const data = await getBootstrap(tenantId.value, configId.value, identity.value)
@@ -690,6 +745,18 @@ async function observeRunner(runnerId: string) {
 }
 .markdown-body {
   overflow-wrap: anywhere;
+}
+/* iOS 聚焦自动放大防御（2026-11-24 二次反馈）：WKWebView 对 font-size < 16px 的
+   输入控件聚焦时会 zoom 页面（scale ≈ 16/字号），微信内核键盘收起后不还原，
+   表现为页面宽于视口可横向平移、右侧锚定内容（用户气泡/时间戳/停止按钮）出屏。
+   移动端输入框字号提到 16px 使 Safari 跳过聚焦缩放；桌面端保持 text-sm。 */
+.chat-root textarea {
+  font-size: 16px;
+}
+@media (min-width: 768px) {
+  .chat-root textarea {
+    font-size: 14px;
+  }
 }
 .markdown-body :deep(p) {
   margin: 0.25rem 0;
