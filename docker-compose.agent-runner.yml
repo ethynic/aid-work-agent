@@ -209,7 +209,7 @@ services:
       dockerfile: Dockerfile
     image: aid-agent-api:latest
     restart: unless-stopped
-    container_name: ${HEAVY_TOOLS_CONTAINER:-aid-heavy-tools}
+    # container_name removed 2026-11-17: heavy replicas>1 requires no fixed name, DNS rounds by service name
     deploy:
       replicas: ${HEAVY_TOOLS_REPLICAS:-1}
     cpus: ${HEAVY_TOOLS_CPUS:-2}
