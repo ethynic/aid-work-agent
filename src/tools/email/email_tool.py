@@ -104,7 +104,7 @@ TOOL_DESCRIPTION = """邮件处理工具。通过用户绑定的邮箱发送和�
   filenames（可选，附件名过滤）、folder（可选，默认INBOX）；单附件超25MB跳过并在 skipped 中标注
 
 调用注意：
-- 未绑定邮箱时会返回错误提示，需引导用户先在设置中绑定邮箱
+- 未绑定邮箱时会返回错误提示，需引导用户先在「连接中心 → 连接邮箱」中连接邮箱
 - read 返回结构：emails（uid/subject/from/to/date/body_preview/attachments）+ folders（文件夹列表）+ count；
   attachments 为附件元信息 [{filename, content_type, size}]，不含附件内容
 - 按发件人/主题筛选时工具会先只拉取邮件头做本地过滤，命中才拉取全文
@@ -136,6 +136,27 @@ _SEND_SAFE_MESSAGES = {
     TimeoutError: "连接SMTP服务器超时，请检查网络",
     OSError: "网络异常，邮件发送失败",
 }
+
+
+def _send_error_code(e: Exception) -> str:
+    """发送异常 → 错误类型（error_code）。具体类型必须先判断
+    （如 SMTPAuthenticationError 也是 OSError 后代），供保存接口区分失败原因"""
+    if isinstance(e, smtplib.SMTPAuthenticationError):
+        return "auth"
+    if isinstance(e, (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected,
+                      ConnectionRefusedError)):
+        return "connect"
+    if isinstance(e, TimeoutError):
+        return "timeout"
+    if isinstance(e, email_lib.EmailLibError):
+        return "invalid_recipient"
+    if isinstance(e, smtplib.SMTPException):
+        # SMTPException 也是 OSError 后代；走到这里是服务器已应答但拒绝
+        # （发件人/收件人被拒、不支持 AUTH 等），不是网络异常
+        return "other"
+    if isinstance(e, OSError):
+        return "network"
+    return "other"
 
 # 读取失败白名单（imaplib.IMAP4.error 覆盖登录失败/命令失败等，统一固定文案）
 _READ_SAFE_MESSAGES = {
@@ -209,7 +230,7 @@ class EmailProcessTool(BaseTool):
         # 邮件调用前的账号查询阻塞同一 worker 上的其他请求。
         user_email = await asyncio.to_thread(self._resolve_user_email)
         if not user_email:
-            return {"success": False, "error": "未绑定邮箱，请先去设置中绑定邮箱"}
+            return {"success": False, "error": "未绑定邮箱，请先在「连接中心 → 连接邮箱」中连接邮箱"}
 
         action = str(kwargs.get("action") or "").strip().lower()
         if action == "send":
@@ -247,6 +268,7 @@ class EmailProcessTool(BaseTool):
                 "error": sanitize_error(
                     e, safe_messages=_SEND_SAFE_MESSAGES, fallback="邮件发送失败，请稍后重试"
                 ),
+                "error_code": _send_error_code(e),
             }
 
         logger.info(

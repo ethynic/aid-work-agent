@@ -1127,6 +1127,8 @@ const connectionSubMenuItems = computed(() => {
     { key: 'weixin_agent', path: `${base}/weixin-agent`, label: '微信 Agent', icon: 'M8 10h.01M12 10h.01M16 10h.01M20 11.5c0 4.1-3.6 7.5-8 7.5a8.9 8.9 0 01-3-.5L4 20l1.4-4.2A7 7 0 014 11.5C4 7.4 7.6 4 12 4s8 3.4 8 7.5z', adminOnly: false },
     // 外部系统：链接（管理员与普通员工均可见）
     { key: 'external_systems', path: `${base}/connections/external-systems`, label: '外部系统', icon: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71', adminOnly: false },
+    // 连接邮箱：信封（管理员与普通员工均可见，排在「外部系统」之后）
+    { path: `${base}/connections/email`, label: '连接邮箱', icon: 'M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z', adminOnly: false },
   ]
   // 数据源授权门控：「商城产品同步」仅对已开通租户显示（portal 授权记录，见 GET /api/saas/connection-sources）
   if (grantedModules.value.has('hongtao_shop')) {
@@ -1156,6 +1158,7 @@ const isConnectionActive = computed(() => {
   return [
     `${base}/connections`,
     `${base}/connections/external-systems`,
+    `${base}/connections/email`,
     `${base}/channels`,
     `${base}/wechat-mp`,
     `${base}/hongtao-shop`,

@@ -46,7 +46,7 @@ metadata:
    `hook_library.py` 只把兄弟技能 `b2b-lead-research-1.0.0/scripts/` 的权威副本
    加载进来（模块导入 + CLI 直跑双语义）。schema / 子命令变更只改权威副本。
 3. **发件邮箱三层解析**（`mailbox_resolver.py`，发送脚本自动调用）：
-   用户个人邮箱（邮箱设置）-> 租户邮箱兜底 -> 两者皆无时脚本退出并提示用户去配置。
+   用户个人邮箱（连接中心 → 连接邮箱）-> 租户邮箱兜底 -> 两者皆无时脚本退出并提示用户去配置。
    系统 .env 邮箱仅用于平台通知，**本技能禁止使用**。SMTP/IMAP 密码只在脚本内存中
    解密，不落盘、不打印、不进对话上下文。
 4. **campaign 工作目录**：`/app/storage/tenants/{tenant}/lead-gen/campaign_{id}/`

@@ -382,7 +382,7 @@ def cmd_init(args):
     with get_conn() as conn, conn.cursor(cursor_factory=NamedTupleCursor) as cur:
         if not _mailbox_configured(cur, tenant_id, user_id):
             print("ERROR: 尚未配置发件邮箱，暂不创建 campaign（避免整个流程走完才在发送阶段失败）。")
-            print("  请先在「邮箱设置」配置个人邮箱，或联系租户管理员在企业设置页配置租户邮箱，")
+            print("  请先在「连接中心 → 连接邮箱」连接个人邮箱，或联系租户管理员在企业设置页配置租户邮箱，")
             print("  配置完成后重新执行本命令。")
             return 1
     brief = Path(args.brief_file).read_text(encoding="utf-8") if args.brief_file else ""

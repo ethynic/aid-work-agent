@@ -70,6 +70,7 @@ describe('entry route responsibilities', () => {
         "knowledge/tdoc-imports",
         "connections",
         "connections/external-systems",
+        "connections/email",
         "channels",
         "wechat-mp",
         "hongtao-shop",

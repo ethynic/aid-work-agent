@@ -4,7 +4,7 @@
 
 | 阶段 | 内容 | 状态 | 完成记录 |
 |------|------|------|---------|
-| Phase 1 | 连接邮箱页面与品牌弹窗、旧入口移除、后端错误类型与连接时间、引导文案 | 🔧 进行中 | — |
+| Phase 1 | 连接邮箱页面与品牌弹窗、旧入口移除、后端错误类型与连接时间、引导文案 | ✅ 完成（2026-11-24） | 测试先行；独立测试与 CodeReview 通过。本阶段相关测试：后端 152、前端 142、真实 PostgreSQL 7 个用例通过，前端构建通过；全量回归中另有 37 个失败，逐个对照过均为改动前已存在。待合并 `master`，遗留见第七节 |
 
 > 设计文档：[连接邮箱设计](../system/design-connect-mailbox-design.md)。品牌参数、交互状态和设计决策以设计文档为准，本计划只写怎么实现、怎么验证。
 > 工作分支 `dev/connect-mailbox`，独立 worktree `C:\repos\aid-work-agent-connect-mailbox`。本功能录入邮箱密码和授权码，属于敏感数据范围，按高风险走完整三智能体流程（开发 → 独立测试 → 独立 Code Review）。
@@ -79,12 +79,15 @@
 
 | 范围 | 位置 | 覆盖 |
 |---|---|---|
-| 后端工具 | `tests/unit/tools/test_email_tool.py`（修改） | 授权失败、连不上、超时、其他四类错误的 `error_code`；未绑定邮箱的新文案 |
+| 后端工具 | `tests/unit/tools/test_email_tool.py`（修改） | 授权失败、连不上、超时、网络、服务器拒绝、其他各类错误的 `error_code`；未绑定邮箱的新文案 |
 | 后端接口 | `tests/integration/test_email_settings_api.py`（新增） | 查询带 `updated_at`；保存成功和失败两种响应；不连接数据库 |
+| 数据库层 | `tests/integration/test_email_settings_endpoints.py`（修改） | 补一条断言：查询结果里的 `updated_at` 是 `datetime`，接口里的 `isoformat()` 才成立 |
 | 受文案影响的现有测试 | `tests/unit/tools/test_excel_pipeline.py` 等 | 断言跟着新文案更新 |
-| 品牌表 | `frontend/web/__tests__/components/mailboxBrands.test.ts`（新增） | 各品牌的尝试顺序和拼出的 9 项；地址补全；从配置识别品牌；失败提示的选择 |
-| 页面和弹窗 | `frontend/web/__tests__/components/ConnectMailbox.test.ts`（新增） | 两种分组、预留位不显示、校验提示、依次尝试、连接中禁止关闭、失败提示与展开步骤、更换提示、重新连接带出地址、断开确认、加载失败重试 |
+| 品牌表 | `frontend/web/__tests__/components/mailboxBrands.test.ts`（新增） | 各品牌的尝试顺序、服务器和端口、拼出的 9 项；地址补全；从配置识别品牌；失败提示的选择 |
+| 页面和弹窗 | `frontend/web/__tests__/components/ConnectMailbox.test.ts`（新增） | 两种分组、预留位不显示、校验提示、依次尝试、连接中禁止关闭、失败提示与展开步骤、更换提示、重新连接带出地址、断开确认、加载失败重试、关闭后清空表单 |
 | 侧栏菜单 | `frontend/web/__tests__/components/MenuSidebar.test.ts`（修改） | 普通员工能看到「连接邮箱」并能跳转 |
+| 路由清单 | `frontend/web/__tests__/router/routes.test.ts`（修改） | 租户嵌套路由清单加上 `connections/email` |
+| 帮助组件 | `frontend/web/__tests__/components/HelpExpand.test.ts`（新增） | 不传 `open` 时内部切换；传了以后由外部控制 |
 
 ## 五、验证命令
 
@@ -103,6 +106,16 @@ wsl.exe -d Ubuntu-22.04 --exec bash -lc 'cd /mnt/c/repos/aid-work-agent-connect-
 
 修改前的基线：`test_email_tool.py` 36 个通过；`MenuSidebar.test.ts` 和 `BaseModal.test.ts` 共 29 个通过。
 
+真实数据库的回归用专用测试库入口（复用本机常驻的测试 PostgreSQL）：
+
+```bash
+wsl.exe -d Ubuntu-22.04 --exec bash -lc 'cd /mnt/c/repos/aid-work-agent-connect-mailbox && docker compose -f docker-compose.test-db.yml run --rm -T sql tests/integration/test_email_settings_endpoints.py -p no:cacheprovider -q'
+```
+
+导入检查里的 `from src.main import app` 在一次性容器里会因为没配 `WANX_API_KEY` 而失败，这是环境原因。给容器临时加一个占位值即可通过：在 `run` 后面加 `-e WANX_API_KEY=local-dev-placeholder`。
+
+页面已在真实浏览器里验证（前端连本地 API，接口响应用页面内模拟，不写业务库）：页面四种状态、QQ 弹窗校验与连接成功、腾讯和网易企业邮箱按顺序尝试与全部失败提示、步骤展开、自定义表单与高级设置、窄屏排版、断开连接、重试、设置弹窗里邮箱页签已移除。
+
 ## 六、流程与风险
 
 1. 开发智能体按任务书实现并自测，先做后端，再做前端。
@@ -114,6 +127,8 @@ wsl.exe -d Ubuntu-22.04 --exec bash -lc 'cd /mnt/c/repos/aid-work-agent-connect-
 
 ## 七、遗留
 
-- 四个品牌的服务器参数来自官方帮助页，没有用真实账号实测。上线前每个品牌至少用测试账号连接一次；自动尝试的顺序和总耗时按实测调整。
+- 四个品牌的服务器参数来自官方帮助页，没有用真实账号实测。上线前每个品牌至少用测试账号连接一次；自动尝试的顺序和总耗时按实测调整。凭据错误时服务器很快返回；如果某套服务器连不上，每次要等到超时，三套都连不上最长可能等一分多钟，这期间弹窗不能取消。
 - 品牌图标是示意 SVG，需要替换为品牌官方素材或由设计提供。
 - 页面里的帮助文字需要同步到产品侧的《智能体后台操作指引》。
+- 全量回归里有 37 个失败，逐个用 `master` 的代码实跑对照过，都是改动前已存在的：后端 24 个（8 个是一次性测试容器没配模型密钥，16 个是历史遗留），前端 13 个（10 个是测试里的 mock 缺 `hiddenMenus`，3 个是历史遗留）。都不在本阶段改动的文件里，没有修。
+- 两个不影响功能的小地方没有做：「连接中」时步骤开关、高级设置开关和官方链接没有置灰（关闭请求已被忽略）；技能脚本里改的引导文案没有测试断言新措辞。
