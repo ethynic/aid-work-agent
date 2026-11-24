@@ -127,25 +127,30 @@
                   {{ batchLabel(batch.state) }} · {{ batch.groups.length }} 群
                   <span v-if="batch.notification_status"> · {{ notificationLabels[batch.notification_status] }}</span>
                 </p>
-                <ul class="m-0 list-none space-y-2 p-0">
-                  <li v-for="group in batch.groups" :key="group.group_id" class="rounded-lg border border-default p-3">
-                    <div class="flex flex-wrap items-start justify-between gap-2">
-                      <h3 class="m-0 min-w-0 break-all text-sm font-semibold text-default">{{ group.name }}</h3>
-                      <span class="text-sm text-muted">{{ groupLabel(group) }}</span>
-                    </div>
-                    <p v-if="group.summary" class="m-0 mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-default">{{ group.summary }}</p>
-                    <p v-if="group.message_count !== undefined" class="m-0 mt-2 text-sm text-muted">
-                      {{ group.message_count ? `使用 ${group.message_count} 条文字消息` : '此时段未读到文字消息' }}
-                      {{ group.partial ? ' · 仅包含能核实的部分文字，实际覆盖起止时间无法确认' : '' }}
-                    </p>
-                    <div v-if="canRetry(group)" class="mt-2 flex flex-wrap items-center gap-2">
-                      <div class="min-w-0 space-y-1">
-                        <p class="m-0 text-sm text-danger-700">{{ reason(group.error_code) }}</p>
-                        <p class="m-0 text-sm text-muted">重试前，请在原任务设备的微信中打开并核对目标群。</p>
+                <ul class="m-0 list-none space-y-3 p-0">
+                  <li v-for="group in batch.groups" :key="group.group_id" class="min-w-0 rounded-lg border border-default">
+                    <header class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-t-lg bg-canvas px-3 py-2.5">
+                      <div class="flex min-w-0 items-start gap-2">
+                        <BaseBadge intent="info" size="sm" class="shrink-0">微信群</BaseBadge>
+                        <h3 class="m-0 min-w-0 break-all text-sm font-medium text-default">{{ group.name }}</h3>
                       </div>
-                      <BaseButton type="button" intent="secondary" :disabled="Boolean(retrying)" @click="retry(group)">
-                        {{ retrying === group.group_id ? '正在提交…' : '仅重试此群' }}
-                      </BaseButton>
+                      <span class="text-xs text-muted">{{ groupLabel(group) }}</span>
+                    </header>
+                    <div v-if="group.summary || group.message_count !== undefined || canRetry(group)" class="min-w-0 space-y-2 border-t border-default p-3">
+                      <WeixinSummaryMarkdown v-if="group.summary" :source="group.summary" />
+                      <p v-if="group.message_count !== undefined" class="m-0 text-sm text-muted">
+                        {{ group.message_count ? `使用 ${group.message_count} 条文字消息` : '此时段未读到文字消息' }}
+                        {{ group.partial ? ' · 仅包含能核实的部分文字，实际覆盖起止时间无法确认' : '' }}
+                      </p>
+                      <div v-if="canRetry(group)" class="flex flex-wrap items-center gap-2">
+                        <div class="min-w-0 space-y-1">
+                          <p class="m-0 text-sm text-danger-700">{{ reason(group.error_code) }}</p>
+                          <p class="m-0 text-sm text-muted">重试前，请在原任务设备的微信中打开并核对目标群。</p>
+                        </div>
+                        <BaseButton type="button" intent="secondary" :disabled="Boolean(retrying)" @click="retry(group)">
+                          {{ retrying === group.group_id ? '正在提交…' : '仅重试此群' }}
+                        </BaseButton>
+                      </div>
                     </div>
                   </li>
                 </ul>
@@ -187,6 +192,7 @@ import {
   type Batch, type Group, type GroupResult, type HistoryBatch, type Preset,
 } from '@/api/weixinAgent'
 import AppHeader from '@/components/AppHeader.vue'
+import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseCard from '@/components/ui/BaseCard.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
@@ -194,6 +200,7 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import WeixinSchedules from './WeixinSchedules.vue'
+import WeixinSummaryMarkdown from './WeixinSummaryMarkdown.vue'
 import { formatBeijing } from './beijingTime'
 
 const route = useRoute()

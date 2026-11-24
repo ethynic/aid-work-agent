@@ -66,9 +66,9 @@ marked.use({ renderer: { link: linkRenderer, image: imageRenderer } })
 /**
  * 将 markdown 文本渲染为 HTML
  */
-export function renderMarkdown(content: string, resolveFile?: ReplyFileResolver): string {
+export function renderMarkdown(content: string, resolveFile?: ReplyFileResolver, options?: { textOnly?: boolean }): string {
   const template = document.createElement('template')
-  template.innerHTML = marked(content) as string
+  template.innerHTML = marked(content, options?.textOnly ? { breaks: true } : undefined) as string
   if (resolveFile) {
     for (const element of template.content.querySelectorAll('img[src], a[href]')) {
       const attribute = element.tagName === 'IMG' ? 'src' : 'href'
@@ -76,6 +76,14 @@ export function renderMarkdown(content: string, resolveFile?: ReplyFileResolver)
       const fileId = replyFileId(original)
       if (fileId) element.setAttribute(attribute, resolveFile(fileId, attribute === 'href'))
     }
+  }
+  if (options?.textOnly) {
+    return DOMPurify.sanitize(template.innerHTML, {
+      ALLOWED_TAGS: ['a', 'blockquote', 'br', 'code', 'del', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+        'hr', 'li', 'ol', 'p', 'pre', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul'],
+      ALLOWED_ATTR: ['align', 'href', 'rel', 'start', 'target', 'title'],
+      ALLOW_DATA_ATTR: false,
+    })
   }
   return DOMPurify.sanitize(template.innerHTML, { ADD_ATTR: ['target'] })
 }
