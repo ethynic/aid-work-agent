@@ -22,6 +22,8 @@ class UsageScope:
     exit_guard_registered: bool = False
     owned_group: int | None = None
     tool_call_id: str | None = None
+    # 子进程记账运行时（DB 池/租约校验/工具上下文）已惰性初始化标记
+    runtime_ready: bool = False
 
     def check(self):
         if self.failure_file:
@@ -114,6 +116,23 @@ class UsageScope:
             self.fail(CheckpointFailure('RUNNER_CHILD_USAGE_STORAGE_FAILED'))
         self.check()
 
+    def child_timeout(self):
+        """执行器主动超时 kill 子进程组（SKILL_COMMAND_TIMEOUT 到期）。
+
+        与 child_exit 的异常退出语义区分：超时 kill 是执行器的确定性动作，
+        不是子进程记账存储故障，不得把「命令超时」放大为整个 runner 中断
+        （2026-11-24 聊易 CHANNEL_EXECUTION_INTERRUPTED 事故定性）。被杀子
+        进程在途的 skill-call 收据无法取证、也不能虚构零用量，按既有
+        uncertain 口径标记为 unknown 交由结算/对账闭环。"""
+        if self.repository is not None:
+            try:
+                self.repository.abandon_inflight_skill_calls(self.attempt)
+            except BaseException as error:
+                # 收据标记失败本身属于记账存储不可信，保持 fail() 原语义
+                self.fail(error)
+                raise
+        self.check()
+
     async def call(self, method, **arguments):
         return await provider_call(method, **arguments)
 
@@ -123,6 +142,8 @@ class UsageScope:
         from src.tools.context import current_tool_execution_context
         context = current_tool_execution_context()
         try:
+            if self.skill_boundary:
+                _ensure_subprocess_runtime(self,(self.attempt.runner_id,self.attempt.worker_id,self.attempt.number))
             from .domain_usage import physical_authorization
             execution_id = getattr(context, 'agent_execution_id', None) or self.execution_id
             tool_call_id = getattr(context, 'tool_call_id', None) or self.tool_call_id
@@ -225,6 +246,9 @@ async def provider_call(method, *, provider, model, kwargs, owner="llm", purpose
     execution_id = (_call.get() or (getattr(tool_context, "agent_execution_id", None) or scope.execution_id, None))[0]
     call_id = "provider_" + uuid.uuid4().hex
     try:
+        if scope.skill_boundary:
+            await asyncio.to_thread(_ensure_subprocess_runtime, scope,
+                (scope.attempt.runner_id,scope.attempt.worker_id,scope.attempt.number))
         from .domain_usage import physical_authorization
         tool_call_id = getattr(tool_context, 'tool_call_id', None) or scope.tool_call_id
         authorization = physical_authorization(scope.attempt,execution_id,tool_call_id,purpose,call_id)
@@ -319,11 +343,61 @@ def prepare_skill_environment(env, context=None):
 
 _subprocess_scopes = {}
 _subprocess_tool_scopes = {}
+_subprocess_runtime_lock = None
+
+
+def _subprocess_runtime_lock_handle():
+    global _subprocess_runtime_lock
+    if _subprocess_runtime_lock is None:
+        import threading
+        _subprocess_runtime_lock = threading.Lock()
+    return _subprocess_runtime_lock
+
+
+def _ensure_subprocess_runtime(scope, key):
+    """惰性初始化子进程记账运行时（DB 池 + 租约校验 + 工具上下文）。
+
+    bootstrap 启动期（sitecustomize -> install_subprocess_observer）不再强
+    依赖数据库：非 LLM 技能命令（import 校验、文件操作、prep 解析等）完全
+    不触碰 DB，DB 抖动不再放大为全部技能命令失败（2026-11-24 聊易事故）。
+    首个真实 provider 调用时才初始化；初始化失败经 scope.fail 写 failure
+    file，worker 侧按原语义中断——仅影响真正产生 LLM 用量的命令。
+    """
+    if getattr(scope,'runtime_ready',False) or key in _subprocess_tool_scopes:
+        return
+    with _subprocess_runtime_lock_handle():
+        if getattr(scope,'runtime_ready',False) or key in _subprocess_tool_scopes:
+            return
+        try:
+            from src.db.database import get_postgres_pool, init_postgres_pool
+            if get_postgres_pool() is None:
+                init_postgres_pool()
+            if key not in _subprocess_tool_scopes:
+                from .repository import RunnerRepository
+                from .ownership import LeaseLost
+                from src.tools.context import ExecutionContextFactory, tool_execution_scope
+                row = RunnerRepository().get(key[0])
+                if not row or row['attempt']!=key[2] or row['worker_id']!=key[1]:
+                    raise LeaseLost('RUNNER_CHILD_ATTEMPT_NOT_OWNED')
+                context = ExecutionContextFactory.for_agent_call(
+                    tenant_id=row['tenant_id'],user_id=row['user_id'],session_id=row['session_id'],
+                    channel=row['source'],subagent_id=os.environ.get('AID_SUBAGENT_ID'),
+                    chat_record_id=row['record_id'],agent_execution_id=scope.execution_id,
+                    tool_call_id=scope.tool_call_id,request_data={},env_vars={},infer_legacy_identity=False)
+                lifetime_scope = tool_execution_scope(context)
+                lifetime_scope.__enter__()
+                _subprocess_tool_scopes[key] = lifetime_scope
+            scope.runtime_ready = True
+        except BaseException as error:
+            scope.fail(error)
+            raise
 
 
 def install_subprocess_observer(owned_group=None):
-    """Install the neutral observer at the trusted Python skill entry point."""
-    from src.db.database import get_postgres_pool, init_postgres_pool
+    """Install the neutral observer at the trusted Python skill entry point.
+
+    启动期只装 observer 与 scope（含失败信号文件），不做任何 DB IO；DB 运行
+    时由 _ensure_subprocess_runtime 在首个 provider 调用时惰性初始化。"""
     from .ownership import Attempt
     from .usage_repository import UsageRepository
     from src.llm.call_observer import install_call_observer
@@ -334,42 +408,20 @@ def install_subprocess_observer(owned_group=None):
         tool_call_id=os.environ.get('AID_RUNNER_TOOL_CALL_ID')))
     _scope.set(scope)
     install_call_observer(scope)
-    try:
-        scope.check()
-        if get_postgres_pool() is None:
-            init_postgres_pool()
-        if key not in _subprocess_tool_scopes:
-            from .repository import RunnerRepository
-            from .ownership import LeaseLost
-            from src.tools.context import ExecutionContextFactory, tool_execution_scope
-            row = RunnerRepository().get(attempt.runner_id)
-            if not row or row['attempt']!=attempt.number or row['worker_id']!=attempt.worker_id:
-                raise LeaseLost('RUNNER_CHILD_ATTEMPT_NOT_OWNED')
-            context = ExecutionContextFactory.for_agent_call(
-                tenant_id=row['tenant_id'],user_id=row['user_id'],session_id=row['session_id'],
-                channel=row['source'],subagent_id=os.environ.get('AID_SUBAGENT_ID'),
-                chat_record_id=row['record_id'],agent_execution_id=scope.execution_id,
-                tool_call_id=scope.tool_call_id,request_data={},env_vars={},infer_legacy_identity=False)
-            lifetime_scope = tool_execution_scope(context)
-            lifetime_scope.__enter__()
-            _subprocess_tool_scopes[key] = lifetime_scope
-    except BaseException as error:
-        scope.fail(error)
-        raise
+    scope.check()
     return scope
 
 
 @contextmanager
 def subprocess_usage_scope():
-    """Normal skill subprocess entry; no bearer/service token is persisted here."""
+    """Normal skill subprocess entry; no bearer/service token is persisted here.
+
+    启动期不触碰 DB（惰性初始化见 _ensure_subprocess_runtime）。"""
     if current_scope() is not None or not os.environ.get('AID_RUNNER_ID'):
         yield
         return
-    from src.db.database import get_postgres_pool, init_postgres_pool
     from .ownership import Attempt
     from .usage_repository import UsageRepository
-    if get_postgres_pool() is None:
-        init_postgres_pool()
     attempt = Attempt(os.environ['AID_RUNNER_ID'],os.environ['AID_RUNNER_WORKER_ID'],int(os.environ['AID_RUNNER_ATTEMPT']))
     key = (attempt.runner_id,attempt.worker_id,attempt.number)
     if key not in _subprocess_scopes:
