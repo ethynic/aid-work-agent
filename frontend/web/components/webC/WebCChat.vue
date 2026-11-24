@@ -1,5 +1,5 @@
 <template>
-  <div class="h-screen flex flex-col bg-canvas" :class="{ 'embed-mode': isEmbed }">
+  <div class="h-screen chat-root flex flex-col bg-canvas" :class="{ 'embed-mode': isEmbed }">
     <!-- 页头（iframe embed 模式隐藏，设计 §4.5） -->
     <header v-if="!isEmbed" class="flex items-center gap-3 px-4 py-3 bg-surface border-b border-default">
       <div class="w-9 h-9 rounded-full bg-primary-50 text-primary-600 flex items-center justify-center shrink-0">
@@ -27,7 +27,7 @@
       </button>
     </header>
 
-    <div class="flex-1 flex min-h-0">
+    <div class="flex-1 flex min-h-0 relative">
       <!-- 历史会话侧栏（仅 anon 模式本浏览器历史；uid 模式服务端强制无历史，ext 按userid跨设备续聊无本地历史侧栏） -->
       <aside v-if="showHistoryEnabled && showHistory && identityMode === 'anon'" class="w-64 border-r border-default bg-surface flex flex-col max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-10">
         <div class="px-3 py-2 border-b border-default flex items-center justify-between gap-2">
@@ -676,6 +676,20 @@ async function observeRunner(runnerId: string) {
 <style scoped>
 .embed-mode {
   background: transparent;
+}
+/* iOS 微信真机适配（2026-11-24 反馈）：
+   1. 100vh 在微信内置浏览器常大于可视高度（标题栏/键盘），dvh 修正「上滑不到顶部」；
+      不支持 dvh 的旧内核回落 100vh（h-screen）。
+   2. overflow-x: clip 把横向溢出就地裁切，防止 iOS WebKit 按溢出内容平移/展开
+      整页布局视口——表现为右侧内容被裁、justify-end 的用户气泡整个出屏看不到。 */
+.chat-root {
+  height: 100vh;
+  height: 100dvh;
+  max-width: 100%;
+  overflow-x: clip;
+}
+.markdown-body {
+  overflow-wrap: anywhere;
 }
 .markdown-body :deep(p) {
   margin: 0.25rem 0;
