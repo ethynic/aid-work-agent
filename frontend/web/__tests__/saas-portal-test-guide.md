@@ -5,7 +5,7 @@
 | 路由 | 组件 | 功能 |
 |------|------|------|
 | `/portal/login` | TenantLogin.vue | 管理员手机号+验证码登录 |
-| `/portal` | TenantDashboard.vue | 仪表盘：实例数、用户数、Token 用量、活跃订阅 |
+| `/portal` | SystemHealthMonitor.vue | 系统健康（登录后默认页；原仪表盘已移除，首页由系统健康页接管） |
 | `/portal/instances` | InstanceManager.vue | 智能体实例 CRUD + 启动/停止 |
 | `/portal/channels` | ChannelConfig.vue | IM 渠道（企微/钉钉/飞书）凭证配置 |
 | `/portal/users` | TenantUserManager.vue | 企业用户管理 + CSV 批量导入 |
@@ -36,7 +36,7 @@
 |------|------|----------|
 | 1 | 访问 `/portal/login` | 显示登录页，含手机号和验证码输入框 |
 | 2 | 输入手机号，点击"获取验证码" | 按钮变为 60s 倒计时 |
-| 3 | 输入验证码，点击"登录" | 登录成功，跳转到 `/portal` 仪表盘 |
+| 3 | 输入验证码，点击"登录" | 登录成功，跳转到 `/portal`（系统健康页） |
 | 4 | 刷新页面 | 仍停留在 `/portal`（token 从 localStorage 恢复） |
 | 5 | 点击侧边栏"退出登录" | 清除 token，跳转回 `/portal/login` |
 
@@ -44,15 +44,9 @@
 - 空 手机号 → 点击登录 → 提示"请输入手机号和验证码"
 - 错误验证码 → 提示"登录失败"相关错误信息
 
-### TC-02 仪表盘
+### TC-02 仪表盘（已移除）
 
-**前置条件**：已登录
-
-| 步骤 | 操作 | 预期结果 |
-|------|------|----------|
-| 1 | 访问 `/portal` | 显示 4 个统计卡片：实例数、用户数、Token 用量、活跃订阅 |
-| 2 | 检查 Token 用量卡片 | 显示进度条 + 已用/总量数字 |
-| 3 | 检查侧边栏 | 显示企业名称、管理员姓名 |
+原仪表盘页面（TenantDashboard.vue）已于 2026-11-24 删除，管理后台首页由系统健康页（SystemHealthMonitor.vue）接管，访问 `/portal` 重定向到 `/portal/system-health`。
 
 ### TC-03 智能体实例管理
 
@@ -307,7 +301,6 @@ src/__tests__/
 │   └── useTenantAuth.test.ts       # 认证状态管理测试
 └── components/saas/
     ├── TenantLogin.test.ts          # 登录页组件测试
-    ├── TenantDashboard.test.ts      # 仪表盘渲染测试
     ├── InstanceManager.test.ts      # 实例管理交互测试
     ├── ChannelConfig.test.ts        # 渠道配置测试
     ├── TenantUserManager.test.ts    # 用户管理测试

@@ -61,7 +61,7 @@ describe('tenantStorage.getTenantScopedKey', () => {
   })
 
   it('平台管理后台 /portal → portal_token / portal_admin / portal_tenant', () => {
-    setPath('/portal/dashboard')
+    setPath('/portal/system-health')
     expect(getTenantScopedKey('saas_token')).toBe('portal_token')
     expect(getTenantScopedKey('saas_admin')).toBe('portal_admin')
     expect(getTenantScopedKey('saas_tenant')).toBe('portal_tenant')
