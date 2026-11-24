@@ -18,9 +18,9 @@ function Item($label, $class = 'mmui::XTableCell', $id = '') {
     return @{Current=@{ClassName=$class; AutomationId=$id; ProcessId=42;
         ControlType=[Windows.Automation.ControlType]::ListItem; Name=$label; IsOffscreen=$false}}
 }
-function Pick($nodes, [string]$TargetType = 'friend', [switch]$RequireGroupSection) {
+function Pick($nodes, [string]$TargetType = 'friend', [switch]$VerifyGroupCandidate) {
     try {
-        $node = Select-WeixinNativeSearchCandidate $nodes @{ProcessId=42;Title='contact'} $TargetType -RequireGroupSection:$RequireGroupSection
+        $node = Select-WeixinNativeSearchCandidate $nodes @{ProcessId=42;Title='contact'} $TargetType -VerifyGroupCandidate:$VerifyGroupCandidate
         return $node.Current.AutomationId
     } catch { return $_.Exception.Message }
 }
@@ -31,16 +31,27 @@ $groups = Item '群聊'
 $more = Item '查看全部(32)'
 $history = Item '聊天记录'
 $web = Item '搜索网络结果'
+$hidden = Item 'contact' 'mmui::SearchContentCellView' 'search_item_contact'
+$hidden.Current.IsOffscreen = $true
+$truncated = Item 'cont...' 'mmui::SearchContentCellView' 'search_item_contact'
+$unknown = Item '未知栏目'
 ConvertTo-Json @{
     unambiguous=Pick @($recent,$person,$groups,$more,$history,(Item 'contact' 'mmui::SearchMessageCellView' 'history-match'),$web,(Item 'contact'))
     duplicate=Pick @($recent,$person,$contacts,$person,$web)
     moreContacts=Pick @($recent,$person,$contacts,$more,$web)
     noCompletionBoundary=Pick @($recent,$person)
     sendKnownGroup=Pick @($recent,$person,$web) -TargetType 'group'
-    summaryKnownGroup=Pick @($groups,$person,$web) -TargetType 'group' -RequireGroupSection
-    summaryRecentIsUntyped=Pick @($recent,$person,$web) -TargetType 'group' -RequireGroupSection
-    summaryPerson=Pick @($contacts,$person,$web) -TargetType 'group' -RequireGroupSection
-    summaryTwoGroups=Pick @($groups,$person,$person,$web) -TargetType 'group' -RequireGroupSection
+    summaryKnownGroup=Pick @($groups,$person,$web) -TargetType 'group' -VerifyGroupCandidate
+    summaryUniqueRecent=Pick @($recent,$person,$web) -TargetType 'group' -VerifyGroupCandidate
+    summaryRecentAndGroup=Pick @($recent,$person,$groups,$person,$web) -TargetType 'group' -VerifyGroupCandidate
+    summaryTwoRecent=Pick @($recent,$person,$person,$web) -TargetType 'group' -VerifyGroupCandidate
+    summaryClippedDuplicate=Pick @($recent,$truncated,$groups,$person,$web) -TargetType 'group' -VerifyGroupCandidate
+    summaryOffscreenCandidate=Pick @($recent,$hidden,$web) -TargetType 'group' -VerifyGroupCandidate
+    summaryMoreRecent=Pick @($recent,$person,$more,$web) -TargetType 'group' -VerifyGroupCandidate
+    summaryUnknownSection=Pick @($recent,$person,$unknown,$web) -TargetType 'group' -VerifyGroupCandidate
+    summaryIncompleteRecent=Pick @($recent,$person) -TargetType 'group' -VerifyGroupCandidate
+    summaryPerson=Pick @($contacts,$person,$web) -TargetType 'group' -VerifyGroupCandidate
+    summaryTwoGroups=Pick @($groups,$person,$person,$web) -TargetType 'group' -VerifyGroupCandidate
 } -Compress
 `
   const result = spawnSync('powershell.exe', ['-NoProfile', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8' })
@@ -52,7 +63,14 @@ ConvertTo-Json @{
     noCompletionBoundary: 'UI_CHANGED',
     sendKnownGroup: 'search_item_contact',
     summaryKnownGroup: 'search_item_contact',
-    summaryRecentIsUntyped: 'TARGET_AMBIGUOUS',
+    summaryUniqueRecent: 'search_item_contact',
+    summaryRecentAndGroup: 'TARGET_AMBIGUOUS',
+    summaryTwoRecent: 'TARGET_AMBIGUOUS',
+    summaryClippedDuplicate: 'TARGET_AMBIGUOUS',
+    summaryOffscreenCandidate: 'TARGET_AMBIGUOUS',
+    summaryMoreRecent: 'TARGET_AMBIGUOUS',
+    summaryUnknownSection: 'TARGET_AMBIGUOUS',
+    summaryIncompleteRecent: 'UI_CHANGED',
     summaryPerson: 'TARGET_NOT_FOUND',
     summaryTwoGroups: 'TARGET_AMBIGUOUS',
   })
