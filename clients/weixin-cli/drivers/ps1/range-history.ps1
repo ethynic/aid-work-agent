@@ -102,7 +102,7 @@ function Invoke-WeixinRangeHistory($Request) {
     }
     if (-not $session) {
         $null = Get-WeixinNativeList $candidate 'session_list' 'mmui::XTableView'
-        $session = Open-WeixinNativeSearchTarget $candidate.Title 'group' -RequireGroupSection
+        $session = Open-WeixinNativeSearchTarget $candidate.Title 'group' -VerifyGroupCandidate
     }
     $verified = Get-WeixinNativeTitleInfo $session
     if (-not $verified.is_group -or -not [string]::Equals($verified.title, $candidate.Title, [StringComparison]::Ordinal)) {

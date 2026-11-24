@@ -113,17 +113,18 @@ function Throw-DriverError($Code, $Message) { throw $Code }
 function Resolve-WeixinMainWindowHwnd { 1 }
 function Get-WindowIdentityByHwnd($Handle) { @{ProcessId=42} }
 function Test-WeixinMainIdentity($Identity,$Handle) { $true }
-function Get-WeixinNativeTitleInfo($Session) { @{title=$script:currentTitle;is_group=$true} }
+function Get-WeixinNativeTitleInfo($Session) { @{title=$script:currentTitle;is_group=$script:currentIsGroup} }
 function Get-WeixinCurrentNativeSession($TargetName) {
     $script:openedChecks++
     @{Title=$TargetName;Identity='verified'}
 }
 function Get-WeixinNativeList($Session,$Id,$Class) { $null }
-function Open-WeixinNativeSearchTarget($Name,$Type,[switch]$RequireGroupSection) {
+function Open-WeixinNativeSearchTarget($Name,$Type,[switch]$VerifyGroupCandidate) {
     $script:searches++
-    if ($Name -cne 'same-name' -or $Type -cne 'group' -or -not $RequireGroupSection) {
+    if ($Name -cne 'same-name' -or $Type -cne 'group' -or -not $VerifyGroupCandidate) {
         throw 'search-without-target-proof'
     }
+    if ($script:uniqueSearchResult) { return @{Title=$Name;Identity='verified'} }
     throw 'TARGET_AMBIGUOUS'
 }
 function Get-WeixinLatestProcessStart($Session) { return 'start' }
@@ -138,6 +139,8 @@ $script:openedChecks = 0
 $script:searches = 0
 $script:captures = 0
 $script:currentTitle = 'same-name'
+$script:currentIsGroup = $true
+$script:uniqueSearchResult = $false
 function Run($data) {
     try { Invoke-WeixinRangeHistory $data } catch { $_.Exception.Message }
 }
@@ -146,8 +149,14 @@ $notBoolean = Run ($request + @{allow_open_group='true'})
 $retry = Run ($request + @{allow_open_group=$true})
 $script:currentTitle = 'another-name'
 $wrongGroupRetry = Run ($request + @{allow_open_group=$true})
+$script:currentTitle = 'same-name'
+$script:uniqueSearchResult = $true
+$uniqueGroup = Run $request
+$script:currentIsGroup = $false
+$uniqueFriend = Run $request
 ConvertTo-Json -Compress @{
     automatic=$automatic;notBoolean=$notBoolean;retry=$retry;wrongGroupRetry=$wrongGroupRetry
+    uniqueGroup=$uniqueGroup;uniqueFriend=$uniqueFriend
     searches=$script:searches;openedChecks=$script:openedChecks;captures=$script:captures
 }
 `
@@ -156,6 +165,7 @@ ConvertTo-Json -Compress @{
   assert.equal(result.status, 0, result.stderr)
   assert.deepEqual(JSON.parse(result.stdout), {
     automatic: 'TARGET_AMBIGUOUS', notBoolean: 'TARGET_AMBIGUOUS', retry: 'captured-verified-group',
-    wrongGroupRetry: 'TARGET_AMBIGUOUS', searches: 3, openedChecks: 1, captures: 1,
+    wrongGroupRetry: 'TARGET_AMBIGUOUS', uniqueGroup: 'captured-verified-group', uniqueFriend: 'TARGET_NOT_FOUND',
+    searches: 5, openedChecks: 1, captures: 2,
   })
 })
