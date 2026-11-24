@@ -53,11 +53,13 @@
           <BaseButton
             v-if="row.status !== 'disabled'"
             intent="ghost" size="sm" title="踢该码已激活的客户端下线"
+            :disabled="revokingBinding"
             @click="handleRevoke(row)"
           >吊销</BaseButton>
           <BaseButton
             v-if="row.status !== 'disabled'"
             intent="danger-ghost" size="sm"
+            :disabled="disablingCode"
             @click="handleDisable(row)"
           >禁用</BaseButton>
           <span v-else class="text-xs text-muted">已禁用</span>
@@ -190,6 +192,8 @@ const loading = ref(false)
 // 生成激活码
 const showGenerate = ref(false)
 const generating = ref(false)
+const disablingCode = ref(false)
+const revokingBinding = ref(false)
 const genError = ref('')
 const genForm = ref({ client_name: '', max_uses: '1', expires_at: '' })
 
@@ -226,6 +230,7 @@ function openGenerate() {
 }
 
 async function handleGenerate() {
+  if (generating.value) return
   genError.value = ''
   const maxUses = parseInt(genForm.value.max_uses, 10)
   if (isNaN(maxUses) || maxUses < 1) {
@@ -260,6 +265,7 @@ function openStatic() {
 }
 
 async function handleIssueStatic() {
+  if (issuing.value) return
   staticError.value = ''
   const clientName = staticForm.value.client_name.trim()
   if (!clientName) {
@@ -291,24 +297,32 @@ function closeStaticCreated() {
 }
 
 async function handleDisable(row: any) {
+  if (disablingCode.value) return
   if (!confirm(`确定禁用激活码 ${row.code}？禁用后未激活的不可再激活。`)) return
+  disablingCode.value = true
   try {
     await disableActivationCode(row.id)
     toast.success('已禁用')
     await loadCodes()
   } catch (e: any) {
     toast.error(e?.message || '禁用失败')
+  } finally {
+    disablingCode.value = false
   }
 }
 
 async function handleRevoke(row: any) {
+  if (revokingBinding.value) return
   if (!confirm(`确定吊销激活码 ${row.code} 关联的客户端绑定？将踢已激活的客户端下线。`)) return
+  revokingBinding.value = true
   try {
     const { revoked_count } = await revokeActivationBinding(row.id)
     toast.success(`已吊销 ${revoked_count} 个客户端绑定`)
     await loadCodes()
   } catch (e: any) {
     toast.error(e?.message || '吊销失败')
+  } finally {
+    revokingBinding.value = false
   }
 }
 

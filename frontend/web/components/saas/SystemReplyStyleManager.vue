@@ -142,6 +142,7 @@
               v-if="!v.is_active"
               intent="ghost"
               size="sm"
+              :disabled="activating"
               @click="handleActivate(v.version)"
             >激活</BaseButton>
           </div>
@@ -265,6 +266,7 @@ const showEditor = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
 const editorForm = ref({ style_id: '', name: '', description: '', content: '' })
 const saving = ref(false)
+const activating = ref(false)
 const editingStyleId = ref('')
 
 // 版本历史
@@ -308,6 +310,7 @@ async function openEdit(row: any) {
 }
 
 async function handleSave() {
+  if (saving.value) return
   const form = editorForm.value
   if (!form.style_id || !form.name || !form.content) {
     toast.error('请填写必填项')
@@ -374,7 +377,9 @@ const showViewer = ref(false)
 const viewerContent = ref('')
 
 async function handleActivate(version: number) {
+  if (activating.value) return
   if (!confirm('确定激活此版本？当前版本将被替换。')) return
+  activating.value = true
   try {
     await activateSystemVersion(versionsStyleId.value, version)
     toast.success('已激活')
@@ -383,6 +388,8 @@ async function handleActivate(version: number) {
     await loadStyles()
   } catch (e: any) {
     toast.error(e.message || '激活失败')
+  } finally {
+    activating.value = false
   }
 }
 
@@ -485,6 +492,7 @@ async function doImport(payload: ImportPayload) {
 }
 
 async function confirmConflictImport() {
+  if (importing.value) return
   if (!pendingImportPayload) return
   await doImport({ ...pendingImportPayload, conflict_strategy: conflictMode.value })
 }

@@ -15,7 +15,7 @@
         </BaseSelect>
       </div>
       <div class="page-toolbar-right">
-        <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
+        <BaseButton :disabled="batchDeleting || selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
         <BaseButton @click="openCreate">新增餐标</BaseButton>
         <BaseButton intent="secondary" @click="handleDownloadTemplate">下载模板</BaseButton>
         <BaseButton intent="secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
@@ -57,7 +57,7 @@
       <template #actions="{ row }">
         <div class="flex gap-2">
           <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openEdit(row)">编辑</BaseButton>
-          <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleDelete(row)">删除</BaseButton>
+          <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" :disabled="deletingItem" @click="handleDelete(row)">删除</BaseButton>
         </div>
       </template>
       <template v-if="loading" #empty>加载中...</template>
@@ -139,7 +139,7 @@
       </div>
       <template #footer>
         <BaseButton intent="secondary" @click="showModal = false">取消</BaseButton>
-        <BaseButton @click="handleSave">保存</BaseButton>
+        <BaseButton :disabled="savingItem" @click="handleSave">保存</BaseButton>
       </template>
     </BaseModal>
 
@@ -204,6 +204,9 @@ const loading = ref(false)
 const showModal = ref(false)
 const editingItem = ref<any>(null)
 const filterTier = ref('')
+const savingItem = ref(false)
+const deletingItem = ref(false)
+const batchDeleting = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const uuidFileInput = ref<HTMLInputElement | null>(null)
 const { importing, showImportResult, importResult, handleImport, handleDownloadTemplate, triggerFileInput } = useImport(loadData)
@@ -261,22 +264,30 @@ function openEdit(item: any) {
 }
 
 async function handleSave() {
+  if (savingItem.value) return
+  savingItem.value = true
   try {
     if (editingItem.value) await meals.update(editingItem.value.id, form.value)
     else await meals.create(form.value)
     showModal.value = false; await loadData()
   } catch (e) { console.error('保存失败', e); alert('保存失败') }
+  finally { savingItem.value = false }
 }
 
 async function handleDelete(item: any) {
+  if (deletingItem.value) return
   if (!confirm('确定删除该餐标？')) return
+  deletingItem.value = true
   try { await meals.delete(item.id); await loadData() }
   catch (e) { console.error('删除失败', e); alert('删除失败') }
+  finally { deletingItem.value = false }
 }
 
 async function handleBatchDelete() {
+  if (batchDeleting.value) return
   if (selectedArr.value.length === 0) return
   if (!confirm(`确定删除选中的 ${selectedArr.value.length} 个餐标？`)) return
+  batchDeleting.value = true
   try {
     for (const id of selectedArr.value) {
       await meals.delete(id)
@@ -285,6 +296,7 @@ async function handleBatchDelete() {
     await loadData()
     alert('批量删除成功')
   } catch (e) { console.error('批量删除失败', e); alert('批量删除失败') }
+  finally { batchDeleting.value = false }
 }
 
 async function handleExport() {

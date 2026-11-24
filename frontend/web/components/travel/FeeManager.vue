@@ -28,7 +28,7 @@
           </BaseSelect>
         </div>
         <div class="page-toolbar-right">
-          <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
+          <BaseButton :disabled="batchDeletingFees || selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
           <BaseButton @click="openFeeCreate">新增费用</BaseButton>
           <BaseButton intent="secondary" @click="handleDownloadTemplate">下载模板</BaseButton>
           <BaseButton intent="secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
@@ -68,7 +68,7 @@
         <template #actions="{ row }">
           <div class="flex gap-2">
             <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openFeeEdit(row)">编辑</BaseButton>
-            <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleFeeDelete(row)">删除</BaseButton>
+            <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" :disabled="deletingFee" @click="handleFeeDelete(row)">删除</BaseButton>
           </div>
         </template>
         <template v-if="feeLoading" #empty>加载中...</template>
@@ -134,7 +134,7 @@
         </div>
         <template #footer>
           <BaseButton intent="secondary" @click="showFeeModal = false">取消</BaseButton>
-          <BaseButton @click="handleFeeSave">保存</BaseButton>
+          <BaseButton :disabled="savingFee" @click="handleFeeSave">保存</BaseButton>
         </template>
       </BaseModal>
     </div>
@@ -160,7 +160,7 @@
         <template #actions="{ row }">
           <div class="flex gap-2">
             <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openSeasonEdit(row)">编辑</BaseButton>
-            <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleSeasonDelete(row)">删除</BaseButton>
+            <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" :disabled="deletingSeason" @click="handleSeasonDelete(row)">删除</BaseButton>
           </div>
         </template>
         <template v-if="seasonLoading" #empty>加载中...</template>
@@ -207,7 +207,7 @@
         </div>
         <template #footer>
           <BaseButton intent="secondary" @click="showSeasonModal = false">取消</BaseButton>
-          <BaseButton @click="handleSeasonSave">保存</BaseButton>
+          <BaseButton :disabled="savingSeason" @click="handleSeasonSave">保存</BaseButton>
         </template>
       </BaseModal>
     </div>
@@ -303,6 +303,9 @@ const feeLoading = ref(false)
 const showFeeModal = ref(false)
 const editingFee = ref<any>(null)
 const filterCategory = ref('')
+const savingFee = ref(false)
+const deletingFee = ref(false)
+const batchDeletingFees = ref(false)
 
 const feeTotal = ref(0)
 const { currentPage: feeCurrentPage, pageSize: feePageSize, seqNumber: feeSeqNumber, handleSearch: handleFeeSearch } =
@@ -359,22 +362,30 @@ function openFeeEdit(item: any) {
 }
 
 async function handleFeeSave() {
+  if (savingFee.value) return
+  savingFee.value = true
   try {
     if (editingFee.value) await fees.update(editingFee.value.id, feeForm.value)
     else await fees.create(feeForm.value)
     showFeeModal.value = false; await loadFees()
   } catch (e) { console.error('保存失败', e); alert('保存失败') }
+  finally { savingFee.value = false }
 }
 
 async function handleFeeDelete(item: any) {
+  if (deletingFee.value) return
   if (!confirm(`确定删除费用「${item.fee_name}」？`)) return
+  deletingFee.value = true
   try { await fees.delete(item.id); await loadFees() }
   catch (e) { console.error('删除失败', e); alert('删除失败') }
+  finally { deletingFee.value = false }
 }
 
 async function handleBatchDelete() {
+  if (batchDeletingFees.value) return
   if (selectedArr.value.length === 0) return
   if (!confirm(`确定删除选中的 ${selectedArr.value.length} 个费用？`)) return
+  batchDeletingFees.value = true
   try {
     for (const id of selectedArr.value) {
       await fees.delete(id)
@@ -383,6 +394,7 @@ async function handleBatchDelete() {
     await loadFees()
     alert('批量删除成功')
   } catch (e) { console.error('批量删除失败', e); alert('批量删除失败') }
+  finally { batchDeletingFees.value = false }
 }
 
 // --- 淡旺季 ---
@@ -390,6 +402,8 @@ const seasonItems = ref<any[]>([])
 const seasonLoading = ref(false)
 const showSeasonModal = ref(false)
 const editingSeason = ref<any>(null)
+const savingSeason = ref(false)
+const deletingSeason = ref(false)
 
 const seasonTotal = ref(0)
 const { currentPage: seasonCurrentPage, pageSize: seasonPageSize, seqNumber: seasonSeqNumber } =
@@ -433,17 +447,23 @@ function openSeasonEdit(item: any) {
 }
 
 async function handleSeasonSave() {
+  if (savingSeason.value) return
+  savingSeason.value = true
   try {
     if (editingSeason.value) await seasons.update(editingSeason.value.id, seasonForm.value)
     else await seasons.create(seasonForm.value)
     showSeasonModal.value = false; await loadSeasons()
   } catch (e) { console.error('保存失败', e); alert('保存失败') }
+  finally { savingSeason.value = false }
 }
 
 async function handleSeasonDelete(item: any) {
+  if (deletingSeason.value) return
   if (!confirm(`确定删除「${item.season_type_label}」？`)) return
+  deletingSeason.value = true
   try { await seasons.delete(item.id); await loadSeasons() }
   catch (e) { console.error('删除失败', e); alert('删除失败') }
+  finally { deletingSeason.value = false }
 }
 
 watch(activeTab, (tab) => {

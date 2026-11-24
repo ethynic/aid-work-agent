@@ -521,6 +521,7 @@ async function loadReport() {
 }
 
 async function handleRegenerate() {
+  if (regenerating.value) return
   const tip = isTeamScope.value
     ? `确定重新生成团队${typeLabel.value}？将消耗少量积分。`
     : `确定重新生成${typeLabel.value}？将消耗少量积分。`

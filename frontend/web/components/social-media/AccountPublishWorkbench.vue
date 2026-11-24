@@ -18,7 +18,7 @@
             </div>
             <div class="flex flex-wrap gap-2">
               <BaseButton intent="secondary" @click="loadAll">刷新</BaseButton>
-              <BaseButton @click="seedDemoFlow">创建示例草稿</BaseButton>
+              <BaseButton :disabled="seedingDemo" @click="seedDemoFlow">创建示例草稿</BaseButton>
             </div>
           </div>
         </div>
@@ -113,7 +113,7 @@
                     </td>
                     <td class="py-3"><BaseBadge intent="success" size="sm">{{ account.status }}</BaseBadge></td>
                     <td class="py-3 text-right">
-                      <BaseButton intent="ghost" size="sm" @click="refreshAccount(account.account_id)">验证</BaseButton>
+                      <BaseButton intent="ghost" size="sm" :disabled="verifyingAccount" @click="refreshAccount(account.account_id)">验证</BaseButton>
                     </td>
                   </tr>
                 </tbody>
@@ -294,22 +294,34 @@ async function createPlan() {
   }
 }
 
+// 防重复提交：验证与示例创建均为变更类 API，进行中禁止重复触发
+const verifyingAccount = ref(false)
+const seedingDemo = ref(false)
+
 async function refreshAccount(accountId: string) {
-  const res = await socialMediaAPI.refreshCapabilities(accountId)
-  if (!res.success) {
-    showMessage(res.error || '验证失败', 'error')
-    return
+  if (verifyingAccount.value) return
+  verifyingAccount.value = true
+  try {
+    const res = await socialMediaAPI.refreshCapabilities(accountId)
+    if (!res.success) {
+      showMessage(res.error || '验证失败', 'error')
+      return
+    }
+    showMessage('账号能力已刷新')
+    await loadAll()
+  } finally {
+    verifyingAccount.value = false
   }
-  showMessage('账号能力已刷新')
-  await loadAll()
 }
 
 async function seedDemoFlow() {
+  if (seedingDemo.value) return
   if (accounts.value.length === 0) {
     showMessage('请先绑定至少一个平台账号', 'error')
     return
   }
   const account = accounts.value[0]
+  seedingDemo.value = true
   try {
     const master = await socialMediaAPI.createMaster({
       title: '本周品牌内容母版',
@@ -346,6 +358,8 @@ async function seedDemoFlow() {
     await loadAll()
   } catch (error: any) {
     showMessage(error.message || '示例流程失败', 'error')
+  } finally {
+    seedingDemo.value = false
   }
 }
 

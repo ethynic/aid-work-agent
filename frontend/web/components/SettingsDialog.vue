@@ -106,6 +106,7 @@ watch(() => props.visible, (val) => {
 })
 
 async function saveProfile() {
+  if (profileSaving.value) return
   profileSaving.value = true
   try {
     const result = await apiUpdateProfile({

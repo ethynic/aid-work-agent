@@ -107,6 +107,7 @@
                     :disabled="generatingTicket" @click="handleReplace(row)">更换此设备</BaseButton>
                   <BaseButton
                     intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs"
+                    :disabled="revokingDevice"
                     @click="handleRevoke(row)"
                   >解绑</BaseButton>
                 </div>
@@ -224,14 +225,19 @@ async function handleSelect(row: Record<string, any>) {
   }
 }
 
+const revokingDevice = ref(false)
 async function handleRevoke(row: Record<string, any>) {
+  if (revokingDevice.value) return
   const device = row as LocalToolDevice
   if (!confirm(`确定解绑设备「${device.name || device.device_id}」？解绑后该设备的 Runtime 将无法继续使用。`)) return
+  revokingDevice.value = true
   try {
     await revokeDevice(device.device_id)
     await loadDevices()
   } catch (e: any) {
     alert(e?.message || '解绑设备失败，请稍后重试')
+  } finally {
+    revokingDevice.value = false
   }
 }
 

@@ -40,7 +40,8 @@
       <div class="p-4 border-t border-gray-700">
         <button
           @click="handleLogout"
-          class="w-full py-2 text-sm text-muted hover:text-white transition-colors"
+          :disabled="loggingOut"
+          class="disabled:opacity-50 w-full py-2 text-sm text-muted hover:text-white transition-colors"
         >
           退出登录
         </button>
@@ -113,6 +114,7 @@ const { isMobile } = useMobile()
 
 // 侧边栏折叠状态（手机端默认收起）
 const sidebarCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
+const loggingOut = ref(false)
 
 // 可用数字员工列表（带缓存，避免重复请求）
 const { availableSubagents, loadAvailableSubagents } = useSubagentList()
@@ -257,12 +259,18 @@ function isActive(path: string) {
 }
 
 async function handleLogout() {
-  await logout()
-  // 根据当前路由决定跳转
-  if (isTenantRoute.value) {
-    router.push(`/t/${tenantId.value}/login`)
-  } else {
-    router.push('/portal/login')
+  if (loggingOut.value) return
+  loggingOut.value = true
+  try {
+    await logout()
+    // 根据当前路由决定跳转
+    if (isTenantRoute.value) {
+      router.push(`/t/${tenantId.value}/login`)
+    } else {
+      router.push('/portal/login')
+    }
+  } finally {
+    loggingOut.value = false
   }
 }
 

@@ -159,6 +159,7 @@ async function load() {
 }
 
 async function handleSave() {
+  if (saving.value) return
   if (!canSave.value) return
   if (!confirm('保存前会发送一封测试邮件验证配置，确定继续？')) return
   saving.value = true
@@ -188,6 +189,7 @@ async function handleSave() {
 }
 
 async function handleDelete() {
+  if (saving.value) return
   if (!confirm('确定删除租户邮箱配置？删除后未配置个人邮箱的用户将无法用 AI获客 发信。')) return
   saving.value = true
   message.value = ''

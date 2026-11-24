@@ -75,7 +75,7 @@
           </template>
           <template #actions="{ row }">
             <div class="flex justify-center gap-1">
-              <BaseButton intent="danger-ghost" size="sm" @click="handleDelete(row)">删除</BaseButton>
+              <BaseButton intent="danger-ghost" size="sm" :disabled="deletingRecharge" @click="handleDelete(row)">删除</BaseButton>
             </div>
           </template>
           <template #empty>暂无充值记录</template>
@@ -160,7 +160,7 @@
       </div>
       <template #footer>
         <BaseButton intent="secondary" @click="showFormDialog = false">取消</BaseButton>
-        <BaseButton @click="handleSubmit">确认充值</BaseButton>
+        <BaseButton :disabled="submitting" @click="handleSubmit">确认充值</BaseButton>
       </template>
     </BaseModal>
   </div>
@@ -266,6 +266,8 @@ function onPageChange(page: number, size: number) {
 }
 
 // 新增弹框
+const submitting = ref(false)
+const deletingRecharge = ref(false)
 const showFormDialog = ref(false)
 
 // 租户 autocomplete 关键词与下拉控制
@@ -317,6 +319,7 @@ function openAddDialog() {
 }
 
 async function handleSubmit() {
+  if (submitting.value) return
   if (!formData.value.tenant_id) {
     toast.error('请选择租户')
     return
@@ -332,6 +335,7 @@ async function handleSubmit() {
     toast.error('转化积分必须是正整数')
     return
   }
+  submitting.value = true
   try {
     const res = await createRecharge({
       tenant_id: formData.value.tenant_id,
@@ -351,13 +355,17 @@ async function handleSubmit() {
     }
   } catch (e: any) {
     toast.error(e.message || '充值失败')
+  } finally {
+    submitting.value = false
   }
 }
 
 async function handleDelete(row: any) {
+  if (deletingRecharge.value) return
   if (!confirm(`确定删除该充值记录？\n\n租户：${row.tenant_name || row.tenant_id}\n金额：¥${row.amount_yuan}\n积分：${row.credits}\n\n删除后租户余额将回扣 ${row.credits} 积分。`)) {
     return
   }
+  deletingRecharge.value = true
   try {
     const res = await deleteRecharge(row.id)
     if (res.success) {
@@ -369,6 +377,8 @@ async function handleDelete(row: any) {
     }
   } catch (e: any) {
     toast.error(e.message || '删除失败')
+  } finally {
+    deletingRecharge.value = false
   }
 }
 

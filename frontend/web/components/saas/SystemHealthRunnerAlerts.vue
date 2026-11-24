@@ -258,6 +258,7 @@ function goToTrace() {
 
 const stopping = ref(false)
 async function stopRunner() {
+  if (stopping.value) return
   const current = detail.value
   if (!current || current.alert.ended_at) return
   const confirmed = confirm(`确定停止 Runner 任务 ${current.alert.runner_id} 吗？任务将协作式取消，已执行的工具操作不可撤销。`)
@@ -321,6 +322,7 @@ async function saveThreshold() {
   finally { savingThreshold.value = false }
 }
 async function removeThreshold(item: RunnerAlertThreshold) {
+  if (savingThreshold.value) return
   savingThreshold.value = true
   thresholdError.value = ''
   try {
@@ -342,6 +344,7 @@ async function loadTarget() {
   catch (error) { targetError.value = errorMessage(error) }
 }
 async function saveTarget() {
+  if (savingTarget.value) return
   if (!webhookUrl.value.trim()) return
   savingTarget.value = true
   targetError.value = ''
@@ -353,6 +356,7 @@ async function saveTarget() {
   finally { savingTarget.value = false }
 }
 async function revokeTarget() {
+  if (savingTarget.value) return
   if (!target.value) return
   savingTarget.value = true
   targetError.value = ''

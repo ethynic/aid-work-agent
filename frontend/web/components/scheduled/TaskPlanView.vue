@@ -1056,6 +1056,7 @@ function actionErrorText(e: unknown, fallback: string): string {
 }
 
 async function handlePause() {
+  if (actionBusy.value) return
   const c = ctx
   actionBusy.value = true
   try {
@@ -1070,6 +1071,7 @@ async function handlePause() {
 }
 
 async function handleResume() {
+  if (actionBusy.value) return
   const c = ctx
   actionBusy.value = true
   try {
@@ -1088,6 +1090,7 @@ async function handleResume() {
 }
 
 async function handleTrigger() {
+  if (actionBusy.value) return
   const c = ctx
   actionBusy.value = true
   try {
@@ -1102,6 +1105,7 @@ async function handleTrigger() {
 }
 
 async function handleDelete() {
+  if (actionBusy.value) return
   const c = ctx
   if (!window.confirm('确定删除该任务吗？任务会话与执行记录将一并删除，不可恢复。')) return
   actionBusy.value = true
@@ -1119,6 +1123,7 @@ async function handleDelete() {
 
 /** 取消指定执行（行级/顶部唯一 active 入口共用）：runner cancel 专用端点（评审 P2-12） */
 async function handleCancelRunner(runnerId: string) {
+  if (actionBusy.value) return
   const c = ctx
   actionBusy.value = true
   try {
@@ -1249,6 +1254,7 @@ function buildTimeConfig(): Record<string, unknown> {
 }
 
 async function handleReschedule() {
+  if (actionBusy.value) return
   const c = ctx
   actionBusy.value = true
   try {
@@ -1372,6 +1378,7 @@ async function handleAddAttachment(event: Event) {
 }
 
 async function handleEditSave() {
+  if (actionBusy.value) return
   const c = ctx
   if (!editModal.name.trim() || !editModal.taskPrompt.trim()) {
     toast.error('任务名称与任务定义不能为空白')

@@ -184,6 +184,8 @@ function showForgetPassword() {
 }
 
 async function handleLogin() {
+  // 防重复提交：登录请求进行中禁止再次触发（按钮 disabled 生效前，回车/连点可绕过）
+  if (isLoading.value) return
   // 重置错误
   errorMessage.value = ''
   fieldErrors.value = {

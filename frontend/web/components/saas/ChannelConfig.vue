@@ -37,10 +37,10 @@
             </BaseBadge>
           </div>
           <div class="flex items-center gap-2">
-            <BaseButton v-if="ch.channel_type !== 'wecom_app_notify'" intent="ghost" size="sm" @click="handleVerify(ch.config_id)">验证连接</BaseButton>
+            <BaseButton v-if="ch.channel_type !== 'wecom_app_notify'" intent="ghost" size="sm" :disabled="verifying" @click="handleVerify(ch.config_id)">验证连接</BaseButton>
             <BaseButton intent="ghost" size="sm" @click="editChannel(ch)">编辑</BaseButton>
             <BaseButton intent="ghost" size="sm" @click="openAbusePolicy(ch)">防滥用</BaseButton>
-            <BaseButton intent="danger-ghost" size="sm" @click="handleDelete(ch.config_id)">删除</BaseButton>
+            <BaseButton intent="danger-ghost" size="sm" :disabled="deletingChannel" @click="handleDelete(ch.config_id)">删除</BaseButton>
           </div>
         </div>
         <!-- 回调地址展示（企业微信应用通知为纯外发通知渠道，无回调地址；
@@ -100,9 +100,9 @@
       <div>
         <!-- 操作按钮区（第一行） -->
         <div class="flex items-center gap-2 mb-3">
-          <BaseButton @click="handleSubmit">保存</BaseButton>
-          <BaseButton intent="secondary" @click="handleSaveAndClose">保存并关闭</BaseButton>
-          <BaseButton v-if="editingId && form.channel_type !== 'wecom_app_notify'" intent="ghost" @click="handleVerify(editingId)">验证连接</BaseButton>
+          <BaseButton :disabled="submitting" @click="handleSubmit">保存</BaseButton>
+          <BaseButton intent="secondary" :disabled="submitting" @click="handleSaveAndClose">保存并关闭</BaseButton>
+          <BaseButton v-if="editingId && form.channel_type !== 'wecom_app_notify'" intent="ghost" :disabled="verifying" @click="handleVerify(editingId)">验证连接</BaseButton>
         </div>
 
         <p v-if="!editingId" class="text-sm text-muted mb-3">选择 IM 平台，然后填写应用凭证</p>
@@ -257,7 +257,7 @@
               <div class="flex items-center gap-2">
                 <code class="text-xs bg-canvas rounded px-2 py-2 flex-1 truncate font-mono break-all whitespace-normal">{{ form.config.channel_secret || '保存后由服务端生成' }}</code>
                 <BaseButton size="sm" intent="ghost" @click="copyWebCSecret">复制</BaseButton>
-                <BaseButton size="sm" intent="secondary" @click="rotateWebCSecretKey">重置</BaseButton>
+                <BaseButton size="sm" intent="secondary" :disabled="rotatingWebCSecret" @click="rotateWebCSecretKey">重置</BaseButton>
               </div>
               <p class="mt-1 text-xs text-muted">服务端自动生成；重置后旧签名链接全部失效，需同步更新官网签名服务。</p>
             </div>
@@ -390,7 +390,7 @@
                     <BaseButton intent="ghost" size="sm" @click="goNotificationRules('kf_config', acc.open_kfid)">通知规则</BaseButton>
                     <BaseButton intent="ghost" size="sm" @click="viewKfQr({ config_id: editingId }, acc)">二维码</BaseButton>
                     <BaseButton intent="ghost" size="sm" @click="openKfAccountEdit({ config_id: editingId }, acc)">编辑</BaseButton>
-                    <BaseButton intent="danger-ghost" size="sm" @click="handleDeleteKfAccount({ config_id: editingId }, acc)">删除</BaseButton>
+                    <BaseButton intent="danger-ghost" size="sm" :disabled="deletingKfAccount" @click="handleDeleteKfAccount({ config_id: editingId }, acc)">删除</BaseButton>
                   </div>
                 </div>
               </div>
@@ -1159,6 +1159,7 @@ function viewKfQr(_ch: any, acc: any) {
 }
 
 async function handleKfSubmit() {
+  if (kfSubmitting.value) return
   const name = (kfForm.value.name || '').trim()
   if (!name) { kfFormError.value = '请填写客服名称'; return }
   if (!kfForm.value.tenant_user_id) { kfFormError.value = '请选择用户'; return }
@@ -1223,8 +1224,11 @@ async function handleKfSubmit() {
   }
 }
 
+const deletingKfAccount = ref(false)
 async function handleDeleteKfAccount(_ch: any, acc: any) {
+  if (deletingKfAccount.value) return
   if (!confirm(`确定删除客服账号「${acc.name}」吗？删除后已发放的二维码将失效，客户将无法继续通过该二维码进入会话。`)) return
+  deletingKfAccount.value = true
   try {
     await deleteKfAccount(acc.open_kfid)
     toast.success('删除成功')
@@ -1232,6 +1236,8 @@ async function handleDeleteKfAccount(_ch: any, acc: any) {
     syncKfAccountsToForm()
   } catch (e: any) {
     toast.error(e.message || '删除失败')
+  } finally {
+    deletingKfAccount.value = false
   }
 }
 
@@ -1652,6 +1658,7 @@ function resetMpTokenState() {
 }
 
 async function handleRotateMpToken() {
+  if (rotatingToken.value) return
   if (!editingId.value) return
   if (!confirm('重置后旧 Token 立即失效，需到公众平台后台同步更新并重新保存服务器配置。确定重置吗？')) return
   rotatingToken.value = true
@@ -1790,6 +1797,7 @@ function stopMpPolling() {
 }
 
 async function handleStartScan() {
+  if (mpBusy.value) return
   mpBusy.value = true
   mpScan.value.error = ''
   try {
@@ -1850,6 +1858,7 @@ function scheduleMpPoll(scanId: string) {
 }
 
 async function handleRefreshQr() {
+  if (mpBusy.value) return
   await handleStartScan()
 }
 
@@ -1859,6 +1868,7 @@ function handleCancelScan() {
 }
 
 async function handleUnbind() {
+  if (mpBusy.value) return
   if (!confirm('解绑后停止自动同步该公众号内容（已入库文章保留），确定解绑吗？')) return
   mpBusy.value = true
   try {
@@ -2093,15 +2103,20 @@ function copyWebCSignDoc() {
   copyText(md, '签名算法说明MD')
 }
 
+const rotatingWebCSecret = ref(false)
 async function rotateWebCSecretKey() {
+  if (rotatingWebCSecret.value) return
   if (!editingId.value) return
   if (!confirm('确定重置签名密钥？重置后旧签名链接全部失效，需同步更新官网的签名服务配置。')) return
+  rotatingWebCSecret.value = true
   try {
     const res = await rotateWebCSecret(editingId.value)
     if (res.channel_secret) form.value.config.channel_secret = res.channel_secret
     toast.success(res.message || '签名密钥已重置')
   } catch (e: any) {
     toast.error(e.message || '重置失败')
+  } finally {
+    rotatingWebCSecret.value = false
   }
 }
 
@@ -2255,6 +2270,7 @@ async function saveChannel(): Promise<boolean> {
 
 // 保存按钮：仅保存，不关闭弹窗
 async function handleSubmit() {
+  if (submitting.value) return
   const isCreate = !editingId.value
   const ok = await saveChannel()
   if (ok) toast.success(isCreate ? '创建成功' : '保存成功')
@@ -2262,11 +2278,15 @@ async function handleSubmit() {
 
 // 保存并关闭按钮：保存后关闭弹窗
 async function handleSaveAndClose() {
+  if (submitting.value) return
   const ok = await saveChannel()
   if (ok) closeModal()
 }
 
+const verifying = ref(false)
 async function handleVerify(configId: string) {
+  if (verifying.value) return
+  verifying.value = true
   try {
     const res = await verifyChannel(configId)
     const ch = channels.value.find((c: any) => c.config_id === configId)
@@ -2286,17 +2306,24 @@ async function handleVerify(configId: string) {
     await loadChannels()
   } catch (e: any) {
     toast.error(e.message || '验证失败')
+  } finally {
+    verifying.value = false
   }
 }
 
+const deletingChannel = ref(false)
 async function handleDelete(configId: string) {
+  if (deletingChannel.value) return
   if (!confirm('确定要删除此渠道配置吗？删除后对应渠道将无法接收消息。')) return
+  deletingChannel.value = true
   try {
     await deleteChannel(configId)
     toast.success('删除成功')
     await loadChannels()
   } catch (e: any) {
     toast.error(e.message || '删除失败')
+  } finally {
+    deletingChannel.value = false
   }
 }
 

@@ -213,8 +213,10 @@
         </BaseTable>
       </div>
       <template #footer>
-        <BaseButton intent="secondary" @click="skipSchema">跳过</BaseButton>
-        <BaseButton @click="confirmSchema">确认入库</BaseButton>
+        <BaseButton intent="secondary" :disabled="schemaSaving" @click="skipSchema">跳过</BaseButton>
+        <BaseButton :disabled="schemaSaving" @click="confirmSchema">
+          {{ schemaSaving ? '入库中...' : '确认入库' }}
+        </BaseButton>
       </template>
     </BaseModal>
 
@@ -810,44 +812,52 @@ function openSchemaReview(schemasData: SchemaInfo[], connectorId?: string) {
   showSchemaReview.value = true
 }
 
+// 防重复提交：入库请求进行中时禁止再次点击（并发提交会在后端事务锁上互相阻塞）
+const schemaSaving = ref(false)
+
 async function confirmSchema() {
-  if (!currentSchema.value) return
+  if (!currentSchema.value || schemaSaving.value) return
   const schema = currentSchema.value
   let saveResult: Awaited<ReturnType<typeof saveSchema>> | null = null
+  schemaSaving.value = true
   try {
-    if (editingSchemaDoc.value) {
-      await updateSchema(editingSchemaDoc.value.id, schema)
+    try {
+      if (editingSchemaDoc.value) {
+        await updateSchema(editingSchemaDoc.value.id, schema)
+      } else {
+        const batchIds = importBatchScope.value
+        // 已绑定批次名单随每张新表确认入库提交；从未保存过更改则按共享创建（不传字段）
+        saveResult = await saveSchema({
+          ...schema,
+          connector_id: importConnectorId.value || undefined,
+          ...(batchIds && batchIds.length > 0 ? { allowed_agent_ids: batchIds } : {}),
+        })
+      }
+    } catch (e: any) {
+      alert(e.message || '保存失败')
+      return // 保存失败不锁定本批摘要
+    }
+
+    if (!editingSchemaDoc.value) {
+      // 首张新表成功入库即锁定摘要，避免中途改名单使前面已保存表保持旧值
+      importBatchLocked.value = true
+      if (saveResult?.existing) {
+        // 重复命中已有表：后端保留原范围，本批值不覆盖
+        batchExistingTitles.value.push(schema.table_name)
+      }
+    }
+
+    if (currentReviewIndex.value < reviewSchemas.value.length - 1) {
+      currentReviewIndex.value++
     } else {
-      const batchIds = importBatchScope.value
-      // 已绑定批次名单随每张新表确认入库提交；从未保存过更改则按共享创建（不传字段）
-      saveResult = await saveSchema({
-        ...schema,
-        connector_id: importConnectorId.value || undefined,
-        ...(batchIds && batchIds.length > 0 ? { allowed_agent_ids: batchIds } : {}),
-      })
+      showSchemaReview.value = false
+      if (!editingSchemaDoc.value && batchExistingTitles.value.length > 0) {
+        alert(`以下表已存在，沿用原可用智能体设置：${batchExistingTitles.value.join('、')}`)
+      }
+      await loadSchemas()
     }
-  } catch (e: any) {
-    alert(e.message || '保存失败')
-    return // 保存失败不锁定本批摘要
-  }
-
-  if (!editingSchemaDoc.value) {
-    // 首张新表成功入库即锁定摘要，避免中途改名单使前面已保存表保持旧值
-    importBatchLocked.value = true
-    if (saveResult?.existing) {
-      // 重复命中已有表：后端保留原范围，本批值不覆盖
-      batchExistingTitles.value.push(schema.table_name)
-    }
-  }
-
-  if (currentReviewIndex.value < reviewSchemas.value.length - 1) {
-    currentReviewIndex.value++
-  } else {
-    showSchemaReview.value = false
-    if (!editingSchemaDoc.value && batchExistingTitles.value.length > 0) {
-      alert(`以下表已存在，沿用原可用智能体设置：${batchExistingTitles.value.join('、')}`)
-    }
-    await loadSchemas()
+  } finally {
+    schemaSaving.value = false
   }
 }
 

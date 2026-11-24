@@ -160,6 +160,7 @@ async function refreshCaptcha() {
 }
 
 async function handleLogin() {
+  if (isLoading.value) return
   if (!identifier.value) {
     errorMessage.value = '请输入手机号或用户名'
     return

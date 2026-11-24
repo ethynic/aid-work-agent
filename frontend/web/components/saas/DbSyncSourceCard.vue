@@ -137,6 +137,7 @@ function openGrantModal() {
 }
 
 async function handleGrant() {
+  if (operating.value) return
   formError.value = ''
   if (!form.db_host.trim() || !form.db_database.trim() || !form.db_user.trim() || !form.db_password) {
     formError.value = '请完整填写连接配置（密码必填）'
@@ -163,6 +164,7 @@ async function handleGrant() {
 }
 
 async function handleRevoke() {
+  if (operating.value) return
   if (!confirm(`确定停用该租户的「${props.title}」数据源？停用后：租户侧入口立即隐藏、定时同步停止、排队中的同步将被取消；已入库知识与历史记录保留。重新开通需重新填写数据库连接，租户此前的范围/频率设置不保留。`)) return
   operating.value = true
   try {

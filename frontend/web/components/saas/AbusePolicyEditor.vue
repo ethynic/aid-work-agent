@@ -161,6 +161,7 @@ async function loadData() {
 }
 
 async function handleSave() {
+  if (saving.value) return
   saving.value = true
   error.value = ''
   try {

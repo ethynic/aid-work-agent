@@ -48,7 +48,7 @@
               <template #actions="{ row }">
                 <BaseButton size="sm" intent="ghost" @click="handleDownload(row)">下载</BaseButton>
                 <BaseButton size="sm" intent="ghost" @click="handleViewDetail(row)">详情</BaseButton>
-                <BaseButton size="sm" intent="danger-ghost" @click="handleDelete(row)">删除</BaseButton>
+                <BaseButton size="sm" intent="danger-ghost" :disabled="deletingVideo" @click="handleDelete(row)">删除</BaseButton>
               </template>
               <template #empty>暂无视频</template>
             </BaseTable>
@@ -249,14 +249,23 @@ async function handleViewDetail(row: any) {
   }
 }
 
+// 防重复提交：删除为变更类 API，进行中禁止重复触发
+const deletingVideo = ref(false)
+
 async function handleDelete(row: any) {
+  if (deletingVideo.value) return
   if (!confirm(`确定删除视频「${row.file_name || row.summary || row.id}」？`)) return
-  const res = await deleteVideo(row.id)
-  if (res.success) {
-    toast.success('删除成功')
-    refresh()
-  } else {
-    toast.error(res.error || '删除失败')
+  deletingVideo.value = true
+  try {
+    const res = await deleteVideo(row.id)
+    if (res.success) {
+      toast.success('删除成功')
+      refresh()
+    } else {
+      toast.error(res.error || '删除失败')
+    }
+  } finally {
+    deletingVideo.value = false
   }
 }
 </script>

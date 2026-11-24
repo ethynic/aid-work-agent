@@ -86,7 +86,7 @@
         <template #actions="{ row }">
           <div class="flex items-center justify-end gap-1">
             <BaseButton intent="ghost" size="sm" @click="openDetail(row)">详情</BaseButton>
-            <BaseButton intent="danger" size="sm" @click="confirmDelete(row)">删除</BaseButton>
+            <BaseButton intent="danger" size="sm" :disabled="deletingLead" @click="confirmDelete(row)">删除</BaseButton>
           </div>
         </template>
         <template #empty>
@@ -197,6 +197,7 @@
                   v-show="key !== selectedLead.stage"
                   intent="secondary"
                   size="sm"
+                  :disabled="changingStage"
                   @click="changeStage(key)"
                 >
                   {{ label }}
@@ -266,6 +267,8 @@ const columns = [
 const leads = ref<Lead[]>([])
 const total = ref(0)
 const submitting = ref(false)
+const changingStage = ref(false)
+const deletingLead = ref(false)
 const showAddModal = ref(false)
 const showImportDialog = ref(false)
 const selectedLead = ref<Lead | null>(null)
@@ -359,6 +362,7 @@ function openAddModal() {
 }
 
 async function handleAddLead() {
+  if (submitting.value) return
   if (!newLead.value.company_name && !newLead.value.contact_name) {
     alert('请至少填写公司名称或联系人')
     return
@@ -386,7 +390,9 @@ async function openDetail(lead: any) {
 }
 
 async function changeStage(stage: string) {
+  if (changingStage.value) return
   if (!selectedLead.value) return
+  changingStage.value = true
   try {
     await followupAPI.updateStage(selectedLead.value.lead_id, stage)
     selectedLead.value.stage = stage
@@ -394,17 +400,23 @@ async function changeStage(stage: string) {
     loadDashboard()
   } catch (e: any) {
     alert(e.message || '变更阶段失败')
+  } finally {
+    changingStage.value = false
   }
 }
 
 async function confirmDelete(lead: any) {
+  if (deletingLead.value) return
   if (!confirm(`确定要删除线索「${lead.company_name || lead.contact_name}」吗？`)) return
+  deletingLead.value = true
   try {
     await followupAPI.deleteLead(lead.lead_id)
     loadLeads()
     loadDashboard()
   } catch (e: any) {
     alert(e.message || '删除失败')
+  } finally {
+    deletingLead.value = false
   }
 }
 

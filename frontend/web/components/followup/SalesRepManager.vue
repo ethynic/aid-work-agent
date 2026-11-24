@@ -85,7 +85,8 @@
             <button
               v-if="rep.is_active"
               @click="handleDeactivateRep(rep)"
-              class="text-xs px-2 py-1 rounded border border-danger-200 text-danger-600 hover:bg-danger-50 transition-colors"
+              :disabled="deactivatingRep"
+              class="text-xs px-2 py-1 rounded border border-danger-200 text-danger-600 hover:bg-danger-50 transition-colors disabled:opacity-50"
             >
               停用
             </button>
@@ -135,7 +136,8 @@
               <td class="px-4 py-3 text-right">
                 <button
                   @click="handleToggleRule(rule)"
-                  class="text-xs px-2 py-1 rounded border border-default text-muted hover:bg-surface-hover transition-colors"
+                  :disabled="togglingRule"
+                  class="text-xs px-2 py-1 rounded border border-default text-muted hover:bg-surface-hover transition-colors disabled:opacity-50"
                 >
                   {{ rule.is_active ? '停用' : '启用' }}
                 </button>
@@ -195,7 +197,7 @@
         </div>
         <div class="px-6 py-4 border-t border-default flex justify-end gap-2">
           <button @click="showRepModal = false" class="text-sm px-4 py-2 rounded-lg border border-default text-muted hover:bg-surface-hover transition-colors">取消</button>
-          <button @click="handleSaveRep" class="text-sm px-4 py-2 rounded-lg bg-primary-600 text-white hover:brightness-110 transition-all">保存</button>
+          <button @click="handleSaveRep" :disabled="savingRep" class="text-sm px-4 py-2 rounded-lg bg-primary-600 text-white hover:brightness-110 transition-all disabled:opacity-50">保存</button>
         </div>
       </div>
     </div>
@@ -242,7 +244,7 @@
         </div>
         <div class="px-6 py-4 border-t border-default flex justify-end gap-2">
           <button @click="showRuleModal = false" class="text-sm px-4 py-2 rounded-lg border border-default text-muted hover:bg-surface-hover transition-colors">取消</button>
-          <button @click="handleSaveRule" class="text-sm px-4 py-2 rounded-lg bg-primary-600 text-white hover:brightness-110 transition-all">保存</button>
+          <button @click="handleSaveRule" :disabled="savingRule" class="text-sm px-4 py-2 rounded-lg bg-primary-600 text-white hover:brightness-110 transition-all disabled:opacity-50">保存</button>
         </div>
       </div>
     </div>
@@ -267,6 +269,10 @@ const ruleTypeLabels: Record<string, string> = {
 const reps = ref<SalesRep[]>([])
 const rules = ref<AssignRule[]>([])
 const loading = ref(false)
+const savingRep = ref(false)
+const deactivatingRep = ref(false)
+const savingRule = ref(false)
+const togglingRule = ref(false)
 const showRepModal = ref(false)
 const showRuleModal = ref(false)
 const editingRep = ref<SalesRep | null>(null)
@@ -330,10 +336,12 @@ function openEditRepModal(rep: SalesRep) {
 }
 
 async function handleSaveRep() {
+  if (savingRep.value) return
   if (!repForm.value.user_id || !repForm.value.name) {
     alert('请填写用户ID和姓名')
     return
   }
+  savingRep.value = true
   try {
     if (editingRep.value) {
       await followupAPI.updateRep(editingRep.value.rep_id, {
@@ -358,25 +366,33 @@ async function handleSaveRep() {
   } catch (e) {
     console.error('保存销售人员失败:', e)
     alert('保存失败')
+  } finally {
+    savingRep.value = false
   }
 }
 
 async function handleDeactivateRep(rep: SalesRep) {
+  if (deactivatingRep.value) return
   if (!confirm(`确定停用 ${rep.name}？`)) return
+  deactivatingRep.value = true
   try {
     await followupAPI.updateRep(rep.rep_id, { is_active: false })
     loadReps()
   } catch (e) {
     console.error('停用失败:', e)
+  } finally {
+    deactivatingRep.value = false
   }
 }
 
 // --- 分配规则操作 ---
 async function handleSaveRule() {
+  if (savingRule.value) return
   if (!ruleForm.value.name) {
     alert('请填写规则名称')
     return
   }
+  savingRule.value = true
   try {
     await followupAPI.createAssignRule({
       name: ruleForm.value.name,
@@ -390,15 +406,21 @@ async function handleSaveRule() {
   } catch (e) {
     console.error('保存规则失败:', e)
     alert('保存失败')
+  } finally {
+    savingRule.value = false
   }
 }
 
 async function handleToggleRule(rule: AssignRule) {
+  if (togglingRule.value) return
+  togglingRule.value = true
   try {
     await followupAPI.updateAssignRule(rule.rule_id, { is_active: !rule.is_active })
     loadRules()
   } catch (e) {
     console.error('切换规则状态失败:', e)
+  } finally {
+    togglingRule.value = false
   }
 }
 

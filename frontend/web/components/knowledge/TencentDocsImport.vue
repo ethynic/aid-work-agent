@@ -37,7 +37,7 @@
                 {{ isStartingOAuth ? '跳转中...' : '授权绑定' }}
               </BaseButton>
               <BaseButton v-if="authStatus?.bound" size="sm" intent="secondary" @click="openBindModal">更新凭据</BaseButton>
-              <BaseButton v-if="authStatus?.bound" size="sm" intent="danger-ghost" @click="handleUnbind">解绑</BaseButton>
+              <BaseButton v-if="authStatus?.bound" size="sm" intent="danger-ghost" :disabled="unbinding" @click="handleUnbind">解绑</BaseButton>
               <BaseButton v-else size="sm" intent="secondary" @click="openBindModal">手工绑定</BaseButton>
             </div>
           </div>
@@ -77,6 +77,7 @@
                       <BaseButton
                         v-if="row.fail_count > 0 && row.status !== 'running'"
                         size="sm" intent="ghost" class="text-xs whitespace-nowrap"
+                        :disabled="retryingBatch"
                         @click="handleRetry(row as TdocImportBatch)"
                       >重试</BaseButton>
                     </div>
@@ -285,6 +286,7 @@ async function loadAuthStatus() {
 const isStartingOAuth = ref(false)
 
 async function handleStartOAuth() {
+  if (isStartingOAuth.value) return
   isStartingOAuth.value = true
   try {
     const result = await startTdocOAuth()
@@ -321,6 +323,7 @@ function openBindModal() {
 }
 
 async function handleSaveAuth() {
+  if (isSavingAuth.value) return
   const form = bindForm.value
   bindErrors.value = {
     client_id: !form.client_id.trim(),
@@ -352,8 +355,11 @@ async function handleSaveAuth() {
   }
 }
 
+const unbinding = ref(false)
 async function handleUnbind() {
+  if (unbinding.value) return
   if (!confirm('确定解绑腾讯文档账号？解绑后需重新绑定才能导入。')) return
+  unbinding.value = true
   try {
     const result = await deleteTdocAuth()
     if (result.success) {
@@ -364,6 +370,8 @@ async function handleUnbind() {
     }
   } catch (e: any) {
     toast.error(e.message || '解绑失败')
+  } finally {
+    unbinding.value = false
   }
 }
 
@@ -464,6 +472,7 @@ const skippedSelectedCount = computed(() => {
 })
 
 async function handleCreateImport() {
+  if (isCreating.value) return
   const selected = files.value.filter(f => selectedFileIds.value.has(f.file_id) && f.type === 'doc')
   if (selected.length === 0) return
   isCreating.value = true
@@ -587,7 +596,10 @@ async function refreshBatchDetail(batchId: string) {
   }
 }
 
+const retryingBatch = ref(false)
 async function handleRetry(row: TdocImportBatch) {
+  if (retryingBatch.value) return
+  retryingBatch.value = true
   try {
     const result = await retryTdocImport(row.batch_id)
     if (result.success) {
@@ -598,6 +610,8 @@ async function handleRetry(row: TdocImportBatch) {
     }
   } catch (e: any) {
     toast.error(e.message || '重试失败')
+  } finally {
+    retryingBatch.value = false
   }
 }
 

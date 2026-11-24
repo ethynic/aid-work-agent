@@ -59,7 +59,7 @@
           <template #actions="{ row }">
             <div class="flex gap-2">
               <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="goDetail(row.id)">详情</BaseButton>
-              <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleDelete(row as ResumeListItem)">删除</BaseButton>
+              <BaseButton intent="danger-ghost" size="sm" :disabled="deletingResume" class="whitespace-nowrap text-xs" @click="handleDelete(row as ResumeListItem)">删除</BaseButton>
             </div>
           </template>
           <template v-if="loading" #empty>加载中...</template>
@@ -296,13 +296,19 @@ function goDetail(id: number) {
 }
 
 async function handleDelete(row: ResumeListItem) {
+  if (deletingResume.value) return
   if (!confirm(`确定删除「${row.candidate_name || '未命名候选人'}」的简历？`)) return
-  const res = await deleteResume(row.id)
-  if (res.success) {
-    toast.success('删除成功')
-    refresh()
-  } else {
-    toast.error(res.error || '删除失败')
+  deletingResume.value = true
+  try {
+    const res = await deleteResume(row.id)
+    if (res.success) {
+      toast.success('删除成功')
+      refresh()
+    } else {
+      toast.error(res.error || '删除失败')
+    }
+  } finally {
+    deletingResume.value = false
   }
 }
 
@@ -310,6 +316,7 @@ async function handleDelete(row: ResumeListItem) {
 
 const showCreateModal = ref(false)
 const submitting = ref(false)
+const deletingResume = ref(false)
 const createInputRef = ref<HTMLInputElement | null>(null)
 
 function emptyCreateForm() {
@@ -341,6 +348,7 @@ function handleFilePick(e: Event) {
 }
 
 async function handleSubmitCreate() {
+  if (submitting.value) return
   if (!canSubmitCreate.value) return
   submitting.value = true
   try {

@@ -64,11 +64,12 @@
                 <BaseButton
                   v-if="currentTab === 'kept' && isTenantAdmin"
                   size="sm"
+                  :disabled="promoting"
                   @click="handlePromote(row)"
                 >
                   升级为模版
                 </BaseButton>
-                <BaseButton size="sm" intent="danger-ghost" @click="handleDelete(row)">删除</BaseButton>
+                <BaseButton size="sm" intent="danger-ghost" :disabled="deletingPrompt" @click="handleDelete(row)">删除</BaseButton>
               </template>
               <template #empty>暂无提示词</template>
             </BaseTable>
@@ -263,8 +264,14 @@ async function handleViewDetail(row: any) {
   }
 }
 
+// 防重复提交：升级与删除均为变更类 API，进行中禁止重复触发
+const promoting = ref(false)
+const deletingPrompt = ref(false)
+
 async function handlePromote(row: any) {
+  if (promoting.value) return
   if (!confirm(`确定将此提示词升级为模版？`)) return
+  promoting.value = true
   try {
     const res = await promotePrompt(row.id)
     if (res.success) {
@@ -275,11 +282,15 @@ async function handlePromote(row: any) {
     }
   } catch (e: any) {
     toast.error(e.message || '升级失败')
+  } finally {
+    promoting.value = false
   }
 }
 
 async function handleDelete(row: any) {
+  if (deletingPrompt.value) return
   if (!confirm(`确定删除此提示词？`)) return
+  deletingPrompt.value = true
   try {
     const res = await deletePrompt(row.id)
     if (res.success) {
@@ -290,6 +301,8 @@ async function handleDelete(row: any) {
     }
   } catch (e: any) {
     toast.error(e.message || '删除失败')
+  } finally {
+    deletingPrompt.value = false
   }
 }
 </script>

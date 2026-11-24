@@ -186,7 +186,7 @@
               intent="danger-ghost"
               size="sm"
               class="flex-shrink-0"
-              :disabled="templateUploading"
+              :disabled="templateDeleting"
               @click="handleDeleteTemplate(t.file_id)"
             >
               删除
@@ -560,8 +560,13 @@ async function handleUploadTemplate() {
   }
 }
 
+// 防重复提交：模板删除为变更类 API，进行中禁止重复触发
+const templateDeleting = ref(false)
+
 async function handleDeleteTemplate(fileId: string) {
+  if (templateDeleting.value) return
   if (!confirm('确定删除该模板？')) return
+  templateDeleting.value = true
   errorMsg.value = ''
   try {
     const res = await deleteTemplate(props.agentId, fileId)
@@ -572,6 +577,8 @@ async function handleDeleteTemplate(fileId: string) {
     }
   } catch (e: any) {
     errorMsg.value = e.message || '删除失败'
+  } finally {
+    templateDeleting.value = false
   }
 }
 
@@ -693,6 +700,7 @@ async function confirmRollback() {
 }
 
 async function handleCopy() {
+  if (copying.value) return
   const name = copyName.value.trim()
   if (!name) {
     errorMsg.value = '请填写副本显示名'
@@ -712,6 +720,7 @@ async function handleCopy() {
 }
 
 async function handleDelete() {
+  if (deleting.value) return
   if (!confirm('确定删除该副本？删除后新会话无法继续使用。')) return
   deleting.value = true
   errorMsg.value = ''

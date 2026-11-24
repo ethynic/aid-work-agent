@@ -55,7 +55,8 @@
               >下载</button>
               <button
                 @click="handleDelete"
-                class="text-xs px-3 py-1.5 bg-white border border-danger-300 text-danger-600 rounded hover:bg-danger-50 transition-colors"
+                :disabled="deletingConfig"
+                class="text-xs px-3 py-1.5 bg-white border border-danger-300 text-danger-600 rounded hover:bg-danger-50 transition-colors disabled:opacity-50"
               >删除</button>
             </div>
           </div>
@@ -187,8 +188,11 @@ async function handleDownload() {
   }
 }
 
+const deletingConfig = ref(false)
 async function handleDelete() {
+  if (deletingConfig.value) return
   if (!confirm('确定删除配置文件？')) return
+  deletingConfig.value = true
   try {
     const res = await deleteConfigFile(tenantId.value, selectedAgentId.value)
     if (res.success) {
@@ -197,6 +201,8 @@ async function handleDelete() {
     }
   } catch (e: any) {
     toast.error(e.message || '删除失败')
+  } finally {
+    deletingConfig.value = false
   }
 }
 </script>

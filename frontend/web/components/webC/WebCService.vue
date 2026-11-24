@@ -377,7 +377,7 @@
             <BaseSelect v-model="leadDetailStage" size="sm" class="w-32">
               <option v-for="(s, key) in leadStageOptions" :key="key" :value="key">{{ s.label }}</option>
             </BaseSelect>
-            <BaseButton size="sm" @click="saveLeadStage">保存</BaseButton>
+            <BaseButton size="sm" :disabled="leadStageSaving" @click="saveLeadStage">保存</BaseButton>
           </div>
         </div>
       </div>
@@ -832,8 +832,12 @@ async function openLeadDetail(row: any) {
   }
 }
 
+// 防重复提交：阶段保存为变更类 API，进行中禁止重复触发
+const leadStageSaving = ref(false)
+
 async function saveLeadStage() {
-  if (!leadDetail.value) return
+  if (!leadDetail.value || leadStageSaving.value) return
+  leadStageSaving.value = true
   try {
     const result = await updateWebCLeadStage(String((leadDetail.value as Record<string, unknown>).lead_id), leadDetailStage.value)
     leadDetail.value = result.lead as unknown as Record<string, unknown>
@@ -841,6 +845,8 @@ async function saveLeadStage() {
     await loadLeadStats()
   } catch (e) {
     console.error('前端日志：官网留资阶段更新失败', e)
+  } finally {
+    leadStageSaving.value = false
   }
 }
 

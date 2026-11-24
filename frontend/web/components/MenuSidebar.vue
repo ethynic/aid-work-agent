@@ -572,7 +572,8 @@
         <!-- 退出登录 -->
         <button
           @click="handleLogout"
-          class="w-full flex items-center gap-3 px-3 py-2 text-left text-sm text-gray-700 hover:bg-danger-50 hover:text-danger-600 transition-colors"
+          :disabled="loggingOut"
+          class="w-full flex items-center gap-3 px-3 py-2 text-left text-sm text-gray-700 hover:bg-danger-50 hover:text-danger-600 transition-colors disabled:opacity-50"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
@@ -613,7 +614,8 @@
           </button>
           <button
             @click="confirmRename"
-            class="px-3 py-1.5 text-sm bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-colors"
+            :disabled="renamingSession"
+            class="px-3 py-1.5 text-sm bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-colors disabled:opacity-50"
           >
             确定
           </button>
@@ -1596,11 +1598,18 @@ async function handleSelectSession(sessionId: string) {
 }
 
 // 删除会话
+const deletingSession = ref(false)
 async function handleDeleteSession(sessionId: string) {
+  if (deletingSession.value) return
   if (confirm('确定要删除这个会话吗？')) {
-    // 先断开并清理该会话的流式状态（若正在后台生成）
-    removeStreamState(sessionId)
-    await removeSession(sessionId)
+    deletingSession.value = true
+    try {
+      // 先断开并清理该会话的流式状态（若正在后台生成）
+      removeStreamState(sessionId)
+      await removeSession(sessionId)
+    } finally {
+      deletingSession.value = false
+    }
   }
 }
 
@@ -1612,12 +1621,19 @@ function handleRenameSession(session: { session_id: string; title: string }) {
 }
 
 // 确认重命名
+const renamingSession = ref(false)
 async function confirmRename() {
+  if (renamingSession.value) return
   if (renamingSessionId.value && renameInput.value.trim()) {
-    await renameSession(renamingSessionId.value, renameInput.value.trim())
-    showRenameModal.value = false
-    renamingSessionId.value = null
-    renameInput.value = ''
+    renamingSession.value = true
+    try {
+      await renameSession(renamingSessionId.value, renameInput.value.trim())
+      showRenameModal.value = false
+      renamingSessionId.value = null
+      renameInput.value = ''
+    } finally {
+      renamingSession.value = false
+    }
   }
 }
 
@@ -1633,12 +1649,19 @@ function handleModifyPassword() {
 }
 
 // 租户模式退出登录
+const loggingOut = ref(false)
 async function handleTenantLogout() {
-  await tenantLogout()
-  if (tenantId.value) {
-    router.push(`/t/${tenantId.value}/login`)
-  } else {
-    router.push('/')
+  if (loggingOut.value) return
+  loggingOut.value = true
+  try {
+    await tenantLogout()
+    if (tenantId.value) {
+      router.push(`/t/${tenantId.value}/login`)
+    } else {
+      router.push('/')
+    }
+  } finally {
+    loggingOut.value = false
   }
 }
 </script>

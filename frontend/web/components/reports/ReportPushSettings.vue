@@ -212,6 +212,7 @@ async function loadPreferences() {
 }
 
 async function handleSave() {
+  if (saving.value) return
   if (!prefs.value) return
   saving.value = true
   errorMessage.value = ''

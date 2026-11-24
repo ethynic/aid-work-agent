@@ -90,6 +90,7 @@
               intent="danger-ghost"
               size="sm"
               class="whitespace-nowrap text-xs"
+              :disabled="rollbackLoading"
               @click="confirmRollback(row as ContextSummaryListItem)"
             >回滚</BaseButton>
           </div>
@@ -381,10 +382,13 @@ async function showDetail(row: ContextSummaryListItem) {
 }
 
 // ------- Rollback -------
+const rollbackLoading = ref(false)
 async function confirmRollback(row: ContextSummaryListItem) {
+  if (rollbackLoading.value) return
   if (!confirm(`确定回滚此次压缩？\n\n摘要 ID：${row.summary_id}\n\n回滚后，被压缩的 ${row.compressed_message_count} 条原消息将恢复 compacted=false，重新参与 LLM 上下文。`)) {
     return
   }
+  rollbackLoading.value = true
   try {
     const response = await rollbackSummary(row.summary_id)
     if (response.success) {
@@ -397,11 +401,14 @@ async function confirmRollback(row: ContextSummaryListItem) {
   } catch (error: any) {
     console.error('前端日志：回滚失败:', error)
     toast.error(error.message || '回滚失败')
+  } finally {
+    rollbackLoading.value = false
   }
 }
 
 // ------- Manual Compact -------
 async function handleManualCompact() {
+  if (manualLoading.value) return
   if (!manualSessionId.value) {
     toast.warning('请输入 session_id')
     return

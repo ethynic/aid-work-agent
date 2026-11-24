@@ -103,14 +103,20 @@ function togglePanel() {
   }
 }
 
+// 防重复触发：标记已读幂等危害低，但仍避免请求期间连点重复发送
+const markingReadIds = ref<Set<string>>(new Set())
+
 async function handleRead(item: InboxItem) {
-  if (!item.read_at) {
+  if (!item.read_at && !markingReadIds.value.has(item.notification_ref)) {
+    markingReadIds.value.add(item.notification_ref)
     try {
       await notificationsAPI.markRead(item.notification_ref)
       item.read_at = new Date().toISOString()
       unreadCount.value = Math.max(0, unreadCount.value - 1)
     } catch (e) {
       console.error('标记已读失败:', e)
+    } finally {
+      markingReadIds.value.delete(item.notification_ref)
     }
   }
   if (item.link) {

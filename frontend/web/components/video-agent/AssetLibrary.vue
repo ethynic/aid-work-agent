@@ -65,7 +65,7 @@
               </template>
               <template #actions="{ row }">
                 <BaseButton size="sm" intent="ghost" @click="handleDownload(row)">下载</BaseButton>
-                <BaseButton size="sm" intent="danger-ghost" @click="handleDelete(row)">删除</BaseButton>
+                <BaseButton size="sm" intent="danger-ghost" :disabled="deletingAsset" @click="handleDelete(row)">删除</BaseButton>
               </template>
               <template #empty>暂无素材</template>
             </BaseTable>
@@ -112,7 +112,9 @@
       </div>
       <template #footer>
         <BaseButton intent="secondary" @click="showUploadModal = false">取消</BaseButton>
-        <BaseButton :disabled="!canSubmitUpload" @click="handleSubmitUpload">上传</BaseButton>
+        <BaseButton :disabled="!canSubmitUpload || uploadSubmitting" @click="handleSubmitUpload">
+          {{ uploadSubmitting ? '上传中...' : '上传' }}
+        </BaseButton>
       </template>
     </BaseModal>
   </div>
@@ -234,14 +236,24 @@ function handleDownload(row: any) {
   }
 }
 
+// 防重复提交：删除与上传均为变更类 API，进行中禁止重复触发
+const deletingAsset = ref(false)
+const uploadSubmitting = ref(false)
+
 async function handleDelete(row: any) {
+  if (deletingAsset.value) return
   if (!confirm(`确定删除素材「${row.display_name}」？`)) return
-  const res = await deleteAsset(row.id)
-  if (res.success) {
-    toast.success('删除成功')
-    refresh()
-  } else {
-    toast.error(res.error || '删除失败')
+  deletingAsset.value = true
+  try {
+    const res = await deleteAsset(row.id)
+    if (res.success) {
+      toast.success('删除成功')
+      refresh()
+    } else {
+      toast.error(res.error || '删除失败')
+    }
+  } finally {
+    deletingAsset.value = false
   }
 }
 
@@ -268,7 +280,8 @@ function handleFilePick(e: Event) {
 }
 
 async function handleSubmitUpload() {
-  if (!uploadForm.value.file) return
+  if (!uploadForm.value.file || uploadSubmitting.value) return
+  uploadSubmitting.value = true
   try {
     // 1. 先调 /api/upload 上传文件拿 file_id
     const uploadRes = await uploadFile(uploadForm.value.file, getAuthHeader())
@@ -295,6 +308,8 @@ async function handleSubmitUpload() {
     }
   } catch (e: any) {
     toast.error(e.message || '上传异常')
+  } finally {
+    uploadSubmitting.value = false
   }
 }
 </script>

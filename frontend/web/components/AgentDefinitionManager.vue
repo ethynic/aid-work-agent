@@ -96,8 +96,9 @@
                       {{ exporting ? '导出中...' : '导出配置' }}
                     </button>
                     <button v-if="!pendingCreate" @click="confirmDelete"
-                      class="px-3 py-1.5 text-xs text-danger-600 border border-danger-200 rounded-lg hover:bg-danger-50">
-                      删除
+                      class="px-3 py-1.5 text-xs text-danger-600 border border-danger-200 rounded-lg hover:bg-danger-50 disabled:opacity-50"
+                      :disabled="deletingAgent">
+                      {{ deletingAgent ? '删除中...' : '删除' }}
                     </button>
                   </div>
                 </div>
@@ -1172,6 +1173,7 @@ function openCreateDialog() {
 }
 
 async function doCreate() {
+  if (creating.value) return
   const f = createForm.value
   if (!f.agent_id || !f.name || !f.system_prompt) {
     showToast('请填写必填字段', 'error')
@@ -1195,6 +1197,7 @@ async function doCreate() {
 }
 
 async function saveDefinition() {
+  if (saving.value) return
   if (!canSaveDefinition.value || !validateModelCodes()) return
   saving.value = true
   try {
@@ -1282,14 +1285,19 @@ async function saveDefinition() {
   } finally { saving.value = false }
 }
 
+// 防重复提交：删除为不可恢复的变更操作，进行中禁止重复触发
+const deletingAgent = ref(false)
+
 function confirmDelete() {
+  if (deletingAgent.value) return
   if (!selectedAgentId.value) return
   if (!confirm(`确定删除智能体 "${form.value.name}"？此操作不可恢复。`)) return
   doDelete()
 }
 
 async function doDelete() {
-  if (!selectedAgentId.value) return
+  if (!selectedAgentId.value || deletingAgent.value) return
+  deletingAgent.value = true
   try {
     const res = await deleteDefinition(selectedAgentId.value)
     if (res.success) {
@@ -1302,6 +1310,8 @@ async function doDelete() {
     }
   } catch (e: any) {
     showToast(e.message || '删除失败', 'error')
+  } finally {
+    deletingAgent.value = false
   }
 }
 
@@ -1312,6 +1322,7 @@ function onPromptInput() {
 
 async function commitPromptVersion() {
   if (!selectedAgentId.value) return
+  if (promptSaving.value) return
   // 确认与变更说明都放在第一个写请求之前：任一弹窗取消时不产生任何保存
   //（分段若先落库，取消也会影响运行时提示词装配）
   if (!confirm('保存后提示词将立即生效，是否保存？')) return
@@ -1347,7 +1358,7 @@ function openRollbackDialog() {
 }
 
 async function confirmRollback() {
-  if (!selectedAgentId.value || !previousVersion.value) return
+  if (!selectedAgentId.value || !previousVersion.value || rollbackLoading.value) return
   rollbackLoading.value = true
   try {
     const res = await rollbackSystemPrompt(selectedAgentId.value)
@@ -1366,7 +1377,7 @@ async function confirmRollback() {
 
 // ============== Sections Management ==============
 async function saveAllSections() {
-  if (!selectedAgentId.value) return
+  if (!selectedAgentId.value || promptSaving.value) return
   promptSaving.value = true
   try {
     for (const key of sectionKeys.value) {
@@ -1408,7 +1419,7 @@ async function flushUnsavedSections(): Promise<boolean> {
 }
 
 async function optimizeSection(key: string) {
-  if (!selectedAgentId.value) return
+  if (!selectedAgentId.value || optimizingKey.value) return
   const content = sections.value[key]?.trim()
   if (!content) {
     showToast('分段内容为空，无法优化', 'error')
@@ -1509,6 +1520,7 @@ async function onImportFileChange(e: Event) {
 }
 
 async function doImport(payload: ImportPayload) {
+  if (importing.value) return
   importing.value = true
   try {
     const res = await importDefinition(payload)

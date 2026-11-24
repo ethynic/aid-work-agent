@@ -266,6 +266,7 @@ function openDetail(record: any) {
 }
 
 async function handleEvaluate(recordId: string) {
+  if (evaluating.value) return
   evaluating.value = recordId
   try {
     const res = await followupAPI.evaluateRecord(recordId)

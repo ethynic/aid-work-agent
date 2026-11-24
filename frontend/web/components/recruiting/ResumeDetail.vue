@@ -318,6 +318,7 @@ async function saveStatus() {
 }
 
 async function saveRemark() {
+  if (savingRemark.value) return
   if (!detail.value) return
   savingRemark.value = true
   try {

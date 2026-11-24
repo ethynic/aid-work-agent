@@ -222,6 +222,7 @@ async function loadSettings() {
 }
 
 async function handleSave() {
+  if (saving.value) return
   saving.value = true
   message.value = ''
   try {
@@ -268,6 +269,7 @@ async function loadSchedulerSettings() {
 }
 
 async function handleSaveScheduler() {
+  if (schedulerSaving.value) return
   const value = Number(schedulerMaxTasks.value.trim())
   if (!Number.isInteger(value) || value < 1) {
     schedulerMessage.value = '每人活跃任务上限必须为正整数'
@@ -278,6 +280,7 @@ async function handleSaveScheduler() {
 }
 
 async function handleResetScheduler() {
+  if (schedulerSaving.value) return
   await saveSchedulerOverride(null)
 }
 
@@ -310,6 +313,7 @@ const prefMessageType = ref<'success' | 'error'>('success')
 showAiBadge.value = tenantInfo.value?.show_ai_badge !== false
 
 async function handleSavePreferences() {
+  if (prefSaving.value) return
   prefSaving.value = true
   prefMessage.value = ''
   try {

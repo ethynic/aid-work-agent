@@ -20,6 +20,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261124-2145 | 前端 Vitest 存量失败基线（13 例）+ 防重复提交守卫 | 🔧 部分完成（改造已验证，存量 13 例待整改） | 全站防重复提交改造（66 个 .vue 三件套守卫 + 规则入 frontend_dev.md）经 HEAD 基线对照确认零回归；全量 vitest 恒红的 13 例存量失败（routes 快照 / useAgentAsk 链路漂移 / MSW 缺 mock / MenuSidebar hiddenMenus 未装配）已登记待整改。 | [失败基线](design/devtools/frontend-vitest-failing-baseline-20261124.md) | — |
 | 20261113-1600 | 测试套件提速（Runtime/CLI/BOSS TS 三包） | 🔧 部分完成（整改完成待 CR） | 挂死 2 文件修复、5 项确定性红+2 项摇摆闭环、boss 全量 14s 全绿、去强制重建；余项留档。 | — | [计划](plans/plan-test-suite-speedup.md) |
 | 20261012-1230 | file_assets 历史文件名补录 | ✅ agent2 已补录，生产待执行 | commit 8825d880 上线 file_assets 表持久化文件元数据（根治下载文件名退化）后，存量历史文件名需跑补录脚本恢复（磁盘 + 消息表原始名优先，幂等）。agent2 已执行（磁盘 1241 + 消息 769，共 1457 行）；生产 243 发布后需同样执行。 | — | —（执行步骤见 [生产发布备忘](deploy/生产发布备忘.md)） |
 | 20261012-2130 | docs 文档清理（3 个月前失效文档） | ✅ 已执行（2026-10-13） | 41 个删除项已 git rm；待定 wecom-integration.md 摘取有效章节至 wecom-crypto-troubleshooting.md 后删除；research_index 8 条目 + 全部悬空引用已清理；B 级重点项 6 处已修（含 2 个部署文档凭证脱敏），其余 32 个 B 级小修待后续顺手处理。 | [清理计划](plans/plan-docs-cleanup-20261012.md) | — |
