@@ -213,10 +213,8 @@ const logoUrl = computed(() => {
 // /portal 下的菜单（仅平台管理员）
 // icon 字段为统一的 SVG path 数据，使用 stroke="currentColor" 的细线描边风格
 const portalMenuItems = [
-  // 系统健康：心跳波形（登录后默认页）
+  // 系统健康：心跳波形（登录后默认页，原仪表盘已由系统健康页接管并移除）
   { path: '/portal/system-health', label: '系统健康', icon: 'M22 12h-4l-3 9L9 3l-3 9H2' },
-  // 仪表盘：九宫格统计图（与参考图风格一致）
-  { path: '/portal', label: '仪表盘', icon: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z' },
   // 租户管理：办公建筑
   { path: '/portal/tenants', label: '租户管理', icon: 'M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M9 12h.01M9 15h.01M9 18h.01M15 9h.01M15 12h.01M15 15h.01M15 18h.01' },
   // 租户充值：钱包/充值
@@ -255,8 +253,6 @@ const currentMenuItems = computed(() => {
 })
 
 function isActive(path: string) {
-  // 处理 /portal 路由
-  if (path === '/portal') return route.path === '/portal'
   return route.path.startsWith(path)
 }
 

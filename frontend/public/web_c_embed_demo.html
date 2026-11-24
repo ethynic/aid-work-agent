@@ -17,6 +17,8 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: #333; }
+  /* 防横向溢出：iOS WebKit 会按溢出内容平移 fixed 全屏面板（聊天窗右侧被裁） */
+  html, body { overflow-x: hidden; }
 
   /* ===== 官网部分 ===== */
   header {
@@ -100,6 +102,8 @@
     #chat-panel {
       right: 0; bottom: 0;
       width: 100%; height: 100%; max-height: none;
+      /* iOS 微信 100% 基准高度可能含可视外区域，dvh 修正（不支持时回落上一行） */
+      height: 100dvh;
       border-radius: 0;
     }
     /* 全屏时 ✕ 移到右上角，避免压住聊天输入框与发送按钮 */

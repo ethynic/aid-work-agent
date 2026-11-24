@@ -28,6 +28,7 @@
 | 20261116-1240 | 创蓝253 短信通道（聊易） | 🔧 部分完成（代码+单测完成，待发版联调） | 新增 ChuangLan253Sender 通道+配置+单测；待配 env/IP 白名单与真机验收。 | [任务文档](deploy/liaoyi/创蓝253短信通道开发任务.md) | — |
 | 20261119-1500 | 租户前台菜单隐藏部署开关（TENANT_HIDDEN_MENUS） | ✅ 已完成（fd17ad37，聊易已部署生效，待真机 UI 验收） | .env 单变量逗号分隔菜单键，经 /saas/auth/me 下发、MenuSidebar 过滤连接中心/管理菜单 8 项；仅控显示，直链 404 兜底；聊易已配 8 键并重建容器+前端原子切换，容器 env 值级核验通过。 | — | — |
 | 20261117-2040 | 聊易上线首日错误日志排查 | ✅ 已完成（真机复测通过） | log_error 4084 行三类全闭环：DeepSeek 400（.env provider 链与 qwen 模型名错配）、空态摘要同因、企微客服 RunnerError（sales-assistant 定义 llm_provider=deepseek 但客户无 DeepSeek key，置空回落 qwen 后真机复测通过）；遗留定义保存 provider Key 校验防复发。 | [排查文档](deploy/liaoyi/错误日志排查_20261117.md) | — |
+| 20261124-1410 | 聊易错误日志排查（11-18~11-24） | 🔧 部分完成（中断修复已实现待提交部署；其余项待逐一处理） | 15 项清单；CHANNEL_EXECUTION_INTERRUPTED 已定性（doc-layout-clone 技能命令 600s 环境挂死 + 超时 kill 误标记账故障）并实现两项修复：超时走 child_timeout 在途收据标 unknown 对账不中断 runner、bootstrap 惰性 DB 化，7 单测绿待部署；ERP 参数错误/neirong、wecom_kf 95018/95001、P3 降噪待处理；P2 两项已修待部署（5db6591c/227e41d8）。 | [排查文档](deploy/liaoyi/错误日志排查_20261124.md) | — |
 | 20261028-1255 | 外发邮箱配置指南（域名 DNS 侧） | ✅ 已完成（2026-10-28） | 新增 [docs/guides/deployment/outbound-email-dns-setup-guide.md](guides/deployment/outbound-email-dns-setup-guide.md)：面向租户外发邮件域名配置的实操指南，沉淀 tulin.cn 体检实战——SPF/DKIM/DMARC/MX 四记录要点（163 免费企业邮 + 阿里云解析逐步操作）、MX 主机记录误填子域致主域收信中断、权威 DNS 与公共缓存验证口径、DMARC 报告解读与 p 策略升级路径、缺 DKIM 决策参考与验收清单。 | [指南](guides/deployment/outbound-email-dns-setup-guide.md) | — |
 
 ## 系统功能

@@ -428,7 +428,13 @@ Follow the instructions in the skill above to complete the user's task."""
             except asyncio.TimeoutError:
                 from src.core.subprocess_owner import stop_process_group_async
                 await stop_process_group_async(process)
-                observe_child_exit(None)
+                # 执行器主动超时 kill：与 observe_child_exit 的异常退出语义
+                # 区分，不得标记记账存储故障（否则命令超时会放大为整个
+                # runner 中断，2026-11-24 聊易 CHANNEL_EXECUTION_INTERRUPTED
+                # 事故）；在途子进程收据按 uncertain 口径交由对账，超时结果
+                # 作为工具失败返回模型继续执行。
+                from src.llm.call_observer import observe_child_timeout
+                observe_child_timeout()
                 duration = time.time() - start_time
                 
                 return ExecutionResult(
