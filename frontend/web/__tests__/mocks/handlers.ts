@@ -116,6 +116,11 @@ export const handlers = [
     })
   }),
 
+  // 租户信息（TenantAgentCustomizeDialog 打开时预查 allow_llm_provider_edit）
+  http.get('/api/saas/tenants/me', () => {
+    return HttpResponse.json({ tenant: { settings: {} } })
+  }),
+
   // 租户列表（list_tenants）
   http.get('/api/saas/tenants/list_tenants', () => {
     return HttpResponse.json({

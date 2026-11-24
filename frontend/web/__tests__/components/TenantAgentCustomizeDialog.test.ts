@@ -85,7 +85,7 @@ describe('TenantAgentCustomizeDialog', () => {
 
     expect(wrapper.find('input[placeholder="留空则使用默认名称"]').element).toHaveProperty('value', '')
     expect((wrapper.find('textarea').element as HTMLTextAreaElement).value).toBe('')
-    expect(wrapper.find('input[placeholder="留空则使用默认描述"]').element).toHaveProperty('value', '')
+    // 简介描述字段已删（4f48d14f），改验问候按钮文案不残留
     expect(wrapper.find('input[placeholder="按钮文案，≤6 字"]').element).toHaveProperty('value', '')
   })
 

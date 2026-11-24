@@ -40,7 +40,6 @@ describe('entry route responsibilities', () => {
       [
         "",
         "system-health",
-        "dashboard",
         "tenants",
         "recharge",
         "subagents",

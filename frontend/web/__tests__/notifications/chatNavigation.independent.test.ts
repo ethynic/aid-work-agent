@@ -12,7 +12,9 @@ const messages = ref<any[]>([])
 const agentSessionId = ref<string | null>(null)
 vi.mock('@/api/session', async () => ({ ...await vi.importActual('@/api/session'), ...network }))
 vi.mock('@/composables/useTenantAuth', () => ({ useTenantAuth: () => ({ admin, isLoggedIn: loggedIn,
-  tenant: ref({ tenant_id: 'tenant-one', company_name: 'Fixture' }), init: initialization.auth, logout: vi.fn() }) }))
+  tenant: ref({ tenant_id: 'tenant-one', company_name: 'Fixture' }), init: initialization.auth, logout: vi.fn(),
+  // MenuSidebar 依赖菜单隐藏开关（/saas/auth/me 下发），测试装配给空集合
+  privateCloud: ref(false), hiddenMenus: ref(new Set<string>()) }) }))
 vi.mock('@/composables/useAgent', () => ({ useAgent: () => ({ messages, sessionId: agentSessionId,
   isProcessing: ref(false), canStop: ref(false), currentFiles: ref([]), sendMessage: agent.send,
   clearSession: agent.clear, switchSession: agent.switch, clearSessionCache: vi.fn(), precacheNewSession: vi.fn(),
