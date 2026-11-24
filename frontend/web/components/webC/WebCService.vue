@@ -177,10 +177,12 @@
                 </div>
                 <!-- AI 产出可下载文件 -->
                 <div v-if="msg.role === 'assistant' && getDownloadableFiles(msg).length > 0" class="mt-3 flex flex-wrap gap-2">
+                  <!-- download-only：本页未挂载 AttachmentPreviewPanel，可预览类型点击会静默无响应 -->
                   <DownloadFileCard
                     v-for="file in getDownloadableFiles(msg)"
                     :key="file.file_id"
                     :file="file"
+                    download-only
                   />
                 </div>
               </div>

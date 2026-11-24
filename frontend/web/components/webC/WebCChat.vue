@@ -90,7 +90,8 @@
                   v-html="renderMarkdown(msg.content)"
                 ></div>
                 <div v-if="msg.files && msg.files.length" class="space-y-2">
-                  <DownloadFileCard v-for="(f, i) in msg.files" :key="i" :file="f" />
+                  <!-- download-only：本页未挂载 AttachmentPreviewPanel，可预览类型点击会静默无响应 -->
+                  <DownloadFileCard v-for="(f, i) in msg.files" :key="i" :file="f" download-only />
                 </div>
                 <div v-if="msg.created_at" class="ml-2 mt-1 text-xs text-muted tabular-nums">{{ formatMsgTime(msg.created_at) }}</div>
               </div>
