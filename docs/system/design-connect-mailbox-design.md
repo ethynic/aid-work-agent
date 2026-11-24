@@ -1,6 +1,6 @@
 # 连接邮箱设计
 
-> 状态：Phase 1 开发完成（2026-11-24），已提交到分支 `dev/connect-mailbox`，等待合并 `master`。第一版（QQ、163、自定义）确认后，按反馈增加企业邮箱和两个预留位，并确定「同一品牌的多套服务器由系统自动尝试，不让用户选」「预留位接入前不显示」。开发安排与遗留见[开发计划](../plans/plan-connect-mailbox.md)。
+> 状态：Phase 1 开发完成，2026-11-24 合并 `master`，待 agent2 部署验证。第一版（QQ、163、自定义）确认后，按反馈增加企业邮箱和两个预留位，并确定「同一品牌的多套服务器由系统自动尝试，不让用户选」「预留位接入前不显示」。开发安排与遗留见[开发计划](../plans/plan-connect-mailbox.md)。
 > 交互设计稿：[prototypes/connect-mailbox/index.html](../prototypes/connect-mailbox/index.html)，双击即可在浏览器打开。
 
 ## 1. 背景与目标
