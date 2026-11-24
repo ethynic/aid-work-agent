@@ -6060,3 +6060,67 @@ CREATE TABLE IF NOT EXISTS wecom_scheduled_send_settings (
     singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
     unit_price NUMERIC(12,2) CHECK (unit_price >= 0)
 );
+
+CREATE TABLE IF NOT EXISTS bs_weixin_agent_groups (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    deleted_at TIMESTAMPTZ,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_weixin_agent_group_name
+    ON bs_weixin_agent_groups (tenant_id, user_id, name) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS bs_weixin_agent_schedules (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
+    title TEXT NOT NULL,
+    group_ids JSONB NOT NULL,
+    preset TEXT NOT NULL,
+    frequency TEXT NOT NULL,
+    weekday SMALLINT,
+    hour SMALLINT NOT NULL,
+    minute SMALLINT NOT NULL,
+    notification_rule_id TEXT,
+    notify BOOLEAN NOT NULL DEFAULT FALSE,
+    next_due_at TIMESTAMPTZ,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_weixin_agent_schedule_due
+    ON bs_weixin_agent_schedules (next_due_at) WHERE next_due_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_weixin_agent_schedule_owner
+    ON bs_weixin_agent_schedules (tenant_id, user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS bs_weixin_agent_batches (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
+    schedule_id UUID,
+    planned_at TIMESTAMPTZ,
+    retry_batch_id UUID,
+    title TEXT,
+    start_at TIMESTAMPTZ NOT NULL,
+    end_at TIMESTAMPTZ NOT NULL,
+    groups_json JSONB NOT NULL,
+    notification_rule_id TEXT,
+    notification_pending BOOLEAN NOT NULL DEFAULT FALSE,
+    notification_skipped BOOLEAN NOT NULL DEFAULT FALSE,
+    notification_ref TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_weixin_agent_batch_occurrence
+    ON bs_weixin_agent_batches (schedule_id, planned_at);
+CREATE INDEX IF NOT EXISTS idx_weixin_agent_batch_owner
+    ON bs_weixin_agent_batches (tenant_id, user_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_weixin_agent_batch_notify
+    ON bs_weixin_agent_batches (created_at, id) WHERE notification_pending;
+
+
+CREATE INDEX IF NOT EXISTS idx_lt_weixin_range_pending ON local_tool_invocations (deadline_at)
+    WHERE tool_name='weixin_group_range_summary'
+      AND (state IN ('queued','claimed','running','cancel_requested')
+           OR (state IN ('failed','unknown','expired','cancelled') AND arguments_json ? 'grant'));

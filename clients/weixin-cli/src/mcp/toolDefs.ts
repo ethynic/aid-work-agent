@@ -11,6 +11,7 @@
  */
 import { z } from 'zod'
 import { dailySummaryShape } from '../operations/groupDailySummary.js'
+import { rangeSummaryShape } from '../operations/groupRangeSummary.js'
 
 export interface WeixinToolDef {
   name: string
@@ -121,5 +122,11 @@ TOOL_DEFS.push({
   description: '核对已打开群聊，仅将用户授权的当天文字交给配对服务生成总结。回执仅含摘要和覆盖统计。',
   zodShape: dailySummaryShape,
   annotations: { title: '生成微信群聊今日总结', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+})
+TOOL_DEFS.push({
+  name: 'weixin_group_range_summary', title: '生成微信群聊时段总结',
+  description: '连接中心专用。原生核对群聊，只向配对服务提交获准固定区间的文字。回执仅含摘要和覆盖统计。',
+  zodShape: rangeSummaryShape,
+  annotations: { title: '生成微信群聊时段总结', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 })
 export const TOOL_NAMES = TOOL_DEFS.map((t) => t.name)

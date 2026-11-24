@@ -39,6 +39,13 @@ def resource_in_tx(cursor, message):
         if not row:
             raise NotificationError('NOTIFICATION_RESOURCE_UNAVAILABLE', 404)
         return {**dict(row), 'type': ref['type']}
+    if ref['type'] == 'weixin_summary_batch':
+        cursor.execute('''SELECT id FROM bs_weixin_agent_batches
+                          WHERE id=%s AND tenant_id=%s AND user_id=%s''',
+                       (ref['id'], subject.tenant_id, subject.user_id))
+        if not cursor.fetchone():
+            raise NotificationError('NOTIFICATION_RESOURCE_UNAVAILABLE', 404)
+        return {'type': ref['type'], 'batch_id': ref['id'], 'tenant_id': subject.tenant_id}
     if ref['type'] == 'scheduled_task':
         # 定时任务暂停通知（Phase 3，设计 §8.2）：任务行存在且归属接收人即可
         # 解析（通知到达时任务必然 paused，用户恢复后点击历史通知不应 404，

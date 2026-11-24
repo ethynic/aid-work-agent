@@ -20,6 +20,8 @@ LOCAL_ONLY_WEIXIN_TOOLS = frozenset({"weixin_history_read", "weixin_unread_list"
 LOCAL_ONLY_WEIXIN_MESSAGE = "此微信读取工具仅支持本机 CLI 或 MCP"
 WEIXIN_CHAT_LATEST = "weixin_chat_latest"
 WEIXIN_GROUP_DAILY_SUMMARY = "weixin_group_daily_summary"
+WEIXIN_GROUP_RANGE_SUMMARY = "weixin_group_range_summary"
+WEIXIN_SUMMARY_TOOLS = frozenset({WEIXIN_GROUP_DAILY_SUMMARY, WEIXIN_GROUP_RANGE_SUMMARY})
 WEIXIN_DAILY_SUMMARY_KIND = "weixin_daily_summary"
 
 TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {

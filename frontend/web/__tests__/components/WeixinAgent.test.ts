@@ -2,7 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { createWeixinSummary, getWeixinSummary, listDevices } from '@/api/localTools'
-import WeixinAgent from '@/components/weixinConversation/WeixinAgent.vue'
+import WeixinAgent from '@/components/weixinConversation/WeixinDailySummary.vue'
 
 vi.mock('@/api/localTools', () => ({
   createWeixinSummary: vi.fn(),

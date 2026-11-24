@@ -687,6 +687,13 @@ class ScheduledTaskManager:
         except Exception as e:
             logger.error(f"后端日志：注册 boss_conversation 投影 job 失败: {e}")
 
+        from src.local_tools.weixin_tracking_schedule import run_tick as run_weixin_tracking_tick
+
+        self._scheduler.add_job(
+            run_weixin_tracking_tick, IntervalTrigger(seconds=15), id="job_system_weixin_tracking",
+            name="Weixin Group Tracking", max_instances=1, coalesce=True,
+        )
+
     def _run_memory_summarizer(self):
         """执行每日记忆总结（APScheduler 回调）"""
         try:

@@ -18,9 +18,9 @@ function Item($label, $class = 'mmui::XTableCell', $id = '') {
     return @{Current=@{ClassName=$class; AutomationId=$id; ProcessId=42;
         ControlType=[Windows.Automation.ControlType]::ListItem; Name=$label; IsOffscreen=$false}}
 }
-function Pick($nodes, [string]$TargetType = 'friend') {
+function Pick($nodes, [string]$TargetType = 'friend', [switch]$RequireGroupSection) {
     try {
-        $node = Select-WeixinNativeSearchCandidate $nodes @{ProcessId=42;Title='contact'} $TargetType
+        $node = Select-WeixinNativeSearchCandidate $nodes @{ProcessId=42;Title='contact'} $TargetType -RequireGroupSection:$RequireGroupSection
         return $node.Current.AutomationId
     } catch { return $_.Exception.Message }
 }
@@ -37,6 +37,10 @@ ConvertTo-Json @{
     moreContacts=Pick @($recent,$person,$contacts,$more,$web)
     noCompletionBoundary=Pick @($recent,$person)
     sendKnownGroup=Pick @($recent,$person,$web) -TargetType 'group'
+    summaryKnownGroup=Pick @($groups,$person,$web) -TargetType 'group' -RequireGroupSection
+    summaryRecentIsUntyped=Pick @($recent,$person,$web) -TargetType 'group' -RequireGroupSection
+    summaryPerson=Pick @($contacts,$person,$web) -TargetType 'group' -RequireGroupSection
+    summaryTwoGroups=Pick @($groups,$person,$person,$web) -TargetType 'group' -RequireGroupSection
 } -Compress
 `
   const result = spawnSync('powershell.exe', ['-NoProfile', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8' })
@@ -47,6 +51,10 @@ ConvertTo-Json @{
     moreContacts: 'TARGET_AMBIGUOUS',
     noCompletionBoundary: 'UI_CHANGED',
     sendKnownGroup: 'search_item_contact',
+    summaryKnownGroup: 'search_item_contact',
+    summaryRecentIsUntyped: 'TARGET_AMBIGUOUS',
+    summaryPerson: 'TARGET_NOT_FOUND',
+    summaryTwoGroups: 'TARGET_AMBIGUOUS',
   })
 })
 

@@ -5,6 +5,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_common.ps1')
 . (Join-Path $PSScriptRoot 'native-messages.ps1')
 . (Join-Path $PSScriptRoot 'latest-history.ps1')
+. (Join-Path $PSScriptRoot 'native-session-search.ps1')
+. (Join-Path $PSScriptRoot 'range-history.ps1')
 
 function Test-WeixinHistoryCutoff($Rows, [int]$Days) {
     if ($Days -le 0) { return $false }
@@ -83,6 +85,9 @@ function Select-WeixinDailyText($Capture, [string]$BusinessDate, [DateTime]$Obse
 
 Invoke-DriverMain -MutexName 'Local\AidWorkAgent.WeixinCli.NativeObserve' -Body {
     $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    if ($request.mode -ceq 'range') {
+        return Invoke-WeixinRangeHistory $request
+    }
     $session = Get-WeixinCurrentNativeSession -TargetName $request.target_name -ExpectedSessionIdentity $request.session_identity
     if ($request.mode -ceq 'identity') {
         return @{title=$session.Title;session_identity=$session.Identity;process_started_at=(Get-WeixinLatestProcessStart $session)}

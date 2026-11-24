@@ -10,7 +10,7 @@ function Get-WeixinNativeSearchEdit($Session) {
     }
 }
 
-function Select-WeixinNativeSearchCandidate($Nodes, $Session, [string]$TargetType) {
+function Select-WeixinNativeSearchCandidate($Nodes, $Session, [string]$TargetType, [switch]$RequireGroupSection) {
     $section = ''
     $complete = $false
     $candidates = @()
@@ -25,12 +25,16 @@ function Select-WeixinNativeSearchCandidate($Nodes, $Session, [string]$TargetTyp
             if ($section -cin @('聊天记录','搜索网络结果')) { $complete=$true; break }
             continue
         }
-        $eligible = ($section -ceq '最常使用' -and $TargetType -cne 'other') -or
+        $eligible = ($section -ceq '最常使用' -and $TargetType -cne 'other' -and -not $RequireGroupSection) -or
             ($TargetType -ceq 'friend' -and $section -ceq '联系人') -or
             ($TargetType -ceq 'group' -and $section -ceq '群聊') -or
             ($TargetType -ceq 'other' -and $section -ceq '功能')
         if ($row.ClassName -ceq 'mmui::SearchContentCellView' -and $section -and $row.AutomationId) {
-            if ($eligible -and [string]::Equals(($label -split '\r\n|\r|\n',2)[0], $Session.Title, [StringComparison]::Ordinal)) {
+            $exactName = [string]::Equals(($label -split '\r\n|\r|\n',2)[0], $Session.Title, [StringComparison]::Ordinal)
+            if ($RequireGroupSection -and $section -ceq '最常使用' -and $exactName) {
+                Throw-DriverError 'TARGET_AMBIGUOUS' '同名常用会话的群聊类型无法核对，请先打开目标群聊'
+            }
+            if ($eligible -and $exactName) {
                 if ($row.IsOffscreen -or $label -cne $Session.Title -or
                     -not [string]::Equals($row.AutomationId, ('search_item_' + $Session.Title), [StringComparison]::Ordinal)) {
                     Throw-DriverError 'TARGET_AMBIGUOUS' '微信搜索同名结果无法核对'
@@ -49,7 +53,7 @@ function Select-WeixinNativeSearchCandidate($Nodes, $Session, [string]$TargetTyp
     return $candidates[0]
 }
 
-function Get-WeixinNativeSearchResult($Session, [int64]$Overlay, [string]$TargetType) {
+function Get-WeixinNativeSearchResult($Session, [int64]$Overlay, [string]$TargetType, [switch]$RequireGroupSection) {
     $edit = Get-WeixinNativeSearchEdit $Session
     $value = $null
     if ($null -eq $edit -or -not $edit.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$value) -or
@@ -63,7 +67,7 @@ function Get-WeixinNativeSearchResult($Session, [int64]$Overlay, [string]$Target
     }
     $list = Get-WeixinNativeList @{Handle=$Overlay;ProcessId=$Session.ProcessId} 'search_list' 'mmui::XTableView'
     $nodes = $list.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)
-    $match = Select-WeixinNativeSearchCandidate $nodes $Session $TargetType
+    $match = Select-WeixinNativeSearchCandidate $nodes $Session $TargetType -RequireGroupSection:$RequireGroupSection
     $bounds = $match.Current.BoundingRectangle
     $visible = [Windows.Rect]::Intersect($bounds,$list.Current.BoundingRectangle)
     $runtimeId = $match.GetRuntimeId() -join '.'
@@ -73,7 +77,7 @@ function Get-WeixinNativeSearchResult($Session, [int64]$Overlay, [string]$Target
     return @{ Id=$runtimeId; Bounds=$visible }
 }
 
-function Open-WeixinNativeSearchTarget([string]$TargetName, [string]$TargetType) {
+function Open-WeixinNativeSearchTarget([string]$TargetName, [string]$TargetType, [switch]$RequireGroupSection) {
     if ($TargetType -cnotin @('friend','group','other')) { Throw-DriverError 'TARGET_AMBIGUOUS' '微信目标类型无法核对' }
     $handle = Resolve-WeixinMainWindowHwnd
     $identity = Get-WindowIdentityByHwnd $handle
@@ -97,9 +101,9 @@ function Open-WeixinNativeSearchTarget([string]$TargetName, [string]$TargetType)
             $null -ne (Get-WeixinNativeSearchEdit $session) -and (Get-WeixinSearchOverlayHwnd) -eq $overlay
         }
         Start-Sleep -Milliseconds 850
-        $initial = Get-WeixinNativeSearchResult $session $overlay $TargetType
+        $initial = Get-WeixinNativeSearchResult $session $overlay $TargetType -RequireGroupSection:$RequireGroupSection
         Start-Sleep -Milliseconds 150
-        $candidate = Get-WeixinNativeSearchResult $session $overlay $TargetType
+        $candidate = Get-WeixinNativeSearchResult $session $overlay $TargetType -RequireGroupSection:$RequireGroupSection
         if ($candidate.Id -cne $initial.Id -or -not $candidate.Bounds.Equals($initial.Bounds)) {
             Throw-DriverError 'UI_CHANGED' '微信搜索结果仍在更新'
         }
