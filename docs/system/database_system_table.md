@@ -740,7 +740,7 @@ run + pending items，worker 按租户串行领取（事务内 queued→running�
 
 ### 11.10 Runtime 干净安装注册协议3（2026-10-14，待部署）
 
-2026-10-14补偿登记：agent2代码发布后，存量`_db_update_applied.last_datetime=2026-10-14 18:00:00`使原17:00块被跳过，注册三列及索引未创建。追加`2026-10-14 22:45:00`同结构幂等迁移，不回拨已有水位，不修改设备/任务数据；用户授权后的复查已确认agent2结构齐全及22:45水位，助手没有重复写库，正式库只读确认水位为13日17:00、尚待发布。详情见[干净安装计划Phase7](../plans/plan-runtime-clean-install.md)和[复盘](../incidents/runtime-registration-migration-watermark-incident.md)。
+2026-10-14补偿登记：agent2代码发布后，存量`_db_update_applied.last_datetime=2026-10-14 18:00:00`使原17:00块被跳过，注册三列及索引未创建。追加`2026-10-14 22:45:00`同结构幂等迁移，不回拨已有水位，不修改设备/任务数据；用户授权后的复查已确认agent2结构齐全及22:45水位，助手没有重复写库，正式库只读确认水位为13日17:00、尚待发布。详情见 [Runtime 架构设计 §7](runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)的开发完成记录（原干净安装计划已清理）和[复盘](../incidents/runtime-registration-migration-watermark-incident.md)。
 
 - `local_tool_devices.registration_id UUID NULL`：客户端以现有256-bit随机token与DPAPI保存的注册UUID；部分唯一索引 `uq_lt_devices_registration` 保证一次注册只建一设备。旧协议记录为空。
 - `registration_request_hash TEXT NULL`：规范JSON不可变意图摘要（name/platform/runtime_version/capabilities/machine_fingerprint/previous token hash/protocol=3）；凭据、OTP均不明文落库。`registration_code_hash TEXT NULL` 保存首次票据hash，以核对仍带码的重试。

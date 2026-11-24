@@ -1,6 +1,6 @@
 """WP1 模型层契约：结构化答案入口校验与旧请求摘要兼容。
 
-docs/plans/plan-ask-user-interactive-question.md §WP1：
+设计见 docs/system/design-ask-user-interactive-question.md；原开发计划 WP1：
 - 入口校验修订（reply 合法条件、两组互斥、非 reply 禁带、旧 clarify 不变）；
 - intent()/digest() 显式条件序列化——旧形状请求与改动前基线逐字节一致
   （基线为改动前 model_dump 输出的硬编码值，含 canonical 串与 sha256）。

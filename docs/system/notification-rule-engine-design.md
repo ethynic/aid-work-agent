@@ -1,6 +1,7 @@
 # 通知规则引擎设计（留资业务通知 + 通知配置统一）
 
 > 日期：2026-10-28；版本：v0.3；状态：📋 设计完成，待评审
+> 开发状态（2026-11-24 补记）：✅ 已开发完成——规则引擎本体（Phase 1/2，落地定版见 §14）与定时任务通知规则扩展（§15，2026-11-02）均已落地，完成记录见 §15 末；原开发计划已清理（Git 历史可查）。
 > v0.3：移除转人工通知（企微已有即时触达，不再做超时升级兜底）；留资通知明确**两层配置**——渠道配置层（wecom_kf 渠道级，该渠道产生的留资都走该规则）与客服账号层（单账号级，该账号产生的留资都走该规则），同一留资两层都有规则时**都通知**；渠道配置页与客服账号弹框分别提供规则引擎深链。
 > 上游基础设施：[统一通知基础设施设计](notification-infrastructure-design.md)（核心 + Web Push 已合入）
 > 演进对象：[租户管理员通知设计](tenant-admin-notification-design.md)（Phase 1 已开发未部署，本设计将其"管理员展开 + 租户级四选一目标"收编为规则引擎的预置默认规则）
@@ -254,4 +255,6 @@ CREATE INDEX IF NOT EXISTS idx_notification_target_rule
 2. **任务级绑定生效**：`scheduled_tasks` 新列 `notification_rule_id`；任务事件发布仍走用户级 `publish_in_tx`（属主站内信不变），参数快照 `notify_rule_id`；展开阶段快照命中时按该规则取规则级 targets 投递（跳过偏好门控），规则停用/删除/事件被过滤时 route_snapshot 留痕 skipped。未被任务选用的 `scheduled.task` 规则不产生任何投递。
 3. **存量兼容**：任务无规则但旧列 `notification_target_id` 非空时继续快照 `notify_target_id` 走旧路由（存量任务外发不失效）；写入口（REST 编辑、聊天工具创建/管理）统一切换为规则字段，旧写字段移除。
 4. 普通用户新增只读接口 `GET /api/notifications/task-rules`（本租户 enabled 的 `scheduled.task` 规则 + 渠道目标脱敏摘要），供任务编辑下拉选用；规则 CRUD 仍仅租户管理员。
+
+**开发完成记录（2026-11-24 补记；原开发计划已清理，Git 历史可查）**：✅ 开发完成（2026-11-02）。数据库三处同步（`db_update` 追加 `2026-11-02 12:00:00` 幂等块）；通知模块后端（规则类型 `scheduled.task`、`list_task_rules`、展开快照路由）；定时任务后端（发布侧规则优先、旧目标兜底，聊天工具 `list_notify_rules`/`set_notify_rule`）与前端（规则页、任务编辑弹窗改通知规则）均完成。三智能体闭环：后端 369 passed（9 失败均为存量——web_push 缺 py_vapid ×8、留资渲染空格断言 ×1），前端 TaskPlanView 17/17 与 notifications 套件 125 全过、build 通过；CR 无 P0/P1。
 

@@ -1,6 +1,6 @@
 # 招聘链路单点错误治理与 Win32 输入性能修复
 
-来源：[招聘筛选耗时与恢复阻塞复盘（2026-10-20）](../incidents/recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md)剩余未排期项 + 2026-10-20 会话代码审计。恢复交互出口（登录/设备分类、Worker 切换对账、同会话结束等待、unknown 分层核验）由 [恢复计划](plan-boss-resume-next-recovery-fix.md) Phase 6～10 承担，本计划不重复；本计划处理「一次报错杀死整任务」的**触发面**与**输入性能根因**。
+来源：[招聘筛选耗时与恢复阻塞复盘（2026-10-20）](../incidents/recruiting-runtime-filter-timeout-and-resume-blocked-20261020.md)剩余未排期项 + 2026-10-20 会话代码审计。恢复交互出口（登录/设备分类、Worker 切换对账、同会话结束等待、unknown 分层核验）由 Runner 恢复修复 Phase 6～10 承担（已完成，记录见[增量设计 §5.6](../system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量)），本计划不重复；本计划处理「一次报错杀死整任务」的**触发面**与**输入性能根因**。
 
 ## 开发进度
 

@@ -1,6 +1,6 @@
 """WP2 公共视图投影：wait.form 白名单、supplementalInputs 扩展与表单引用。
 
-docs/plans/plan-ask-user-interactive-question.md §WP2：
+设计见 docs/system/design-ask-user-interactive-question.md；原开发计划 WP2：
 - `_public_waiting` 白名单加 `form`（无 form 的 wait 输出与改动前完全一致）；
 - supplementalInputs 扩展投影（form 快照 + 归一化答案）仅结构化受理携带；
 - clarificationQuestions 问题文本沿用既有结构，附带 form_id 引用；

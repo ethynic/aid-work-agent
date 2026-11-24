@@ -85,7 +85,7 @@ W24 CR 回炉：搜索动作在任何 Ctrl+A/Delete 前，先 Ctrl+F，再用企
 | `wecom_send_file` | 任意扩展 ≤100MB，文件名去空白 ≥3 字符 | 写 |
 | `wecom_add_customer` | 按手机号检索并发添加邀请（confirm 显式 true；M12 网络查找直达路线） | 写 |
 
-`wecom_probe` 的登录态由窗口枚举判断；二维码截图仅供用户扫码。窗口信息无法证明二维码是否过期或账号是否受限，因此保留兼容字段 `qr_status_hint=unknown`，不再调用 OCR 推测细状态。变更见 [开发计划](../../plans/plan-wecom-cli-probe-remove-ocr.md)。
+`wecom_probe` 的登录态由窗口枚举判断；二维码截图仅供用户扫码。窗口信息无法证明二维码是否过期或账号是否受限，因此保留兼容字段 `qr_status_hint=unknown`，不再调用 OCR 推测细状态。开发完成记录（2026-11-06；原开发计划已清理，Git 历史可查）：构建及 24 项测试通过，独立验证无 P0/P1；遗留：真机登出扫码待复验。
 
 - 智能分发（M11a）：send/send-image/send-file 支持 `target_ref`/
   `target_name` 二选一；驱动返回 `navigate_required=true` 时 TS 层（`src/operations/

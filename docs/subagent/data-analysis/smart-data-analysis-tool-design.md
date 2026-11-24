@@ -3,7 +3,7 @@
 > 关联设计：[数据分析子智能体设计](./data-analysis-subagent-design.md) §七
 > 关联规范：[系统架构](../../../.claude/rules/architecture.md)
 > 创建日期：2026-06-03
-> 状态：✅ 已实现（2026-06-09 初版，开发计划见 [smart-data-analysis-tool-dev-plan.md](./smart-data-analysis-tool-dev-plan.md)）
+> 状态：✅ 已实现（2026-06-09 初版；原开发计划已清理，Git 历史可查，记录见文末「开发完成记录」）
 
 ---
 
@@ -1926,3 +1926,27 @@ Agent 循环模式下，步骤间数据传递通过 **文件持久化 + 变量�
 matplotlib>=3.7.0       # 图表生成（PNG 图片）
 numpy>=1.24.0           # 科学计算（条件表达式、统计函数）
 ```
+
+## 开发完成记录
+
+2026-11-24 补记；原开发计划已清理，Git 历史可查。✅ 已实现：对外是注册到主智能体的 `analyze_data` 工具，对内是 `AnalysisAgent` 迷你 Agent 循环，一次调用完成「检索匹配表 → 加载数据 → 编排分析 → 输出结论与产物」。数据源导入、聊天附件数据分析、工具返回结构优化均另有条目。
+
+**相对原设计的关键变更**：
+
+- `tables_metadata` 由必填改为可选：不传时由 AnalysisAgent 内部 `list_data_tables` / `search_data_tables` 自动检索匹配数据表，主智能体只需传自然语言需求。
+- 工具返回结构采用 `conclusion + artifacts + analysis_meta` 三层结构。
+
+**交付物**：`src/tools/data_analysis/smart_analysis_tool.py`（`SmartDataAnalysisTool`）、`analysis_agent.py`（内部迷你 Agent 循环）、`analysis_tools_schema.py`（内部 function calling 的方法 schema）、`data_analyzer.py`（pandas/numpy 执行引擎与 DataFrame 缓存）；在 `Agent._register_builtin_tools()` 注册。
+
+**验收**：工具可被 function calling 调用；内部循环可自动检索表、加载数据并编排 query/aggregate/merge/pivot/calculate/compare/trend 分析；表格产物自动导出 Excel 并可下载；图表产物中文渲染正常（容器环境乱码已于 2026-07-13 修复）；单元测试 19 + 130 项通过；集成脚本覆盖 15 个真实 LLM 分析场景。
+
+**开发记录**：
+
+| 日期 | 提交 | 内容 |
+|------|------|------|
+| 2026-06-09 | `12925ae` | 添加智能数据分析工具模块 + 单元测试 |
+| 2026-06-12 | `6237db1` | 上下文失效修复 + 工具消息事务持久化 |
+| 2026-06-12 | `121f5b9` | 表格自动导出 Excel，修复 ready_for_download |
+| 2026-07-10 | `bd8bb3d` | 修复孤儿元数据导致数据源不存在报错 |
+| 2026-07-13 | `e2a813a` | 修复容器环境图表中文乱码 |
+| 2026-07-20 | — | 修复 3 个过期单测（`tables_metadata` 改可选后未同步），补登记原开发计划 |

@@ -11,7 +11,7 @@
 当前设计与计划见：
 
 - [BOSS 简历筛选助手原生 CDP 设计](../design/recruiting/boss-resume-assistant-native-cdp-design.md)
-- [BOSS 简历筛选助手原生 CDP 开发计划](../plans/recruiting/boss-resume-assistant-native-cdp-dev-plan.md)
+- BOSS 简历筛选助手原生 CDP 开发计划（已清理，Git 历史可查；开发完成记录见上述设计文首）
 
 本调研后续章节保留第一次页面观察，作为历史依据。新设计的首版边界为：每次手动登录、不保存登录态、不接入 aid-work-agent 服务端、合格点击打招呼、不合格点击不感兴趣、不确定则不执行动作。
 

@@ -77,7 +77,7 @@
    - 数据抽检：景点 ticket/project 表文本 + category/category_cn/region/source_sheet 镜像齐全；酒店 price_table + address/sub_region/diamond_level 镜像齐全（旧数据顶层无 region 键故不镜像，新导入才有——镜像现实语义）；唯一带封面的景点（天空之桥 doc=1307）raw_payload.images 正确镜像
    - 报告留档：`log/temp/travel_metadata_migrate_agent23.log`
 2. 真机：dry-run 报告确认 → execute → verify；
-   - ✅ 2026-10-15用户明确授权正式服agent补迁；240文档（景点144/酒店96）全部迁移，verify240一致/no_source0，冲突/并发/超限均0，幂等重跑零变更；逐文档原metadata字段与旧chunks不变，目标1949项目表930字可经统一工具转换返回。备份和执行证据登记[本次修复计划](plan-excel-read-performance.md)，保留旧chunks，生产观察期与清场另行推进。
+   - ✅ 2026-10-15用户明确授权正式服agent补迁；240文档（景点144/酒店96）全部迁移，verify240一致/no_source0，冲突/并发/超限均0，幂等重跑零变更；逐文档原metadata字段与旧chunks不变，目标1949项目表930字可经统一工具转换返回。备份和执行证据登记在[Excel 读取性能设计](../tools/excel-read-performance-design.md)的开发完成记录（原修复计划已清理），保留旧chunks，生产观察期与清场另行推进。
 3. Phase 2 代码上线后观察 ≥1 周（报价回归、聊天封面、Word 嵌图）；
 4. `--drop-chunks` 清场 + verify 复查；回退读逻辑随后续清理任务移除；
    - ✅ **测试库已提前清场**（2026-10-11，用户授权「排除旧数据干扰，强制 metadata 单源验证」）：

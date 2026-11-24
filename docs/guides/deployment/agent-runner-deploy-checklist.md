@@ -6,7 +6,7 @@
 `runner-monitor`（`python -m src.services.agent_runner.monitor` 每分钟扫描运行告警）。微信 KF 恢复主 API 原渠道入口，
 overlay 不再包含 KF ingress/admission 或 `wecom-kf` profile。
 
-Agent/AgentRunner 架构重构已完成，本清单继续作为各环境发布与核查说明，不是“重构未完成”事项。KF agent2 切换及真机验收已于 2026-10-08 完成，agent3 旧 KF 开关/凭据清理见[恢复计划 Phase 5](../../plans/plan-wecom-kf-channel-restore.md)；其他环境不能据此视为已验收。后续渠道保留原业务，只接入共用 Runner，不新增渠道专属容器。
+Agent/AgentRunner 架构重构已完成，本清单继续作为各环境发布与核查说明，不是“重构未完成”事项。KF agent2 切换及真机验收已于 2026-10-08 完成，agent3 残留旧 KF 开关的清除与重建亦已完成（原恢复计划已清理，Git 历史可查）；其他环境不能据此视为已验收。后续渠道保留原业务，只接入共用 Runner，不新增渠道专属容器。
 
 ## 已部署旧 KF 方案的切换前置
 

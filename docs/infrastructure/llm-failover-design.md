@@ -172,7 +172,7 @@ async def _stream_with_failover(self, fn_name, **kwargs):
 
 ### 2.7 错误分类
 
-**2026-10-15 修订（HTTP 状态码透传）**：Provider 将 `HTTPStatusError` 转为仅含正文的 `RuntimeError` 会丢失状态码；生产 DeepSeek 的 503 正文只有 `service_unavailable_error`，无法命中旧的字符串规则，导致备用模型及熔断均未触发。实现计划见 [HTTP 故障转移修复计划](../plans/plan-llm-http-failover-fix.md)。
+**2026-10-15 修订（HTTP 状态码透传）**：Provider 将 `HTTPStatusError` 转为仅含正文的 `RuntimeError` 会丢失状态码；生产 DeepSeek 的 503 正文只有 `service_unavailable_error`，无法命中旧的字符串规则，导致备用模型及熔断均未触发。该修订已开发完成（2026-10-15；原开发计划已清理，Git 历史可查）：93 个新用例覆盖三类 Provider 及 Qwen 子类，定向自测 176 passed、独立测试 209 passed，CR 无遗留 P0/P1/P2；未部署。
 
 DeepSeek、Qwen（含继承实现的子类）、GLM 的普通调用及流式建连使用 `ProviderHTTPError(RuntimeError)` 保存 `status_code`。结构化状态码优先于响应文本：5xx 与 429 尝试备用 Provider，其他 HTTP 状态直接抛出；旧式、无结构状态码的 RuntimeError 继续使用既有兼容规则。异常不额外持有请求头或凭据，公开调用签名不变。
 

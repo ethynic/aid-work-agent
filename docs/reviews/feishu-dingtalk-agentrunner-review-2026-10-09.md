@@ -95,7 +95,7 @@ bash ./scripts/dev_test.sh tests/unit/test_verbose_feedback.py tests/unit/channe
 
 审查基线：`master`，HEAD `96521334572b25c9b8f1c8064bef760aed17748f` 及当前未提交接入改动。结论不自动适用于后续代码版本。
 
-对应事项：`20261008-1603`。设计和计划见[飞书计划](../channel/feishu/implementation_plan.md)、[钉钉计划](../channel/dingtalk/implementation_plan.md)；约束见[架构 §8.1](../system/agent-application-architecture-design.md#81-后续接入的固定边界)、[KF 已验收接入基线](../plans/plan-wecom-kf-channel-restore.md)、[共同集成契约](../system/runner-desktop-runtime-integration-contract.md)。
+对应事项：`20261008-1603`。设计和计划见[飞书计划](../channel/feishu/implementation_plan.md)、[钉钉计划](../channel/dingtalk/implementation_plan.md)；约束见[架构 §8.1](../system/agent-application-architecture-design.md#81-后续接入的固定边界)、[KF 已验收接入基线](../system/agent-application-architecture-design.md)、[共同集成契约](../system/runner-desktop-runtime-integration-contract.md)。
 
 ## 审核结论
 
