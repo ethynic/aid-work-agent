@@ -132,7 +132,7 @@ terminal user        any MCP Host
 
 ### 5.3.1 执行回执标准 1.1
 
-2026-11-18 · 已完成 Phase 5。首个落地是 BOSS GUI 工具。1.1 是执行回执版本，Runtime 和 BOSS CLI 的发行版本 1.1 见[开发计划](../plans/plan-boss-filter-input-and-local-recovery.md#phase-5--cli-异常与业务结果)。
+2026-11-18 · 已完成 Phase 5。首个落地是 BOSS GUI 工具。1.1 是执行回执版本，Runtime 和 BOSS CLI 的发行版本 1.1 见 [AgentRunner 架构设计「BOSS 本机操作恢复」](agent-application-architecture-design.md#boss-本机操作恢复)的开发完成记录（原开发计划已清理）。
 
 #### 回执字段
 

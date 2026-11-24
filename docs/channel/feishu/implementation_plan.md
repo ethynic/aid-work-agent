@@ -18,7 +18,7 @@
 | Phase 4b | 真实接线与 worker 执行测试固化（R4.2）+ 计划同步（R4.1） | ✅ 完成（2026-10-09） | 每渠道 completed/failed/foreign_actor/history_unavailable 4×2 组合经真实入口+真实薄桥+HTTP/ASGI+真实授权/脱敏；真实 `RunnerWorker.execute` 断言 Runtime 用户与 verbose 配置；CR 无 P0/P1；验证记录见下 |
 | Phase 5 | 部署与真机验收 | 📋 待开发 | 用户授权部署后单独核对原飞书行为，不以 Web/KF 验收代替；未验证范围见「验证记录」 |
 
-只做必要的调用、身份和结果适配；不新增渠道专用锁闸门、inbox/投递管线、消费者或容器。详细边界见[AgentRunner 架构 §8.1](../../system/agent-application-architecture-design.md#81-后续接入的固定边界)，KF 参考实现见[微信客服恢复计划](../../plans/plan-wecom-kf-channel-restore.md)，两轮审核记录见[审核报告](../../reviews/feishu-dingtalk-agentrunner-review-2026-10-09.md)。
+只做必要的调用、身份和结果适配；不新增渠道专用锁闸门、inbox/投递管线、消费者或容器。详细边界见[AgentRunner 架构 §8.1](../../system/agent-application-architecture-design.md#81-后续接入的固定边界)，KF 参考实现见 [AgentRunner 架构设计](../../system/agent-application-architecture-design.md)文首的微信客服接入范围与完成记录，两轮审核记录见[审核报告](../../reviews/feishu-dingtalk-agentrunner-review-2026-10-09.md)。
 
 #### 接入前基线核对（2026-10-09，描述接入前代码状态，非现状）
 

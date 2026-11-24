@@ -2,7 +2,7 @@
 
 ## 结论与完成范围
 
-**当前开发检查点（共同契约2.5）**：已实现显式停止原Runtime受管旧工具进程的路径，以原设备身份、原home独占及既有DPAPI Job事实覆盖存量unknown/result_json=NULL且没有generation的BOSS调用；不重放原任务、不改业务unknown、不要求Windows重启。v2纯读仍独立，页面不可观察也不抹掉可信停稳。Runtime/Core及Web构建、自测通过；独立120项（native15、真实PG27、前端78）及1280/390页面验证通过，主控实看截图，独立CR无未解决P0/P1/P2。实际native→Host→result API/PG→用户新意图create/claim/start已串联；桥接Runner终态使用隔离夹具，不冒充新增真实Worker结算。范围与最新结果以[恢复计划Phase10](../plans/plan-boss-resume-next-recovery-fix.md)为准，尚未提交、发行或部署。
+**当前开发检查点（共同契约2.5）**：已实现显式停止原Runtime受管旧工具进程的路径，以原设备身份、原home独占及既有DPAPI Job事实覆盖存量unknown/result_json=NULL且没有generation的BOSS调用；不重放原任务、不改业务unknown、不要求Windows重启。v2纯读仍独立，页面不可观察也不抹掉可信停稳。Runtime/Core及Web构建、自测通过；独立120项（native15、真实PG27、前端78）及1280/390页面验证通过，主控实看截图，独立CR无未解决P0/P1/P2。实际native→Host→result API/PG→用户新意图create/claim/start已串联；桥接Runner终态使用隔离夹具，不冒充新增真实Worker结算。范围与最新结果以 [Runner 增量设计 §5.6](../system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量)为准，尚未提交、发行或部署。
 
 **上一轮复审纠正历史（共同契约2.4，2026-10-20）**：已删除新增scope专用Windows重启见证和“先停止证明、再读页面”的门禁；只读页面观察首次即可执行，Python/sessionTasks配置不会禁用观察。导航和清除筛选复用既有稳定判定，筛选计数相同不冒充完整条件相同。界面分别展示页面事实与停止未知；迟到明确回执解除自身hold后，旧核验按钮按实际事实清理。本轮四项修正已通过独立验证：真实PG38项（首批有效36项加真实Worker夹具纠正后重跑2项）、额外实际跨端/兼容/DAL10项、前端76项，独立CR无未解决P0/P1/P2；开发者客户端与Web构建通过。仍不能称整套资源恢复已完成；未提交、发行或部署。
 
@@ -10,7 +10,7 @@
 
 **旧v1验证仅作历史**：Phase9精确准入已通过独立回归；旧Phase10曾用同scope登记后的Windows重启见证并通过当时隔离测试，但复审确认其设计存在过度门禁，现已按2.4纠正。旧39项跨端、64项前端、3项原生等结果不能代替本次修正验收，也不能继续支持“可信停止闭环已补齐”的完成声明。
 
-**修复进展（2026-10-20）**：用户优先授权的登录/设备错误分类、Worker切换后的迟到原调用对账、同会话结束等待三项已完成代码开发、独立测试和CodeReview，未提交、未部署。含普通取消被unknown阻断的出口；结束聊天不伪造设备停止证明。证据及限制见[恢复计划Phase 6～8](../plans/plan-boss-resume-next-recovery-fix.md)。慢输入与180秒执行截止仍待后续处理。下文保留诊断时事实与原始范围，不将代码验证冒充正式故障任务已恢复。
+**修复进展（2026-10-20）**：用户优先授权的登录/设备错误分类、Worker切换后的迟到原调用对账、同会话结束等待三项已完成代码开发、独立测试和CodeReview，未提交、未部署。含普通取消被unknown阻断的出口；结束聊天不伪造设备停止证明。证据及限制见 [Runner 增量设计 §5.6](../system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量)（原恢复计划已清理）。慢输入与180秒执行截止仍待后续处理。下文保留诊断时事实与原始范围，不将代码验证冒充正式故障任务已恢复。
 
 本报告供开发接手，**诊断阶段尚未实施修复**。除明确标注UTC的原始日志外，时间均为北京时间。诊断阶段服务器操作仅限读取日志、数据库与源码；数据库查询使用只读事务。当时只新增诊断文档并登记索引，不修改代码、配置、数据库、客户端或任务，不部署、不恢复、不重试业务操作，未向其他会话发送信息。
 
@@ -344,7 +344,7 @@ Join-Path $rtPointer.home 'logs'
 
 ## 三、修复建议与开发边界
 
-2026-10-20开发接手：用户授权优先实施登录/设备错误分类、Worker切换后的原调用对账、同会话恢复死结三项，设计与实时进度统一见[恢复计划Phase 6～8](../plans/plan-boss-resume-next-recovery-fix.md)及[Runner增量设计](../system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量)。本报告保留原诊断事实；性能与180秒问题不属于该批开发，验证完成前不勾选对应验收项。
+2026-10-20开发接手：用户授权优先实施登录/设备错误分类、Worker切换后的原调用对账、同会话恢复死结三项，设计与实时进度统一见[Runner增量设计](../system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量)。本报告保留原诊断事实；性能与180秒问题不属于该批开发，验证完成前不勾选对应验收项。
 
 下列为诊断阶段建议；其中本批三项恢复改进已完成代码与隔离验证，详见顶部修复进展及关联计划，尚未部署。性能证据与执行期限仍待后续处理，不能将本批恢复改进当作这些问题已修复。2026-10-20 追加：性能取证、180秒截止拆除、GLM 1210 单份失败分类、输入链路原生化及可观测性缺口等剩余待办已登记专项开发计划 [招聘链路单点错误治理与 Win32 输入性能修复](../plans/plan-recruiting-error-containment-and-input-performance.md)。
 
@@ -360,7 +360,7 @@ Join-Path $rtPointer.home 'logs'
 
 遵循 [Runner / Desktop / Runtime共同契约](../system/runner-desktop-runtime-integration-contract.md)：任务权威仍是AgentRunner；不能新增本地Agent loop，不能因修复恢复交互更换原任务设备/目标，也不能自动重放效果未知的外部写动作。
 
-相关旧方案：[BOSS简历恢复修复计划](../plans/plan-boss-resume-next-recovery-fix.md)。该计划处理过恢复证明和unknown提示，但不是本次故障已经修复的证据。开发接手后需核对已交付设计、补本次变更计划/接口兼容与验收登记，再实施代码。
+相关旧方案：BOSS 简历恢复修复（原计划已清理，Git 历史可查；完成记录见 [Runner 增量设计 §5.6](../system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量)）。该修复处理过恢复证明和unknown提示，但不是本次故障已经修复的证据。开发接手后需核对已交付设计、补本次变更计划/接口兼容与验收登记，再实施代码。
 
 ## 四、验收与交接清单
 

@@ -1,6 +1,6 @@
 """WP2 受理/恢复层：结构化提问的真实数据库受理、幂等、canonical 回注与兼容。
 
-docs/plans/plan-ask-user-interactive-question.md §WP2 验收（数据库真实链路）：
+设计见 docs/system/design-ask-user-interactive-question.md；原开发计划 WP2 验收（数据库真实链路）：
 - 合法结构化答案实际受理并经 recovery 进入 tool result（canonical 落既有
   payload['answer'] 键）；skip 权威跳过文案同链路；
 - 受理幂等两例（自 WP1 分配至本层）：同键重试命中已受理控制；已受理后同键
