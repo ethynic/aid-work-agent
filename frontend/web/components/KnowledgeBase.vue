@@ -114,7 +114,7 @@
                   </template>
                   <BaseButton v-if="tenantId" intent="secondary" @click="showAuthMatrix = true">访问授权</BaseButton>
                   <BaseButton :disabled="selectedArr.length === 0" intent="secondary" @click="openMoveModal">移动 ({{ selectedArr.length }})</BaseButton>
-                  <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
+                  <BaseButton :disabled="selectedArr.length === 0 || isDeleting" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
                   <BaseButton @click="openUploadModal">上传文档</BaseButton>
                 </div>
               </div>
@@ -252,7 +252,7 @@
                       <template #actions="{ row }">
                         <div class="flex justify-center gap-2">
                           <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openDocDetail(row as DocumentResponse)">详情</BaseButton>
-                          <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleToggleDisabled(row as DocumentResponse)">{{ row.disabled ? '启用' : '禁用' }}</BaseButton>
+                          <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" :disabled="isTogglingDisabled" @click="handleToggleDisabled(row as DocumentResponse)">{{ row.disabled ? '启用' : '禁用' }}</BaseButton>
                           <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleDelete(row)">删除</BaseButton>
                         </div>
                       </template>
@@ -1130,6 +1130,7 @@ function openAddCategory() {
 }
 
 async function handleCreateCategory() {
+  if (isCreatingCategory.value) return
   const name = newCategoryDisplayName.value.trim()
   if (!name) {
     toast.error('分类名称不能为空')
@@ -1158,6 +1159,7 @@ function openRenameCategory(cat: CategoryResponse) {
 }
 
 async function handleRenameCategory() {
+  if (isRenamingCategory.value) return
   if (!renameCategoryId.value) return
   const name = renameCategoryDisplayName.value.trim()
   if (!name) {
@@ -1256,6 +1258,7 @@ function handleMoveCategoryTargetSelect(cat: CategoryTreeNode) {
 }
 
 async function confirmMoveCategory() {
+  if (isMovingCategory.value) return
   if (renameCategoryId.value == null || moveCategoryTargetId.value == null) return
   if (moveCategoryTargetId.value === renameCategoryParentId.value) {
     toast.warning('目标父栏目与当前父栏目相同，无需移动')
@@ -1403,6 +1406,7 @@ function handleCancelUpload() {
 }
 
 async function handleUpload() {
+  if (isUploading.value) return
   if (selectedFiles.value.length === 0) return
   isUploading.value = true
   uploadError.value = ''
@@ -1474,8 +1478,11 @@ function handleDelete(doc: any) {
 }
 
 // 禁用/启用为可逆操作，直接切换不弹确认
+const isTogglingDisabled = ref(false)
 async function handleToggleDisabled(doc: DocumentResponse) {
+  if (isTogglingDisabled.value) return
   const target = !doc.disabled
+  isTogglingDisabled.value = true
   try {
     const res = await setDocumentDisabled(doc.id, target)
     if (res.success) {
@@ -1487,10 +1494,13 @@ async function handleToggleDisabled(doc: DocumentResponse) {
   } catch (error: any) {
     console.error('前端日志：切换文档禁用状态失败', error)
     toast.error('操作失败，请稍后重试')
+  } finally {
+    isTogglingDisabled.value = false
   }
 }
 
 async function confirmDelete() {
+  if (isDeleting.value) return
   if (!documentToDelete.value) return
   isDeleting.value = true
   try {
@@ -1511,6 +1521,7 @@ async function confirmDelete() {
 }
 
 async function handleBatchDelete() {
+  if (isDeleting.value) return
   if (selectedArr.value.length === 0) return
   if (!confirm(`确定要删除选中的 ${selectedArr.value.length} 个文档吗？此操作不可恢复。`)) return
   isDeleting.value = true
@@ -1565,6 +1576,7 @@ const moveCategoryPath = computed(() => {
 })
 
 async function confirmMove() {
+  if (isMoving.value) return
   if (!moveTargetSourceType.value || selectedArr.value.length === 0) return
   // 所选文档均已位于目标分类时无需移动
   const targetSub = moveTargetSubCategory.value ?? null

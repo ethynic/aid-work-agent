@@ -24,7 +24,9 @@ class TdocCredentialDB:
     def upsert(tenant_id: str, user_id: str, record: Dict[str, Any]) -> bool:
         """按 (tenant_id, user_id) UPSERT 凭据绑定。
 
-        record 需含：client_id / access_token_enc / open_id，可选 refresh_token_enc。
+        record 需含：client_id / access_token_enc / open_id，可选 refresh_token_enc
+        及 OAuth 字段（auth_type / expires_at / refresh_expires_at / union_id / nick / scope）。
+        未提供的 OAuth 字段重置为 personal 语义默认值（手工绑定覆盖 OAuth 绑定属预期）。
         """
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -32,13 +34,20 @@ class TdocCredentialDB:
                 """
                 INSERT INTO tdoc_credentials (
                     tenant_id, user_id, client_id, access_token_enc,
-                    refresh_token_enc, open_id, status
-                ) VALUES (%s, %s, %s, %s, %s, %s, 'active')
+                    refresh_token_enc, open_id, auth_type,
+                    expires_at, refresh_expires_at, union_id, nick, scope, status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active')
                 ON CONFLICT (tenant_id, user_id) DO UPDATE SET
                     client_id = EXCLUDED.client_id,
                     access_token_enc = EXCLUDED.access_token_enc,
                     refresh_token_enc = EXCLUDED.refresh_token_enc,
                     open_id = EXCLUDED.open_id,
+                    auth_type = EXCLUDED.auth_type,
+                    expires_at = EXCLUDED.expires_at,
+                    refresh_expires_at = EXCLUDED.refresh_expires_at,
+                    union_id = EXCLUDED.union_id,
+                    nick = EXCLUDED.nick,
+                    scope = EXCLUDED.scope,
                     status = 'active',
                     updated_at = CURRENT_TIMESTAMP
                 """,
@@ -49,10 +58,34 @@ class TdocCredentialDB:
                     record["access_token_enc"],
                     record.get("refresh_token_enc"),
                     record["open_id"],
+                    record.get("auth_type") or "personal",
+                    record.get("expires_at"),
+                    record.get("refresh_expires_at"),
+                    record.get("union_id"),
+                    record.get("nick"),
+                    record.get("scope"),
                 ),
             )
             conn.commit()
             return True
+
+    @staticmethod
+    def update_access_token(
+        tenant_id: str, user_id: str, access_token_enc: str, expires_at: Any
+    ) -> None:
+        """刷新流程落新 access_token（refresh_token 沿用旧值，官方刷新不换新）。"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE tdoc_credentials
+                SET access_token_enc = %s, expires_at = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE tenant_id = %s AND user_id = %s
+                """,
+                (access_token_enc, expires_at, tenant_id, user_id),
+            )
+            conn.commit()
+
 
     @staticmethod
     def get(tenant_id: str, user_id: str) -> Optional[Dict[str, Any]]:

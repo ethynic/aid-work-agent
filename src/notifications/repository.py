@@ -143,6 +143,11 @@ SCHEDULED_TASK_RULE_EVENTS = ('task.completed', 'task.failed', 'task.paused',
                               'task.needs_action')
 
 
+def task_rule_matches(conditions, event_type):
+    events = (conditions.get('events') or []) if isinstance(conditions, dict) else []
+    return not events or event_type in events
+
+
 class NotificationRepository:
     def __init__(self, config, registry, connection_factory=get_db_connection):
         self.config, self.registry, self.connection_factory = config, registry, connection_factory
@@ -618,14 +623,17 @@ class NotificationRepository:
 
     def _validate_rule_kf_configs(self, cursor, tenant_id, conditions):
         """kf_config 层条件逐个校验归属本租户：允许渠道 config_id（渠道层，
-        存量语义）或该租户 wecom_kf 渠道 config JSON 内的客服账号 open_kfid
-        （账号级）。"""
+        存量语义）、该租户 wecom_kf 渠道 config JSON 内的客服账号 open_kfid
+        （账号级），或 web_c 渠道 config_id（官网渠道条目，web_c 无账号维度，
+        渠道配置行即语义终点；2026-11-20 起支持）。"""
         ids = conditions.get('kf_config_ids', ())
-        cursor.execute("SELECT config_id, config FROM tenant_channel_configs"
-                       " WHERE tenant_id=%s AND channel_type='wecom_kf'", (tenant_id,))
+        cursor.execute("SELECT config_id, channel_type, config FROM tenant_channel_configs"
+                       " WHERE tenant_id=%s AND channel_type IN ('wecom_kf','web_c')", (tenant_id,))
         valid_ids = set()
         for row in cursor.fetchall():
             valid_ids.add(row['config_id'])
+            if row.get('channel_type') != 'wecom_kf':
+                continue
             try:
                 config = json.loads(row['config']) if isinstance(row['config'], str) else (row['config'] or {})
             except (TypeError, ValueError):
@@ -1335,7 +1343,7 @@ class NotificationRepository:
         targets 投递（替代偏好路由，与 notify_target_id 快照同语义，跳过偏好
         门控）。规则已删除/非本租户、已停用或事件被 conditions.events 过滤时
         仅 route 留痕 skipped——任务已显式选规则，不回退偏好路由。"""
-        cursor.execute('''SELECT rule_id,name,enabled,conditions FROM notification_rules
+        cursor.execute('''SELECT rule_id,name,enabled,conditions,event_type FROM notification_rules
             WHERE rule_id=%s AND tenant_id=%s''', (rule_id, message['tenant_id']))
         rule = cursor.fetchone()
         if not rule:
@@ -1344,13 +1352,16 @@ class NotificationRepository:
         if not rule['enabled']:
             route.append({'rule_id': rule_id, 'skipped': 'rule_disabled'})
             return
-        conditions = rule['conditions'] if isinstance(rule['conditions'], dict) else {}
-        events = conditions.get('events') or []
-        if events and message['event_type'] not in events:
+        if not task_rule_matches(rule['conditions'], message['event_type']):
             route.append({'rule_id': rule_id, 'skipped': 'rule_event_filtered'})
             return
+        batch = (message.get('resource_ref') or {}).get('type') == 'weixin_summary_batch'
+        if batch and rule['event_type'] != SCHEDULED_TASK_RULE_TYPE:
+            route.append({'rule_id': rule_id, 'skipped': 'rule_type_changed'})
+            return
         for target in self._rule_event_targets(cursor, rule, message['tenant_id']):
-            self._append_delivery(cursor, message, target, route)
+            if not batch or target['channel'] == 'im_webhook':
+                self._append_delivery(cursor, message, target, route)
 
     def expand(self):
         with self.connection_factory() as conn:

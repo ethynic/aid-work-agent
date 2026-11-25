@@ -8,6 +8,8 @@ from contextvars import ContextVar
 from contextlib import contextmanager
 from typing import Protocol
 
+from .llm_call_logger import provider_content_private
+
 
 class CallObserver(Protocol):
     async def call(self, method, *, provider, model, kwargs, owner, purpose): ...
@@ -50,6 +52,19 @@ def observe_child_exit(returncode):
         check(returncode)
 
 
+def observe_child_timeout():
+    """执行器主动超时 kill 子进程组（skill_executor 600s 上限）。
+
+    与 observe_child_exit 的异常退出语义区分：超时 kill 是执行器的确定性
+    行为，不是子进程记账存储故障；在途 provider 收据由 observer 按既有
+    uncertain 口径交由结算/对账闭环，超时结果作为工具失败返回模型继续。
+    """
+    observer = _observer.get()
+    handler = getattr(observer,'child_timeout',None)
+    if handler is not None:
+        handler()
+
+
 def prepare_child_process(environment):
     callback = getattr(_observer.get(),'prepare_process',None)
     if callback is not None:
@@ -70,7 +85,7 @@ def release_child_process(environment):
 
 async def observed_call(method, *, provider, model, kwargs, owner='llm', purpose='llm'):
     observer = _observer.get()
-    if observer is None:
+    if observer is None or provider_content_private():
         return await method(**kwargs)
     return await observer.call(method, provider=provider, model=model, kwargs=kwargs,
                                owner=owner, purpose=_purpose.get() if owner=='llm' and _purpose.get() else purpose)

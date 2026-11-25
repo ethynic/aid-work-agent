@@ -4,6 +4,8 @@
   免填）；agent_only（含缺省）保持原 5 项必填（存量行为不变）；notify_usage
   非法值 400
 - update：同样按用途分支（notify_only 免填回调字段；agent_only 缺 token 拒）
+- update 切到 notify_only：表单已隐藏、未提交的回调字段保留库内旧值（不随整体
+  覆盖清除），改回 agent_only/both 时无需重填；显式提交的回调字段以提交值为准
 
 参照 tests/unit/api 现有路由测试手法：最小 app + monkeypatch require_admin +
 patch DB 与行为审计。
@@ -35,6 +37,17 @@ def client(monkeypatch):
     app.include_router(cc.router)
     monkeypatch.setattr(cc, "require_admin", lambda request: dict(_ADMIN))
     return TestClient(app, raise_server_exceptions=False)
+
+
+def _capture_update(monkeypatch):
+    """替换 ChannelConfigDB.update 并返回调用记录 [(位置参数, 关键字参数)]，
+    用于断言实际落库的 config。"""
+    calls = []
+    monkeypatch.setattr(
+        cc.ChannelConfigDB, "update",
+        staticmethod(lambda *a, **k: calls.append((a, k)) or True),
+    )
+    return calls
 
 
 class TestCreateUsageBranch:
@@ -128,8 +141,66 @@ class TestUpdateUsageBranch:
         assert resp.status_code == 200
         assert resp.json()["success"] is True
 
+    @pytest.mark.parametrize("blank_callback", [{}, {"token": "", "encoding_aes_key": ""}])
+    def test_update_to_notify_only_retains_stored_callback_fields(
+        self, client, monkeypatch, blank_callback
+    ):
+        """切到 notify_only：未提交（或提交空串）的 token/encoding_aes_key 保留库内
+        旧值而非随整体覆盖清除——改回 agent_only/both 时无需重填。"""
+        monkeypatch.setattr(
+            cc.ChannelConfigDB, "get_by_id",
+            staticmethod(lambda config_id: self._existing(dict(_WECOM_FULL))))
+        calls = _capture_update(monkeypatch)
+        monkeypatch.setattr(cc.ChannelFactory, "invalidate_adapter", AsyncMock())
+        resp = client.put(
+            "/api/saas/channels/chan_w1",
+            json={"name": "x", "config": {**_WECOM_NOTIFY_ONLY, **blank_callback}},
+        )
+        assert resp.status_code == 200
+        saved = calls[0][0][1]
+        assert saved["notify_usage"] == "notify_only"
+        assert saved["token"] == _WECOM_FULL["token"]
+        assert saved["encoding_aes_key"] == _WECOM_FULL["encoding_aes_key"]
+
+    def test_update_to_notify_only_with_submitted_callback_fields_keeps_submitted(
+        self, client, monkeypatch
+    ):
+        """切到 notify_only 且显式提交了回调字段：以提交值为准，不被库内旧值覆盖。"""
+        monkeypatch.setattr(
+            cc.ChannelConfigDB, "get_by_id",
+            staticmethod(lambda config_id: self._existing(dict(_WECOM_FULL))))
+        calls = _capture_update(monkeypatch)
+        monkeypatch.setattr(cc.ChannelFactory, "invalidate_adapter", AsyncMock())
+        resp = client.put(
+            "/api/saas/channels/chan_w1",
+            json={"name": "x", "config": {**_WECOM_NOTIFY_ONLY,
+                                           "token": "new-token", "encoding_aes_key": "new-aes"}},
+        )
+        assert resp.status_code == 200
+        saved = calls[0][0][1]
+        assert saved["token"] == "new-token"
+        assert saved["encoding_aes_key"] == "new-aes"
+
+    def test_update_to_notify_only_without_stored_callback_fields_adds_none(
+        self, client, monkeypatch
+    ):
+        """库内本无回调字段（直接以 notify_only 新建的配置）：不凭空补键。"""
+        monkeypatch.setattr(
+            cc.ChannelConfigDB, "get_by_id",
+            staticmethod(lambda config_id: self._existing(dict(_WECOM_NOTIFY_ONLY))))
+        calls = _capture_update(monkeypatch)
+        monkeypatch.setattr(cc.ChannelFactory, "invalidate_adapter", AsyncMock())
+        resp = client.put(
+            "/api/saas/channels/chan_w1",
+            json={"name": "x", "config": _WECOM_NOTIFY_ONLY},
+        )
+        assert resp.status_code == 200
+        saved = calls[0][0][1]
+        assert "token" not in saved
+        assert "encoding_aes_key" not in saved
+
     def test_update_agent_only_missing_token_rejected(self, client, monkeypatch):
-        """update 保持 agent_only：缺 token 拒（wecom 类型 update 不做字段保留合并）。"""
+        """update 保持 agent_only：缺 token 拒（回调字段保留仅限 notify_only 用途）。"""
         monkeypatch.setattr(
             cc.ChannelConfigDB, "get_by_id",
             staticmethod(lambda config_id: self._existing(dict(_WECOM_FULL))))
@@ -258,6 +329,25 @@ class TestUpdateFeishuUsageBranch:
         )
         assert resp.status_code == 200
 
+    def test_update_to_notify_only_retains_stored_callback_fields(self, client, monkeypatch):
+        """切到 notify_only：未提交的 verification_token 与可选 encrypt_key
+        均保留库内旧值（改回 agent_only/both 时无需重填）。"""
+        stored = {**_FEISHU_FULL, "encrypt_key": "encrypt-key"}
+        monkeypatch.setattr(
+            cc.ChannelConfigDB, "get_by_id",
+            staticmethod(lambda config_id: self._existing(dict(stored))))
+        calls = _capture_update(monkeypatch)
+        monkeypatch.setattr(cc.ChannelFactory, "invalidate_adapter", AsyncMock())
+        resp = client.put(
+            "/api/saas/channels/chan_f1",
+            json={"name": "x", "config": _FEISHU_NOTIFY_ONLY},
+        )
+        assert resp.status_code == 200
+        saved = calls[0][0][1]
+        assert saved["notify_usage"] == "notify_only"
+        assert saved["verification_token"] == stored["verification_token"]
+        assert saved["encrypt_key"] == "encrypt-key"
+
     def test_update_agent_only_missing_verification_token_rejected(self, client, monkeypatch):
         """update 保持 agent_only：缺 verification_token 拒（存量行为不变）。"""
         monkeypatch.setattr(
@@ -381,6 +471,24 @@ class TestUpdateDingtalkUsageBranch:
             json={"name": "x", "config": _DINGTALK_NOTIFY_ONLY},
         )
         assert resp.status_code == 200
+
+    def test_update_to_notify_only_retains_stored_callback_fields(self, client, monkeypatch):
+        """切到 notify_only：未提交的 token/encoding_aes_key 保留库内旧值
+        （改回 agent_only/both 时无需重填）。"""
+        monkeypatch.setattr(
+            cc.ChannelConfigDB, "get_by_id",
+            staticmethod(lambda config_id: self._existing(dict(_DINGTALK_FULL))))
+        calls = _capture_update(monkeypatch)
+        monkeypatch.setattr(cc.ChannelFactory, "invalidate_adapter", AsyncMock())
+        resp = client.put(
+            "/api/saas/channels/chan_d1",
+            json={"name": "x", "config": _DINGTALK_NOTIFY_ONLY},
+        )
+        assert resp.status_code == 200
+        saved = calls[0][0][1]
+        assert saved["notify_usage"] == "notify_only"
+        assert saved["token"] == _DINGTALK_FULL["token"]
+        assert saved["encoding_aes_key"] == _DINGTALK_FULL["encoding_aes_key"]
 
     def test_update_agent_only_missing_token_rejected(self, client, monkeypatch):
         """update 保持 agent_only：缺 token 拒（存量行为不变）。"""

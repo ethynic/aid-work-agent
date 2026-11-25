@@ -1,6 +1,6 @@
 import { RunnerEventDecoder, RunnerEventProtocolError, RUNNER_EVENT_FRAME_BYTES, type RunnerEventFrame, type RunnerEventStatus } from './runnerEventStream'
 import type { UploadedFile } from './agent'
-import type { AskForm, AskFormErrorItem, BrowserHumanAssistance, DownloadableFile, ImageRef, RunnerAnswerItem, VerboseMessage } from '@/types'
+import type { AskForm, AskFormErrorItem, DownloadableFile, ImageRef, RunnerAnswerItem, VerboseMessage } from '@/types'
 
 // 结构化提问交互（WP4）的 wire 类型以 @/types 为单一来源，此处按契约命名再导出。
 export type { AskForm, AskFormErrorItem, RunnerAnswerItem } from '@/types'
@@ -15,7 +15,6 @@ export interface RunnerPresentation {
   progressMessages?: Record<string, unknown>[]
   downloadableFiles?: DownloadableFile[]
   verboseMessages?: VerboseMessage[]
-  browserAssistance?: BrowserHumanAssistance
   imagesPlacement?: ImageRef['placement']
 }
 export interface RunnerView {
@@ -266,8 +265,12 @@ export class RunnerClient {
     const scheduleQuery = () => {
       clearTimeout(observer.timer)
       if (!current()) return
+      // waiting（parked）行不会自行变化（timer 唤醒/澄清回复各有事件或控制流触发即时刷新），
+      // 权威查询降到慢档，避免未终态 parked 行被 1~5s 档无限轮询（多用户下聚合压力）。
+      const parkedWaiting = lastView?.status === 'waiting'
       const interval = failures ? Math.min(30000, 1000 * 2 ** Math.min(failures, 5))
-        : hint ? 1000 : healthy ? (document.hidden ? 15000 : 5000) : (document.hidden ? 5000 : 1000)
+        : hint ? 1000 : parkedWaiting ? (document.hidden ? 60000 : 30000)
+        : healthy ? (document.hidden ? 15000 : 5000) : (document.hidden ? 5000 : 1000)
       observer.timer = setTimeout(() => void refresh(), interval)
     }
     const refresh = async () => {

@@ -248,6 +248,19 @@ async def _run():
             f"background runner: 通知调度器启动失败（不影响 runner 主流程）: {e}"
         )
 
+    # 7.5 web_c 终态落库兜底扫描器（访客离线时终态回复/文件无人落库的缺口；
+    # 幂等落库多副本安全，无需 Redis 锁，启动失败不影响 runner）
+    _web_c_persist_sweeper = None
+    try:
+        from src.saas.services.web_c_runner_persist import WebCRunnerPersistSweeper
+
+        _web_c_persist_sweeper = WebCRunnerPersistSweeper()
+        await _web_c_persist_sweeper.start()
+    except Exception as e:
+        logger.opt(exception=True).error(
+            f"background runner: web_c 落库扫描器启动失败（不影响 runner 主流程）: {e}"
+        )
+
     # 8. 定时任务调度循环（Runner 化 v2，设计 §4：到期 pending 重提 + 恢复
     # 驱动 + 到期认领；DB 行锁与 occurrence_key 条件保证多实例安全，无需 Redis 锁；
     # 循环内部自吞单轮异常，启动失败不影响 runner 其他任务）
@@ -270,6 +283,11 @@ async def _run():
             await _task_dispatcher.stop()
         except Exception as e:
             logger.opt(exception=True).error(f"background runner: 定时任务调度循环 stop error: {e}")
+    if _web_c_persist_sweeper is not None:
+        try:
+            await _web_c_persist_sweeper.stop()
+        except Exception as e:
+            logger.opt(exception=True).error(f"background runner: web_c 落库扫描器 stop error: {e}")
     if _notification_dispatcher is not None:
         await _notification_dispatcher.stop()
     if _billing_scheduler is not None:

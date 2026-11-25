@@ -3,6 +3,37 @@
 from src.core.agent_events import mask_tool_args
 
 
+PLUGIN_TOOL_NAMES = 'runtime_plugin_tool_names'
+
+
+def redact_runtime_plugin_calls(value, plugin_names):
+    """Project model messages without values from arbitrary plugin-defined inputs."""
+    if not plugin_names or not isinstance(value, dict) or not isinstance(value.get('tool_calls'), list):
+        return value
+    projected = []
+    for call in value['tool_calls']:
+        function = call.get('function') if isinstance(call, dict) else None
+        if isinstance(function, dict) and function.get('name') in plugin_names and 'arguments' in function:
+            arguments = '{}' if isinstance(function['arguments'], str) else {}
+            projected.append({**call, 'function': {**function, 'arguments': arguments}})
+        else:
+            projected.append(call)
+    return {**value, 'tool_calls': projected}
+
+
+def redact_runtime_plugin_event(state, event):
+    names = state.resources.get(PLUGIN_TOOL_NAMES, ())
+    if not names:
+        return
+    if event.get('type') == 'tool_start' and event.get('toolName') in names:
+        event['toolArgs'] = {}
+    elif event.get('type') in {'llm_call', 'tool_messages'}:
+        if 'messages' in event:
+            event['messages'] = [redact_runtime_plugin_calls(message, names) for message in event['messages']]
+        if 'response' in event:
+            event['response'] = redact_runtime_plugin_calls(event['response'], names)
+
+
 def scalar_fields(value, keys):
     if not isinstance(value, dict):
         return {}
@@ -45,20 +76,6 @@ def progress_display(value):
     return result
 
 
-def browser_display(value):
-    result = scalar_fields(value, ('assistance_id','run_id','continuation_id','reason_code','surface',
-                                  'title','completion_mode','completion_status','expires_at','state'))
-    if isinstance(value, dict) and type(value.get('view_available')) is bool:
-        result['view_available'] = value['view_available']
-    if isinstance(value, dict):
-        for key in ('steps','missing_conditions'):
-            if isinstance(value.get(key),list):
-                result[key] = [item for item in value[key] if isinstance(item,str)]
-    return result
-
-
 def project_user_event(snapshot, event):
-    if event.get('type') == 'browser_human_required':
-        snapshot['browserAssistance'] = browser_display(event)
-    elif event.get('type') == 'images':
+    if event.get('type') == 'images':
         snapshot['imagesPlacement'] = event.get('placement','after_text')

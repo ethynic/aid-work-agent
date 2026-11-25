@@ -27,7 +27,10 @@ from loguru import logger
 
 from src.saas.db.tenant_db import TenantDB
 from src.saas.db.channel_config_db import ChannelConfigDB
-from src.saas.services.channel_factory import ChannelFactory
+from src.saas.services.channel_factory import (
+    ChannelFactory,
+    DEFAULT_MEDIA_SWITCHES,
+)
 from src.channels.session import channel_session_manager
 from src.channels.verbose_dispatcher import resolve_verbose_feedback_config
 from src.channels.wecom_kf.budget import WeComKfReplyBudget
@@ -61,10 +64,11 @@ _KF_PULL_LOCK_TTL = 900        # 拉取任务互斥锁 TTL（任务含逐条 LLM
 _KF_PULL_PENDING_TTL = 900     # 任务运行中新回调到达标记 TTL（须 >= 锁 TTL：任务实际时长可能接近锁上限，过期会让补偿拉取静默丢失）
 _KF_SYNC_RETRYABLE_ERRCODES = {45009, 45011}  # 微信接口频率限制类错误码
 _KF_SYNC_MAX_RETRIES = 3       # 限频重试次数，退避 2s/4s/8s
-# 渠道级额外提示词（经 process_and_persist → prompt_augmentations 注入 system prompt，
-# 通路闲置已久首次启用）：让 Agent 感知渠道形态、面向手机端精简回复
+# 渠道级额外提示词（经 process_and_persist → prompt_augmentations，以 user 消息追加到本轮消息末尾）：
+# 开头是固定渠道标识，供子智能体提示词按渠道走分支（如旅行社的「微信客服渠道分支」）；
+# 标识之后让 Agent 感知渠道形态、面向手机端精简回复
 _KF_CHANNEL_EXTRA_SYSTEM_PROMPT = (
-    "当前会话来自企业微信客服渠道：用户在手机微信内阅读，回复务必精简、面向手机端，避免长篇分节说明。"
+    "【渠道：微信客服】当前会话来自企业微信客服渠道：用户在手机微信内阅读，回复务必精简、面向手机端，避免长篇分节说明。"
 )
 
 
@@ -147,6 +151,79 @@ def _try_start_kf_pull_task(tenant_id: str, config_id: str, open_kfid: str, adap
     # 拿到锁即全量拉取，清掉可能残留的 pending 标记
     redis_client.delete(_kf_pull_pending_key(tenant_id, open_kfid))
     asyncio.create_task(_kf_pull_task_wrapper(tenant_id, config_id, open_kfid, adapter, lock_token))
+
+
+# ===== 启动自愈（2026-11-19 聊易事故修复） =====
+# 事故：部署重启杀掉正在处理的拉取任务，finally 释放锁与 pending 补偿均未执行
+# -> Redis 拉取锁残留至 TTL（15 分钟内该 open_kfid 所有回调只置 pending、不拉取）
+# -> pending 补偿永远不触发，已取走未回复的消息丢失、后续消息最长 15 分钟无响应。
+# 启动时清理残留锁并对 pending 标记触发补偿拉取，把重启盲区从 TTL 900s 压到秒级。
+_KF_PULL_LOCK_STALE_MIN_AGE = 30  # 仅清理持有超过该秒数的锁（锁年龄 = TTL 满值 - 剩余 TTL）
+
+
+async def recover_wecom_kf_pull_state() -> None:
+    """启动自愈：清理崩溃/重启遗留的 wecom_kf 拉取锁，并对残留 pending 标记补偿拉取。
+
+    须在事件循环内调用（补偿拉取经 _try_start_kf_pull_task 起异步任务）。
+    非关键路径：任何异常只记日志，不阻断启动（调用方 lifespan 已有 try/except 兜底）。
+    """
+    # 1) 清理残留锁：仅清理持有超过 _KF_PULL_LOCK_STALE_MIN_AGE 的锁。
+    #    gunicorn 多 worker 并行启动时都会执行本函数，刚被另一 worker 持有的在跑锁
+    #    年龄接近 0，不清理，避免误删造成并发 sync_msg 撞 45009。
+    cleared_locks = 0
+    skipped_locks = 0
+    try:
+        cursor = 0
+        while True:
+            cursor, keys = redis_client.scan(cursor, redis_client.make_key(CacheKeys.WECOM_KF_PULL_LOCK, "*"), 100)
+            for key in keys:
+                try:
+                    ttl_remaining = redis_client.ttl(key)
+                    if ttl_remaining > 0 and (_KF_PULL_LOCK_TTL - ttl_remaining) < _KF_PULL_LOCK_STALE_MIN_AGE:
+                        skipped_locks += 1
+                        continue
+                    redis_client.delete(key)
+                    cleared_locks += 1
+                except Exception as e:
+                    logger.warning(f"[wecom_kf] 启动自愈: 清理锁失败 [{key}]: {e}")
+            if cursor == 0:
+                break
+    except Exception as e:
+        logger.warning(f"[wecom_kf] 启动自愈: 扫描残留拉取锁失败（跳过锁清理）: {e}")
+
+    # 2) 残留 pending 标记 -> 补偿拉取（把崩溃期间积压在微信队列的消息拉回来）
+    compensated = 0
+    try:
+        cursor = 0
+        while True:
+            cursor, keys = redis_client.scan(cursor, redis_client.make_key(CacheKeys.WECOM_KF_PULL_PENDING, "*"), 100)
+            for key in keys:
+                # 键形如 {全局前缀}:wecom_kf_pull_pending:{tenant_id}:{open_kfid}，取末两段
+                parts = key.rsplit(":", 2)
+                if len(parts) < 3:
+                    continue
+                tenant_id, open_kfid = parts[-2], parts[-1]
+                if not tenant_id or not open_kfid:
+                    continue
+                logger.info(
+                    f"[wecom_kf] 启动自愈: 发现残留 pending 标记，补偿拉取: tenant={tenant_id}, open_kfid={open_kfid}"
+                )
+                try:
+                    await _compensate_kf_pull(tenant_id, open_kfid)
+                    compensated += 1
+                except Exception as e:
+                    logger.opt(exception=True).warning(
+                        f"[wecom_kf] 启动自愈: 补偿拉取失败: tenant={tenant_id}, open_kfid={open_kfid}, error={e}"
+                    )
+            if cursor == 0:
+                break
+    except Exception as e:
+        logger.warning(f"[wecom_kf] 启动自愈: 扫描残留 pending 标记失败: {e}")
+
+    if cleared_locks or skipped_locks or compensated:
+        logger.info(
+            f"[wecom_kf] 启动自愈完成: 清理残留锁={cleared_locks}, 跳过在跑锁={skipped_locks}, 补偿拉取={compensated}"
+        )
 
 
 def _has_successful_transfer_to_human(tool_messages: list) -> bool:
@@ -595,6 +672,19 @@ def _build_image_attachment_from_bytes(
     }
 
 
+def _get_media_switches(adapter) -> dict:
+    """读取 adapter 注入的媒体识别开关（channel_factory._build_adapter 注入）。
+
+    缺失（旧缓存实例/非注入渠道）时回退缺省值：ASR 开、图片识别关。
+    键：asr_enabled / image_recognition_enabled，语义见 channel_factory.py
+    「媒体识别开关」注释块（2026-11-19）。
+    """
+    switches = getattr(adapter, "media_switches", None)
+    if isinstance(switches, dict) and switches:
+        return switches
+    return dict(DEFAULT_MEDIA_SWITCHES)
+
+
 async def _transcribe_voice_with_asr(
     audio_content: str,
     audio_format: str = "wav",
@@ -753,6 +843,12 @@ async def _process_tenant_wecom_background(
                 await adapter.send_text(reply_text, message.user_id)
             return
 
+        # 媒体识别开关（2026-11-19）：租户可按渠道关闭 ASR/图片识别（识别消耗积分）。
+        # 关闭时不下载媒体、不调 ASR/VL，消息按占位文本走智能体（与视频消息现状一致）。
+        _media_switches = _get_media_switches(adapter)
+        _asr_enabled = _media_switches.get("asr_enabled", True)
+        _image_enabled = _media_switches.get("image_recognition_enabled", False)
+
         # 语音消息：渠道侧调阿里云 ASR 转文字（对齐 wecom_kf 语音链路）。
         # ASR 在 start_record 之前调用，工具内部计费因无当前 record 恒为 no-op，
         # 识别成功后由 start_record 之后的外层 add_asr_usage 补计（不与主循环双计）。
@@ -764,13 +860,15 @@ async def _process_tenant_wecom_background(
             # wecom 媒体模块已按租户附件规范落盘 conversation 目录，此处只登记文件名
             return audio_bytes, content_type, {"voice_file_name": filename}
 
-        asr_success = await _transcribe_channel_voice(
-            message, tenant_id, _download_wecom_voice, "[Tenant WeCom]"
-        )
+        asr_success = False
+        if _asr_enabled:
+            asr_success = await _transcribe_channel_voice(
+                message, tenant_id, _download_wecom_voice, "[Tenant WeCom]"
+            )
 
         # 图片消息：下载图片并按 wecom_kf 口径构建附件（用户发户型图 → 智能体判读出图）
         user_attachments = []
-        if message.message_type == MessageType.IMAGE:
+        if message.message_type == MessageType.IMAGE and _image_enabled:
             _media_id = message.content.get("media_id", "")
             try:
                 _downloaded = await adapter.media.download_media(_media_id)
@@ -786,10 +884,15 @@ async def _process_tenant_wecom_background(
             else:
                 logger.warning(f"[Tenant WeCom] 图片下载失败: message_id={message.message_id}")
 
-        # 图片消息落库与 Agent 输入用占位文本（对齐 wecom_kf 口径），附件另传
+        # 图片消息落库与 Agent 输入用占位文本（对齐 wecom_kf 口径），附件另传；
+        # 图片识别关闭时用无附件占位（不再引导"判读其内容"）
         user_content = message.text
         if message.message_type == MessageType.IMAGE and not user_content:
-            user_content = "[图片消息：用户发来的图片见附件，可判读其内容]"
+            user_content = (
+                "[图片消息：用户发来的图片见附件，可判读其内容]"
+                if _image_enabled
+                else "[图片消息]"
+            )
 
         # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
@@ -1192,6 +1295,12 @@ async def _process_tenant_dingtalk_background(
                 await adapter.send_text(reply_text, reply_target, conversation_type)
             return
 
+        # 媒体识别开关（2026-11-19）：租户可按渠道关闭 ASR/图片识别（识别消耗积分）。
+        # 关闭时不下载媒体、不调 ASR/VL，消息按占位文本走智能体（与视频消息现状一致）。
+        _media_switches = _get_media_switches(adapter)
+        _asr_enabled = _media_switches.get("asr_enabled", True)
+        _image_enabled = _media_switches.get("image_recognition_enabled", False)
+
         # 语音消息：渠道侧调阿里云 ASR 转文字（对齐 wecom_kf 语音链路）。
         # ASR 在 start_record 之前调用，工具内部计费因无当前 record 恒为 no-op，
         # 识别成功后由 start_record 之后的外层 add_asr_usage 补计（不与主循环双计）。
@@ -1205,14 +1314,16 @@ async def _process_tenant_dingtalk_background(
             local_path, audio_bytes = result
             return audio_bytes, "", {"voice_local_path": local_path}
 
-        asr_success = await _transcribe_channel_voice(
-            message, tenant_id, _download_dingtalk_voice, "[Tenant DingTalk]"
-        )
+        asr_success = False
+        if _asr_enabled:
+            asr_success = await _transcribe_channel_voice(
+                message, tenant_id, _download_dingtalk_voice, "[Tenant DingTalk]"
+            )
 
         # 图片消息：下载图片并按 wecom_kf 口径构建附件（用户发图 → 智能体判读出图）。
         # 钉钉 media.download_image 已按租户规范落盘，传 local_path 复用不重复写盘。
         user_attachments = []
-        if message.message_type == MessageType.IMAGE:
+        if message.message_type == MessageType.IMAGE and _image_enabled:
             _download_code = message.content.get("download_code", "")
             try:
                 _downloaded = await adapter.media.download_image(_download_code, adapter.robot_code)
@@ -1230,10 +1341,15 @@ async def _process_tenant_dingtalk_background(
             else:
                 logger.warning(f"[Tenant DingTalk] 图片下载失败: message_id={message.message_id}")
 
-        # 图片消息落库与 Agent 输入用占位文本（对齐 wecom_kf 口径），附件另传
+        # 图片消息落库与 Agent 输入用占位文本（对齐 wecom_kf 口径），附件另传；
+        # 图片识别关闭时用无附件占位（不再引导"判读其内容"）
         user_content = message.text
         if message.message_type == MessageType.IMAGE and not user_content:
-            user_content = "[图片消息：用户发来的图片见附件，可判读其内容]"
+            user_content = (
+                "[图片消息：用户发来的图片见附件，可判读其内容]"
+                if _image_enabled
+                else "[图片消息]"
+            )
 
         # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
@@ -1422,6 +1538,12 @@ async def _process_tenant_feishu_background(
                 await adapter.send_text(reply_text, message.user_id)
             return
 
+        # 媒体识别开关（2026-11-19）：租户可按渠道关闭 ASR/图片识别（识别消耗积分）。
+        # 关闭时不下载媒体、不调 ASR/VL，消息按占位文本走智能体（与视频消息现状一致）。
+        _media_switches = _get_media_switches(adapter)
+        _asr_enabled = _media_switches.get("asr_enabled", True)
+        _image_enabled = _media_switches.get("image_recognition_enabled", False)
+
         # 语音消息：渠道侧调阿里云 ASR 转文字（对齐 wecom_kf 语音链路）。
         # ASR 在 start_record 之前调用，工具内部计费因无当前 record 恒为 no-op，
         # 识别成功后由 start_record 之后的外层 add_asr_usage 补计（不与主循环双计）。
@@ -1436,14 +1558,16 @@ async def _process_tenant_feishu_background(
             local_path, audio_bytes = result
             return audio_bytes, "", {"voice_local_path": local_path}
 
-        asr_success = await _transcribe_channel_voice(
-            message, tenant_id, _download_feishu_voice, "[Tenant Feishu]"
-        )
+        asr_success = False
+        if _asr_enabled:
+            asr_success = await _transcribe_channel_voice(
+                message, tenant_id, _download_feishu_voice, "[Tenant Feishu]"
+            )
 
         # 图片消息：下载图片并按 wecom_kf 口径构建附件（用户发图 → 智能体判读出图）。
         # 飞书 media.download_image 已按租户规范落盘，传 local_path 复用不重复写盘。
         user_attachments = []
-        if message.message_type == MessageType.IMAGE:
+        if message.message_type == MessageType.IMAGE and _image_enabled:
             _image_key = message.content.get("image_key", "")
             try:
                 _downloaded = await adapter.media.download_image(_image_key)
@@ -1461,10 +1585,15 @@ async def _process_tenant_feishu_background(
             else:
                 logger.warning(f"[Tenant Feishu] 图片下载失败: message_id={message.message_id}")
 
-        # 图片消息落库与 Agent 输入用占位文本（对齐 wecom_kf 口径），附件另传
+        # 图片消息落库与 Agent 输入用占位文本（对齐 wecom_kf 口径），附件另传；
+        # 图片识别关闭时用无附件占位（不再引导"判读其内容"）
         user_content = message.text
         if message.message_type == MessageType.IMAGE and not user_content:
-            user_content = "[图片消息：用户发来的图片见附件，可判读其内容]"
+            user_content = (
+                "[图片消息：用户发来的图片见附件，可判读其内容]"
+                if _image_enabled
+                else "[图片消息]"
+            )
 
         # 记录用户消息 —— P0-2：推迟到 process_and_persist 内统一写入
 
@@ -2919,8 +3048,11 @@ async def _process_tenant_wecom_kf_messages(
                     try:
                         if unified_msg.user_id:
                             dedup = _get_tenant_dedup(tenant_id)
-                            if not await dedup.is_duplicate(
-                                f"kf_filter_hint:{tenant_id}:{unified_msg.user_id}"
+                            # 节流占位：5 分钟窗口（claim_throttle 按行龄判断；
+                            # is_duplicate 行存在即重复，会被每日 03:00 清理拖成全天窗口）
+                            if await dedup.claim_throttle(
+                                f"kf_filter_hint:{tenant_id}:{unified_msg.user_id}",
+                                ttl_seconds=300,
                             ):
                                 adapter.current_open_kfid = open_kfid
                                 await adapter.send_text(
@@ -2949,6 +3081,38 @@ async def _process_tenant_wecom_kf_messages(
                 # 保存用户消息
                 msgtype = msg.get("msgtype", "")
                 logger.info(f"[wecom_kf] 收到消息: msgtype={msgtype}, msg keys={list(msg.keys())}, msg={msg}")
+
+                # 媒体识别开关（2026-11-19）：租户关闭 ASR/图片识别时，语音/图片消息
+                # 与 video/file 同模式处理——节流提示 + 跳过（不下载不识别不进智能体，
+                # 不产生识别与对话积分消耗；与历史收集层过滤行为一致）。
+                _media_switches = _get_media_switches(adapter)
+                if (
+                    (msgtype == "voice" and not _media_switches.get("asr_enabled", True))
+                    or (msgtype == "image" and not _media_switches.get("image_recognition_enabled", False))
+                ):
+                    logger.info(
+                        f"[wecom_kf] 媒体识别已关闭（租户配置），跳过消息: msgid={msg_id}, "
+                        f"msgtype={msgtype}"
+                    )
+                    from src.channels.wecom_kf.message import KF_MEDIA_DISABLED_HINT_MESSAGE
+                    try:
+                        if unified_msg.user_id:
+                            dedup = _get_tenant_dedup(tenant_id)
+                            # 节流占位：与 KF_FILTER_HINT 分支同 key 同 5 分钟窗口口径
+                            if await dedup.claim_throttle(
+                                f"kf_filter_hint:{tenant_id}:{unified_msg.user_id}",
+                                ttl_seconds=300,
+                            ):
+                                adapter.current_open_kfid = open_kfid
+                                await adapter.send_text(
+                                    KF_MEDIA_DISABLED_HINT_MESSAGE, unified_msg.user_id
+                                )
+                    except Exception as e:
+                        logger.warning(
+                            f"[wecom_kf] 发送媒体识别关闭提示失败: msgid={msg_id}, error={e}"
+                        )
+                    continue
+
                 user_attachments = []
                 if msgtype in ("image", "voice", "video", "file"):
                     logger.info(f"[wecom_kf] 检测到多媒体消息，开始下载附件: msgtype={msgtype}")
@@ -3301,9 +3465,17 @@ async def _persist_kf_servicer_message(
         if msg_type == "text":
             text = msg.get("text", {}).get("content", "")
         elif msg_type == "voice":
-            text = await _transcribe_kf_voice_for_persist(
-                msg, session_id, tenant_id, api_client
-            )
+            # 语音识别开关（2026-11-19）：关闭时不下载不转写不计费，落占位符留痕
+            if await asyncio.to_thread(_kf_persist_asr_enabled_sync, tenant_id):
+                text = await _transcribe_kf_voice_for_persist(
+                    msg, session_id, tenant_id, api_client
+                )
+            else:
+                text = "[语音消息]"
+                logger.info(
+                    f"[wecom_kf] 语音识别已关闭（租户配置），员工语音落占位符: "
+                    f"session_id={session_id}"
+                )
         elif msg_type == "file":
             text, file_attachments_meta = await _build_kf_file_message_content(
                 msg, session_id, tenant_id, api_client
@@ -3457,6 +3629,23 @@ async def _build_kf_file_message_content(
     return content, attachments_meta
 
 
+def _kf_persist_asr_enabled_sync(tenant_id: str) -> bool:
+    """人工期/员工消息语音 ASR 开关判定（无 adapter 上下文，按租户 wecom_kf 配置查询）。
+
+    与智能体期 adapter.media_switches 同源（ChannelFactory.load_media_switches，
+    配置选择口径与 _load_config 一致）；同步 DB 查询，调用方仅语音消息触发并经
+    asyncio.to_thread 包裹；查询失败保守返回 True（沿用现状，不阻断落库）。
+    """
+    try:
+        switches = ChannelFactory.load_media_switches(tenant_id, "wecom_kf")
+        return switches.get("asr_enabled", True)
+    except Exception as e:
+        logger.warning(
+            f"[wecom_kf] 人工期 ASR 开关读取失败，按开启处理: tenant={tenant_id}, error={e}"
+        )
+        return True
+
+
 def _persist_kf_asr_billing(session_id: str, tenant_id: str) -> None:
     """人工期语音 ASR 独立落账（chat_records，source_type=wecom_kf_human_asr）。
 
@@ -3560,9 +3749,18 @@ async def _persist_kf_context_customer_message(
         msg_type = msg.get("msgtype", "text")
         file_attachments_meta: list = []
         if msg_type == "voice":
-            text = await _transcribe_kf_voice_for_persist(
-                msg, session_id, tenant_id, api_client
-            )
+            # 语音识别开关（2026-11-19）：关闭时不下载不转写不计费，落占位符留痕
+            # （图片/文件本就落占位符，不受开关影响）
+            if await asyncio.to_thread(_kf_persist_asr_enabled_sync, tenant_id):
+                text = await _transcribe_kf_voice_for_persist(
+                    msg, session_id, tenant_id, api_client
+                )
+            else:
+                text = "[语音消息]"
+                logger.info(
+                    f"[wecom_kf] 语音识别已关闭（租户配置），人工期语音落占位符: "
+                    f"session_id={session_id}"
+                )
         elif msg_type == "file":
             text, file_attachments_meta = await _build_kf_file_message_content(
                 msg, session_id, tenant_id, api_client

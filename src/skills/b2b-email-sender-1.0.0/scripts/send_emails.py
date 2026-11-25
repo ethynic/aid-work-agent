@@ -371,7 +371,7 @@ def connect(cfg):
     password = cfg.get("smtp_password") or ""
     if not password:
         raise SystemExit("SMTP password missing: 解析到的邮箱配置缺少密码，"
-                         "请到「邮箱设置」重新保存")
+                         "请到「连接中心 → 连接邮箱」重新连接")
 
     if cfg.get("smtp_secure"):
         ctx = ssl.create_default_context()

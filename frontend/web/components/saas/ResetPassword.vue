@@ -217,6 +217,7 @@ async function refreshCaptcha() {
 
 // 发送短信验证码
 async function handleSendCode() {
+  if (isSendingCode.value) return
   if (!phone.value || phone.value.length !== 11) {
     errorMessage.value = '请输入正确的手机号'
     return
@@ -274,6 +275,7 @@ function startCooldown() {
 
 // 重置密码
 async function handleResetPassword() {
+  if (isLoading.value) return
   if (!smsCode.value) {
     errorMessage.value = '请输入短信验证码'
     return

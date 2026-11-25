@@ -84,6 +84,43 @@ class MessageDeduplicator:
                 )
                 return False
 
+    async def claim_throttle(self, key: str, ttl_seconds: int) -> bool:
+        """限流占位：key 在 ttl_seconds 窗口内首次调用占位成功返回 True，窗口内后续调用返回 False。
+
+        与 is_duplicate（行存在即重复，语义由每日 03:00 的 cleanup_expired 兜底过期）
+        不同，本方法按行龄判断：行不存在或已超过 ttl 时刷新 created_at 并放行。
+        适用场景：拦截提示等「N 分钟最多提示一次」的节流（kf_filter_hint）。
+        不能用 is_duplicate——其行要等到次日清理才会消失，窗口会膨胀到接近一天。
+
+        Args:
+            key: 节流键（如 kf_filter_hint:{tenant_id}:{user_id}）
+            ttl_seconds: 节流窗口秒数
+
+        Returns:
+            True 表示占位成功（应发送提示）；False 表示窗口内已提示过（跳过）；
+            DB 异常时放行（宁可重复提示，不可静默）。
+        """
+        now = time.time()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                # 年龄感知 upsert：冲突且旧行超过 ttl 时刷新（rowcount=1 占位成功），
+                # 冲突且旧行仍在窗口内时 DO UPDATE 不生效（rowcount=0，节流命中）
+                cursor.execute("""
+                    INSERT INTO channel_message_dedup (message_id, created_at)
+                    VALUES (%s, %s)
+                    ON CONFLICT (message_id) DO UPDATE
+                    SET created_at = EXCLUDED.created_at
+                    WHERE channel_message_dedup.created_at < %s
+                """, (key, now, now - ttl_seconds))
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                conn.rollback()
+                # 占位失败视为窗口未占用，放行提示（宁可重复提示，不可静默吞掉）
+                logger.warning(f"限流占位 DB 异常，放行 {key}: {e}")
+                return True
+
     def cleanup_expired(self) -> int:
         """
         清理过期的去重记录

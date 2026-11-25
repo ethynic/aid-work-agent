@@ -163,6 +163,7 @@ async function loadEnvVars() {
 }
 
 async function handleSave() {
+  if (savingEnvVars.value) return
   const vars = envVarList.value.filter(v => v.name.trim())
   const names = vars.map(v => v.name.trim())
   if (new Set(names).size !== names.length) {

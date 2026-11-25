@@ -15,7 +15,7 @@
             <BaseButton size="sm" @click="handleSearchWrapper(searchKeyword)">搜索</BaseButton>
           </div>
           <div class="page-toolbar-right">
-            <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
+            <BaseButton :disabled="batchDeletingUsers || selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
             <BaseButton intent="secondary" @click="showImport = true">CSV 导入</BaseButton>
             <BaseButton @click="openAddUser">添加用户</BaseButton>
           </div>
@@ -73,17 +73,19 @@
                 <div class="flex gap-2">
                   <template v-if="!row.source">
                     <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openEditDialog(row)">编辑</BaseButton>
-                    <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleRemove(row.user_id)">删除</BaseButton>
+                    <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" :disabled="removingUser" @click="handleRemove(row.user_id)">删除</BaseButton>
                   </template>
                   <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openAbusePolicy(row)">防滥用设置</BaseButton>
                   <BaseButton
                     v-if="row.status !== 'suspended'"
                     intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs"
+                    :disabled="togglingUserStatus"
                     @click="handleToggleUserStatus(row, 'suspended')"
                   >停用</BaseButton>
                   <BaseButton
                     v-else
                     intent="ghost" size="sm" class="whitespace-nowrap text-xs"
+                    :disabled="togglingUserStatus"
                     @click="handleToggleUserStatus(row, 'active')"
                   >启用</BaseButton>
                 </div>
@@ -420,6 +422,9 @@ const availableAgents = ref<AgentItem[]>([])
 const selectedAgentIds = ref<string[]>([])
 const loadingAgents = ref(false)
 const savingEdit = ref(false)
+const removingUser = ref(false)
+const togglingUserStatus = ref(false)
+const batchDeletingUsers = ref(false)
 const editError = ref('')
 
 const total = ref(0)
@@ -518,6 +523,7 @@ function toggleAllAgents() {
 }
 
 async function handleSaveEdit() {
+  if (savingEdit.value) return
   if (!editForm.value.user_id) return
   if (editForm.value.role !== 'platform_admin' && editForm.value.role !== 'tenant_admin' && selectedAgentIds.value.length === 0) {
     editError.value = '用户必须至少授权使用1个数字员工'
@@ -586,6 +592,7 @@ async function handleSearchWrapper(keyword: string) {
 }
 
 async function handleAddUser() {
+  if (adding.value) return
   if (!addForm.value.phone) {
     addError.value = '请填写手机号'
     return
@@ -622,6 +629,7 @@ async function handleAddUser() {
 }
 
 async function handleImport() {
+  if (importing.value) return
   if (!importFile.value) return
   importing.value = true
   importError.value = ''
@@ -638,12 +646,16 @@ async function handleImport() {
 }
 
 async function handleRemove(userId: string) {
+  if (removingUser.value) return
   if (!confirm('确定要删除此用户吗？')) return
+  removingUser.value = true
   try {
     await removeTenantUser(userId)
     await loadUsers()
   } catch (e: any) {
     toast.error(e.message || '删除失败')
+  } finally {
+    removingUser.value = false
   }
 }
 
@@ -657,21 +669,26 @@ function openAbusePolicy(user: any) {
 }
 
 async function handleToggleUserStatus(user: any, status: 'active' | 'suspended') {
+  if (togglingUserStatus.value) return
   const name = user.nickname || user.username || user.phone || user.user_id
   const tip = status === 'suspended'
     ? `确定停用用户「${name}」吗？停用后其 Web 与渠道侧均无法继续使用。`
     : `确定启用用户「${name}」吗？`
   if (!confirm(tip)) return
+  togglingUserStatus.value = true
   try {
     await updateUserStatus(user.user_id, status)
     toast.success(status === 'suspended' ? '用户已停用' : '用户已启用')
     await loadUsers()
   } catch (e: any) {
     toast.error(e.message || '更新用户状态失败')
+  } finally {
+    togglingUserStatus.value = false
   }
 }
 
 async function handleBatchDelete() {
+  if (batchDeletingUsers.value) return
   if (selectedArr.value.length === 0) return
   // 批量删除时过滤掉外部用户（source 非空）
   const removable = users.value.filter(
@@ -686,6 +703,7 @@ async function handleBatchDelete() {
     ? `选中的 ${selectedArr.value.length} 个用户中，${skipped} 个为外部用户已跳过，确定删除剩余 ${removable.length} 个吗？`
     : `确定要删除选中的 ${removable.length} 个用户吗？`
   if (!confirm(tip)) return
+  batchDeletingUsers.value = true
   try {
     for (const userId of removable.map((u: any) => u.user_id)) {
       await removeTenantUser(userId)
@@ -695,6 +713,8 @@ async function handleBatchDelete() {
     toast.success('批量删除成功')
   } catch (e: any) {
     toast.error(e.message || '批量删除失败')
+  } finally {
+    batchDeletingUsers.value = false
   }
 }
 

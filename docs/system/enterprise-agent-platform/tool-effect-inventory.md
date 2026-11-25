@@ -8,7 +8,6 @@
 >
 > 2026-10-08 边界说明：这是 2026-08-19 的工具安全盘点，旧注册位置和 agent.py 行数不是当前装配架构。AgentEngine/Runner 当前工具由 Catalog、Assembly 与运行时工具派发装配；新增或续接操作以当前代码、授权和调用事实核定，不按旧工具数量或位置实施。此审计独立于已撤销的平台蓝图，保留供安全追溯。
 >
-> 2026-11-06：`browser_automation` 已废弃退出工具自动目录（`catalog=False`），不再提供给新任务；下文该工具行仅保留作历史盘点参考。依据：[Runner 执行槽隔离计划 Phase 1](../../plans/plan-runner-execution-slot-isolation-and-alerts.md)。
 
 ---
 
@@ -36,7 +35,7 @@
 | 本地代理工具（`_register_local_proxy_tools` agent.py:596-617，子智能体 allowed 交集时按名注册） | 15 | proxy_tool.py:968 `LOCAL_PROXY_TOOL_CLASSES` |
 | 旧注册表（`src/core/executor.py` 独立 ToolRegistry，规划遗留） | 2 | executor.py:206-207 |
 
-注意：`src/tools/browser/browser_tool.py`（browser_open/click 等 7 个）与 `tools_semantic/tools_find/tools_path` 是 BrowserAutomationTool 的内部子动作，**不独立注册**；`asr/speech_to_text` 已注释停用（agent.py:507-509）；均不入清单。
+注意：`asr/speech_to_text` 已注释停用（agent.py:507-509）；均不入清单。
 
 ## 3. 主注册表 28 工具（agent.py `_register_builtin_tools`）
 
@@ -47,7 +46,6 @@
 | email_list_folders | 业务 | none | — | 可安全重试 | src/tools/email/email_tool.py:596 起 IMAP list/status 只读 |
 | paddleocr_doc_parsing | 文档 | none | — | 可安全重试 | src/tools/ocr/ocr_tool.py:367 远端解析 API 只读返回 markdown |
 | web_search | 检索 | none | — | 可安全重试（advanced 超时已内置降级 basic） | src/tools/search/search_tool.py:149 Tavily `client.search` 只读 |
-| browser_automation | 网络 | applied | 无 | 禁止盲目重试：任务可能已提交表单/下单 | src/tools/browser/automation_tool.py:186 `orchestrator.execute` 驱动真实浏览器 RPA |
 | read | 文件 | none | — | 可安全重试 | src/tools/file/read_tool.py:110 只读文件内容 |
 | write | 文件 | applied | 无 | overwrite 重写近似幂等；append 重放会重复追加 | src/tools/file/write_tool.py:502-505 `write_text`/append 写文件 |
 | edit | 文件 | applied | 无 | 禁止自动重试：重放旧编辑找不到旧串或二次修改 | src/tools/file/edit_tool.py:358-363 临时文件+rename 原子写回 |
@@ -124,7 +122,7 @@
 28 个 applied 工具**全部没有显式幂等键**。按风险分层：
 
 **高风险（外部不可逆/不可收回，后续安全加固必须优先覆盖）——11 个：**
-`email_send`、`browser_automation`、`transfer_to_human`、`submit_video_task`、`boss_greet`、`boss_accept_resume`、`boss_reject_current`、`boss_send_to`、`boss_send_current`、`create_scheduled_task`（dry_run 先真实执行一次 prompt）、`manage_scheduled_task`（cancel 删除）。
+`email_send`、`transfer_to_human`、`submit_video_task`、`boss_greet`、`boss_accept_resume`、`boss_reject_current`、`boss_send_to`、`boss_send_current`、`create_scheduled_task`（dry_run 先真实执行一次 prompt）、`manage_scheduled_task`（cancel 删除）。
 
 **中风险（落库/注册，重复产生脏数据）——5 个：**
 `upload_data_file`（重复注册表）、`boss_resume_detail`、`boss_resume_batch`（重复简历记录）、`analyze_data`（重复图表）、`cp`（重复下载注册）。

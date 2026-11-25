@@ -55,7 +55,6 @@ agent.py 的 `_build_base_system_prompt()` 中硬编码了约 204 行工具使�
 | `content_generate` | `src/tools/llm/content_generate_tool.py` | 静态（五要素教学+示例） |
 | `skill_execute` | `src/tools/skill/skill_execute_tool.py` | 静态 |
 | `clarify` | `src/tools/agent/clarify_tool.py` | 静态 |
-| `browser_open` | `src/tools/browser/browser_tool.py` | 静态（Browser 工具组共享） |
 | `create_scheduled_task` | `src/tools/scheduler/scheduled_task_tool.py` | 静态 |
 | `delegate_to_subagent` | `src/tools/agent/delegate_tool.py` | **动态**（重写 `get_usage_guide()`，接受 `subagent_descriptions` 参数） |
 

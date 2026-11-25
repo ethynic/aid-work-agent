@@ -181,6 +181,50 @@ class TestDetectMessageType:
         assert WeComMessageBuilder.detect_message_type("普通纯文本", "text") == "text"
 
 
+class TestLinkifyBareUrls:
+    """裸 URL 包裹为 markdown 链接测试（企微 PC 端不自动转链接）"""
+
+    def test_bare_url_wrapped(self):
+        text = "可以先看看花色：https://example.com/upload/1/97665908_1.jpg 要是喜欢更简洁的设计感"
+        result = WeComMessageBuilder.linkify_bare_urls(text)
+        assert "[https://example.com/upload/1/97665908_1.jpg](https://example.com/upload/1/97665908_1.jpg)" in result
+
+    def test_https_and_http(self):
+        result = WeComMessageBuilder.linkify_bare_urls("看 https://a.com 和 http://b.com/x")
+        assert "[https://a.com](https://a.com)" in result
+        assert "[http://b.com/x](http://b.com/x)" in result
+
+    def test_markdown_link_target_not_double_wrapped(self):
+        text = "[链接](https://x.com)"
+        assert WeComMessageBuilder.linkify_bare_urls(text) == text
+
+    def test_markdown_link_label_not_wrapped(self):
+        # 标签本身是 URL 时不重复包裹
+        text = "[https://x.com](https://y.com)"
+        assert WeComMessageBuilder.linkify_bare_urls(text) == text
+
+    def test_markdown_image_not_wrapped(self):
+        text = "![alt](https://x.com/img.jpg)"
+        assert WeComMessageBuilder.linkify_bare_urls(text) == text
+
+    def test_trailing_chinese_punct_stripped(self):
+        result = WeComMessageBuilder.linkify_bare_urls("地址是 https://a.com/p1.jpg。")
+        assert "](https://a.com/p1.jpg)。" in result
+
+    def test_trailing_ascii_punct_stripped(self):
+        result = WeComMessageBuilder.linkify_bare_urls("see https://a.com/p1.jpg, ok")
+        assert "](https://a.com/p1.jpg), ok" in result
+
+    def test_no_url_unchanged(self):
+        assert WeComMessageBuilder.linkify_bare_urls("普通中文消息") == "普通中文消息"
+        assert WeComMessageBuilder.linkify_bare_urls("") == ""
+
+    def test_url_followed_by_chinese_text(self):
+        # URL 后紧跟中文（无空格分隔）不应把中文吞进 URL
+        result = WeComMessageBuilder.linkify_bare_urls("https://a.com/p.jpg这是图")
+        assert "](https://a.com/p.jpg)这是图" in result
+
+
 class TestSplitLongMessage:
     """长消息拆分测试"""
 

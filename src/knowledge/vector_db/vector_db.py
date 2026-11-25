@@ -18,6 +18,10 @@ from src.services.data_analysis.access_scope import agent_scope_document_filter_
 import psycopg2.extras
 
 
+# 进程级 once 缓存：已确认存在的向量表维度，跳过重复 DDL/探测
+_ensured_dimensions: set = set()
+
+
 class VectorDatabase:
     """向量数据库接口"""
 
@@ -87,7 +91,23 @@ class VectorDBPostgreSQL(VectorDatabase):
                 return_pooled_connection(pool_conn)
 
     def _ensure_table(self, conn):
-        """确保向量表存在并启用 pgvector 扩展"""
+        """确保向量表存在并启用 pgvector 扩展
+
+        表与索引均已确认存在时（进程级 once 缓存）直接返回，不在调用方业务
+        事务内反复执行 DDL：CREATE TABLE/INDEX IF NOT EXISTS 会对 chunks_vec
+        取锁并持有到事务提交，并发写入事务（如连续点击的 schema 入库）会互相
+        阻塞直到 lock_timeout（2026-11-24 agent2「保存 schema 失败」事故）。
+        """
+        if self.dimension in _ensured_dimensions:
+            return
+
+        # 轻量只读探测：表与 HNSW 索引均已存在则不做任何 DDL。
+        # 探测命中说明对象已持久化在库中（与本次事务是否提交无关），可安全置位
+        if self._table_objects_exist(conn):
+            _ensured_dimensions.add(self.dimension)
+            logger.debug(f"pgvector 表已存在，跳过初始化，维度: {self.dimension}")
+            return
+
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
         # 确保 pgvector 扩展已启用
@@ -119,7 +139,26 @@ class VectorDBPostgreSQL(VectorDatabase):
         # 池连接路径保持原行为（建表立即持久化）。
         if not self._external_conn:
             conn.commit()
+            # 仅在 DDL 已即时持久化（池连接路径）后置位；外部连接路径的建表
+            # 随调用方事务提交，事务回滚时表可能未建成，不能提前置位
+            _ensured_dimensions.add(self.dimension)
         logger.info(f"PostgreSQL pgvector 表初始化完成，维度: {self.dimension}")
+
+    def _table_objects_exist(self, conn) -> bool:
+        """轻量只读探测 chunks_vec 表与 HNSW 索引是否均已存在
+
+        使用 to_regclass（缺对象返回 NULL 不报错），只取 AccessShareLock，
+        不与并发写事务冲突。
+        """
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT to_regclass('public.chunks_vec') IS NOT NULL AS has_table,
+                   to_regclass('public.idx_chunks_vec_embedding') IS NOT NULL AS has_index
+            """
+        )
+        has_table, has_index = cursor.fetchone()
+        return bool(has_table) and bool(has_index)
 
     def _get_connection(self):
         """获取数据库连接

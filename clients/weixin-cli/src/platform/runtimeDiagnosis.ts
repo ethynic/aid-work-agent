@@ -19,7 +19,7 @@ const GUIDANCE: Record<WindowState, string> = {
   no_main_window: '进程运行中，未识别到可核对主窗口，请手动打开并登录微信',
   ambiguous: '存在多个微信主窗口，请手动确认目标窗口后重试',
   not_running: '请启动微信并登录',
-  unavailable: '窗口诊断未完成，请确认微信已登录后重试',
+  unavailable: '窗口诊断未完成，请在微信聊天窗口打开后重试',
   unsupported: '桌面运行条件未满足，请在 Windows 交互会话中运行',
 }
 
@@ -63,15 +63,16 @@ export async function diagnoseWeixinRuntime(opts: {
       errorCode = error instanceof CodedOperationError ? error.code : 'INTERNAL_ERROR'
     }
   }
-  const ready = prerequisites && login === 'online' && (state === 'foreground' || state === 'background')
+  const visible = state === 'foreground' || state === 'background'
+  const ready = prerequisites && login === 'online' && visible
   const guidance = errorCode === 'RESULT_TIMEOUT' ? '窗口诊断超时，请稍后重试'
     : errorCode === 'WEIXIN_NOT_FOUND' ? GUIDANCE.no_main_window
       : errorCode === 'WINDOW_AMBIGUOUS' ? GUIDANCE.ambiguous
-        : opts.restoreWindow && errorCode ? '微信窗口恢复失败，请手动点击微信托盘图标并确认登录后重试' : GUIDANCE[state]
+        : visible && login === 'unknown' ? '已找到微信窗口，但无法读取原生会话列表（UIA）'
+          : opts.restoreWindow && errorCode ? '微信窗口恢复失败，请手动打开微信聊天窗口后重试' : GUIDANCE[state]
   return {
     environment, window_state: state, login_state: login, restored, ...(errorCode ? { error_code: errorCode } : {}),
-    runtime_readiness: { ready, reason: ready ? '已核实微信原生会话列表' : login === 'unknown' && (state === 'foreground' || state === 'background')
-      ? '无法核实登录态，请在微信中完成登录' : guidance },
+    runtime_readiness: { ready, reason: ready ? '已核实微信原生会话列表' : guidance },
     guidance,
   }
 }

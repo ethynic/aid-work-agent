@@ -7,47 +7,6 @@
 
 `wecom_scheduled_send_settings` 保存 Portal 管理的企微定时消息平台单价覆盖值。表最多一行，`unit_price` 为非负两位小数，缺行或空值使用 `0.50`。授权时将适用单价冻结到 `bs_wecom_scheduled_sends` 执行记录，后续改价只影响新授权。
 
-> 2026-07-17 Browser Run/Executor Phase 2 例外登记：新增业务审计表
-> `bs_browser_runs`、`bs_browser_assistance_requests`。两表只保存租户归属、
-> 状态枚举和恢复关联，不保存完整 URL、DOM、截图、cookie、header、表单值或
-> 用户输入；所有读取和更新均要求 `tenant_id` 条件，不创建长期 device 表。
-> 2026-10-02 源码核对发现旧基础表未出现在部署 DDL；本次补入
-> `deploy/init-postgres.sql` 与 `deploy/db_update.yaml`，对既有表采用非破坏增列。
->
-> 2026-07-22 Phase 3R 已新增 `bs_browser_resume_jobs` 持久 lease 队列，替代
-> Redis Stream。字段仅包括任务/租户/assistance/run 标识、pending/processing/
-> completed/failed 状态、lease、重试调度、白名单错误码和时间戳；
-> `assistance_id` 唯一保证幂等入队。worker 用 `FOR UPDATE SKIP LOCKED` 领取，
-> lease 过期可回收。本次基础兼容 DDL 同步于上述两份实际部署文件，
-> Python service 为 `src/tools/browser/run_db.py` 的 `BrowserResumeJobDB`。
-> 遵循 `database_dev.md` 不加外键约束。
-
-> M4 Browser 原 Runner 绑定基础片：`bs_browser_runs` 新增可空的
-> `runner_id/runner_execution_id/runner_tool_call_id`、`owner_worker_id/owner_boot_id`、
-> `browser_epoch/owner_endpoint/owner_lease_until/runtime_state/closed_at`。
-> 原调用到 run 为部分唯一索引；原 worker boot/epoch 一旦绑定不得用同调用换 runtime。
-> legacy 行保持整组 NULL；原 Runner 行必须完整绑定，`starting/live` 有租约且无关闭时间，
-> `closed/lost` 清租约并保关闭时间。新 owner 租约为 TIMESTAMPTZ，锁后读数据库时钟；
-> 旧审计 TIMESTAMP 保持数据库会话原有墙钟语义，不作为 owner fence。
-> `bs_browser_assistance_requests` 新增可空 `runner_id/runner_wait_id/owner_boot_id/browser_epoch`
-> 和成对可空的 `completion_ref/completion_fact`，只容纳白名单完成事实，不含页面证据。
-> 原生人工操作使用 `extended_at TIMESTAMPTZ NULL` 标记唯一延期；同事务更新原 `expires_at`，旧 NULL 表示尚未延期。Redis 只投影已提交期限，不重新授予延期。
-> `owner_endpoint` 是服务器固定配置的内控服务地址，不是网页 URL，也不含凭据。
-> 新仓储将 mandatory run/wait 行和原完整执行树 CP 关联同事务提交；基础片尚未装配到
-> Browser Runtime，不以此声明人工续跑可用。原 Runner 完成不进入 `bs_browser_resume_jobs`。
-> 此 Browser 迁移块以单条原子 DO 执行并核对实际列类型、关键唯一索引和已验证 CHECK 定义；
-> 不兼容旧结构整块回滚且不推进原迁移水位，不自动删除或替换历史结构。
-> 旧自增主键 int4/int8、审计 timestamp/timestamptz 以及 text/无长度上限 varchar 可兼容；
-> 新 fencing 时间严格为 timestamptz，完成事实严格为 jsonb。
-> 等待绑定还须核当前受信 worker/boot/epoch，assistance SQL 锁等待后再次校验独立 Browser 租约。
->
-> 2026-10-05 M7 旧卡片透明迁移：`bs_browser_assistance_requests` 新增可空
-> `continuation_id`，native `bind_wait` 每新 wait 持久写入 audit 中的原随机 bac，
-> 与 Runner execution/call/wait 同事务关联，独立于 completion 相位；
-> 部分唯一索引 `uq_browser_assistance_continuation`（WHERE continuation_id IS NOT NULL）
-> 保证一 bac 一行，存量 legacy 行保持 NULL 不受影响。旧 events 薄读桥按该持久行
-> JOIN `agent_runners` 复验当前 owner/tenant；纯只读，不入 `bs_browser_resume_jobs`。
-
 > 2026-07-21 社媒营销智能体 outbound 模块 B0.5 例外登记：新增托管登录态表
 > `bs_outbound_account_sessions`。存知乎/小红书等 web 操作型连接器的 Playwright
 > `storage_state`（cookies + localStorage）**加密 blob**，跨 run 维持登录态（设计
@@ -781,7 +740,7 @@ run + pending items，worker 按租户串行领取（事务内 queued→running�
 
 ### 11.10 Runtime 干净安装注册协议3（2026-10-14，待部署）
 
-2026-10-14补偿登记：agent2代码发布后，存量`_db_update_applied.last_datetime=2026-10-14 18:00:00`使原17:00块被跳过，注册三列及索引未创建。追加`2026-10-14 22:45:00`同结构幂等迁移，不回拨已有水位，不修改设备/任务数据；用户授权后的复查已确认agent2结构齐全及22:45水位，助手没有重复写库，正式库只读确认水位为13日17:00、尚待发布。详情见[干净安装计划Phase7](../plans/plan-runtime-clean-install.md)和[复盘](../incidents/runtime-registration-migration-watermark-incident.md)。
+2026-10-14补偿登记：agent2代码发布后，存量`_db_update_applied.last_datetime=2026-10-14 18:00:00`使原17:00块被跳过，注册三列及索引未创建。追加`2026-10-14 22:45:00`同结构幂等迁移，不回拨已有水位，不修改设备/任务数据；用户授权后的复查已确认agent2结构齐全及22:45水位，助手没有重复写库，正式库只读确认水位为13日17:00、尚待发布。详情见 [Runtime 架构设计 §7](runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)的开发完成记录（原干净安装计划已清理）和[复盘](../incidents/runtime-registration-migration-watermark-incident.md)。
 
 - `local_tool_devices.registration_id UUID NULL`：客户端以现有256-bit随机token与DPAPI保存的注册UUID；部分唯一索引 `uq_lt_devices_registration` 保证一次注册只建一设备。旧协议记录为空。
 - `registration_request_hash TEXT NULL`：规范JSON不可变意图摘要（name/platform/runtime_version/capabilities/machine_fingerprint/previous token hash/protocol=3）；凭据、OTP均不明文落库。`registration_code_hash TEXT NULL` 保存首次票据hash，以核对仍带码的重试。

@@ -7,9 +7,12 @@
 
 两种模式：
   1) 生成（默认）：fields.json -> intake.docx
-     - 示例值以【黄色高亮】呈现，提示用户替换为真实值；确认沿用示例可保留高亮。
+     - 字段有 value（来自知识库/参考资料的真实值）时写入且不高亮，标注"来源已填"。
+     - 字段只有 sample（模板示例值）时以【黄色高亮】呈现，仅示意结构，必须替换。
   2) 回收（--extract）：从用户填写后的 intake.docx 读回 key -> value，
-     供回填 answers.json。按 fields.json 的行列结构定位，不依赖用户是否保留高亮。
+     供回填 answers.json。按 fields.json 的行列结构定位，不依赖用户是否保留高亮；
+     同时返回 unfilled（文本仍等于 sample、即未替换的示例值）与 empty（留空）的 key 列表，
+     供上层把这两类字段当作"缺口"处理，而不是当成真实内容回填。
 
 用法：
   python make_intake.py <fields.json> <intake.docx> [--title "..."] [--note "..."]
@@ -108,12 +111,22 @@ def build(fields, out, title=None, note=None):
             label = str(f.get('label', '')) + (' *' if f.get('required') else '')
             write_cell(cells[1], label, size=9, bold=bool(f.get('required')))
 
+            # value = 来自知识库/参考资料的真实值（来源已填，不高亮）
+            # sample = 模板里的示例值（仅示意结构，必须替换，黄色高亮）
+            value = f.get('value', '')
             sample = f.get('sample', '')
+            has_value = value not in ('', None)
             has_sample = sample not in ('', None)
-            write_cell(cells[2], sample if has_sample else '　',
-                       size=9, highlight=has_sample)
+            if has_value:
+                write_cell(cells[2], value, size=9, highlight=False)
+            elif has_sample:
+                write_cell(cells[2], sample, size=9, highlight=True)
+            else:
+                write_cell(cells[2], '　', size=9)
 
             hint = str(f.get('hint', ''))
+            if f.get('source'):
+                hint = (hint + ' ｜内容来源：' + str(f['source'])).strip(' ｜')
             if f.get('sample_from'):
                 hint = (hint + ' ｜示例来源：' + str(f['sample_from'])).strip(' ｜')
             write_cell(cells[3], hint, size=8, color=GREY)
@@ -137,10 +150,18 @@ def build(fields, out, title=None, note=None):
 
 
 def extract(fields_path, docx_path, out_path=None):
-    """按 fields.json 结构从填好的采集表读回值；高亮与否不影响读取。"""
+    """按 fields.json 结构从填好的采集表读回值；高亮与否不影响读取。
+
+    额外区分两类"缺口"字段，防止示例值被当成真实内容回填：
+      - unfilled：文本仍等于 sample（用户没替换的示例值）
+      - empty    ：空白未填
+    上层 MUST 把这两类当缺口处理（留待补标注或索取），除非用户明确要求沿用示例。
+    """
     fields = json.load(open(fields_path, encoding='utf-8'))
     doc = Document(docx_path)
     values = {}
+    unfilled = []
+    empty = []
     for gi, group in enumerate(fields.get('groups', [])):
         if gi >= len(doc.tables):
             break
@@ -152,11 +173,35 @@ def extract(fields_path, docx_path, out_path=None):
             if len(cells) < 3:
                 continue
             key = f.get('key') or f.get('label')
-            values[key] = cells[2].text.strip().lstrip('\u3000').strip()
+            text = cells[2].text.strip().lstrip('\u3000').strip()
+            values[key] = text
+            sample = f.get('sample', '')
+            # 空白 / 全角空格占位视为未填
+            if text == '':
+                empty.append(key)
+            # 文本仍等于示例值 -> 视为未替换的示例，属缺口
+            elif sample not in ('', None) and text == str(sample):
+                unfilled.append(key)
+    gap_keys = sorted(set(unfilled) | set(empty))
+    payload = {
+        'values': values,
+        '_gaps': {
+            'unfilled': unfilled,
+            'empty': empty,
+            'gap_count': len(gap_keys),
+            'note': 'unfilled=文本仍等于示例值(未替换)，empty=留空；两类都属缺口，'
+                    '默认不得作为成品内容回填，须留待补标注或向用户索取。'
+                    '取真实值请用 values；缺口字段见 _gaps。',
+        },
+    }
     if out_path:
-        json.dump(values, open(out_path, 'w', encoding='utf-8'),
+        json.dump(payload, open(out_path, 'w', encoding='utf-8'),
                   ensure_ascii=False, indent=2)
-    return {'count': len(values), 'out': out_path, 'values': values}
+    return {
+        'count': len(values), 'out': out_path, 'values': values,
+        'unfilled': unfilled, 'empty': empty,
+        'gap_count': len(gap_keys),
+    }
 
 
 def main():

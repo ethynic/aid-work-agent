@@ -21,7 +21,11 @@ from src.saas.api.tenant_auth import require_admin
 from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.db.subscription_db import SubscriptionDB
 from src.saas.models.enums import BehaviorAction, BehaviorResourceType
-from src.saas.services.channel_factory import ChannelFactory
+from src.saas.services.channel_factory import (
+    ChannelFactory,
+    MEDIA_SWITCH_CHANNEL_TYPES,
+    extract_media_switches,
+)
 from src.services.behavior_log import audit_action
 from src.db.database import get_db_connection
 from src.wechat_mp import config_codec as wechat_mp_codec
@@ -144,6 +148,14 @@ _DINGTALK_NOTIFY_ONLY_REQUIRED_FIELDS = {
         "agent_id": "应用AgentId（在应用详情页获取，工作通知发送必须）",
     }
 }
+# notify_only 保存时保留库内旧值的回调字段（wecom/feishu/dingtalk 同模式）：「仅通知」
+# 表单隐藏这些字段、前端不提交；update 整体覆盖 config 若不回填，库内回调凭据会被
+# 清除，改回 agent_only/both 时须重填。仅通知用途不注册回调链路，保留不影响运行。
+_NOTIFY_ONLY_RETAINED_FIELDS = {
+    _WECOM_CHANNEL_TYPE: ("token", "encoding_aes_key"),
+    _FEISHU_CHANNEL_TYPE: ("verification_token", "encrypt_key"),
+    _DINGTALK_CHANNEL_TYPE: ("token", "encoding_aes_key"),
+}
 
 
 def _generate_web_c_secret() -> str:
@@ -164,7 +176,8 @@ def _normalize_web_c_config(config: dict, existing: Optional[dict] = None) -> No
     - channel_secret：缺失/空串/掩码保留旧值（update 场景 existing 传入），
       create 时无旧值则自动生成；伪造防线密钥不由租户表单提供。
     - enabled：缺省 True；greeting：缺省通用文案；allow_attachment：缺省 False
-      （纯文字聊天）；show_history：缺省 False（聊天页不显示历史会话入口）；
+      （纯文字聊天）；show_history：缺省 False（聊天页不显示历史会话入口；
+      仅签名链接模式生效，uid/anon 在 bootstrap 强制 False）；
       identity_mode：缺省 anon（2026-11-19 起下线「签名 + 匿名」组合模式，
       仅保留匿名 / 签名 / userid 三种单一模式），
       非法值 400（表单单选来源，出现非法值即为异常调用，不静默纠正）。
@@ -180,12 +193,28 @@ def _normalize_web_c_config(config: dict, existing: Optional[dict] = None) -> No
         raise HTTPException(status_code=400, detail="身份模式取值应为 ext / anon / uid")
     config["identity_mode"] = mode
 
+    # 留资归属员工（2026-11-20 方案 2）：留资线索 assigned_to / 通知 kf_assignee
+    # 接收人来源；空串 = 未配置（线索不归属员工，kf_assignee 模式零接收人）。
+    # 归属校验（本租户 + active）在 create/update 处 _validate_web_c_lead_assignee 执行
+    config["lead_assignee_user_id"] = str(config.get("lead_assignee_user_id") or "").strip()
+
     secret = str(config.get("channel_secret") or "").strip()
     if secret.startswith("***"):
         secret = ""
     if not secret:
         old_secret = str((existing or {}).get("channel_secret") or "").strip()
         config["channel_secret"] = old_secret or _generate_web_c_secret()
+
+
+def _normalize_media_switch_config(channel_type: str, config: dict) -> None:
+    """原地规整媒体识别开关字段（create/update 共用，2026-11-19）。
+
+    支持渠道（wecom/wecom_kf/dingtalk/feishu）将 asr_enabled（缺省 True）/
+    image_recognition_enabled（缺省 False）以规整后的布尔值写回 config，
+    保证存量/前端漏传时落库值确定；非支持渠道不动（不注入无关键）。
+    """
+    switches = extract_media_switches(channel_type, config)
+    config.update(switches)
 
 
 def _notify_usage(channel_type: str, config: dict) -> str:
@@ -360,6 +389,12 @@ async def create_channel(request: Request, body: ChannelConfigCreateRequest):
     if body.channel_type == _WEB_C_CHANNEL_TYPE:
         body.config = dict(body.config)
         _normalize_web_c_config(body.config)
+        _validate_web_c_lead_assignee(admin["tenant_id"], body.config)
+
+    # 媒体识别开关（2026-11-19）：支持渠道规整布尔值落库（缺省 ASR 开、图片识别关）
+    if body.channel_type in MEDIA_SWITCH_CHANNEL_TYPES:
+        body.config = dict(body.config)
+        _normalize_media_switch_config(body.channel_type, body.config)
 
     _validate_channel_subagent(admin["tenant_id"], body.subagent_type)
 
@@ -423,15 +458,23 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
         body.config = dict(body.config)
         body.config["kf_account"] = (existing.get("config") or {}).get("kf_account") or []
 
-    # wecom/feishu：update 同样按通知用途分支必填（notify_only 免填回调字段；
-    # agent_only/both 保持原必填——update 不做字段保留合并，按本次提交的 config
-    # 校验，notify_usage 非法值同样在此 400）
+    # wecom/feishu/dingtalk：update 同样按通知用途分支必填（notify_only 免填回调字段；
+    # agent_only/both 保持原必填，按本次提交的 config 校验，notify_usage 非法值同样
+    # 在此 400）
     missing = _required_fields_missing(existing["channel_type"], body.config)
     if missing:
         raise HTTPException(
             status_code=400,
             detail=f"缺少必填字段: {', '.join(missing)}",
         )
+
+    # 切到 notify_only：未提交的回调字段保留库内旧值（改回 agent_only/both 免重填）；
+    # 显式提交的值以提交值为准，库内无旧值则不补键
+    if _notify_usage(existing["channel_type"], body.config) == "notify_only":
+        body.config = dict(body.config)
+        for key in _NOTIFY_ONLY_RETAINED_FIELDS[existing["channel_type"]]:
+            if not body.config.get(key) and (existing.get("config") or {}).get(key):
+                body.config[key] = existing["config"][key]
 
     # wechat_mp：appid/original_id 可选（空值规整删除，DB 层缺失回填旧值语义不变）；
     # original_id 有值才校验 gh_ 前缀；callback_token 传入合法明文视为改密
@@ -457,6 +500,13 @@ async def update_channel(config_id: str, request: Request, body: ChannelConfigUp
         body.config = dict(body.config)
         # web_c get_by_id 返回明文 config（非敏感字段机制渠道），旧 secret 可直接沿用
         _normalize_web_c_config(body.config, existing.get("config") or {})
+        _validate_web_c_lead_assignee(admin["tenant_id"], body.config)
+
+    # 媒体识别开关（2026-11-19）：支持渠道规整布尔值落库（缺省 ASR 开、图片识别关；
+    # 前端漏传/存量旧表单整体覆盖时开关值确定，不会静默丢失）
+    if existing["channel_type"] in MEDIA_SWITCH_CHANNEL_TYPES:
+        body.config = dict(body.config)
+        _normalize_media_switch_config(existing["channel_type"], body.config)
 
     _validate_channel_subagent(admin["tenant_id"], body.subagent_type)
 
@@ -729,6 +779,21 @@ async def rotate_web_c_secret(config_id: str, request: Request):
     }
 
 
+def _validate_web_c_lead_assignee(tenant_id: str, config: dict) -> None:
+    """校验 web_c 留资归属员工：本租户 + active（防跨租户/已删除用户落库）。
+
+    空值 = 未配置，直接放行（清空归属是合法操作）。
+    """
+    user_id = str(config.get("lead_assignee_user_id") or "").strip()
+    if not user_id:
+        return
+    from src.db.models import UserDB
+
+    user = UserDB.get_by_id(user_id) or {}
+    if user.get("tenant_id") != tenant_id or user.get("status") != "active":
+        raise HTTPException(status_code=400, detail="留资归属员工不存在或非本租户在职用户，请重新选择")
+
+
 def _validate_channel_subagent(tenant_id: str, subagent_type: Optional[str]) -> None:
     """校验渠道绑定的 subagent_type：本租户实例（active）或已订阅基础员工。
 
@@ -759,20 +824,8 @@ async def get_available_subagents(request: Request):
         with get_db_connection() as conn:
             subagent_types = SubscriptionDB.get_allowed_subagent_types(conn, tenant_id)
 
-        # 构建 agent_id -> 中文名 映射（主智能体 main 固定为 CEO智能体）
-        name_map = {"main": "CEO智能体"}
-        registry = master_agent.subagent_registry
-        if registry:
-            registry.load_from_db()
-            for item in registry.get_all_subagents_with_type():
-                name_map[item["agent_id"]] = item.get("name") or item["agent_id"]
-
-        result = [
-            {"agent_id": t, "name": name_map.get(t, t)}
-            for t in subagent_types
-        ]
-
         # 附加本租户数字员工副本实例（base 在订阅内才可见，订阅继承）
+        copy_rows = []
         try:
             from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
             allowed_set = set(subagent_types)
@@ -781,10 +834,33 @@ async def get_available_subagents(request: Request):
                     continue
                 if row.get("base_agent_id") not in allowed_set:
                     continue
-                name = row.get("display_name") or name_map.get(row["base_agent_id"], row["base_agent_id"])
-                result.append({"agent_id": row["agent_id"], "name": f"{name}（副本）"})
+                copy_rows.append(row)
         except Exception as e:
             logger.warning(f"附加租户数字员工副本失败: {e}")
+
+        # 名称解析：租户实例 display_name（含基础员工定制改名）优先，其次注册表/DB 定义
+        registry = master_agent.subagent_registry
+        if registry:
+            registry.load_from_db()
+        from src.saas.services.agent_name_resolver import resolve_agent_names
+        name_map = resolve_agent_names(
+            tenant_id,
+            [*subagent_types, *[row["agent_id"] for row in copy_rows]],
+        )
+        if name_map.get("main", "main") == "main":
+            name_map["main"] = "CEO智能体"
+
+        result = [
+            {"agent_id": t, "name": name_map.get(t, t)}
+            for t in subagent_types
+        ]
+        for row in copy_rows:
+            name = (
+                name_map.get(row["agent_id"])
+                or row.get("display_name")
+                or name_map.get(row["base_agent_id"], row["base_agent_id"])
+            )
+            result.append({"agent_id": row["agent_id"], "name": f"{name}（副本）"})
 
         return {"success": True, "subagents": result}
     except Exception as e:

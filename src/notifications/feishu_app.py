@@ -179,6 +179,10 @@ class FeishuAppAdapter:
         （PROVIDER_ALLOWED_EVENT_TYPES），只渲染 completed/failed；waiting_input
         等非终态映射已删除，误接事件 fail loud。会话名快照沿用事件参数；
         时长取事件参数 duration_seconds（0/缺省=未知）走旧文案兜底。"""
+        from .events import weixin_batch_text
+
+        if batch := weixin_batch_text(parameters):
+            return batch
         session = parameters.get('session_title') or '任务'
         duration = _duration_label(parameters.get('duration_seconds'))
         if event_type == 'task.completed':

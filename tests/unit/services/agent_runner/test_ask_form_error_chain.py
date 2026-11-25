@@ -1,6 +1,6 @@
 """WP2 错误链路：表单校验 422 的逐题明细全程结构化与 BFF 条件序列化。
 
-docs/plans/plan-ask-user-interactive-question.md §WP2 错误传输链路（P1-1）：
+设计见 docs/system/design-ask-user-interactive-question.md；原开发计划 WP2 错误传输链路（P1-1）：
 - Runner API（api.py）422 响应体携带 errors（question_id/code/message），不并入
   通用错误报文；pydantic 原始报文仍只映射为 INVALID_REQUEST；
 - RunnerServiceClient（web_client.py）结构化透传，不降级为通用错误字符串，

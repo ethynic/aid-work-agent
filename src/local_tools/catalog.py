@@ -19,6 +19,10 @@ from typing import Any, Dict, List, Optional
 LOCAL_ONLY_WEIXIN_TOOLS = frozenset({"weixin_history_read", "weixin_unread_list", "weixin_session_observe"})
 LOCAL_ONLY_WEIXIN_MESSAGE = "此微信读取工具仅支持本机 CLI 或 MCP"
 WEIXIN_CHAT_LATEST = "weixin_chat_latest"
+WEIXIN_GROUP_DAILY_SUMMARY = "weixin_group_daily_summary"
+WEIXIN_GROUP_RANGE_SUMMARY = "weixin_group_range_summary"
+WEIXIN_SUMMARY_TOOLS = frozenset({WEIXIN_GROUP_DAILY_SUMMARY, WEIXIN_GROUP_RANGE_SUMMARY})
+WEIXIN_DAILY_SUMMARY_KIND = "weixin_daily_summary"
 
 TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "runtime-recovery": {"provider_id":"ai.aidwork.runtime-recovery", "min_provider_version":"1.0.0",
@@ -247,6 +251,22 @@ def declared_tools_for_device(capabilities: Optional[Dict[str, Any]]) -> Optiona
             if not tools or names:
                 tools_map[key] = [name for name in names if name not in LOCAL_ONLY_WEIXIN_TOOLS]
     return tools_map or None
+
+
+def parallel_tools_for_device(capabilities: Any) -> Dict[str, List[str]]:
+    """Normalize heartbeat declarations before the parallel claim JSONB filter."""
+    if not isinstance(capabilities, dict):
+        return {}
+    raw = capabilities.get("parallel_tools")
+    if not isinstance(raw, dict):
+        return {}
+    tools_map: Dict[str, List[str]] = {}
+    for key, tools in raw.items():
+        if isinstance(key, str) and isinstance(tools, list):
+            names = [tool for tool in tools if isinstance(tool, str)]
+            if names:
+                tools_map[key] = names
+    return tools_map
 
 
 BOSS_COMPLETION_CAPABILITY = "runtime_boss_completion_v1"

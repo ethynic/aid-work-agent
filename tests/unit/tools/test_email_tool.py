@@ -210,7 +210,33 @@ class TestEmailProcessSend:
         tool = EmailProcessTool()
         result = await tool.execute(action="send", to="x@example.com", subject="s", body="b")
         assert result["success"] is False
-        assert result["error"] == "未绑定邮箱，请先去设置中绑定邮箱"
+        assert result["error"] == "未绑定邮箱，请先在「连接中心 → 连接邮箱」中连接邮箱"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("exc,expected_code", [
+        (smtplib.SMTPAuthenticationError(535, b"secret detail"), "auth"),
+        (smtplib.SMTPConnectError(421, b"server busy"), "connect"),
+        (smtplib.SMTPServerDisconnected("lost"), "connect"),
+        (ConnectionRefusedError(111, "refused"), "connect"),
+        (TimeoutError(), "timeout"),
+        (OSError("network unreachable"), "network"),
+        (email_lib.EmailLibError("收件人地址无效，请检查收件人邮箱地址"), "invalid_recipient"),
+        # SMTPException 同样是 OSError 后代：服务器已应答但拒绝发信的协议级错误不是网络异常
+        (smtplib.SMTPSenderRefused(550, b"refused", "test@example.com"), "other"),
+        (smtplib.SMTPRecipientsRefused({"x@example.com": (550, b"refused")}), "other"),
+        (smtplib.SMTPNotSupportedError("SMTP AUTH extension not supported by server"), "other"),
+        (RuntimeError("boom"), "other"),
+    ])
+    async def test_send_error_code(self, user_email, exc, expected_code):
+        """发送失败返回 error_code 错误类型；更具体类型优先于 OSError 兜底"""
+        with patch.object(email_lib, "send_email", side_effect=exc):
+            tool = EmailProcessTool(user_email)
+            result = await tool.execute(
+                action="send", to="x@example.com", subject="s", body="b"
+            )
+        assert result["success"] is False
+        assert result["error_code"] == expected_code
+        assert result["error"]
 
 
 # ============== read 动作 ==============

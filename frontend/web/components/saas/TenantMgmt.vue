@@ -120,6 +120,7 @@
               <BaseButton
                 :intent="row.status === TenantStatus.DEACTIVATED ? 'danger' : 'danger-ghost'"
                 size="sm"
+                :disabled="deletingTenant"
                 @click="handleDelete(row)"
               >{{ row.status === TenantStatus.DEACTIVATED ? '彻底删除' : '删除' }}</BaseButton>
             </div>
@@ -578,7 +579,7 @@
             </div>
             <div class="flex gap-2">
               <button @click="handleDownloadConfigFile" class="text-xs px-3 py-1.5 bg-white border border-default rounded hover:border-primary-400 transition-colors">下载</button>
-              <button @click="handleDeleteConfigFile" class="text-xs px-3 py-1.5 bg-white border border-danger-300 text-danger-600 rounded hover:bg-danger-50 transition-colors">删除</button>
+              <button @click="handleDeleteConfigFile" :disabled="deletingConfigFile" class="disabled:opacity-50 text-xs px-3 py-1.5 bg-white border border-danger-300 text-danger-600 rounded hover:bg-danger-50 transition-colors">删除</button>
             </div>
           </div>
         </div>
@@ -661,6 +662,8 @@ const isEdit = ref(false)
 const allowLlmEdit = ref(false)
 let allowLlmEditInitial = false
 const submitting = ref(false)
+const deletingTenant = ref(false)
+const deletingConfigFile = ref(false)
 const formError = ref('')
 const tenantCodeError = ref('')
 const currentTenant = ref<any>(null)
@@ -1021,6 +1024,7 @@ async function openEnvVarDialog(agent: AgentItem) {
 }
 
 async function handleSaveEnvVars() {
+  if (savingEnvVars.value) return
   if (!currentTenant.value) return
   const vars = envVarList.value.filter(v => v.name.trim())
   const names = vars.map(v => v.name.trim())
@@ -1077,6 +1081,7 @@ function closeShareDialog() {
 }
 
 async function handleSaveShares() {
+  if (savingShares.value) return
   if (!currentTenant.value) return
   savingShares.value = true
   shareError.value = ''
@@ -1157,6 +1162,7 @@ async function openKnowledgeDialog(agent: AgentItem) {
 }
 
 async function handleSaveKnowledge() {
+  if (savingKnowledge.value) return
   if (!currentTenant.value) return
   savingKnowledge.value = true
   knowledgeError.value = ''
@@ -1255,8 +1261,10 @@ async function handleDownloadConfigFile() {
 }
 
 async function handleDeleteConfigFile() {
+  if (deletingConfigFile.value) return
   if (!currentTenant.value) return
   if (!confirm('确定删除配置文件？')) return
+  deletingConfigFile.value = true
   try {
     const res = await deleteConfigFile(currentTenant.value.tenant_id, configFileAgentId.value)
     if (res.success) {
@@ -1265,6 +1273,8 @@ async function handleDeleteConfigFile() {
     }
   } catch (e: any) {
     toast.error(e.message || '删除失败')
+  } finally {
+    deletingConfigFile.value = false
   }
 }
 
@@ -1292,6 +1302,7 @@ async function checkTenantCodeUnique() {
 }
 
 async function handleSubmit() {
+  if (submitting.value) return
   if (!formData.value.company_name?.trim()) {
     formError.value = '请填写企业名称'
     return
@@ -1350,16 +1361,20 @@ async function handleSubmit() {
 }
 
 async function handleDelete(tenant: any) {
+  if (deletingTenant.value) return
   const isPurge = tenant.status === TenantStatus.DEACTIVATED
   const tip = isPurge
     ? `该租户已处于"已删除"状态。\n\n确定要彻底删除 "${tenant.company_name}" 吗？将物理删除其账号、订阅、授权等核心数据及附件目录，此操作不可恢复；其余历史数据将由夜间清理任务删除。`
     : `确定要删除租户 "${tenant.company_name}" 吗？删除后将无法恢复。`
   if (!confirm(tip)) return
+  deletingTenant.value = true
   try {
     await deleteTenant(tenant.tenant_id)
     await clientRefresh()
   } catch (e: any) {
     toast.error(e.message || '删除失败')
+  } finally {
+    deletingTenant.value = false
   }
 }
 

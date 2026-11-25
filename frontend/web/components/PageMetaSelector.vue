@@ -137,6 +137,7 @@ const groupedPages = computed(() => {
 
 // AI 推荐
 async function handleRecommend() {
+  if (recommending.value) return
   if (!props.agentDescription.trim()) {
     alert('请先填写智能体描述')
     return

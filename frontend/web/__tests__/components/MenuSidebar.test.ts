@@ -654,9 +654,39 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     const flyoutText = flyout!.textContent || ''
     expect(flyoutText).toContain('本地工具')
     expect(flyoutText).toContain('企业微信Agent')
+    expect(flyoutText).toContain('微信 Agent')
     // 管理项对普通用户隐藏
     expect(flyoutText).not.toContain('API配置')
     expect(flyoutText).not.toContain('渠道配置')
+  })
+
+  it('连接中心：普通租户用户可见「连接邮箱」，点击跳转 /connections/email', async () => {
+    // 普通用户（非管理员）
+    routeState.path = '/t/test-tenant/chat'
+    tenantIsLoggedIn.value = true
+    tenantAdmin.value = { username: 'user1', role: 'user' }
+    tenant.value = { company_name: '测试租户' }
+
+    const wrapper = mountAndTrack()
+    await flushPromises()
+
+    const trigger = findButtonByText(wrapper, '连接中心')
+    expect(trigger).toBeTruthy()
+    await trigger.trigger('mouseenter')
+    await flushPromises()
+
+    const flyout = findFlyout()
+    expect(flyout).not.toBeNull()
+    const item = Array.from(flyout!.querySelectorAll('button'))
+      .find(b => b.textContent?.trim() === '连接邮箱')
+    expect(item).toBeTruthy()
+
+    item!.click()
+    await nextTick()
+    await flushPromises()
+
+    expect(routerPush).toHaveBeenLastCalledWith('/t/test-tenant/connections/email')
+    expect(findFlyout()).toBeNull()
   })
 
   it('连接中心：管理员子菜单包含配置入口和企业微信工作台', async () => {
@@ -675,11 +705,12 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(flyoutText).toContain('渠道配置')
     expect(flyoutText).toContain('本地工具')
     expect(flyoutText).toContain('企业微信Agent')
+    expect(flyoutText).toContain('微信 Agent')
   })
 
   it('部署开关：hiddenMenus 下发后对应连接中心与管理菜单项隐藏', async () => {
     hiddenMenus.value = new Set([
-      'api_config', 'wechat_mp', 'local_tools', 'wecom_agent', 'external_systems',
+      'api_config', 'wechat_mp', 'local_tools', 'wecom_agent', 'weixin_agent', 'external_systems',
       'token_usage', 'reply_styles', 'behavior_logs',
     ])
     const wrapper = mountTenantSidebar()
@@ -697,6 +728,7 @@ describe('MenuSidebar - flyout 二级菜单', () => {
     expect(flyoutText).not.toContain('公众号内容')
     expect(flyoutText).not.toContain('本地工具')
     expect(flyoutText).not.toContain('企业微信Agent')
+    expect(flyoutText).not.toContain('微信 Agent')
     expect(flyoutText).not.toContain('外部系统')
 
     // 管理菜单：隐藏项不出现

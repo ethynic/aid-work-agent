@@ -161,7 +161,7 @@
               <template #actions="{ row }">
                 <div class="flex items-center gap-2 whitespace-nowrap">
                   <BaseButton intent="ghost" size="sm" @click="openKeyDetail(row.key)">查看</BaseButton>
-                  <BaseButton intent="danger-ghost" size="sm" @click="handleDeleteKey(row as RedisKeyItem)">删除</BaseButton>
+                  <BaseButton intent="danger-ghost" size="sm" :disabled="deletingKey" @click="handleDeleteKey(row as RedisKeyItem)">删除</BaseButton>
                 </div>
               </template>
             </BaseTable>
@@ -287,6 +287,7 @@
           v-if="detailData && detailData.success"
           intent="danger"
           size="md"
+          :disabled="deletingKey"
           @click="handleDeleteFromDetail"
         >
           删除此键
@@ -544,8 +545,11 @@ async function openKeyDetail(key: string) {
   }
 }
 
+const deletingKey = ref(false)
 async function handleDeleteKey(row: RedisKeyItem) {
+  if (deletingKey.value) return
   if (!confirm(`确定删除键\n${row.key}？\n\n此操作不可恢复！`)) return
+  deletingKey.value = true
   try {
     const res = await deleteRedisKey(row.key)
     if (res.success) {
@@ -559,13 +563,17 @@ async function handleDeleteKey(row: RedisKeyItem) {
     }
   } catch (e: any) {
     toast.error(`删除失败: ${e.message}`)
+  } finally {
+    deletingKey.value = false
   }
 }
 
 async function handleDeleteFromDetail() {
+  if (deletingKey.value) return
   if (!detailData.value || !detailData.value.key) return
   const key = detailData.value.key
   if (!confirm(`确定删除键\n${key}？\n\n此操作不可恢复！`)) return
+  deletingKey.value = true
   try {
     const res = await deleteRedisKey(key)
     if (res.success) {
@@ -578,10 +586,13 @@ async function handleDeleteFromDetail() {
     }
   } catch (e: any) {
     toast.error(`删除失败: ${e.message}`)
+  } finally {
+    deletingKey.value = false
   }
 }
 
 async function handleClearAllCache() {
+  if (clearingAll.value) return
   const total = overview.value?.total_keys ?? '所有'
   if (!confirm(`确定清空所有 Redis 缓存？\n\n将删除约 ${total} 个键（按 REDIS_KEY_PREFIX 隔离）。\n此操作不可恢复，可能导致在线用户的会话状态丢失！`)) return
   clearingAll.value = true

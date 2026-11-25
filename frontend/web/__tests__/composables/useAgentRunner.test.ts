@@ -873,13 +873,12 @@ describe('Existing useAgent public interface with durable Runner transport', () 
     expect(agent.error.value).toBeFalsy()
   })
 
-  it('a browser assistance wait preserves input and does not pretend to reply to a clarification', async () => {
-    await discoverParked(runnerView({ status: 'waiting', snapshot: { waiting: { kind: 'browser', wait_id: 'browser-wait' } } }))
+  it('an unrecognized wait preserves input and does not send a clarification reply', async () => {
+    await discoverParked(runnerView({ status: 'waiting', snapshot: { waiting: { kind: 'unknown_wait', wait_id: 'original-wait' } } }))
     const before = network.requests.length
-    expect(await agent.sendMessage('keep browser assistance answer', null, 'A')).toMatchObject({ restoreInput: true })
+    expect(await agent.sendMessage('keep pending input', null, 'A')).toMatchObject({ restoreInput: true })
     expect(network.requests).toHaveLength(before)
-    expect(agent.error.value).toContain('请先完成原任务的人工协助')
-    expect(agent.error.value).toContain('本次输入已保留')
+    expect(agent.error.value).toBe('原任务正在等待，本次输入已保留。')
     expect(external.legacy).not.toHaveBeenCalled()
   })
 

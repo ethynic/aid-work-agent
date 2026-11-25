@@ -12,6 +12,9 @@ export interface TdocAuthStatus {
   success: boolean
   bound: boolean
   status: 'none' | 'active' | 'expired'
+  auth_type?: 'personal' | 'oauth'
+  nick?: string | null
+  oauth_enabled?: boolean
   client_id_masked?: string
   open_id_masked?: string
   updated_at?: string | null
@@ -126,6 +129,12 @@ export async function saveTdocAuth(params: TdocAuthSaveParams): Promise<TdocAuth
 
 export async function deleteTdocAuth(): Promise<{ success: boolean; deleted: boolean }> {
   return request('/auth', { method: 'DELETE' })
+}
+
+// ========== OAuth 授权流（任务 #2） ==========
+
+export async function startTdocOAuth(): Promise<{ success: boolean; authorize_url?: string; detail?: string }> {
+  return request('/oauth/start')
 }
 
 // ========== 目录浏览 ==========

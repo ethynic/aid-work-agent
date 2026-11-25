@@ -10,7 +10,6 @@ export const portalRoutes: RouteRecordRaw[] = [
     children: [
       { path: '', redirect: { name: 'portal-system-health' } },
       { path: 'system-health', name: 'portal-system-health', component: () => import('@/components/saas/SystemHealthMonitor.vue') },
-      { path: 'dashboard', name: 'portal-dashboard', component: () => import('@/components/saas/TenantDashboard.vue') },
       { path: 'tenants', name: 'portal-tenants', component: () => import('@/components/saas/TenantMgmt.vue') },
       { path: 'recharge', name: 'portal-recharge', component: () => import('@/components/saas/TenantRecharge.vue') },
       { path: 'subagents', name: 'portal-subagents', component: () => import('@/components/DigitalEmployeeManager.vue') },
@@ -21,7 +20,10 @@ export const portalRoutes: RouteRecordRaw[] = [
       { path: 'behavior-logs', name: 'portal-behavior-logs', component: () => import('@/components/saas/BehaviorLogs.vue'), props: { scope: 'platform' } },
       { path: 'reply-styles', name: 'portal-reply-styles', component: () => import('@/components/saas/SystemReplyStyleManager.vue') },
       { path: 'monitoring', name: 'portal-monitoring', component: () => import('@/components/saas/TraceBrowser.vue') },
-      { path: 'runner-alerts', name: 'portal-runner-alerts', component: () => import('@/components/saas/RunnerAlerts.vue') },
+      // Runner 告警已合并进系统健康页（2026-11-23）；旧路由保留为重定向，
+      // 飞书告警详情链接（events.py runner_alert_detail_link）依赖该路径
+      { path: 'runner-alerts', name: 'portal-runner-alerts',
+        redirect: (to) => ({ path: '/portal/system-health', query: to.query, hash: '#runner-alerts' }) },
       { path: 'monitoring/:session_id', name: 'portal-session-traces', component: () => import('@/components/saas/SessionTraces.vue') },
       { path: 'monitoring/trace/:trace_id', name: 'portal-trace-detail', component: () => import('@/components/saas/TraceDetail.vue') },
       { path: 'context-compression', name: 'portal-context-compression', component: () => import('@/components/saas/ContextCompressionManager.vue') },

@@ -74,9 +74,11 @@ class TestDocLayoutCloneSkillRegistry(unittest.TestCase):
         self.assertIn("doc-layout-clone", registry.list_skills())
         skill = registry.get("doc-layout-clone")
         self.assertIsNotNone(skill)
-        # 2026-11-19 合并上游 1.2.0 -> 1.3.0（分轮问答 + 信息采集表）
-        self.assertEqual(skill.version, "1.3.0")
-        self.assertIn("cp", skill.requires_tools)
+        # 2026-11-20 合并上游 1.4.0 -> 1.5.0（最高铁律 + 选项问答 + 来源审计）
+        self.assertEqual(skill.version, "1.5.0")
+        for tool in ("cp", "ask_user", "knowledge_base_search",
+                     "knowledge_file_search"):
+            self.assertIn(tool, skill.requires_tools)
 
     def test_required_scripts_exist(self):
         for name in ("prep.py", "fill_doc.py", "dump_template.py",
@@ -285,6 +287,113 @@ class TestDocLayoutCloneFill(unittest.TestCase):
             self.assertEqual(
                 rep["verification"]["checks"]["deferred_by_dependency"], 1)
 
+    def test_fill_sample_residue_and_source_audit(self):
+        # 上游 1.4.0/1.4.3：样例残留扫描（只提示不阻断）+ 来源审计（按 _meta.sources）
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            tpl = tmp / "tpl.docx"
+            from docx import Document
+            doc = Document()
+            doc.add_paragraph("服务合同")
+            doc.add_paragraph("甲方：样例科技有限公司")
+            doc.add_paragraph("本合同总价款 100,000 元，工期 6 个月")
+            doc.save(str(tpl))
+            work = tmp / "work"
+            r = _run(["prep.py", "--work", work, "--templates", tpl,
+                      "--cache-dir", tmp / "cache"])
+            prep = json.loads(r.stdout)
+            analysis = {
+                "fields": [{"key": "party_a", "label": "甲方", "required": True,
+                            "locators": [{"kind": "literal",
+                                          "text": "甲方：样例科技有限公司"}]}],
+            }
+            (work / "analysis.json").write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            # party_a 已声明来源；"100,000 元"/"6 个月" 未纳入 locators -> 应被残留扫描捕获
+            answers = {"party_a": "甲方：测试股份有限公司",
+                       "_meta": {"sources": {"party_a": "用户指令"},
+                                 "gaps": []}}
+            r = _run(
+                ["fill_doc.py", prep["working_template"], work / "analysis.json",
+                 "-", work / "output.docx", "--report", work / "fill_report.json"],
+                stdin=json.dumps(answers, ensure_ascii=False))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            rep = json.loads(r.stdout)
+            # 只提示不阻断：ok 仍为 true
+            self.assertTrue(rep["ok"], rep["summary"])
+            frags = {item["fragment"] for item in rep["sample_residue"]}
+            self.assertIn("100,000 元", frags)
+            self.assertIn("6 个月", frags)
+            self.assertEqual(rep["verification"]["checks"]["sample_residue"], 2)
+            self.assertTrue(any("样版业务数值" in w for w in rep["warnings"]))
+            # 来源审计：party_a 已声明 -> 无 ungrounded；gaps 空 -> 无 unfilled
+            audit = rep["source_audit"]
+            self.assertEqual(audit["source_declaration"], "provided")
+            self.assertEqual(audit["ungrounded_fields"], [])
+            self.assertEqual(audit["unfilled_gaps"], [])
+
+    def test_fill_ungrounded_and_zero_not_empty(self):
+        # 上游 1.4.1：未声明来源的字段进 ungrounded_fields（仅声明了 sources 才审计）
+        # 上游 1.4.2：合法的 0/False 不再被当空值（不被 default 覆盖、不误报缺失）
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            prep = self._prep(tmp)
+            work = Path(prep["work"])
+            analysis = {
+                "fields": [
+                    {"key": "party_a", "label": "甲方", "required": True,
+                     "locators": [{"kind": "literal",
+                                   "text": "甲方：样例科技有限公司"}]},
+                    {"key": "discount", "label": "折扣率", "default": "95%",
+                     "locators": [{"kind": "literal",
+                                   "text": "签订日期：2026 年 1 月 1 日"}]},
+                ],
+            }
+            (work / "analysis.json").write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            # discount=0 有真实含义，必须保留用户值；sources 未声明 discount
+            answers = {"party_a": "甲方：测试股份有限公司", "discount": 0,
+                       "_meta": {"sources": {"party_a": "用户指令"}}}
+            r = _run(
+                ["fill_doc.py", prep["working_template"], work / "analysis.json",
+                 "-", work / "output.docx", "--report", work / "fill_report.json"],
+                stdin=json.dumps(answers, ensure_ascii=False))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            rep = json.loads(r.stdout)
+            self.assertTrue(rep["ok"], rep["summary"])
+            # 0 不被 default 覆盖（报告里值统一为字符串形态）
+            self.assertEqual(rep["verification"]["fields"]["discount"], "0")
+            self.assertEqual(rep["defaults"], [])
+            # 声明了 sources 才做差集审计：discount 无来源声明 -> ungrounded
+            audit = rep["source_audit"]
+            self.assertEqual(audit["source_declaration"], "provided")
+            self.assertEqual(audit["ungrounded_fields"], ["discount"])
+
+    def test_fill_source_declaration_absent_warns_only(self):
+        # 上游 1.4.1：未提供 _meta.sources 时只给单条提示，不把所有字段误标无来源
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            prep = self._prep(tmp)
+            work = Path(prep["work"])
+            analysis = {
+                "fields": [{"key": "party_a", "label": "甲方", "required": True,
+                            "locators": [{"kind": "literal",
+                                          "text": "甲方：样例科技有限公司"}]}],
+            }
+            (work / "analysis.json").write_text(
+                json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+            r = _run(
+                ["fill_doc.py", prep["working_template"], work / "analysis.json",
+                 "-", work / "output.docx", "--report", work / "fill_report.json"],
+                stdin=json.dumps({"party_a": "甲方：测试股份有限公司"},
+                                 ensure_ascii=False))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            rep = json.loads(r.stdout)
+            self.assertTrue(rep["ok"], rep["summary"])
+            self.assertEqual(rep["source_audit"]["source_declaration"], "absent")
+            self.assertEqual(rep["source_audit"]["ungrounded_fields"], [])
+            self.assertTrue(any("_meta.sources" in w for w in rep["warnings"]))
+
 
 class TestDocLayoutCloneProbe(unittest.TestCase):
     """probe.py 分轮编排：依赖判定 / 自动解决字段 / ready_to_fill / 答案合并。"""
@@ -417,6 +526,100 @@ class TestDocLayoutCloneIntake(unittest.TestCase):
             self.assertEqual(res["values"]["company_name"], "测试股份有限公司")
             self.assertEqual(res["values"]["revenue"], "4500")
             self.assertTrue(values_out.is_file())
+
+
+class TestDocLayoutCloneIntakeV15(unittest.TestCase):
+    """上游 1.4.0/1.4.3：value 预填（来源已填不高亮）、source 标注、
+    --extract 缺口标记（unfilled/empty/gap_count）与 --out 结构化落盘（values + _gaps）。"""
+
+    FIELDS = {
+        "title": "测试信息采集表",
+        "note": "黄色高亮=模板示例值，仅示意结构，必须替换。",
+        "groups": [
+            {"name": "一、主体信息", "fields": [
+                # 来源已填：写入 value、不高亮、说明列拼来源
+                {"key": "revenue", "label": "营业收入（万元）", "value": "4500",
+                 "source": "用户上传的财报.pdf", "sample": "4,500"},
+                # 模板示例值：高亮，需用户替换
+                {"key": "company_name", "label": "公司全称", "sample": "样例科技",
+                 "required": True},
+                # 无 sample 无 value：留白待填
+                {"key": "remark", "label": "备注", "sample": ""},
+            ]},
+        ],
+    }
+
+    def test_value_prefill_no_highlight_and_gap_marks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            fpath = tmp / "fields.json"
+            fpath.write_text(json.dumps(self.FIELDS, ensure_ascii=False),
+                             encoding="utf-8")
+            out = tmp / "信息采集表.docx"
+            r = _run(["make_intake.py", fpath, out])
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+            from docx import Document
+            doc = Document(str(out))
+            tbl = doc.tables[0]
+            # 行序与 fields 一致：revenue / company_name / remark
+            rev_cell = tbl.rows[1].cells[2]
+            self.assertEqual(rev_cell.text, "4500")
+            # value 预填不高亮
+            self.assertFalse(rev_cell._tc.xpath('.//w:highlight'))
+            # 说明列带来源标注
+            self.assertIn("内容来源：用户上传的财报.pdf", tbl.rows[1].cells[3].text)
+            # sample 仍黄色高亮
+            self.assertTrue(
+                tbl.rows[2].cells[2]._tc.xpath('.//w:highlight'))
+            doc.save(str(out))
+
+            # 回收：只替换 company_name；revenue 保持预填值；remark 留空
+            doc = Document(str(out))
+            tbl = doc.tables[0]
+            tbl.rows[2].cells[2].text = "测试股份有限公司"
+            filled = tmp / "filled.docx"
+            doc.save(str(filled))
+
+            values_out = tmp / "intake_values.json"
+            r = _run(["make_intake.py", "--extract", filled, fpath,
+                      "--out", values_out])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            res = json.loads(r.stdout)
+            self.assertEqual(res["values"]["revenue"], "4500")
+            self.assertEqual(res["values"]["company_name"], "测试股份有限公司")
+            # 缺口标记：remark 留空 -> empty；无未替换示例 -> unfilled 空
+            self.assertEqual(res["empty"], ["remark"])
+            self.assertEqual(res["unfilled"], [])
+            self.assertEqual(res["gap_count"], 1)
+            # --out 落盘为结构化对象（values + _gaps），不再裸 values
+            payload = json.loads(values_out.read_text(encoding="utf-8"))
+            self.assertEqual(payload["values"]["company_name"],
+                             "测试股份有限公司")
+            self.assertEqual(payload["_gaps"]["empty"], ["remark"])
+            self.assertEqual(payload["_gaps"]["unfilled"], [])
+            self.assertEqual(payload["_gaps"]["gap_count"], 1)
+
+    def test_unfilled_sample_marked_as_gap(self):
+        # 用户没替换高亮示例 -> 该 key 进 unfilled，防止示例值被当真实内容回填
+        fields = json.loads(json.dumps(self.FIELDS, ensure_ascii=False))
+        fields["groups"][0]["fields"][1]["required"] = False
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            fpath = tmp / "fields.json"
+            fpath.write_text(json.dumps(fields, ensure_ascii=False),
+                             encoding="utf-8")
+            out = tmp / "信息采集表.docx"
+            r = _run(["make_intake.py", fpath, out])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            values_out = tmp / "intake_values.json"
+            # 不做任何填写，直接回收
+            r = _run(["make_intake.py", "--extract", out, fpath,
+                      "--out", values_out])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            res = json.loads(r.stdout)
+            self.assertIn("company_name", res["unfilled"])
+            self.assertEqual(res["gap_count"], 2)  # company_name + remark
 
 
 class TestDocLayoutClonePdf(unittest.TestCase):

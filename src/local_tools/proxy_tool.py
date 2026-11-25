@@ -43,6 +43,7 @@ from .wecom_business import AttachmentReadInput
 from src.config.settings import settings
 from src.db.client_binding_db import ClientUsageLogDB
 from src.local_tools import catalog, repository
+from src.local_tools.plugin_manifests import PLUGIN_CHANGED_CODE, PLUGIN_CHANGED_MESSAGE
 from src.local_tools.pricing import (
     RESUME_RECOGNITION_TOOL_NAME,
     overlay_heal_price,
@@ -233,6 +234,8 @@ class LocalToolProxyTool(BaseTool):
     heal_eligible = True
     # Server-owned adapter policy; CLI facts and model output cannot grant replay.
     visual_recovery_policy: Optional[str] = None
+    unknown_effect_notice = UNKNOWN_EFFECT_NOTICE
+    boss_login_recovery = True
 
     async def execute(self, **kwargs) -> Dict[str, Any]:
         from src.local_tools.lifecycle import current_local_operation
@@ -338,6 +341,8 @@ class LocalToolProxyTool(BaseTool):
                 'data': {'latest_invocation_id': conflict.invocation_id}, 'invocation_id': None}
         except repository.DeviceOperationUnresolved as error:
             messages = {
+                PLUGIN_CHANGED_CODE: PLUGIN_CHANGED_MESSAGE,
+                'LOCAL_DEVICE_NOT_SELECTED': '已选 Runtime 发生变化，本次操作未派发。',
                 'LOCAL_DEVICE_OFFLINE': '原执行设备离线，未派发；请保持原 Runtime 在线。',
                 'LOCAL_DEVICE_UNSUPPORTED': '原设备不支持此工具，未派发；请检查原设备插件版本。',
                 'LOCAL_DEVICE_NOT_READY': '原设备已撤销或未就绪，未派发；请检查原设备连接。',
@@ -530,24 +535,24 @@ class LocalToolProxyTool(BaseTool):
                       "message": "操作已取消", **base}
         elif state == "unknown":
             # 租约过期/执行结果无法确认：必须 fail-loud，禁止重试
-            msg = error_message or "本机执行结果无法确认"
             result = {"success": False, "code": "EXECUTION_UNKNOWN",
-                      "message": f"{msg}；{UNKNOWN_EFFECT_NOTICE}", **base}
+                      "message": error_message or "本机执行结果无法确认", **base}
         elif state == "expired":
             result = {"success": False, "code": "EXPIRED",
-                      "message": f"本机执行租约过期；{UNKNOWN_EFFECT_NOTICE}", **base}
+                      "message": "本机执行租约过期", **base}
         else:
             # failed：DESKTOP_NOT_INTERACTIVE / CHROME_UNAVAILABLE / NOT_LOGGED_IN /
             # WRONG_PAGE / PAYWALL / UI_CHANGED / BUSY 等中文文案直传（已是用户可读）
             result = {"success": False, "code": error_code or "FAILED",
                       "message": error_message or "本机执行失败", **base}
 
-        if self.name.startswith('boss_') and result.get('code') == 'NOT_LOGGED_IN' and effect == 'none':
+        if self.boss_login_recovery and self.name.startswith('boss_') and result.get('code') == 'NOT_LOGGED_IN' and effect == 'none':
             result['message'] = '请在原执行电脑的原 Chrome 浏览器登录 BOSS 直聘，完成后在本会话回复“已登录，继续”。本次操作未执行。'
             result['recovery_action'] = 'login_original_browser'
 
-        if effect == "unknown" and UNKNOWN_EFFECT_NOTICE not in result["message"]:
-            result["message"] = f"{result['message']}；{UNKNOWN_EFFECT_NOTICE}"
+        if (state in {'unknown', 'expired'} or effect == 'unknown') and self.unknown_effect_notice:
+            if self.unknown_effect_notice not in result['message']:
+                result['message'] = f"{result['message']}；{self.unknown_effect_notice}"
         return result
 
     # ==================== 计费（落库侧 write_result 同事务计费，本模块只预检/附带金额） ====================

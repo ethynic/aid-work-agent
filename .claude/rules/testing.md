@@ -18,8 +18,7 @@ tests/
 │   ├── test_auth.py         # 认证逻辑
 │   └── tools/               # 各工具单元测试（mock 外部依赖）
 │       ├── test_email_tool.py
-│       ├── test_search_tool.py
-│       └── test_browser_tool.py
+│       └── test_search_tool.py
 ├── integration/             # 集成测试 — 真实组件组合，选择性 mock
 │   ├── test_agent_loop.py   # Agent 消息处理循环
 │   ├── test_tool_execution.py # ToolExecutor + 真实 Tool
@@ -41,7 +40,7 @@ tests/
 - Docker 自动模式在测试或 helper 执行前核对当前工作区的三个测试安全入口。代码不一致时拒绝执行。普通容器测试为无 DB 模式，SQL 测试显式使用 `--isolated-db`，管理连接须在测试进程所在网络命名空间内通过 loopback 访问。无法复用匹配容器时，按 [开发环境手册](../../docs/guides/development/local-dev-environments.md) 创建容器或使用 agent3。
 - 清理仅在明确隔离库模式执行，并先核对实际`current_database()`与本轮目标一致；收集测试不启动清理。独立测试需用驱动底层tripwire证明零connect/零DELETE，单独禁止Python socket不能证明C/libpq没有发起连接。
 
-详细设计与执行证据见[测试隔离计划](../../docs/plans/plan-test-database-isolation-runtime-assertions.md)。该策略仅作用于测试入口，不改变产品数据库连接配置；不宣称隔离任意恶意Python代码。
+详细设计与执行证据见[测试数据库隔离设计](../../docs/design/devtools/test-database-isolation-design.md)（原开发计划已清理）。该策略仅作用于测试入口，不改变产品数据库连接配置；不宣称隔离任意恶意Python代码。
 
 ## 测试分层规则
 

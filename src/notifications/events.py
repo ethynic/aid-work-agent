@@ -33,11 +33,14 @@ class TerminalParameters(StrictDTO):
     daily_report_link: str | None = Field(default=None, min_length=1, max_length=512)
     daily_report_summary: str | None = Field(default=None, min_length=1, max_length=200)
     daily_report_missing: str | None = Field(default=None, min_length=1, max_length=200)
+    weixin_batch_status: Literal['succeeded', 'partial', 'failed'] | None = None
 
     def model_dump(self, **kwargs):
         parameters = super().model_dump(**kwargs)
         if self.recovery_summary is None:
             parameters.pop('recovery_summary', None)
+        if self.weixin_batch_status is None:
+            parameters.pop('weixin_batch_status', None)
         return parameters
 
 
@@ -203,7 +206,11 @@ class EventRegistry:
 
     def validate(self, event_type, parameters, resource_ref):
         definition=self.definitions.get(event_type)
-        if definition is None or resource_ref.get('type') != definition.resource_type:
+        batch = resource_ref.get('type') == 'weixin_summary_batch'
+        if definition is None or (resource_ref.get('type') != definition.resource_type and not (
+                batch and event_type in ('task.completed', 'task.failed'))):
+            raise ValueError('NOTIFICATION_EVENT_UNSUPPORTED')
+        if bool(parameters.get('weixin_batch_status')) != batch:
             raise ValueError('NOTIFICATION_EVENT_UNSUPPORTED')
         if not isinstance(resource_ref.get('id'), str) or not 1<=len(resource_ref['id'])<=256:
             raise ValueError('NOTIFICATION_RESOURCE_INVALID')
@@ -246,8 +253,18 @@ def _non_work_time_note(now=None):
     return '当前为非工作时间，请于下一个工作日跟进。'
 
 
+def weixin_batch_text(parameters):
+    state = parameters.get('weixin_batch_status')
+    if state:
+        outcome = {'succeeded': '已完成', 'partial': '部分完成', 'failed': '执行失败'}[state]
+        return parameters['task_name'], outcome
+    return None
+
+
 def render_inbox_text(event_type, parameters):
     """站内信标题与正文按事件模板渲染；仅做纯文本插值，参数已过严格模型。"""
+    if batch := weixin_batch_text(parameters):
+        return batch
     if event_type in ('task.completed', 'task.failed'):
         # 终态文案按来源区分（评审 P2）：scheduled 生产者必带 task_id，
         # 普通聊天终态不带——不把聊天完成显示成"定时任务"（取代远程 d30901b4

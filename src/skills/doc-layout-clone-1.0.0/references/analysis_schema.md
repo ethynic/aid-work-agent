@@ -56,8 +56,10 @@
 | `phase` | 问答轮次序号，默认 1；小的先问。用于「先问方向，再问细节」 |
 | `depends_on` | 见 1.2.1；未满足时本轮不问，也不计缺失，留到下一轮 |
 | `skip_when_blocked` | 默认 `true`：依赖未满足就跳过。设 `false` 则无论如何都要问 |
-| `hint` | 给用户的填写提示（单位、格式、可从哪份材料取数），只影响提问不写进文档 |
+| `hint` | 给用户的填写提示（单位、格式、可从哪份材料取数），只影响提问不写进文档。注明应从哪份知识库/参考资料取数；找不到时按缺口处理，不得退而取样例值 |
 | `locators` | **填在哪里**，可多个；一个值出现在多处时写多个 |
+
+> 关于 `default` / `formula`：用来填**凡能由来源真实值/已收集答案确定性算出的派生值**——当天日期、流水编号、合计/小计、人民币大写、比例/税价换算、单价×数量、日期与期限推算等，**一律自动算、不向用户提问**（见 SKILL.md「自动计算」）。**不得用它们生成业务事实基础数据**（甲方名称、真实成交额、人名、签署日期、结论、条款等）——那属于编造，违反最高铁律；这类基础值缺失时按缺口处理（问用户或留待补），但**由它们派生出的合计/大写/分期等仍应自动算出**。区分标准：一次性写入的基础事实值 = 业务事实（不得编造）；对已知值做确定性四则/函数运算的结果 = 派生值（应自动算）。
 
 #### 1.2.1 `depends_on`（多轮问答的驱动开关）
 
@@ -120,7 +122,7 @@
 | 变量 | 含义 |
 |------|------|
 | `{value}` | 原值 |
-| `{value_fmt}` | 数字千分位，如 `110000` → `110,000` |
+| `{value_fmt}` | 数字千分位，如 `100000` → `100,000` |
 | `{value_upper}` | 人民币中文大写 |
 | `{index}` | 清单行序号（从 1 开始），仅清单列可用 |
 | `{清单条目字段}` | 如 `{qty}` `{unit}` `{name}`，仅清单列可用 |
@@ -146,11 +148,12 @@
   "sample_rows": [1, 2, 3],
   "footer_rows": [4],
   "columns": [
-    {"key": "name",       "col": 0, "sample": "样例名称", "label": "项目名称"},
-    {"key": "unit_price", "col": 1, "sample": "110,000", "value_template": "{value_fmt}"},
-    {"key": "qty",        "col": 2, "sample": "1 套", "value_template": "{qty} {unit}"},
-    {"key": "amount",     "col": 3, "sample": "110,000", "value_template": "{value_fmt}", "formula": "unit_price*qty"},
-    {"key": "desc",       "col": 4, "label": "说明"}
+    {"col": 0, "sample": "1", "value_template": "{index}", "label": "序号"},
+    {"key": "name",       "col": 1, "sample": "（示例名称）", "label": "项目名称"},
+    {"key": "unit_price", "col": 2, "sample": "100,000", "value_template": "{value_fmt}"},
+    {"key": "qty",        "col": 3, "sample": "1 套", "value_template": "{qty} {unit}"},
+    {"key": "amount",     "col": 4, "sample": "100,000", "value_template": "{value_fmt}", "formula": "unit_price*qty"},
+    {"key": "desc",       "col": 5, "label": "说明"}
   ],
   "total_cells": [
     {"footer_index": 0, "col": 4, "formula": "sum('amount')", "value_template": "{value_fmt}"}
@@ -166,10 +169,11 @@
 | `min_items` | 可选，默认 1；收集时提示至少给几条，`0` 表示允许空表 |
 | `item_hint` | 可选，告诉用户每条至少要有哪些字段，只影响提问 |
 | `header_rows` | 表头行数，不参与动态扩展 |
-| `sample_rows` | **样版里的样例行下标**，生成时被删除并按实际条数克隆替换 |
+| `sample_rows` | **样版里的全部样例数据行下标**（不含表头/合计）；生成时这些行被删除并按实际条数克隆替换。**漏列的样例行不会被删，会作为空行残留在新文档中** |
 | `footer_rows` | 合计/小计行下标，保留并可用 `total_cells` 更新数值 |
-| `columns[].key` | 对应清单条目的字段；列公式的结果会写回条目，供合计与派生字段使用 |
+| `columns[].key` | 对应清单条目的字段；列公式的结果会写回条目，供合计与派生字段使用。序号列只是展示，可省略 `key` |
 | `columns[].sample` | 样例行中的原文；提供时做局部替换（保留格式），不提供则整格写入 |
+| `columns[].value_template` | 写入格式，支持 `{value}` `{value_fmt}` `{value_upper}` `{index}`（行序号，从 1 开始）与清单条目字段。**序号列用 `"{index}"` 自动编号**；不声明则克隆行会继承样例行的旧序号（如全是"1"） |
 | `columns[].formula` | 列值计算，如 `unit_price*qty` |
 | `total_cells[]` | `footer_index`（指向 `footer_rows` 第几行）或 `row`（绝对行号）+ `col` + `formula` |
 
@@ -192,12 +196,12 @@
 ```json
 {
   "_meta": {"client": "客户简称", "note": "问答过程备注"},
-  "project_name": "某某项目",
-  "sign_date": "2026 年 11 月 16 日",
+  "project_name": "（来自内容来源的项目名称）",
+  "sign_date": "（来自内容来源的日期）",
   "items": [
-    {"name": "定制开发服务", "category": "software",
-     "unit_price": "110000", "qty": "1", "unit": "套",
-     "amount": "", "desc": "功能描述"}
+    {"name": "（条目名称）", "category": "software",
+     "unit_price": "100000", "qty": "1", "unit": "套",
+     "amount": "", "desc": "（功能描述）"}
   ]
 }
 ```
@@ -206,6 +210,25 @@
 - 数组键（由 `list_tables[].rows_source` 指定，默认 `items`）条数任意。
 - 单价、总价等留空即可：计算由 `formula` 补，结果会写回清单。
 - 未提供的非必填字段保持样版原值不动。
+
+**内容来源约束（最高优先级）**：`answers.json` 里每个实际内容值都必须来自知识库检索、用户上传的参考资料，或用户在对话中的明确指令。**不得填入样版/历史文件里的样例值，也不得自行编造**。来源缺失的必填项，写成待补标注（如 `【待补：请提供 XX】`）或先不填入、向用户索取；只有用户明确要求"用示例 / 模拟数据"时，才允许填示例值，并需在交付时声明。`default` / `formula` 只用于**结构派生值**（日期、编号、合计、大写等），不得用来凭空生成业务事实数据。
+
+在 `_meta` 里记录每个字段的来源以便追溯（`_` 开头键不参与回填）：
+
+```json
+"_meta": {
+  "client": "客户简称",
+  "sources": {"project_name": "知识库检索", "revenue_2025": "用户上传的财报.pdf"},
+  "gaps": ["sign_date"],
+  "note": "sign_date 来源缺失，成品留待补标注"
+}
+```
+
+| `_meta` 键 | 说明 |
+|-----------|------|
+| `sources` | 字段名 -> 来源说明。**第 4 步来源审计的依据**：提供后，`fill_report.source_audit` 会列出 `ungrounded_fields`（有值但无来源声明的字段）；不提供则审计记为 `source_declaration: absent` 并给一条提示，**不会**把所有字段误标为无来源 |
+| `gaps` | 来源缺失的字段名列表。识别缺口并留白是正确行为，报告会提醒交付前确认这些字段已留 `【待补：…】` 或已向用户索取，`unfilled_gaps` 列出其中仍为空的 |
+| `rounds` / `last_round` | 由 `probe.py --merge` 自动写入，勿手工维护 |
 
 ---
 
@@ -222,9 +245,11 @@
 | `tables` | 各清单表扩展前后的行数与实际条数 |
 | `total_cells` / `cell_updates` | 汇总单元格写入值 |
 | `layout` | `identical` 与 `differences`：页面尺寸/边距/段落样式/非清单表结构对比 |
-| `warnings` | 残留样例值、公式失败、板式漂移等 |
+| `warnings` | 来源缺口、公式失败、板式漂移、内部标记残留、**样例残留提示**等 |
+| `sample_residue` | **样版样例残留扫描**（最高铁律兜底）：`[{fragment, count}]`，样版中带业务单位的数值片段回填后仍原样保留的项。分析阶段漏纳入 locators 的样例数值不再静默通过验收。只提示不阻断、不改 `ok`：固定政策数值可合法保留，但须逐条确认是否应换成真实值；已在 locator 文本/新值/`_meta` 中声明的片段不报，正常场景为 0。`checks.sample_residue` 为其类别数 |
+| `source_audit` | **来源审计**（最高铁律落地）：`declared_sources` / `declared_gaps`（取自 `answers.json._meta.sources` / `gaps`）、`ungrounded_fields`（无来源声明且非公式/默认的字段）、`unfilled_gaps`（仍为空的缺口字段）。仅提示不阻断，用于复核"内容是否都有来源、缺口是否留白" |
 | `summary` | **一行验收结论**：ok / 字段 / 清单项 / 未命中定位 / 板式一致 / 警告 |
-| `verification` | `fields`（最终值）、`tables`、`preview_lines`（成品前 12 行）、`checks` |
+| `verification` | `fields`（最终值）、`tables`、`preview_lines`（成品前 12 行）、`checks`（含 `ungrounded_fields` / `source_gaps` 计数） |
 | `analysis_cached` | 本次 `analysis.json` 是否按样版 hash 入缓存；`ok=false` 时跳过 |
 
 `ok=false` 时回到第 2/3 步修正缓存后重跑，**不要修改样版**。看 `summary` + `verification` + `layout` 即可完成验收，**无需再打开 `output.docx` 读回核对**。

@@ -319,6 +319,43 @@ const date = new Date('2026-05-15T11:49:45.429739')
 new Date('2026-05-15T11:49:45.429739' + 'Z')  // 结果会变成 19:49
 ```
 
+### 防重复提交守卫（2026-11-24 起，强制）
+
+所有触发**变更类 API**（POST/PUT/DELETE/PATCH：保存、提交、确认、新增、创建、更新、导入、上传、发送、发布、生成、删除、批量操作等）的按钮必须做防重复提交。**三件套缺一不可**：
+
+```typescript
+// 1. handler 前声明 in-flight 标志（命名与操作匹配：savingX / deletingX / revokingX）
+const savingX = ref(false)
+
+async function saveX() {
+  // 2. 入口检查：请求进行中直接返回（防止双击、回车等绕过按钮 disabled 的重复触发）
+  if (savingX.value) return
+  savingX.value = true
+  try {
+    await api.saveX(...)
+  } finally {
+    // 3. 所有 return 路径都要复位：统一放 finally，不能只放在成功路径
+    savingX.value = false
+  }
+}
+```
+
+```vue
+<!-- 4. 按钮绑定 disabled（BaseButton 直接绑；原生 button 加 disabled:opacity-50） -->
+<BaseButton :disabled="savingX" @click="saveX">{{ savingX ? '保存中...' : '保存' }}</BaseButton>
+```
+
+**规则**：
+
+1. `confirm()` 原生确认框**不能替代守卫**——连点两次会各弹一次确认框，两次都会通过。守卫入口检查放在 confirm 之前。
+2. 有 `@keyup.enter` 等除按钮外的其他触发路径时，入口检查是唯一防线（回车可绕过按钮 disabled）。
+3. `for` 循环逐条调用变更 API 的批量操作，守卫（置位/复位）必须包住**整个循环**，不是单条调用。
+4. 多处绑定同一 handler（列表多行删除按钮等），每处绑定都要加 `:disabled`。
+5. 已有 loading 标志的 handler 也必须补入口检查——按钮 disabled 生效存在渲染 tick 窗口，同帧双击仍可双发。
+6. 纯导航/展开收起/GET 查询类按钮不适用本规则。
+
+**Why**：并发重复提交会在后端造成重复数据、重复计费（如 schema 入库重复 embedding 计费），甚至事务锁竞争导致请求失败（2026-11-24 agent2「保存 schema 失败」lock timeout 事故的直接诱因即连续 3 次点击确认入库）。
+
 ## 运行构建
 
 修改前端源码后，执行[开发环境手册](../../docs/guides/development/local-dev-environments.md#3-在容器内自测)里的 Web 构建。

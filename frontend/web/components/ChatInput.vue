@@ -124,7 +124,8 @@
             <button
               v-if="canStop ?? isProcessing"
               @click="handleStopClick"
-              class="w-9 h-9 rounded-full bg-danger-50 text-danger-600 border border-danger-200 hover:bg-danger-100 transition-colors flex items-center justify-center"
+              :disabled="stopping"
+              class="w-9 h-9 rounded-full bg-danger-50 text-danger-600 border border-danger-200 hover:bg-danger-100 transition-colors flex items-center justify-center disabled:opacity-50"
               title="停止生成"
             >
               <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
@@ -267,10 +268,17 @@ function handleEnter(e: KeyboardEvent) {
   handleSend()
 }
 
+const stopping = ref(false)
 function handleStopClick() {
   // 防误点确认：取消会导致本轮回复中断并标记为已取消
+  if (stopping.value) return
   if (confirm('确定要停止生成吗？')) {
+    stopping.value = true
     emit('stop')
+    // 短暂锁定，防止连续点击触发第二次确认弹窗双发 cancel
+    setTimeout(() => {
+      stopping.value = false
+    }, 1500)
   }
 }
 

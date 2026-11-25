@@ -110,6 +110,24 @@ class RunnerManager:
             raise RunnerError('SCHEDULED_CONTROL_FORBIDDEN', 403)
         return public_runner(self.repository.cancel(principal, runner_id))
 
+    def admin_cancel(self, runner_id, credentials):
+        """平台管理员运维停止（系统健康页告警处置）：仅校验服务对等凭据。
+
+        与 owner cancel 的差异：平台运维不持有属主用户 token，按行属主
+        身份构造 Principal 使 assert_owner 自然通过；且不受 §5.2 scheduled
+        仅限用户取消的限制（该限制面向用户/调度语义，运维 kill 是平台级
+        操作）。取消本身仍走 repository.cancel 完整协作式语义
+        （cancel_requested + 检查点标记 + 控制收口），不绕过状态机。
+        """
+        self.authorizer.verify_service(credentials['service_id'], credentials['service_token'], None)
+        row = self.repository.get(runner_id)
+        from .contracts import Identity, Principal
+        principal = Principal(
+            Identity(row['tenant_id'], row['user_id'], row['session_id'],
+                     source=row['source'], session_kind=row['session_kind']),
+            row['actor_kind'], row['actor_id'], credentials['service_id'])
+        return public_runner(self.repository.cancel(principal, runner_id))
+
     def verify_local(self, runner_id, request_id, credentials, *, stop_resources=False,
                      continue_after_stop=False):
         self.authorizer.verify_service(credentials['service_id'], credentials['service_token'], None)

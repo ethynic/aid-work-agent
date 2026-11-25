@@ -40,7 +40,7 @@
 
 ## 4. 筛选降级的剩余边界
 
-依据：[筛选执行与探查](../../../clients/boss-resume-assistant/src/main/boss/FilterSetter.ts)、[筛选操作](../../../clients/boss-resume-assistant/src/main/operations/bossFilter.ts)、[筛选代理与引用验证](../../../src/local_tools/proxy_tool.py)、[已完成的部分匹配修复](plan-boss-partial-filter-discovery.md)。
+依据：[筛选执行与探查](../../../clients/boss-resume-assistant/src/main/boss/FilterSetter.ts)、[筛选操作](../../../clients/boss-resume-assistant/src/main/operations/bossFilter.ts)、[筛选代理与引用验证](../../../src/local_tools/proxy_tool.py)、[已完成的部分匹配修复](../../design/recruiting/resume-job-matching-design.md#页面条件按可匹配子集执行2026-10-15)。
 
 “匹配不到的条件跳过，继续其余条件与读取评分”已在 `50a0ba35` 修复，不重新登记为待开发。本节只记录原修复和当前视觉恢复项目未明确覆盖的边界；先复现，已被解决则从清单移除。
 

@@ -5,7 +5,7 @@ import copy
 from collections.abc import Mapping
 import shutil
 from loguru import logger
-from src.core.agent_engine import AgentEngine, Outcome
+from src.core.agent_engine import AgentEngine, AgentMode, Outcome
 from src.core.agent_events import make_event
 from src.tools.context import ExecutionContextFactory
 from .attachments import AttachmentAssembler
@@ -26,12 +26,13 @@ from .tools import ToolDispatcher
 
 class ModelAdapter:
     def __init__(self, gateway, defer_names=None, deferred_call_id=None, resource_directory=None,
-                 enable_thinking=None):
+                 enable_thinking=None, plugin_bindings=None):
         self.gateway = gateway
         self.defer_names, self.deferred_call_id = defer_names, deferred_call_id
         self.resource_directory = resource_directory
         # None 走 provider 默认（deepseek 默认开启思考）；False 显式关闭
         self.enable_thinking = enable_thinking
+        self.plugin_bindings = plugin_bindings
 
     @staticmethod
     def _message_has_image_references(message):
@@ -162,7 +163,12 @@ class ModelAdapter:
         return [*messages[:insertion], *additions, *messages[insertion:]] if additions else messages
 
     async def complete(self, state, call_id, tools):
+        from src.local_tools.plugin_tool import PLUGIN_BINDINGS
         from src.services.agent_runner.usage_context import execution_call
+        if self.plugin_bindings:
+            state.resources[PLUGIN_BINDINGS] = self.plugin_bindings
+        else:
+            state.resources.pop(PLUGIN_BINDINGS, None)
         messages = state.messages
         if self.resource_directory is not None and any(
                 self._message_has_image_references(message) for message in messages):
@@ -249,9 +255,12 @@ class RuntimeExecution:
         self.visibility = ProfileResolver(resources.subagent_registry, identity.tenant_id)
         from ..continuous import supported
         self.supports_sleep = getattr(self.control,'durable_owner',False) and supported(identity.source,identity.session_kind)
+        config = resources.subagent_config
         self.catalog = ToolCatalog(resources.mode, resources.tool_registry, resources._tool_controls,
             self.visibility, resources.skill_registry, supports_sleep=self.supports_sleep,
-            configured_tools=resources.subagent_config.get_allowed_tools() if resources.subagent_config else ())
+            configured_tools=config.get_allowed_tools() if config else (),
+            allow_local_runtime_tools=config is not None and config.tools.get('allow_local_runtime_tools') is True,
+            excluded_tools=config.get_excluded_tools() if config else ())
         self.skills = SkillSession(identity.tenant_id, resources.skill_registry, resources.memory)
         history_source = identity.source if identity.session_kind == "channel" else "chat"
         self.history = SessionHistory(resources.memory, history_source,
@@ -321,7 +330,8 @@ class RuntimeExecution:
             hint = request_data.get('wecom_task_device') if isinstance(request_data, Mapping) else None
             if hint:
                 provider_devices['wecom'] = str(hint)
-        await self.catalog.prime_local_tools(self.identity, provider_devices)
+        await self.catalog.prime_local_tools(self.identity, provider_devices,
+            include_runtime_plugins=getattr(root, 'durable_owner', False))
 
     async def run(self, text, user=None, attachments=None, request_context=None,
                   extra_system_prompt=None, continuation=None, defer_names=None,
@@ -353,6 +363,11 @@ class RuntimeExecution:
                 await self._prime_local_tools(request_context.request_data if request_context else None)
                 await asyncio.to_thread(self.skills._ensure_tenant_skills_loaded)
                 await self.visibility.prime()
+            from ..presentation import PLUGIN_TOOL_NAMES
+            plugin_names = self.catalog._plugin_tools | self.history.runtime_plugin_tool_names
+            if plugin_names:
+                self.state.resources[PLUGIN_TOOL_NAMES] = sorted(plugin_names.union(
+                    self.state.resources.get(PLUGIN_TOOL_NAMES, ())))
             if state is None and self.initial_followup_inputs:
                 self.state.followup_messages.extend(copy.deepcopy(self.initial_followup_inputs))
                 for message in self.initial_followup_inputs:
@@ -519,7 +534,8 @@ class RuntimeExecution:
             async for event in AgentEngine().run(self.state,
                 ModelAdapter(self.resources.llm, defer_names, deferred_call_id,
                              resource_directory=self.resources.resource_directory,
-                             enable_thinking=self.resources.enable_thinking), dispatcher,
+                             enable_thinking=self.resources.enable_thinking,
+                             plugin_bindings=self.catalog.runtime_plugin_bindings()), dispatcher,
                 self.control, self.observer):
                 if event["type"] == "execution_completed":
                     yield make_event("progress", data="✅ 任务完成，正在生成回复...")

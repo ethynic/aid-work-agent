@@ -74,7 +74,7 @@
               @remove="handleRemoveFile"
               @stop="abortStreaming"
               @resume="resumeResumableTask"
-              :disabled="isProcessing || isWaitingHuman || existingSessionLoading || !!existingSessionError"
+              :disabled="isProcessing || existingSessionLoading || !!existingSessionError"
               :is-processing="isProcessing"
               :files="currentFiles"
               :can-stop="canStop"
@@ -158,7 +158,6 @@ const {
   abortStreaming,
   sessionId: agentSessionId,
   inputHintState,
-  isWaitingHuman,
   runnerFeedback,
   durableTask,
   durableTaskBusy,
@@ -625,52 +624,59 @@ function handleQuickPrompt(message: string) {
   chatInputRef.value?.fillQuickPrompt(message)
 }
 
+const sending = ref(false)
 async function handleSend(content: string, executionMode?: 'continuous') {
+  if (sending.value) return
   if (existingSessionLoading.value || existingSessionError.value) return
 
-  // 如果有预生成的会话ID，直接使用它
-  let sid: string | null | undefined
-  if (pregeneratedSessionId.value) {
-    sid = pregeneratedSessionId.value
-    // 确保 agent 使用这个 sessionId
-    agentSessionId.value = sid
-    precacheNewSession(sid)
-  } else if (!currentSessionId.value) {
-    // 如果没有当前会话，自动创建一个（默认标题"新会话"，发送消息后更新标题）
-    const newSession = await createNewSession(undefined, subagentName.value)
-    if (newSession) {
-      // 新建会话本来就是空的，预先缓存空数组，避免切换时请求后端
-      precacheNewSession(newSession.session_id)
-      skipNextSwitch.value = true
-      selectSession(newSession.session_id)
-      agentSessionId.value = newSession.session_id
-      // 手动等待 switchSession 完成，避免 watcher 异步覆盖后续 sendMessage 的消息
-      await switchSession(newSession.session_id)
-      sid = newSession.session_id
+  sending.value = true
+  try {
+    // 如果有预生成的会话ID，直接使用它
+    let sid: string | null | undefined
+    if (pregeneratedSessionId.value) {
+      sid = pregeneratedSessionId.value
+      // 确保 agent 使用这个 sessionId
+      agentSessionId.value = sid
+      precacheNewSession(sid)
+    } else if (!currentSessionId.value) {
+      // 如果没有当前会话，自动创建一个（默认标题"新会话"，发送消息后更新标题）
+      const newSession = await createNewSession(undefined, subagentName.value)
+      if (newSession) {
+        // 新建会话本来就是空的，预先缓存空数组，避免切换时请求后端
+        precacheNewSession(newSession.session_id)
+        skipNextSwitch.value = true
+        selectSession(newSession.session_id)
+        agentSessionId.value = newSession.session_id
+        // 手动等待 switchSession 完成，避免 watcher 异步覆盖后续 sendMessage 的消息
+        await switchSession(newSession.session_id)
+        sid = newSession.session_id
+      }
+    } else {
+      sid = currentSessionId.value
     }
-  } else {
-    sid = currentSessionId.value
-  }
 
-  if (!sid) {
-    chatInputRef.value?.restoreDraft(content, executionMode === 'continuous')
-    return
-  }
-
-  // 如果是当前会话的首条用户消息（标题还是默认的"新会话"），自动用前10个字更新标题
-  // 注意：预生成的会话ID还没有对应的 DB 记录，所以跳过这一步
-  if (!pregeneratedSessionId.value) {
-    const session = sessions.value.find(s => s.session_id === sid)
-    if (session && (!session.title || session.title === '新会话')) {
-      const title = content.slice(0, 10).trim() || '新会话'
-      await renameSession(sid, title)
+    if (!sid) {
+      chatInputRef.value?.restoreDraft(content, executionMode === 'continuous')
+      return
     }
-  }
 
-  const disposition = await sendMessage(content, subagentName.value, sid, instanceId.value,
-    undefined, undefined, executionMode)
-  if (disposition?.restoreInput && disposition.canRestore() && currentSessionId.value === sid) {
-    chatInputRef.value?.restoreDraft(content, executionMode === 'continuous')
+    // 如果是当前会话的首条用户消息（标题还是默认的"新会话"），自动用前10个字更新标题
+    // 注意：预生成的会话ID还没有对应的 DB 记录，所以跳过这一步
+    if (!pregeneratedSessionId.value) {
+      const session = sessions.value.find(s => s.session_id === sid)
+      if (session && (!session.title || session.title === '新会话')) {
+        const title = content.slice(0, 10).trim() || '新会话'
+        await renameSession(sid, title)
+      }
+    }
+
+    const disposition = await sendMessage(content, subagentName.value, sid, instanceId.value,
+      undefined, undefined, executionMode)
+    if (disposition?.restoreInput && disposition.canRestore() && currentSessionId.value === sid) {
+      chatInputRef.value?.restoreDraft(content, executionMode === 'continuous')
+    }
+  } finally {
+    sending.value = false
   }
 }
 

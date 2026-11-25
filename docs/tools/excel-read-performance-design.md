@@ -1,6 +1,8 @@
 # Excel 读取性能与事件循环隔离修复
 
-关联：[开发计划](../plans/plan-excel-read-performance.md)、[故障分析](../incidents/wecom-kf-excel-read-runner-interrupted-20261015.md)。
+关联：[故障分析](../incidents/wecom-kf-excel-read-runner-interrupted-20261015.md)。
+
+开发完成记录（2026-11-24 补记；原开发计划已清理，Git 历史可查）：✅ 开发完成（2026-10-15）。正式库 240 份文档 metadata 补迁完成并校验一致（零冲突，重跑零变更，原数据已备份）；Excel 维度扫描与异步入口修复在 master 完成，92 项单元通过、4 项无 DB 集成实跑通过，完整宽表读取约 1 秒；独立测试 96 项通过、零跳过，CR 无 P0/P1/P2。遗留：计划完成时代码未提交部署。
 
 ## 现状与原因
 

@@ -209,7 +209,9 @@ services:
       dockerfile: Dockerfile
     image: aid-agent-api:latest
     restart: unless-stopped
-    container_name: ${HEAVY_TOOLS_CONTAINER:-aid-heavy-tools}
+    # container_name 刻意不设（2026-11-24 漂移裁决吸收 11-17 B1 决策，与 243 版
+    # 对齐）：HEAVY_TOOLS_REPLICAS>1 时固定名会重名冲突，服务发现走服务名 DNS
+    # （HEAVY_TOOLS_URL 默认 http://heavy-tools:8093 即服务名）。
     deploy:
       replicas: ${HEAVY_TOOLS_REPLICAS:-1}
     cpus: ${HEAVY_TOOLS_CPUS:-2}

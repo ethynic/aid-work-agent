@@ -9,7 +9,6 @@ from .persistence_limits import capped_checkpoint_dumps, capped_snapshot_dumps
 from .repository import decoded
 from .control_projection import merge_control_projection
 from .event_repository import EventRepository
-from .application_public_projection import sync_public_display, project_public_snapshot
 
 
 def _preserve_server_checkpoint(row, checkpoint):
@@ -147,7 +146,6 @@ class ExecutionRepository:
                 revision=revision+1,view_revision=view_revision+1,updated_at=CURRENT_TIMESTAMP
                 WHERE runner_id=%s RETURNING *""", (capped_checkpoint_dumps(checkpoint), worker_id, lease_seconds, row["runner_id"]))
             row = decoded(cursor.fetchone())
-            row = sync_public_display(cursor,row,advance_view=False)
             row = EventRepository.notify_in_tx(cursor,previous,after=row)
             row["cancel_only"] = cancel_only
             conn.commit()
@@ -234,7 +232,6 @@ class ExecutionRepository:
                 self._source_dispatch(cursor,row,source_prepared)
             checkpoint = _preserve_server_checkpoint(row, checkpoint)
             snapshot = merge_control_projection(snapshot,row.get('public_snapshot'))
-            snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,snapshot=snapshot)
             cursor.execute("""UPDATE agent_runners SET checkpoint=%s::jsonb,
                 public_snapshot=COALESCE(%s::jsonb,public_snapshot),
                 revision=revision+1,
@@ -243,7 +240,6 @@ class ExecutionRepository:
                  capped_snapshot_dumps(snapshot) if snapshot is not None else None,
                  attempt.runner_id))
             result = decoded(cursor.fetchone())
-            result = sync_public_display(cursor,result,advance_view=False)
             result = EventRepository.notify_in_tx(cursor,row,after=result)
             if physical_dispatch:
                 result=self._final_dispatch(cursor,attempt,source_prepared)
@@ -276,7 +272,6 @@ class ExecutionRepository:
                 view_revision=view_revision+1,updated_at=clock_timestamp() WHERE runner_id=%s RETURNING *""",
                 (capped_checkpoint_dumps(checkpoint),capped_snapshot_dumps(snapshot),attempt.runner_id))
             result = decoded(cursor.fetchone())
-            result = sync_public_display(cursor,result,advance_view=False)
             result = EventRepository.notify_in_tx(cursor,row,after=result)
             conn.commit()
             return result
@@ -313,14 +308,14 @@ class ExecutionRepository:
                 snapshot={**(snapshot or {}),'waiting':copy.deepcopy(root.get('waiting')),
                     'business_iterations':(root.get('resources') or {}).get('business_iterations',root.get('iteration',0))}
             snapshot = merge_control_projection(snapshot,row.get('public_snapshot'))
-            snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,snapshot=snapshot,status=status)
+            if snapshot is None:
+                snapshot = row.get('public_snapshot') or {}
             lock_runner(cursor,attempt.runner_id,attempt)
             cursor.execute("""UPDATE agent_runners SET status=%s,checkpoint=%s::jsonb,public_snapshot=%s::jsonb,
                 worker_id=NULL,lease_until=NULL,revision=revision+1,view_revision=view_revision+1,
                 wake_at=%s,updated_at=CURRENT_TIMESTAMP WHERE runner_id=%s RETURNING *""", (status,
                 capped_checkpoint_dumps(checkpoint), capped_snapshot_dumps(snapshot), wake_at, attempt.runner_id))
             result = decoded(cursor.fetchone())
-            result = sync_public_display(cursor,result,advance_view=False)
             result = EventRepository.notify_in_tx(cursor,row,after=result)
             if result['status'] == 'waiting':
                 # 提问等待通知（Phase 2，设计 §5.6）：chat/web 用户自有 runner
@@ -353,7 +348,8 @@ class ExecutionRepository:
             if row['revision']!=revision: raise LeaseLost('CHECKPOINT_REVISION_CHANGED')
             checkpoint = {**_preserve_server_checkpoint(row, checkpoint), "pending_finalization": result}
             snapshot = merge_control_projection(snapshot,row.get('public_snapshot'))
-            snapshot = project_public_snapshot(cursor,row,checkpoint=checkpoint,snapshot=snapshot,status='finalizing')
+            if snapshot is None:
+                snapshot = row.get('public_snapshot') or {}
             previous = (row.get('checkpoint') or {}).get('pending_finalization')
             if previous is not None:
                 if previous != result:
@@ -371,7 +367,6 @@ class ExecutionRepository:
                 (capped_checkpoint_dumps(checkpoint),
                  capped_snapshot_dumps(snapshot), attempt.runner_id))
             result = decoded(cursor.fetchone())
-            result = sync_public_display(cursor,result,advance_view=False)
             result = EventRepository.notify_in_tx(cursor,row,after=result)
             conn.commit()
             return result
@@ -390,7 +385,6 @@ class ExecutionRepository:
             interrupted_rows = [decoded(row) for row in cursor.fetchall()]
             interrupted = []
             for row in interrupted_rows:
-                row = sync_public_display(cursor,row,advance_view=False)
                 row = EventRepository.notify_in_tx(cursor,previous[row['runner_id']],after=row)
                 interrupted.append(row['runner_id'])
             # Finalizing is safe to retry without reentering the Engine; the old
@@ -414,7 +408,6 @@ class ExecutionRepository:
                 public_snapshot=%s::jsonb,revision=revision+1,view_revision=view_revision+1,updated_at=clock_timestamp()
                 WHERE runner_id=%s RETURNING *""", (capped_snapshot_dumps(snapshot),attempt.runner_id))
             row = decoded(cursor.fetchone())
-            row = sync_public_display(cursor,row,advance_view=False)
             row = EventRepository.notify_in_tx(cursor,previous,after=row)
             conn.commit()
             return row

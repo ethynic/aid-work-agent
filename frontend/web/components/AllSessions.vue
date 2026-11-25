@@ -101,7 +101,8 @@
                           </button>
                           <button
                             @click.stop="handleDeleteSession(session.session_id)"
-                            class="p-1 text-gray-400 hover:text-danger-500 hover:bg-danger-50 rounded transition-colors"
+                            :disabled="deletingSession"
+                            class="p-1 text-gray-400 hover:text-danger-500 hover:bg-danger-50 rounded transition-colors disabled:opacity-50"
                             title="删除"
                           >
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -159,7 +160,8 @@
           </button>
           <button
             @click="confirmRename"
-            class="px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-colors"
+            :disabled="renamingSession"
+            class="px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-colors disabled:opacity-50"
           >
             确定
           </button>
@@ -316,7 +318,8 @@
           </button>
           <button
             @click="confirmRename"
-            class="px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-colors"
+            :disabled="renamingSession"
+            class="px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-colors disabled:opacity-50"
           >
             确定
           </button>
@@ -518,13 +521,20 @@ function handleSelectSession(sessionId: string) {
 }
 
 // 删除会话
+const deletingSession = ref(false)
 async function handleDeleteSession(sessionId: string) {
+  if (deletingSession.value) return
   if (confirm('确定要删除这个会话吗？')) {
-    const success = await removeSession(sessionId)
-    // 只有删除成功时才刷新列表，确保数据最新
-    // 404 等情况已经在 removeSession 内部处理（从本地列表移除）
-    if (success) {
-      await loadSessions(currentPage.value, true)
+    deletingSession.value = true
+    try {
+      const success = await removeSession(sessionId)
+      // 只有删除成功时才刷新列表，确保数据最新
+      // 404 等情况已经在 removeSession 内部处理（从本地列表移除）
+      if (success) {
+        await loadSessions(currentPage.value, true)
+      }
+    } finally {
+      deletingSession.value = false
     }
   }
 }
@@ -537,12 +547,19 @@ function handleRenameSession(session: { session_id: string; title: string }) {
 }
 
 // 确认重命名
+const renamingSession = ref(false)
 async function confirmRename() {
+  if (renamingSession.value) return
   if (renamingSessionId.value && renameInput.value.trim()) {
-    await renameSession(renamingSessionId.value, renameInput.value.trim())
-    showRenameModal.value = false
-    renamingSessionId.value = null
-    renameInput.value = ''
+    renamingSession.value = true
+    try {
+      await renameSession(renamingSessionId.value, renameInput.value.trim())
+      showRenameModal.value = false
+      renamingSessionId.value = null
+      renameInput.value = ''
+    } finally {
+      renamingSession.value = false
+    }
   }
 }
 

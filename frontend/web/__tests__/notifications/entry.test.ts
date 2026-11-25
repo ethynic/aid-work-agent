@@ -22,6 +22,7 @@ async function entry(url: string) {
     { path: '/portal/notification-session', component: { template: '<div>global history</div>' } },
     { path: '/t/:tenant/chat/:agent?', component: { template: '<div>chat</div>' } },
     { path: '/t/:tenant/tasks/:task_id', component: { template: '<div>task view</div>' } },
+    { path: '/t/:tenant/weixin-agent', component: { template: '<div>Weixin batch</div>' } },
   ] })
   await router.push(url); await router.isReady()
   const wrapper = mount(NotificationEntry, { global: { plugins: [router] } })
@@ -58,6 +59,16 @@ describe('notification click entry', () => {
     expect(router.currentRoute.value.path).toBe('/notification')
     expect(wrapper.text()).toContain('租户与当前账号不匹配')
     expect(wrapper.text()).not.toContain('secret-session')
+  })
+  it('takes a scoped Weixin result notification to the exact saved batch', async () => {
+    localStorage.setItem('saas_token_tenant-1', 'fake-test-token')
+    request.mockResolvedValue({ event_type: 'task.completed', resource: {
+      type: 'weixin_summary_batch', tenant_id: 'tenant-1', batch_id: '1859fed0-a324-413b-962c-7a8f55cd808d',
+    } })
+    const { router, wrapper } = await entry('/notification?ref=message-1&tenant=tenant-1')
+    expect(router.currentRoute.value.path).toBe('/t/tenant-1/weixin-agent')
+    expect(router.currentRoute.value.query).toEqual({ tab: 'history', batch: '1859fed0-a324-413b-962c-7a8f55cd808d' })
+    wrapper.unmount()
   })
   it('restores a global notification through the dedicated read-only resource route', async () => {
     localStorage.setItem('portal_token', 'fake-global-token')

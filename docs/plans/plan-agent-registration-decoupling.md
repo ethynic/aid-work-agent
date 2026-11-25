@@ -355,7 +355,6 @@ Agent 边界解析优先级为“构造/调用显式可信值 → SaaS middlewar
 | 工具 | 改造 |
 |------|------|
 | email_process | 显式 `user_email` 测试构造参数优先；生产只读 context user_id；同阶段删除身份 setter/fallback |
-| browser_automation | Remote/LOCAL 边界先把 trusted args 转为 context；生产只读 context；同阶段删除实例身份字段 |
 | 三个 knowledge search | 生产只读 context tenant_id；同阶段删除身份 setter/fallback |
 | cp | 下载目录和成果登记读取同一 context 快照 |
 | write | 字段当前未消费，直接删除 setter/字段及 Agent 注入，不人为激活 |

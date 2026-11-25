@@ -65,6 +65,7 @@
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import { generateUuid } from '@/utils/uuid'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseCard from '@/components/ui/BaseCard.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
@@ -105,7 +106,7 @@ async function mutate(action: (signal: AbortSignal) => Promise<void>) {
   finally { if (alive && mutationController === actionController) { busy.value = false; schedule() } }
 }
 function save() { if (!task.value || !editor.value) return; let spec; try { spec = editor.value.getSpec() } catch(e) { error.value = errorMessage(e); return } const id = task.value.id, version = task.value.version; void mutate(async signal => { await sessionTasksApi.save(id, version, spec, signal) }) }
-function publish() { if (!task.value || !capabilities.value.publish_enabled || !reviewing.value) return; const id = task.value.id, version = task.value.version; void mutate(async signal => { if (!publishAttempt || publishAttempt.id !== id || publishAttempt.version !== version) { const result = await sessionTasksApi.confirm(id, version, signal); if (signal.aborted) return; publishAttempt = { id, version, confirmation: result.confirmation_id, key: crypto.randomUUID() } } await sessionTasksApi.publish(id, version, publishAttempt.confirmation, publishAttempt.key, signal) }) }
+function publish() { if (!task.value || !capabilities.value.publish_enabled || !reviewing.value) return; const id = task.value.id, version = task.value.version; void mutate(async signal => { if (!publishAttempt || publishAttempt.id !== id || publishAttempt.version !== version) { const result = await sessionTasksApi.confirm(id, version, signal); if (signal.aborted) return; publishAttempt = { id, version, confirmation: result.confirmation_id, key: generateUuid() } } await sessionTasksApi.publish(id, version, publishAttempt.confirmation, publishAttempt.key, signal) }) }
 function openResume() { resumeMode.value = ''; controlAction.value = 'resume' }
 function control() { if (!task.value || !capabilities.value.publish_enabled || !controlAction.value || (controlAction.value === 'resume' && (!resumeMode.value || task.value.input_version === undefined))) return; const { id, version, input_version } = task.value, action = controlAction.value; void mutate(async signal => { await sessionTasksApi.control(id, version, action, input_version, signal) }) }
 watch([reviewing, controlAction], () => { if (reviewing.value || controlAction.value) { clearTimeout(timer); controller?.abort(); generation++; loading.value = false } else schedule() })

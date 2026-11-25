@@ -166,6 +166,8 @@ C 端流程：
 2. `GET /runners/{runner_id}/events`：SSE 透传 Runner events，前端 token 级渲染。
 3. **终态落库（代理层职责）**：事件流出现 `completed` 时，读 Runner `/v1/runners/{runner_id}/channel-result` 的 output 与 public snapshot 的 `downloadableFiles`/`images` 投影（口径同 `runner_agent.py:222-232`），assistant 消息落 `channel_messages`。终态回复按会话与 `runner_id` 去重。用户消息与直接回复按会话、角色和 `client_request_id` 去重，同一次请求可保留两条消息。唯一索引仅匹配官网客服会话前缀，其他渠道继续使用各自的落库规则。SSE 断开后，下次拉取 `/sessions/{sid}/messages` 前触发补写检查。
 4. 提问等待（clarification）：以渠道文本化口径渲染（沿用 `ask_render` 的 single/segments 结构，web_c 归入 single 渠道组），用户以普通文本回复 -> 下一轮 `/chat` 走既有 reply control 路径（`submit()` 已含）。结构化表单交互列 Phase 2+ 升级项。
+   - **反问落库（2026-11-19 补）**：`waiting` 非终态，SSE 不关闭、终态落库覆盖不到中途 ask_user；代理层在 `/chat` 返回 waiting、`GET /runners/{runner_id}` 轮询命中 waiting、`/sessions/{sid}/messages` 拉取前补写检查三处，把渠道文本化反问按 `kind=clarification` 落 `channel_messages`（幂等键 `clarify_{wait_id}`，复用 `uq_web_c_messages_client_request` 唯一部分索引），保证接待页与历史可见（含访客反问后关页场景）。
+   - **C 端停车交互（2026-11-19 补）**：前端 `WebCChat.vue` 快照出现 `waiting_text` 时主动结束本轮观察（abort SSE）、反问作为 assistant 消息入列并恢复输入框——不主动断开会因流不关闭导致输入框永久禁用；用户回复走新一轮 `/chat` 自动应答等待中的澄清。
 5. 同会话并发提交：沿用 `submit()` 的既有语义（取消未完成 runner 后受理新消息）；前端按钮单飞防抖。
 
 多 worker 兼容：落库走 DB、限流走 Redis、runner 状态读 Runner 服务，进程内零跨请求状态（符合 Gunicorn 多 worker 规范）。
@@ -183,7 +185,7 @@ C 端流程：
 
 - 路由：`/c/:tenant_id/:config_id`（公开路由，不套 PortalLayout/AppHeader 登录体系）；`?embed=1` 为 iframe 紧凑模式（隐藏页头，深浅色跟随宿主参数可选）。SPA fallback 已由 nginx `try_files` 覆盖，无需新增下载限速。
 - 建议形态：**按钮新开标签为推荐集成形态**（匿名身份持久性最好），iframe 同 URL + `?embed=1` 支持；配置页给出两种集成代码片段。
-- UI：单会话对话视图为主（消息流 + 输入框 + 停止按钮 + 流式光标），greeting 开场卡；历史会话入口按 `identity_mode` 决定是否展示（anon 模式仍可看本浏览器历史）；附件双向支持：用户上传（图片粘贴/选择 + 文件选择，走 §4.6）与 AI 产出可下载文件（复用 `ImageRef`/downloadableFiles 渲染与 §4.6 代理下载）。
+- UI：单会话对话视图为主（消息流 + 输入框 + 停止按钮 + 流式光标），greeting 开场卡；历史会话入口按 `identity_mode` 决定是否展示（2026-11-19 起仅签名链接模式开放，anon/uid 在 bootstrap 强制 False，渠道配置弹框同步禁用置灰）；附件双向支持：用户上传（图片粘贴/选择 + 文件选择，走 §4.6）与 AI 产出可下载文件（复用 `ImageRef`/downloadableFiles 渲染与 §4.6 代理下载）。
 - 组件独立于 B 端聊天组件（消息结构不同：channel_messages + 渠道文本化提问），避免耦合 `useAgent` 的 B 端 SSE 契约；复用 `marked` 渲染、`ImageGallery`、`DownloadFileCard` 等原子组件。
 
 ### 4.6 附件与图片上传（Phase 1 纳入，裁决 2026-11-16）
@@ -205,6 +207,9 @@ C 端流程：
 复用 pre-sales 留资链路，web_c 无专用改动：
 
 - 写入路径不变：绑定子智能体在 web_c 对话中按技能提示词触发 `record_lead_capture` 工具（`src/tools/lead_capture/record_lead_capture.py`）-> `LeadCaptureDB.create` 落 `bs_lead_capture_leads`；身份从 `ToolExecutionContext` 取（tenant/session/user），工具无需感知渠道。
+- Runner 执行上下文注入（2026-11-20 修复）：`channel_runtime_scope`（`src/services/agent_runner/channel_context.py`）对 `source='web_c'` 增加 web_c 分支，经 `web_c_binding` 校验渠道配置行（存在 + enabled + 渠道级 `subagent_type` 绑定与 `profile_id` 一致）后设置 kf context，使留资工具的 `get_kf_context()` 渠道闸门可达。字段按 web_c 语义降维：`open_kfid=None`、`adapter=None`、`kf_config_id=渠道配置行 id`（通知规则 kf_config 层匹配）；wecom_kf 分支同批补齐了此前缺失的 `kf_config_id`。`get_channel_user_info` 按有无 `adapter` 区分：web_c 回退 users 表读取客户信息；`transfer_to_human` 在无 adapter 时返回明确的「渠道未提供人工客服」拒绝。
+- 留资归属员工（2026-11-20 方案 2）：渠道配置新增 `lead_assignee_user_id`（ChannelConfig web_c 面板「留资归属员工」下拉，保存时校验本租户 + active 用户）；Runner 注入时映射为 `kf_config.tenant_user_id` -> `record_lead_capture` 的 `assigned_to` / `assignee_name` / `assignee_phone` 与通知规则「线索归属员工」（`kf_assignee`）接收人全链路复用。未配置（缺省）时 `kf_config={}`、`assigned_to` 为空，`kf_assignee` 模式规则零接收人（与修复前行为一致）。
+- 通知规则账号层支持官网渠道（2026-11-20 方案 1）：web_c 无客服账号维度，渠道配置行即语义终点 -> `NotificationRepository._validate_rule_kf_configs` 合法值集纳入 web_c 渠道 `config_id`（匹配端零改动：事件 `kf_config_id` 本就是 web_c config_id）；前端账号层下拉在微信客服账号后追加官网渠道条目（label 标注「官网渠道」），渠道层规则本就渠道无关、直接覆盖 web_c 留资。
 - web_c 口径：`channel_chat_id=None`（该列是 wecom_kf open_kfid 语义）、`kf_account_name='官网客服'`（名称快照）、`session_id=当前 web_c session_id`（表已支持，web_c 线索靠 session_id 关联渠道会话识别，零 DDL）。
 - C 端聊天页无专门留资 UI，联系方式收集走子智能体对话流程（含文本化提问）；AI 产出可下载文件（如报价单）经 §4.6 代理下载交付。
 - Phase 2 接待页留资 Tab 见 §5.2。
@@ -238,7 +243,7 @@ C 端流程：
 ### 5.2 前端（`WebCService.vue`）
 
 - 布局：顶部 Tab 切换（对齐 `ExternalCustomerService.vue` 结构）：`对话记录` / `统计` / `留资线索`；`AppHeader` 标题「官网接待客户」。
-- Tab1 对话记录：左右两栏（客户列表 w-96 + 会话查看）；客户列表行 = 头像（匿名用默认图）+ 名称（签名 name / `官网访客xxxx`）+ `uid: ext_xxx/anon_xxx` 徽标 + 会话日期区间；筛选 = 搜索框 + 绑定子智能体下拉 + 日期段预设；分页（遵循 [list-page-convention](../../.claude/rules/list-page-convention.md)）。消息区只读消息流（用户/AI 消息、用户上传与 AI 产出附件下载卡、图片画廊）；无转人工标记、撤回徽章、servicer 消息等 wecom_kf 特例。
+- Tab1 对话记录：左右两栏（客户列表 w-96 + 会话查看）；客户列表行 = **用户 × 会话**（每条渠道会话一行，2026-11-19 裁决：uid 模式每次进入即新会话，按用户折叠会让历史问答看似消失）= 头像（匿名用默认图）+ 名称（签名 name / `官网访客xxxx`）+ `uid: ext_xxx/anon_xxx` 徽标 + 该会话起止时间（精确到分钟）；行带 `session_id`，点击直接展示该会话，右侧会话下拉仍可切该用户其他会话（`list_external_users` `group_by_session=True`）；筛选 = 搜索框 + 渠道下拉；分页（遵循 [list-page-convention](../../.claude/rules/list-page-convention.md)）。消息区只读消息流（用户/AI 消息、用户上传与 AI 产出附件下载卡、图片画廊）；无转人工标记、撤回徽章、servicer 消息等 wecom_kf 特例。
 - Tab2 统计：日期段预设 + 统计卡片（会话数、消息数、活跃客户数）+ 按绑定子智能体分组表。
 - Tab3 留资线索：复用 wecom_kf 留资口径——统计卡片（总留资数 + 按联系方式类型）+ 线索列表（序号/客户姓名/联系方式/联系方式类型/意向度/阶段/留资时间/操作）+ 线索详情与阶段编辑弹框（简化版，无客服账号/归属员工/servicer 维度）；web_c 线索过滤 = 后端 join `channel_sessions`（`session_id` + `channel_type='web_c'`），复用 `/lead-stats`、`/leads`、PATCH `/leads/{lead_id}` 端点加渠道过滤参数，零 DDL。
 - 路由 `/t/:tenant_id/web-c-customers`（`agentRoutes.ts` 注册，模式同 `tenant-web-sessions`）；菜单入口 `MenuSidebar.vue`「官网接待客户」，管理员可见（web-sessions 模式 :708-723）。

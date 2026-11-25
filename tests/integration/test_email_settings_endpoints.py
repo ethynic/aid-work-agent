@@ -5,6 +5,7 @@ Email Settings API 端到端测试
 
 import pytest
 import uuid
+from datetime import datetime
 
 
 class TestEmailSettingsCRUD:
@@ -123,6 +124,8 @@ class TestEmailSettingsCRUD:
         assert config["smtp_password"] != "mysecretpassword"
         # 非敏感信息保持不变
         assert config["email_address"] == "test@example.com"
+        # 连接时间：数据库层返回 datetime，查询接口才能调用 isoformat()
+        assert isinstance(config["updated_at"], datetime)
 
     def test_delete_email_config(self, test_user_for_email):
         """测试删除邮箱配置"""

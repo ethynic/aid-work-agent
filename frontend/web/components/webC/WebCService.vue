@@ -62,9 +62,9 @@
           <div v-else>
             <div
               v-for="user in userList"
-              :key="user.user_id"
+              :key="user.session_id || user.user_id"
               class="p-4 border-b border-default cursor-pointer transition-all"
-              :class="selectedUserId === user.user_id ? 'bg-primary-50 border-l-4 border-l-primary-500' : 'hover:bg-surface-hover'"
+              :class="selectedRowKey === rowKey(user) ? 'bg-primary-50 border-l-4 border-l-primary-500' : 'hover:bg-surface-hover'"
               @click="selectUser(user)"
             >
               <div class="flex items-center gap-3">
@@ -79,10 +79,10 @@
                     <span
                       v-if="user.channel_user_id"
                       class="text-xs px-2 py-0.5 rounded-full shrink-0"
-                      :class="String(user.channel_user_id).startsWith('ext_') ? 'bg-primary-50 text-primary-600' : 'bg-gray-100 text-muted'"
+                      :class="isIdentifiedWebCUser(user.channel_user_id) ? 'bg-primary-50 text-primary-600' : 'bg-gray-100 text-muted'"
                       :title="user.channel_user_id"
                     >
-                      {{ String(user.channel_user_id).startsWith('ext_') ? '官网用户' : '匿名访客' }}
+                      {{ isIdentifiedWebCUser(user.channel_user_id) ? '官网用户' : '匿名访客' }}
                     </span>
                   </div>
                   <div class="text-xs text-muted mt-1">{{ formatSessionDateRange(user) }}</div>
@@ -177,10 +177,12 @@
                 </div>
                 <!-- AI 产出可下载文件 -->
                 <div v-if="msg.role === 'assistant' && getDownloadableFiles(msg).length > 0" class="mt-3 flex flex-wrap gap-2">
+                  <!-- download-only：本页未挂载 AttachmentPreviewPanel，可预览类型点击会静默无响应 -->
                   <DownloadFileCard
                     v-for="file in getDownloadableFiles(msg)"
                     :key="file.file_id"
                     :file="file"
+                    download-only
                   />
                 </div>
               </div>
@@ -375,7 +377,7 @@
             <BaseSelect v-model="leadDetailStage" size="sm" class="w-32">
               <option v-for="(s, key) in leadStageOptions" :key="key" :value="key">{{ s.label }}</option>
             </BaseSelect>
-            <BaseButton size="sm" @click="saveLeadStage">保存</BaseButton>
+            <BaseButton size="sm" :disabled="leadStageSaving" @click="saveLeadStage">保存</BaseButton>
           </div>
         </div>
       </div>
@@ -414,6 +416,12 @@ const messageContainerRef = ref<HTMLElement | null>(null)
 const defaultAvatar = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2JkYmRiZCI+PHBhdGggZD0iTTEyIDEyYTIyIDIyIDAgMSAwIDAtNCAyIDIgMCAwIDAgMCA0em0tNyA3YTcgNyAwIDAgMSAxNCAwIi8+PC9zdmc+'
 
 const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)
+
+/** 实名身份（ext_ 签名链接 / uid_ userid 链接），anon_ 为匿名访客（与后端 _resolve_identity 三种前缀对齐） */
+function isIdentifiedWebCUser(channelUserId: unknown): boolean {
+  const uid = String(channelUserId || '')
+  return uid.startsWith('ext_') || uid.startsWith('uid_')
+}
 const effectiveUser = computed(() => {
   return tenantAdmin.value ? {
     user_id: tenantAdmin.value.user_id,
@@ -500,12 +508,32 @@ function handleSearch() {
 
 watch(userPage, () => void loadUsers())
 
+/** 行唯一键：会话粒度行（带 session_id）同一用户多行各自可选中 */
+function rowKey(user: WebCCustomer): string {
+  return `${user.user_id}:${user.session_id || ''}`
+}
+const selectedRowKey = computed(() => (selectedUser.value ? rowKey(selectedUser.value) : ''))
+
 async function selectUser(user: WebCCustomer) {
-  if (selectedUserId.value === user.user_id) return
+  if (selectedRowKey.value === rowKey(user)) return
   selectedUser.value = user
   messageList.value = []
   messageTotal.value = 0
   messagePage.value = 1
+  if (user.session_id) {
+    // 行即会话：直接展示该会话；仍拉取该用户会话列表供下拉切换其他会话
+    selectedSessionId.value = user.session_id
+    try {
+      const result = await listWebCCustomerSessions({ user_id: user.user_id, config_id: channelFilter.value || undefined, page: 1, page_size: 50 })
+      sessionList.value = result.sessions || []
+    } catch (e) {
+      console.error('前端日志：官网客户会话列表加载失败', e)
+      sessionList.value = []
+    }
+    await loadSessionMessages()
+    return
+  }
+  // 兜底：无 session_id 的行（理论不出现），沿用按用户取最新会话
   try {
     const result = await listWebCCustomerSessions({ user_id: user.user_id, config_id: channelFilter.value || undefined, page: 1, page_size: 50 })
     sessionList.value = result.sessions || []
@@ -607,6 +635,11 @@ function toAttachmentCard(att: Record<string, unknown>) {
 
 function formatSessionDateRange(user: WebCCustomer): string {
   if (!user.first_session_at && !user.last_session_at) return '暂无会话'
+  if (user.session_id) {
+    // 会话粒度行：显示该会话起止时间（含时分，精确到分钟）
+    if (user.first_session_at === user.last_session_at) return formatTime(user.first_session_at)
+    return `${formatTime(user.first_session_at)} ~ ${formatTime(user.last_session_at)}`
+  }
   if (user.first_session_at === user.last_session_at) return formatDate(user.first_session_at)
   return `${formatDate(user.first_session_at)} ~ ${formatDate(user.last_session_at)}`
 }
@@ -799,8 +832,12 @@ async function openLeadDetail(row: any) {
   }
 }
 
+// 防重复提交：阶段保存为变更类 API，进行中禁止重复触发
+const leadStageSaving = ref(false)
+
 async function saveLeadStage() {
-  if (!leadDetail.value) return
+  if (!leadDetail.value || leadStageSaving.value) return
+  leadStageSaving.value = true
   try {
     const result = await updateWebCLeadStage(String((leadDetail.value as Record<string, unknown>).lead_id), leadDetailStage.value)
     leadDetail.value = result.lead as unknown as Record<string, unknown>
@@ -808,6 +845,8 @@ async function saveLeadStage() {
     await loadLeadStats()
   } catch (e) {
     console.error('前端日志：官网留资阶段更新失败', e)
+  } finally {
+    leadStageSaving.value = false
   }
 }
 

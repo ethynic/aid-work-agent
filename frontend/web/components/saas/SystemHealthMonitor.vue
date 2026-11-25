@@ -22,6 +22,12 @@
         {{ collectorBanner.text }}
       </div>
 
+      <!-- 告警扫描停滞横幅（runner-monitor 心跳缺失/超 3 分钟，告警链路风险） -->
+      <div v-if="runner?.monitor_stalled"
+        class="rounded-lg px-4 py-3 text-sm border bg-warning-50 border-warning-200 text-warning-800">
+        Runner 告警扫描已停滞{{ runner?.monitor_last_scan_at ? `（最近成功扫描 ${formatDateTimeWithSeconds(runner.monitor_last_scan_at)}）` : '' }}——超 30 分钟运行任务的告警可能不完整。
+      </div>
+
       <!-- AI 研判横幅 -->
       <div v-if="assessmentBanner"
         :class="['rounded-lg px-4 py-4 border', assessmentBanner.cls]">
@@ -96,10 +102,24 @@
               </span>
             </div>
             <div class="flex justify-between">
-              <span class="text-muted">活跃告警</span>
-              <span :class="levelCls(valueLevel('runner.active_alerts', runner?.active_alerts))" class="font-medium">
-                {{ runner?.active_alerts ?? '-' }}
+              <span class="text-muted">告警扫描</span>
+              <span :class="monitorStallLevel === 'normal' ? 'text-default font-medium' : 'text-warning-600 font-medium'"
+                title="agent-runner-monitor 每 60s 扫描超 30 分钟运行任务并落告警；超 3 分钟未成功扫描视为停滞，告警可能不完整">
+                {{ runner?.monitor_stalled ? '已停滞' : '正常' }}
+                <span v-if="runner?.monitor_last_scan_at" class="text-muted text-xs font-normal">
+                  {{ formatTs(runner.monitor_last_scan_at) }}
+                </span>
               </span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-muted">活跃告警</span>
+              <button type="button" class="flex items-center gap-1" title="查看告警列表" @click="scrollToAlerts">
+                <span :class="levelCls(valueLevel('runner.active_alerts', runner?.active_alerts))" class="font-medium">
+                  {{ runner?.active_alerts ?? '-' }}
+                </span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  class="w-3.5 h-3.5 text-muted"><path d="M12 5v14m0 0l-6-6m6 6l6-6" /></svg>
+              </button>
             </div>
           </div>
         </div>
@@ -187,7 +207,10 @@
             </div>
             <div class="flex justify-between">
               <span class="text-muted">任务耗时 P50 / P95</span>
-              <span class="text-default">{{ fmtMs(business?.duration_p50_ms) }} / {{ fmtMs(business?.duration_p95_ms) }}</span>
+              <span class="text-default">
+                {{ fmtMs(business?.duration_p50_ms) }} / {{ fmtMs(business?.duration_p95_ms) }}
+                <span v-if="(business?.duration_samples ?? 0) < 20" class="text-xs text-muted">（样本 {{ business?.duration_samples ?? 0 }}，不足以研判）</span>
+              </span>
             </div>
             <div class="flex justify-between">
               <span class="text-muted">错误日志（1 小时）</span>
@@ -324,6 +347,9 @@
           </div>
         </div>
       </div>
+
+      <!-- Runner 运行告警（原独立 Runner 告警页合并，2026-11-23；含运维配置折叠区） -->
+      <SystemHealthRunnerAlerts id="runner-alerts" />
     </div>
   </div>
 </template>
@@ -337,12 +363,16 @@
  * - 红黄高亮由前端硬阈值驱动（与后端 assessment.py THRESHOLDS 同源镜像，
  *   改阈值需两处同步）；AI 研判横幅只解释数据，不隐藏数据
  * - 数据量小（运行中/排队任务有限），全量渲染，不分页（设计 §6.2）
+ * - 2026-11-23 合并独立 Runner 告警页（/portal/runner-alerts 保留为重定向，
+ *   飞书告警详情链接依赖旧路径）：告警列表/详情/阈值/飞书目标见
+ *   SystemHealthRunnerAlerts 子组件，告警扫描心跳并入快照（collector.py）
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useToast } from 'vue-toastification'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseTable, { type TableColumn } from '@/components/ui/BaseTable.vue'
+import SystemHealthRunnerAlerts from '@/components/saas/SystemHealthRunnerAlerts.vue'
 import { useMobile } from '@/composables/useMobile'
 import { resolveEnvLabel } from '@/utils/envLabel'
 import { formatDateTimeWithSeconds } from '@/utils/date'
@@ -440,6 +470,10 @@ function valueLevel(key: string, value: number | null | undefined): HealthLevel 
 const runnerStallLevel = computed<HealthLevel>(() =>
   runner.value?.runner_stalled ? 'error' : 'normal')
 
+// 告警扫描停滞（runner-monitor 心跳缺失/超 3 分钟）：观察级，与后端 assessment 同级
+const monitorStallLevel = computed<HealthLevel>(() =>
+  runner.value?.monitor_stalled ? 'watch' : 'normal')
+
 const loadLevel = computed<HealthLevel>(() => {
   const load = system.value?.load_1
   const cpuCount = system.value?.cpu_count
@@ -499,6 +533,7 @@ const runnerGroupLevel = computed<HealthLevel>(() => {
     valueLevel('runner.oldest_queued_seconds', runner.value?.oldest_queued_seconds),
     valueLevel('runner.wait_p95_seconds', runner.value?.wait_p95_seconds),
     valueLevel('runner.active_alerts', runner.value?.active_alerts),
+    monitorStallLevel.value,
   ])
 })
 
@@ -621,7 +656,7 @@ const hasAnomaly = computed(() => {
   if (LEVEL_RANK[overallLevel.value] > 0) return true
   // 兜底：后端研判缺失或滞后时，按前端阈值判断
   if (middleware.value?.redis_available === false) return true
-  if (runnerStallLevel.value !== 'normal' || loadLevel.value !== 'normal'
+  if (runnerStallLevel.value !== 'normal' || monitorStallLevel.value !== 'normal' || loadLevel.value !== 'normal'
     || dbConnLevel.value !== 'normal' || keyPoolLevel.value !== 'normal'
     || netLoadLevel.value !== 'normal') return true
   return Object.entries(METRIC_META).some(([key, meta]) => {
@@ -633,6 +668,10 @@ const hasAnomaly = computed(() => {
 function collectAnomalyLines(): string[] {
   const lines: string[] = []
   if (runner.value?.runner_stalled) lines.push('- [错误] Runner 调度停摆（runner_stalled=true）')
+  if (runner.value?.monitor_stalled) {
+    lines.push(`- [观察] Runner 告警扫描停滞（runner-monitor 超 3 分钟未成功扫描`
+      + `${runner.value.monitor_last_scan_at ? `，最近扫描 ${runner.value.monitor_last_scan_at}` : ''}）`)
+  }
   if (middleware.value?.redis_available === false) lines.push('- [错误] Redis 不可用/降级（redis_available=false）')
   for (const [key, meta] of Object.entries(METRIC_META)) {
     const value = meta.get()
@@ -699,6 +738,10 @@ function copyAnomalyInfo() {
   })
 }
 
+function scrollToAlerts() {
+  document.getElementById('runner-alerts')?.scrollIntoView({ behavior: 'smooth' })
+}
+
 // ==================== 表格列定义 ====================
 
 const runningColumns: TableColumn[] = [
@@ -741,7 +784,7 @@ function fmtMs(value: number | null | undefined): string {
   return `${value}ms`
 }
 
-function formatTs(ts: string | undefined): string {
+function formatTs(ts: string | null | undefined): string {
   if (!ts) return '-'
   const d = new Date(ts)
   return isNaN(d.getTime()) ? ts : d.toLocaleTimeString('zh-CN', { hour12: false })

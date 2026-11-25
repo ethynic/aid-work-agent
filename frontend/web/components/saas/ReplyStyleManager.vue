@@ -298,6 +298,7 @@ function openViewVersion(v: ReplyStyleVersion) {
 }
 
 async function handleSave() {
+  if (saving.value) return
   const form = editorForm.value
   if (!form.style_id || !form.name || !form.content) {
     toast.error('请填写必填项')
@@ -354,8 +355,11 @@ async function openVersions(row: any) {
   }
 }
 
+const activating = ref(false)
 async function handleActivate(version: number) {
+  if (activating.value) return
   if (!confirm(`确定激活 v${version}？当前版本将被替换。`)) return
+  activating.value = true
   try {
     await activateVersion(versionsStyleId.value, version)
     toast.success('已激活')
@@ -365,6 +369,8 @@ async function handleActivate(version: number) {
     await loadStyles()
   } catch (e: any) {
     toast.error(e.message || '激活失败')
+  } finally {
+    activating.value = false
   }
 }
 

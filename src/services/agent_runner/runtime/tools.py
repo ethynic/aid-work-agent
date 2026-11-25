@@ -6,9 +6,7 @@ import json
 from pathlib import Path
 from src.core.agent_engine.contracts import CheckpointFailure, DispatchResult, ToolCall
 from src.core.agent_events import _extract_image_refs_from_tool_result, _normalize_image_placement, make_event
-from src.core.tool_suspension import ToolSuspension
 from src.tools.base import ExecutionTarget
-from .history_projection import waiting_messages
 
 
 def owns_plan_task(name):
@@ -26,8 +24,6 @@ class ToolDispatcher:
         self.verbose_config, self.verbose_state = verbose_config, verbose_state
         self.policy_iterations = set()
         self.child_recovery = child_recovery
-        from .browser_tools import BrowserToolAdapter
-        self.browser = BrowserToolAdapter(control,getattr(local,'state',None))
 
     def definitions(self):
         definitions = self.catalog._get_tools()
@@ -62,19 +58,23 @@ class ToolDispatcher:
             result = await self.child_recovery.recover(state,call)
             await self._finish_plan_task(state,call,result)
             return result
-        tool = self.registry.get_tool(call.name)
-        from src.tools.browser.automation_tool import BrowserAutomationTool
-        if type(tool) is BrowserAutomationTool and getattr(self.control,'durable_owner',False):
-            context=self.control_tools.context.derive(tool_call_id=call.id,agent_execution_id=state.execution_id)
-            result=await self.browser.recover(state,call,context)
-            await self._finish_plan_task(state,call,result)
-            return result
+        from src.local_tools.plugin_tool import PLUGIN_BINDINGS, PLUGIN_CALL_IDS, bound_plugin_tool, plugin_not_dispatched
+        plugin = bound_plugin_tool(state, call)
+        if (plugin is None and (call.id in state.resources.get(PLUGIN_CALL_IDS, ())
+                or call.name in state.resources.get(PLUGIN_BINDINGS, {}))
+                and not state.tools[call.id].invocation_id):
+            # Enqueue and its binding commit together. At this checkpoint there was no dispatch.
+            terminal = DispatchResult(plugin_not_dispatched(), success=False)
+            await self._finish_plan_task(state, call, terminal)
+            return terminal
+        tool = plugin or self.registry.get_tool(call.name)
         if tool and getattr(tool, 'execution_target', None) == ExecutionTarget.LOCAL_REQUIRED:
             context = self.control_tools.context.derive(tool_call_id=call.id, agent_execution_id=state.execution_id)
             terminal = None
             async for kind, payload in self.local._run_local_required_tool(call.name, call.arguments,
                     state.identity.tenant_id, state.identity.user_id, context=context, recover=True,
-                    cancel_check=lambda: self.control.command() == 'cancel'):
+                    cancel_check=lambda: self.control.command() == 'cancel',
+                    **({'recovery_tool': plugin} if plugin else {})):
                 if kind == 'verification':
                     terminal = DispatchResult(None, wait=payload)
                 elif kind == 'result':
@@ -197,6 +197,17 @@ class ToolDispatcher:
                     if isinstance(terminal.content,dict) else 'Tool execution failed')
 
     def before_tools(self, state):
+        if self.defer_names is None and getattr(self.control, 'durable_owner', False):
+            from src.local_tools.plugin_tool import PLUGIN_CALL_IDS, RuntimePluginTool
+            # Engine persists this with the dispatching tool fact before issuing any IO.
+            marked = state.resources.get(PLUGIN_CALL_IDS, ())
+            pending_plugins = [call.id for call in state.pending if call.id in marked
+                or (state.tools[call.id].phase == 'prepared'
+                    and isinstance(self.registry.get_tool(call.name), RuntimePluginTool))]
+            if pending_plugins:
+                state.resources[PLUGIN_CALL_IDS] = pending_plugins
+            elif marked:
+                state.resources.pop(PLUGIN_CALL_IDS, None)
         # disabled 配置在注入点直接拦截（对齐 prepare_turn_feedback 的
         # effective_enabled 门），直连 process_message_with_feedback 的调用
         # 不会绕过全局关闭开关
@@ -241,6 +252,19 @@ class ToolDispatcher:
                              toolArgs=call.arguments, toolCallId=call.id)
             yield DispatchResult(None, wait={"kind": "remote_tool", "tool_call_id": call.id})
             return
+        from src.local_tools.plugin_tool import PLUGIN_BINDINGS, RuntimePluginTool, plugin_not_dispatched
+        expected = state.resources.get(PLUGIN_BINDINGS, {}).get(call.name)
+        plugin = self.registry.get_tool(call.name)
+        is_plugin = isinstance(plugin, RuntimePluginTool)
+        if expected is not None or is_plugin:
+            if not is_plugin or plugin.manifest_binding != expected:
+                from src.local_tools.plugin_manifests import PLUGIN_CHANGED_CODE, PLUGIN_CHANGED_MESSAGE
+                failure = plugin_not_dispatched() if expected is None else {'success': False,
+                    'code': PLUGIN_CHANGED_CODE, 'effect': 'none', 'message': PLUGIN_CHANGED_MESSAGE}
+                terminal = DispatchResult(failure, success=False)
+                await self._finish_plan_task(state, call, terminal)
+                yield terminal
+                return
         runner_state = self._runner_state(state)
         if runner_state.resources.get('server_resolved_effects'):
             from ..server_recovery_reply import previously_resolved_effect
@@ -346,31 +370,9 @@ class ToolDispatcher:
                     if result is None:
                         raise RuntimeError("LOCAL_TOOL_MISSING_RESULT")
                 else:
-                    result = await self.browser.execute(tool,self.executor,
-                        execution_call,context)
+                    result = await self.executor.execute(execution_call.name, execution_call.arguments, context=context)
                 if isinstance(result, DispatchResult):
                     terminal = result
-                elif isinstance(result, ToolSuspension):
-                    from src.tools.browser.resume_store import ResumeStore
-                    store = ResumeStore()
-                    try:
-                        assistance = await store.get_assistance(result.tenant_id, result.assistance_id)
-                        if assistance is None or not await store.bind_agent(assistance,
-                            self.subagent_config.dir_name if self.subagent_config else None):
-                            raise RuntimeError("TOOL_SUSPEND_FAILED")
-                    except CheckpointFailure:
-                        raise
-                    except Exception as error:
-                        if getattr(self.control,'durable_owner',False):
-                            # Mandatory wait is already committed and its live
-                            # original runtime must retain the Runner claim.
-                            raise CheckpointFailure('TOOL_SUSPENSION_STORAGE_FAILED') from error
-                        raise
-                    yield make_event("tool_messages", messages=waiting_messages(state), suspended=True)
-                    yield result.event
-                    yield make_event("progress", data="等待你的操作；完成后系统会自动继续")
-                    terminal = DispatchResult(None, wait={"kind": "human_assistance",
-                        "assistance_id": result.assistance_id, "tool_call_id": call.id})
                 else:
                     success = result.get("success", True) if isinstance(result, dict) else True
                     images = _extract_image_refs_from_tool_result(result) if isinstance(result, dict) else []

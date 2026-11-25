@@ -64,6 +64,8 @@ class RunnerLocalLifecycle:
             execution_id=phase.execution_id, tool_call_id=phase.tool_call_id,
             branch=phase.branch, ordinal=phase.ordinal)
         request = fact.get('request') or {}
+        if request.get('plugin_manifest_digest') is not None:
+            reference['plugin_manifest_digest'] = request['plugin_manifest_digest']
         if (any(fact.get(key) != value for key, value in reference.items())
                 or not invocation or str(invocation.get('id')) != fact.get('invocation_id')):
             raise CheckpointFailure('LOCAL_INVOCATION_OWNER_VERIFICATION_REQUIRED')
@@ -119,14 +121,16 @@ class RunnerLocalLifecycle:
     async def bind_invocation(self, *, branch, ordinal, tool_name, device, arguments,
                               provider_key=None, deadline_at=None, authorization_epoch=None,
                               execution_lane='standard', recovery_deadline=None,
-                              automatic_provider=None, recovery_key=None):
+                              automatic_provider=None, recovery_key=None, declared_provider=None,
+                              plugin_manifest_digest=None):
         """New IO uses fresh permission; existing phase never picks a new device."""
         phase = self._phase(branch, ordinal)
         try:
             original = await self.saved_phase(branch=branch, ordinal=ordinal)
             if original is not None:
                 request = original['request']
-                if request['tool_name'] != tool_name or request['arguments'] != arguments or request['provider_key'] != provider_key:
+                if (request['tool_name'] != tool_name or request['arguments'] != arguments
+                        or request['provider_key'] != provider_key or request.get('plugin_manifest_digest') != plugin_manifest_digest):
                     raise CheckpointFailure('LOCAL_PHASE_INTENT_CHANGED')
                 return original['invocation']
             await self.control.authorize_dispatch(self.state.profile_id)
@@ -145,7 +149,10 @@ class RunnerLocalLifecycle:
                     **({'recovery_deadline': recovery_deadline, 'recovery_key': recovery_key}
                        if recovery_deadline is not None else {}),
                     **({'automatic_provider': automatic_provider} if automatic_provider else {}),
-                    device_policy=lambda current, now: device_ready_error(current, tool_name, now))
+                    **({'plugin_manifest_digest': plugin_manifest_digest} if plugin_manifest_digest is not None else {}),
+                    device_policy=lambda current, now: device_ready_error(
+                        current, tool_name, now, declared_provider=declared_provider,
+                        plugin_manifest_digest=plugin_manifest_digest))
                 self._accept(row)
             original = await self.saved_phase(branch=branch, ordinal=ordinal)
             return original['invocation']

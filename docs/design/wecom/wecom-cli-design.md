@@ -1,5 +1,7 @@
 # wecom-cli：第一方企业微信操作 CLI / MCP Provider 设计
 
+2026-11-23 P0 群标题焦点修复：点击已标定的聊天输入点后，在同一调用中限时等待原群标题编辑框退出，再单击已标定的群标题首字。等待标题位置出现唯一的编辑框后，向该编辑框显式发送 Ctrl+A 和 Ctrl+C。两个状态任一未在期限内达到，按原 UI_CHANGED 路径退出。单聊双击、剪贴板归属与标题全等核验沿用原规则。真机验证只复制「测试群」的标题，覆盖企微前台和被遮挡。[开发计划](../../plans/plan-wecom-scheduled-send.md#p01-cli-标题点击前重置焦点)
+
 2026-11-10 P0 标题点击前重置焦点：用户观察到群标题偶尔停在编辑状态，现有逻辑看到 `EditWnd` 后可能沿用该状态，标题选取或复制失败。单击群标题或双击单聊标题前，先用同一主窗口已标定的 `input_x/input_y` 单击一次输入框，使旧标题编辑状态退出；然后按原群聊单击、单聊双击流程选取标题并复制。前置点击只用于切换焦点。标题仍须按原规则核对，核对通过后才执行原发送流程的输入框点击、清理、粘贴及 Enter。点位或窗口核验失败、标题核对失败时，按原发送失败路径退出。异常编辑态能否稳定退出需用真机验证。本项作为[消息发送计划 P0 的 CLI 前置](../../plans/plan-wecom-scheduled-send.md#p01-cli-标题点击前重置焦点)。
 
 2026-11-09 W32 标定复用 Runtime 配对身份：agent2 创建代理任务时另一台已安装新版 Runtime＋WeCom CLI 的设备，doctor 成功后标定返回 `CONFIG_MISSING`；实际驱动在调用模型前要求额外 `AID_WECOM_SERVER_URL/TOKEN`，普通安装配对不会提供。新版 Runtime 从既有配对配置与设备凭据向受信 WeCom Provider 注入受信服务端地址和设备 token；CLI 调用服务端设备鉴权的企微标定专用 API，服务端按设备核定租户/用户，固定 GLM-5.3-Flash 与原坐标提示词，继续按原 ×10 规则计费，不接受客户端自报租户或任意模型。CLI 坐标 JSON、标题复制核对、缓存和发送结果核验不变。无需用户签发静态 ClientBinding 或配置域名；旧 Runtime 环境变量透传和 `/api/client/v1/llm/chat` 均保留供已交付旧包使用，新 CLI 不读取旧变量。独立 CLI 若未由 Runtime 提供配对上下文则明确失败，不读取 Runtime 磁盘凭据。共同契约 2.18 与 [W32 计划](../../plans/plan-wecom-cli-group-chat-experiment.md#w32-标定复用-runtime-配对身份2026-11-09)为实施依据。
@@ -83,7 +85,7 @@ W24 CR 回炉：搜索动作在任何 Ctrl+A/Delete 前，先 Ctrl+F，再用企
 | `wecom_send_file` | 任意扩展 ≤100MB，文件名去空白 ≥3 字符 | 写 |
 | `wecom_add_customer` | 按手机号检索并发添加邀请（confirm 显式 true；M12 网络查找直达路线） | 写 |
 
-`wecom_probe` 的登录态由窗口枚举判断；二维码截图仅供用户扫码。窗口信息无法证明二维码是否过期或账号是否受限，因此保留兼容字段 `qr_status_hint=unknown`，不再调用 OCR 推测细状态。变更见 [开发计划](../../plans/plan-wecom-cli-probe-remove-ocr.md)。
+`wecom_probe` 的登录态由窗口枚举判断；二维码截图仅供用户扫码。窗口信息无法证明二维码是否过期或账号是否受限，因此保留兼容字段 `qr_status_hint=unknown`，不再调用 OCR 推测细状态。开发完成记录（2026-11-06；原开发计划已清理，Git 历史可查）：构建及 24 项测试通过，独立验证无 P0/P1；遗留：真机登出扫码待复验。
 
 - 智能分发（M11a）：send/send-image/send-file 支持 `target_ref`/
   `target_name` 二选一；驱动返回 `navigate_required=true` 时 TS 层（`src/operations/

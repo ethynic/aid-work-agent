@@ -226,7 +226,8 @@ async def test_child_refresh_reuses_existing_domain_pin_without_rebinding_other_
     execution.identity = IDENTITY
     execution.catalog = SimpleNamespace(prime_local_tools=AsyncMock())
     await execution._prime_local_tools()
-    execution.catalog.prime_local_tools.assert_awaited_once_with(IDENTITY, {'wecom': 'original'})
+    execution.catalog.prime_local_tools.assert_awaited_once_with(
+        IDENTITY, {'wecom': 'original'}, include_runtime_plugins=True)
 
 
 @pytest.mark.asyncio

@@ -47,7 +47,7 @@ export async function withSendSnapshot<T>(
   const paths = current.dataDir.db_paths!
   const prepared = await prepareDecryptedDbs(
     { message: paths.message, user: paths.user, session: paths.session },
-    { ctx, current, version: admission.version, expected: admission.expected, algorithm: admission.algorithm,
+    { ctx, current, ...admission,
       state, getState, putState, workPrefix, tolerateSessionFailure: true, deps: local },
   )
   try {

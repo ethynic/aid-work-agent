@@ -33,7 +33,7 @@
 - agent2本次现场部署目录HEAD为 `abcd8e91`。已只读核对容器中的 `src/local_tools/repository.py`、`src/services/agent_runner/local_owner.py`，SHA256与排查时本地文件一致。
 - 扩展静态审查固定使用本地Git对象 `99c62216`，避免共享工作区切分支后把旧代码当成线上基线。该对象包括已实施的恢复、模型识别和Runtime性能增量，不表示客户机实际BOSS插件逐字等于该提交。
 - 编写时共享工作区在 `feature/ask-user-question-card`，HEAD `ae31f2b1`；本会话不切分支，不处理他人改动。实施前由开发核对当时主线、部署版本、Runtime/插件release与digest，再整合文档；禁止用当前较旧分支回退已完成修复。
-- 现有方案：复用[Runner架构](../system/agent-application-architecture-design.md)、[共同契约](../system/runner-desktop-runtime-integration-contract.md)、[BOSS恢复设计](../design/recruiting/boss-overlay-heal-design.md)、[既有续筛恢复计划](plan-boss-resume-next-recovery-fix.md)。`99c62216` 中既有恢复计划已到Phase 10；当前分支若只显示Phase 1～5，不代表后续功能未实现。
+- 现有方案：复用[Runner架构](../system/agent-application-architecture-design.md)、[共同契约](../system/runner-desktop-runtime-integration-contract.md)、[BOSS恢复设计](../design/recruiting/boss-overlay-heal-design.md)、既有续筛恢复修复（原计划已清理，记录见[增量设计 §5.6](../system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量)）。`99c62216` 中该修复已到Phase 10；当前分支若只显示Phase 1～5，不代表后续功能未实现。
 
 ### 1.2 证据等级
 
@@ -104,7 +104,6 @@
 
 ### 3.1 同源复核项与明确保留的保护
 
-1. `RunnerBrowserOwner._fail/_root_transaction/_observation` 也有宽泛存储包装；未取得Browser业务拒绝导致会话锁死的现场证据。Phase 1逐个调用者分类后才能决定是否修改，不能全局放宽Browser外部动作。
 2. `UsageScope` 在真实receipt/checkpoint落库失败时中断是正确保护。断库、提交结果未知、身份/意图不符、owner失权必须继续阻止新动作；修复不等于所有异常都忽略。
 3. v2已存在网络/5xx重传、原ACK保存及outbox，不重做；Web提交/control也已有原幂等键退避机制，网络错误后pending保留本身不是已证明缺陷。补断网/重连/刷新/切会话验证，防止错误清键造成重复受理。
 4. 新durable调用无总deadline、迟到原回执的 `_late_result`、单份模型失败处理已存在。以兼容/回归为主；旧deadline、unknown费用事实不能被硬改为成功。
@@ -225,7 +224,7 @@
 
 | 阶段 | 最小实施范围 | 完成门 |
 |---|---|---|
-| Phase 1 | `local_owner.py`、`local_invocations.py`、`proxy_tool.py`、必要的内部异常类型与测试；复核browser_owner同源包装 | STALE和设备准入拒绝成为普通结果，且真实断库/提交不明仍fail loud；不以本阶段单独上线宣称旧会话恢复 |
+| Phase 1 | `local_owner.py`、`local_invocations.py`、`proxy_tool.py`、必要的内部异常类型与测试 | STALE和设备准入拒绝成为普通结果，且真实断库/提交不明仍fail loud；不以本阶段单独上线宣称旧会话恢复 |
 | Phase 2 | **首批CLI修复**详见5.3：`CdpSocket.ts`、`CdpGateway.ts`、`bossContext.ts`、`localOperationRecovery.ts`、`ResumeBatchReader.ts`、`bossResumeBatch.ts`、`ChromeLauncher.ts`及错误映射；后端游标文件只处理接续依赖 | CDP超时能本地回读/重试，tab/浏览器关闭能恢复，已有批次成果保留；不以仅改服务端拒绝逻辑替代CLI修复 |
 | Phase 3 | `local_recovery.py`、`recovery.py`、`local_wait.py`、既有控制/终态接口、Web原会话入口 | 旧dispatching无调用状态可证明收敛；不可恢复状态也有准确退出；cancelled不复活 |
 | Phase 4 | 共享Core `apiClient.ts`、`invocationRunner.ts`、`resultOutbox.ts`及Runtime适配/启动重投 | 503/429/丢ACK/重启不丢原回执、不重复业务；失权后无新输入 |

@@ -51,14 +51,13 @@ def test_actual_built_ui_event_stream_queries_original_worker_then_refresh_detac
     workers.environment.update({'AGENT_RUNNER_WEB_ENABLED': 'true',
         'AGENT_RUNNER_API_URL': workers.api.urls[0],
         'AGENT_RUNNER_WEB_SERVICE_ID': workers.api.service_id,
-        'AGENT_RUNNER_WEB_SERVICE_TOKEN': workers.api._service_token,
-        'AGENT_RUNNER_BROWSER_OWNER_ENABLED': 'false', 'AGENT_RUNNER_BROWSER_VIEW_ENABLED': 'false'})
+        'AGENT_RUNNER_WEB_SERVICE_TOKEN': workers.api._service_token})
     release = threading.Event()
     output = 'Actual event UI original worker result'
     reply = Reply(content=output, release=release)
     marker = workers.provider.register(reply)
     gateway = WebGateway(workers.processes, environment=workers.environment,
-        factory='tests.integration.agent_runner_service.browser_card_ui_api:create_app', access_log=False)
+        factory='tests.integration.agent_runner_service.runner_events_ui_api:create_app', access_log=False)
     child = None
     identifier = None
     observed = []
@@ -191,7 +190,6 @@ def test_actual_ui_observes_automatic_local_recovery_with_no_page_attached_at_co
         'AGENT_RUNNER_API_URL': workers.api.urls[0],
         'AGENT_RUNNER_WEB_SERVICE_ID': workers.api.service_id,
         'AGENT_RUNNER_WEB_SERVICE_TOKEN': workers.api._service_token,
-        'AGENT_RUNNER_BROWSER_OWNER_ENABLED': 'false', 'AGENT_RUNNER_BROWSER_VIEW_ENABLED': 'false',
     })
     service_database.rows(
         'INSERT INTO subscriptions(subscription_id,tenant_id,subagent_type,status,starts_at) VALUES(%s,%s,%s,%s,%s)',
@@ -210,7 +208,7 @@ def test_actual_ui_observes_automatic_local_recovery_with_no_page_attached_at_co
         *replies, Reply(content=successful_output)), profile_id=profile)
     identifier = accepted['runner_id']
     gateway = WebGateway(workers.processes, environment=workers.environment,
-        factory='tests.integration.agent_runner_service.browser_card_ui_api:create_app', access_log=False)
+        factory='tests.integration.agent_runner_service.runner_events_ui_api:create_app', access_log=False)
     url = f'{gateway.url}/t/{actor.tenant_id}?_load_session={actor.session_id}'
     requests = []
     next_output = '同一会话执行了下一条任务'

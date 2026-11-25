@@ -9,12 +9,58 @@
 | Phase 3 | 声明即调度授权：CLI 声明收敛 + Runtime 删交集锚定 + 服务端声明分流 | ✅ 完成（2026-11-12） | 契约 2.20 修订（e0ae04f2）落地：wecom 声明白名单 12 工具（chat_search 等 5 个内部命令不声明）、weixin 声明 6 个 v1 工具（session_observe/v2 发送不声明），两 CLI 清单 tools 与 schema_digest 不动；host-core deriveProviderManifest 受信面=声明全集（删交集锚定，未知插件同一逻辑）+ 心跳新增 declared_tools（与 parallel_tools 同源同过滤）；服务端 claim 行级放行与 device_ready_error 声明分流（未声明覆盖的 provider 与 NULL 行回退目录，旧设备逐字节不变）。服务端单测 765 过（新增 22）、真实 PG 16 集成 5/5（声明端到端）+ Phase 2 集成 8/8 回归、host-core 129/130 与 runtime 340/343（基线失败 stash 对照一致）、三 CLI manifest 测试绿、五包 typecheck 0 |
 | Phase 3-R2 | 复审修复：执行通道协商门禁 + 长轮询脱挂解耦 + 正式接入路径 | ✅ 完成（2026-11-12） | 外部复审三处修复 + 执行语义升级：①pollLoop 执行通道同受 serverParallelClaim 门禁（旧服务端下声明并行作业按串行执行，与后续串行作业无并发重叠）；②hasParallelTools 判定——无并行工具设备完全沿用原串行循环（执行中零领取请求、第二条 <1s 启动），解耦模式串行 settle 时在途 parallel_only 长轮询脱挂（detachedClaims 入账、drain 等待其与派生 runner 全部结束），串行队列 <1s 拿到下一条，脱挂轮询返回的并行作业照常后台执行；③Runtime 安装白名单由产品信任配置 trust roots 覆盖 provider_id 并集驱动（ai.aidwork. 命名空间，无信任配置维持 FIRST_PARTY 默认），服务端 get_provider_keys_for_device 并入声明 provider_key（目录外新插件可领，旧设备逐字节不变；get_provider_key_for_device 单数版仅审计不改——default_provider 兼容字段语义保持）。runtime parallelClaim 10/10（新增 4 用例）、productTrust/pluginStore 第 4 方身份安装用例、服务端单测 +2、集成 +1（新插件 provider 领取）；契约 2.20 补执行语义与接入驱动三句；CR 通过（无 P0/P1）：P2 留档 1 项——serverParallelClaim 中途回滚窗口内脱挂轮询返回作业落串行 lane，可与 attached 空参数领取的串行短暂并发（桌面锁 120s 超时/DESKTOP_RESOURCE_BUSY 可重试兜底，租约记账一致、无死锁丢作业；触发需服务端能力标记回滚且 20s 轮询在途，与 Phase 2 翻转窗口锁兜底 P2 同源，较修复前同窗口行为严格更安全）。CR 复跑：runtime 定向 13/13、全量 344/347（2 基线 stash 对照复核一致）、host-core pluginStore 20/20、服务端声明单测 24/24、typecheck 0 |
 | Phase 3-R3 | 复审修复：并行领取 lane 专职化 + 连接迁移逐包信任迁移 | ✅ 完成（2026-11-12，CR 无 P0/P1，commit 09d8e360） | 外部复审两处修复：①pollLoop 删除脱挂机制（每条串行 settle 遗留一条在途 parallel_only 轮询，连发五条；脱挂轮询失败进共用退避拖住串行实测 0.76s），改为专职并行领取通道——任一时刻至多 1 个在途 parallel_only 轮询跨串行作业复用，串行占用期间主循环零领取请求只等 settle，失败走 lane 私有退避不触碰主循环退避，DeviceRevoked 沿 fail-loud 停整个循环，stopClaiming/shutdown 经共用 claimController abort 通道，drain 等待 claim+lane+全部 inFlight；②desktop migratePlugins 移除 3 条上限与三家写死名单（第 4 插件重配对全丢缺陷：inventory 4 条整体跳过 → 新连接零插件），放行名单改信任配置派生（同包 productTrust providerIdsOfTrust，与 hostEntry 同目录分发），verifyOfflinePackage 与 PluginStore storeOptions 均传 providers 验签闭环，逐包容错 warn+continue 保留，安装时信任配置与验签规则沿用。测试先行红→绿：parallelClaim +3（503 不拖串行 <1s、5 条串行 parallel_only 峰值并发 1 且完成回落 0、连续 503 私有退避串行节奏稳定）、runtimeInstallation +3（信任配置第 4 方身份 4 条全迁移含停用保留、未授权身份跳过其余迁移、3 条旧行为不变）；回归：runtime 全量 347/350 与 host-core 129/131（基线失败 stash 两态一致：runtime 进程清理 SIGINT/v2 写 shutdown、host-core wecomSendStatus 族）、desktop 全量 111/111 + typecheck 0、服务端 local_tools 单测 767、真实 PG 集成 14/14、五包 typecheck 0；契约 2.20 复审段「串行结束不等待在途长轮询」与「接入驱动」句同步 lane 与逐包迁移语义 |
+| Phase 4 | 模型工具定义接入与自动同步 | 🔧 进行中 | 自动同步独立复测通过，agent2 验收信任已纳入默认配置，待网页验收 |
+| Phase 5 | 数字员工的本机 Runtime 插件开关 | ✅ 完成（2026-11-20） | 本地独测和网页交互通过，待 agent2 网页验收 |
 
 ## 实施
 
 - Phase 1 为新版 BOSS 和企微 CLI 增加带版本的工具声明，保留旧 Runtime 使用的插件包和调用接口。新版 Runtime 从签名包读取声明，将按插件名或工具名写死的配置和业务判断移到插件声明或对应业务代码。用 BOSS、企微和一个 Runtime 未预先认识的测试插件验证接入。
 - Phase 2 在现有领取接口增加按类型领取。服务端负责待领状态和原子领取，Runtime 负责按当前占用继续领取并立即执行。把并行命令从本机串行限制中放开，沿用现有取消、进度和回执。
 - 源码实施前在共同契约登记声明与领取接口的版本、生产端和消费端示例。插件负责自身声明，Runtime 负责读取、上报和执行，服务端负责记录并选择任务。按既有能力协商兼容已交付组合。（已登记：[共同契约 2.20 检查点](../system/runner-desktop-runtime-integration-contract.md)，2026-11-11）
+
+## Phase 4 已确认事项
+
+- Runtime 通过现有认证心跳报告已启用插件的清单摘要，服务端只请求缺失或变化的清单，Runtime 自动补报本机安装包的原始 `envelope.json` 和 `runtime-manifest.json`。
+- 服务端验签并核对插件身份与完整清单摘要。使用已打包的浏览器 `0.1.0` 验证。 [设计](../system/runtime-plugin-decoupling-dispatch-design.md#runtime-自动同步签名清单)
+- Runner 读取当前用户已选中的唯一 Runtime，工具定义取该设备当前启用的插件清单，调用派给同一台设备。不同 Runtime 的清单各自同步。
+- 服务端同步的工具定义取自目标 Runtime 安装使用的签名包；设备可执行工具沿用现有 `declared_tools` 上报。
+- 内部登录会话的插件可见性由 Phase 5 的独立开关决定。各 Agent 共用所选设备的接入路径，外部会话沿用渠道授权。
+- Runner 读取同一份已同步的清单，将原生工具定义交给模型，并用通用入口派发调用。浏览器作为本阶段验收插件。
+- 沿用当前 Runtime 的任务派发、执行和标准回执。失败时按既有行为说明原因，用户可以继续会话。浏览器插件与其他插件使用同一套契约。
+
+### Phase 4 实施步骤
+
+1. 扩展心跳，验证首次同步、重复心跳、升级及停用后的设备清单，用现有浏览器 `0.1.0` 签名包核对服务端验签和工具定义读取。 [共同契约](../system/runner-desktop-runtime-integration-contract.md#runtime-插件签名清单同步)
+2. 接上 Runner 通用工具装配，从当前用户所选设备读取已启用的插件工具，生成模型使用的工具定义。
+3. 接上现有任务派发和结果回传，核对定义、执行设备和回执对应。定向回归权限隔离、设备切换以及既有本地工具流程。
+4. 独立测试和评审通过后，按项目部署授权流程进入 agent2 的真实网页验收。发布服务端，使用已支持自动同步的本机 Runtime、当前 CLI 和浏览器签名包。
+
+本地验证覆盖已交付浏览器包的 35 项工具定义。最终独立复验 125 项单测及 2 项 PostgreSQL 集成通过，验证 Runner 向模型提供原生定义、把调用派给选中设备、返回部分失败回执并继续会话。已入队调用继续观察原设备，未入队的调用按现有失败结果继续会话。公开进度、执行详情和诊断记录保留操作信息，参数值留在原执行链路。额外旧 BOSS 恢复和取消的 6 组超时在基线 `57006423` 同样失败。
+
+自动同步使用真实签名包读取 35 项定义，重复心跳只报摘要。最终独立复验通过 177 项服务端单测、15 项 PostgreSQL 集成、31 项 Runtime 和 29 项共享 Host 测试。覆盖模型响应恢复、停用与降级回收旧队列、新旧长轮询同时领取、同包领取和旧静态工具。额外运行的 3 项旧 Device API 时间测试在基线 `f542e41a` 同样失败。
+
+信任问题会阻止插件工具向模型发布。服务端拒收清单后，Runtime 会按现有心跳节奏重试。正确配置发布者信任后，成功同步的清单只再发送摘要。
+
+### Phase 4 agent2 发布准备
+
+1. 使用现有 `deploy/agent2_update.sh` 发布服务端。主 API 和 Runner worker 根据 agent2 现有的 `AGENT_RUNNER_NETWORK=aid-network2`，默认使用已挂载的 `/app/configs/runtime-plugin-trust/acceptance-roots.json`。已有信任路径继续有效，显式设置空的 `AGENT_RUNNER_PLUGIN_TRUST_ROOTS` 可关闭清单同步。
+2. 使用已支持同步的本机 Runtime 和已安装的浏览器签名包自动同步插件清单。
+3. 主 API 接收清单时使用现有 `requirements.txt` 中的 `rfc8785` 生成规范 JSON。Runner 使用原有加密库验证已保存的签名数据。快捷更新脚本沿用上游 `5ff97350` 的依赖安装流程，对同项目、同镜像的容器同步更新 Python 依赖。
+
+### Phase 4 agent2 网页验收
+
+1. 用用户的 agent2 内部网页和当前已选中的本机 Runtime，确认心跳自动同步浏览器定义，且服务端读取的清单来自本机已安装的签名包。
+2. 在「在线电商客服」网页会话发出测试指令，由 AID 调用插件打开之前测试的 ERP 登录页。登录凭据在本机网页填写，AID 使用原浏览器会话完成登录操作、进入出差申请模块并打开新增表单。
+3. 按测试资料填写表单并上传用户授权的测试附件。保存测试申请，核对页面回执和申请列表。从 Runner 任务记录核对调用实际发给所选 Runtime。验收记录使用脱敏信息。
+4. 在同一会话安排一次可控失败，确认按现有回执说明原因，再继续问一条其他问题。核对会话继续可用。
+
+## Phase 5 本机 Runtime 插件工具开关
+
+1. 在自定义数字员工的「工具配置」新增「允许本机 Runtime 插件工具」，旧定义和新建定义默认关闭。沿用现有数字员工保存接口，在工具配置中保存 `allow_local_runtime_tools`。
+2. Runner 根据该开关决定是否装配当前选中设备已启用的插件工具。已开启的内部登录会话直接获得插件工具，现有静态工具继承、名单、显式排除与渠道范围保持原规则。
+3. 验证旧定义、新建、开关保存及重开，验证关闭时已有默认工具仍可用，开启后即使只允许少量静态工具也能使用 Runtime 插件。按 agent2 授权流程部署后，管理员在「在线电商客服」勾选并保存，再按上文流程做网页验收。
+
+独立复验通过 104 项服务端单测、14 项 PostgreSQL 集成和 9 项前端测试，Web 构建通过。前端覆盖切换员工时禁用保存及忽略迟到详情。本地浏览器验证编辑状态、全屏选择和保存重开，并查看 390px 的全屏选择器。
 
 ## 验收
 

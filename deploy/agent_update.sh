@@ -16,10 +16,11 @@ fi
 # 用法: ./agent_update.sh [recreate|git版本号]
 #       不带参数 -> 更新到 origin/master 最新
 #       带参数   -> 停留在指定提交（如 ./agent_update.sh c43c65e）
-#       recreate -> 仅重建容器使修改后的 .env 生效（不拉代码、不编译前端、
-#                   不装依赖；只做 PG 连通自检 + 后端/runner 容器重建 +
-#                   CPU 限制 + /tmp 权限兜底）。docker restart 不会重读 env，
-#                   必须 force-recreate 重建
+#       recreate -> 仅重建容器使修改后的 .env 生效（不拉代码、不编译前端；
+#                   只做 PG 连通自检 + 后端/runner 容器重建 + CPU 限制 +
+#                   /tmp 权限兜底 + 依赖补装）。docker restart 不会重读 env，
+#                   必须 force-recreate 重建；重建会丢弃容器可写层里的 pip
+#                   安装，故依赖补装必须执行
 # ==============================================================================
 # 变更记录：
 #   1. 前端编译输出到 dist.new，编译期间 nginx 继续服务旧 dist，build 完成后
@@ -44,6 +45,11 @@ fi
 #      aid-runner-worker 当孤儿容器删除（2026-10-15 生产事故：发布后渠道消息
 #      全部 RUNNER_SERVICE_UNAVAILABLE）；并重建 runner 服务使新代码生效。
 #      删除根级副本即回到仅 api 形态（与 agent1 sim.sh 同模式）
+#   9. 2026-11-20 [10] 步增量依赖安装由「仅主 API 容器」改为「本 compose project
+#      内全部同镜像容器」（api/background/runner-api/worker/heavy-tools/monitor），
+#      并移出标准模式专属段（recreate 模式同样需要）：docker exec 的 pip 安装只
+#      落在单容器可写层，Runner 不继承主 API 的安装，导致 rfc8785 仅主 API 有、
+#      runner 容器全缺
 # ==============================================================================
 
 set -e
@@ -154,26 +160,25 @@ docker run --rm \
     npm install --no-audit --no-fund --prefer-offline
 
 
-# 3. 前端类型检查 + 依赖边界检查（不产出 dist，nginx 服务不受影响；
-#    先于后端重启执行，类型/边界错误能在此中止，避免白白停一次服务）
-echo "[3] 前端类型检查 + 边界检查..."
-docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm run typecheck
-docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
-    node scripts/check-dependency-boundaries.mjs --scope=web
-
-# 4. 前端编译到 dist.new（后台执行，与后端重启并行）。
-#    旧 dist 一直保留到原子切换，编译期间前端零空窗。
-#    校验链拆开跑：typecheck/boundary 已在 [3]，build 用 npx vite build --outDir
-#    （npm run build 是复合命令，追加 --outDir 会透传给最后的 verify 脚本导致误解析）
-echo "[4] 前端编译 dist.new（后台）..."
+# 3. 前端校验 + 编译到 dist.new（后台执行，与后端重启并行，2026-11-24 优化）。
+#    typecheck/边界检查不产出 dist、不影响 nginx，只需在 dist 原子切换前通过；
+#    移入后台校验链与后端重启并行（原串行卡在重启前约 2 分钟）。
+#    校验链任一失败都不会生成 dist.new，等待段会在切换前中止，前端零空窗；
+#    代价：类型/边界错误时后端已重启（多一次服务重启），属可接受取舍。
+#    build 用 npx vite build --outDir（npm run build 是复合命令，追加 --outDir
+#    会透传给最后的 verify 脚本导致误解析）
+echo "[3] 前端校验 + 编译 dist.new（后台，与后端重启并行）..."
 # dist.new/dist.old 若为上次 root 容器残留，ubuntu 身份 rm 会 Permission denied，须 sudo
 sudo rm -rf "$DIST_DIR.new"
 mkdir -p "$(dirname "$BUILD_LOG")"
 (
-  docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+  docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm run typecheck \
+  && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+      node scripts/check-dependency-boundaries.mjs --scope=web \
+  && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
       npx vite build --outDir dist.new \
-    && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
-        node scripts/verify-web-build.mjs /app/dist.new
+  && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+      node scripts/verify-web-build.mjs /app/dist.new
 ) > "$BUILD_LOG" 2>&1 &
 FRONTEND_PID=$!
 
@@ -260,7 +265,7 @@ if ! docker exec -u root aid-agent-api chmod 1777 /tmp 2>/dev/null; then
 fi
 docker exec -u root aid-agent-api ls -ld /tmp || true
 
-# ── 以下前端切换/依赖安装段仅在标准更新模式执行 ──
+# ── 以下前端切换段仅在标准更新模式执行 ──
 if [ "$RECREATE_ONLY" -eq 0 ]; then
 
 # 8. 等待前端编译完成
@@ -285,15 +290,48 @@ sudo rm -rf "$DIST_DIR.old"
 sudo chown -R ubuntu:ubuntu "$DIST_DIR"
 sudo chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
 
+fi  # 结束：标准更新模式专属段（前端切换）
+
 # 10. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
 #     新依赖不会自动安装；下次重建镜像后可移除此步骤）
-echo "[10] 增量安装新增依赖..."
-docker exec -u root aid-agent-api \
-    pip install --no-cache-dir -r /app/requirements.txt \
-    -i https://mirrors.cloud.tencent.com/pypi/simple \
-    --quiet || echo "  警告：依赖安装失败，部分新功能可能不可用"
-
-fi  # 结束：标准更新模式专属段（前端切换/依赖安装）
+#     两种模式都必须执行：recreate 同样会 --force-recreate，丢弃容器可写层里的
+#     既有安装；标准模式还可能引入新依赖。
+#     注意：api/background/runner-api/runner-worker/heavy-tools/runner-monitor 共用
+#     同一镜像，docker exec 的安装只落在单个容器的可写层，其它容器不会继承；
+#     因此必须对本 compose project 内所有同镜像容器逐个安装，否则 Runner 侧
+#     运行时 import 新依赖直接失败（2026-11-20 事故：仅主 API 装了 rfc8785，
+#     Runner worker 全部缺包）。彻底解法仍是定期重建镜像，把依赖固化进镜像层。
+echo "[10] 增量安装新增依赖（本项目全部同镜像容器）..."
+PIP_PROJECT=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' aid-agent-api 2>/dev/null || true)
+[ -z "$PIP_PROJECT" ] && PIP_PROJECT="${PWD##*/}"
+PIP_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=$PIP_PROJECT" \
+    --format '{{.Image}} {{.Names}}' | awk '$1 == "aid-agent-api:latest" {print $2}')
+if [ -z "$PIP_CONTAINERS" ]; then
+    echo "  警告：未匹配到同镜像容器，退回仅安装 aid-agent-api"
+    PIP_CONTAINERS="aid-agent-api"
+fi
+PIP_TMPDIR=$(mktemp -d)
+PIP_RUNNING=0
+for c in $PIP_CONTAINERS; do
+    echo "    -> $c"
+    ( docker exec -u root "$c" \
+          pip install --no-cache-dir -r /app/requirements.txt \
+          -i https://mirrors.cloud.tencent.com/pypi/simple \
+          --quiet || echo "$c" >> "$PIP_TMPDIR/failed" ) &
+    PIP_RUNNING=$((PIP_RUNNING + 1))
+    # 限制并发 4 个：api+background+runner 多副本同时跑 pip 的内存峰值偏高
+    if [ "$PIP_RUNNING" -ge 4 ]; then
+        wait -n || true
+        PIP_RUNNING=$((PIP_RUNNING - 1))
+    fi
+done
+wait || true
+if [ -s "$PIP_TMPDIR/failed" ]; then
+    echo "  警告：以下容器依赖安装失败，对应功能可能不可用：$(tr '\n' ' ' < "$PIP_TMPDIR/failed")"
+else
+    echo "    全部容器依赖安装完成"
+fi
+rm -rf "$PIP_TMPDIR"
 
 echo ""
 echo "=========================================="

@@ -41,8 +41,8 @@
           <div class="flex items-center justify-center gap-1">
             <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="showDetail(row)">详情</BaseButton>
             <template v-if="row.status === 'unprocessed'">
-              <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="markAsProcessed(row.id)">处理</BaseButton>
-              <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="markAsIgnored(row.id)">忽略</BaseButton>
+              <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" :disabled="updatingStatus" @click="markAsProcessed(row.id)">处理</BaseButton>
+              <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" :disabled="updatingStatus" @click="markAsIgnored(row.id)">忽略</BaseButton>
             </template>
           </div>
         </template>
@@ -206,7 +206,10 @@ function showDetail(log: Record<string, any>) {
 }
 
 // ------- Status Actions -------
+const updatingStatus = ref(false)
 async function markAsProcessed(logId: number) {
+  if (updatingStatus.value) return
+  updatingStatus.value = true
   try {
     await updateErrorLogStatus(logId, 'processed')
     toast.success('状态已更新为「已处理」')
@@ -214,10 +217,14 @@ async function markAsProcessed(logId: number) {
   } catch (error: any) {
     console.error('前端日志：更新状态失败:', error)
     toast.error(error.message || '更新状态失败')
+  } finally {
+    updatingStatus.value = false
   }
 }
 
 async function markAsIgnored(logId: number) {
+  if (updatingStatus.value) return
+  updatingStatus.value = true
   try {
     await updateErrorLogStatus(logId, 'ignored')
     toast.success('状态已更新为「已忽略」')
@@ -225,11 +232,14 @@ async function markAsIgnored(logId: number) {
   } catch (error: any) {
     console.error('前端日志：更新状态失败:', error)
     toast.error(error.message || '更新状态失败')
+  } finally {
+    updatingStatus.value = false
   }
 }
 
 // ------- Cleanup -------
 async function doCleanup() {
+  if (cleanupLoading.value) return
   cleanupLoading.value = true
   try {
     const result = await cleanupOldErrorLogs()

@@ -30,14 +30,23 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.api.rate_limit import SlidingWindowRateLimiter
-from src.channels import ask_render
-from src.channels.runner_agent import ChannelRunnerAgent, _clarification_wait
+from src.channels.runner_agent import ChannelRunnerAgent
 from src.channels.session import channel_session_manager
 from src.config.settings import settings
 from src.core.cache_utils import CacheKeys
 from src.db.database import get_db_connection
 from src.saas.db.channel_config_db import ChannelConfigDB
 from src.saas.services.credit_gate import check_tenant_credit_blocked
+# 终态落库辅助已收敛到服务模块（SSE finalize / 拉取补写 / 扫描器三处共享）；
+# 下划线别名保留历史调用点与测试兼容
+from src.saas.services.web_c_runner_persist import (
+    backfill_session_runners as _backfill_session_runners,
+    clarification_from_row as _clarification_question,
+    persist_assistant_message as _persist_assistant_message,
+    persist_clarification_message as _persist_clarification_message,
+    persist_runner_result as _persist_runner_result,
+    runner_files_to_attachments as _runner_files_to_attachments,
+)
 from src.services.agent_runner.contracts import RunnerError
 from src.services.agent_runner.event_stream import FRAME_BYTES, ObserverResponse, parse_cursor
 from src.services.agent_runner.web_client import RunnerServiceClient, close_event_transport
@@ -275,148 +284,20 @@ async def _get_owned_runner(identity: WebCIdentity, runner_id: str,
 
 
 # ============== 终态落库（代理层职责，设计 §4.3 步骤 3） ==============
-
-
-def _has_final_message(session_id: str, runner_id: str) -> bool:
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT 1 FROM channel_messages WHERE session_id = %s "
-            "AND metadata->>'runner_id' = %s AND COALESCE(metadata->>'kind', '') = '' LIMIT 1",
-            (session_id, runner_id),
-        )
-        return cursor.fetchone() is not None
-
-
-def _persist_assistant_message(tenant_id: str, session_id: str, runner_id: str,
-                               output: str, attachments: List[dict],
-                               kind: str = "", client_request_id: Optional[str] = None) -> None:
-    """assistant 消息落库（幂等：唯一部分索引 + ON CONFLICT，并发双写原子拦截）。
-
-    direct_reply 类（runner_id 为空）按 client_request_id 判重——同会话多次
-    纠正/重发回复内容各不相同，仅按 (runner_id, kind) 判重会吞掉后续回复。
-    """
-    message_id = f"msg_{uuid.uuid4().hex[:16]}"
-    metadata = {"runner_id": runner_id}
-    if kind:
-        metadata["kind"] = kind
-    if client_request_id:
-        metadata["client_request_id"] = client_request_id
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO channel_messages
-            (message_id, session_id, tenant_id, role, content, message_type, attachments, metadata)
-            VALUES (%s, %s, %s, 'assistant', %s, 'text', %s::jsonb, %s::jsonb)
-            ON CONFLICT DO NOTHING
-            """,
-            (
-                message_id, session_id, tenant_id, output or "",
-                json.dumps(attachments, ensure_ascii=False) if attachments else None,
-                json.dumps(metadata, ensure_ascii=False),
-            ),
-        )
-        inserted = cursor.rowcount > 0
-        if inserted:
-            from datetime import datetime
-
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute(
-                "UPDATE channel_sessions SET last_message_at = %s, updated_at = %s "
-                "WHERE session_id = %s",
-                (now, now, session_id),
-            )
-        conn.commit()
-        if not inserted:
-            logger.debug(f"[web_c] 终态消息已存在，跳过重复落库 runner={runner_id}")
-
-
-def _runner_files_to_attachments(row: dict) -> List[dict]:
-    """public snapshot 投影（口径同 runner_agent.py downloadableFiles/images）。"""
-    snapshot = row.get("snapshot") or {}
-    result = row.get("result") or {}
-    attachments: List[dict] = []
-    for item in snapshot.get("downloadableFiles") or []:
-        if isinstance(item, dict) and item.get("file_id"):
-            attachments.append({
-                "type": "file",
-                "file_id": item["file_id"],
-                "name": item.get("name"),
-                "mime_type": item.get("mime_type"),
-                "size": item.get("size"),
-                "download_url": item.get("download_url"),
-            })
-    images = result.get("images") or snapshot.get("images") or []
-    for item in images:
-        if isinstance(item, dict) and item.get("file_id"):
-            attachments.append({
-                "type": "image",
-                "file_id": item["file_id"],
-                "name": item.get("display_name"),
-                "mime_type": item.get("mime_type"),
-                "size": item.get("size_bytes"),
-                "download_url": item.get("download_url"),
-            })
-    return attachments
-
-
-async def _persist_runner_result(identity: WebCIdentity, session_id: str, row: dict) -> None:
-    """终态 assistant 消息落库（completed 幂等落库；失败/取消不落）。"""
-    if row.get("status") != "completed":
-        return
-    runner_id = row.get("runner_id") or ""
-    if not runner_id or await asyncio.to_thread(_has_final_message, session_id, runner_id):
-        return
-    result = row.get("result") or {}
-    output = result.get("output") or ""
-    attachments = _runner_files_to_attachments(row)
-    await asyncio.to_thread(
-        _persist_assistant_message, identity.tenant_id, session_id, runner_id, output, attachments
-    )
-
-
-async def _backfill_terminal_runners(identity: WebCIdentity, session_id: str) -> int:
-    """SSE 断开兜底：会话下未落库的终态 runner 补写检查（设计 §4.3 步骤 3）。"""
-    page = await _runner_client().request(
-        "GET", "/v1/sessions/channel/" + quote(session_id, safe="") + "/runners",
-        authorization=None, channel_source="web_c", channel_user=identity.channel_user_id,
-        params={"source": "web_c", "profile_id": identity.subagent_type or "main",
-                "channel_user_id": identity.channel_user_id, "channel_chat_id": ""})
-    persisted: set = set()
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT metadata->>'runner_id' FROM channel_messages WHERE session_id = %s "
-            "AND metadata->>'runner_id' IS NOT NULL AND COALESCE(metadata->>'kind', '') = ''",
-            (session_id,),
-        )
-        persisted = {row["runner_id"] for row in cursor.fetchall()}
-    count = 0
-    for row in (page.get("runners") or []):
-        if row.get("status") != "completed" or row.get("runner_id") in persisted:
-            continue
-        await _persist_runner_result(identity, session_id, row)
-        count += 1
-    return count
+# 落库/投影/补写实现已收敛到 src/saas/services/web_c_runner_persist.py，
+# 本模块经文件头部别名导入使用（_persist_runner_result / _backfill_session_runners 等）。
 
 
 def _waiting_text(row: dict) -> str:
     """提问等待的渠道文本化口径（web_c 归入 single 渠道组，设计 §4.3 步骤 4）。"""
-    wait = _clarification_wait((row.get("snapshot") or {}).get("waiting")) or {}
-    if wait.get("kind") != "clarification":
-        return ""
-    form = wait.get("form")
-    if isinstance(form, dict) and form.get("questions") and wait.get("wait_id"):
-        return ask_render.render_single_message(form, ask_render.source_segment_limit("web_c"))
-    return wait.get("question") or ""
+    return _clarification_question(row)[0]
 
 
 # ============== SSE 透传（事件流在 terminal+settled 时由上游关闭） ==============
 
 
 class WebCEventResponse(ObserverResponse):
-    """Runner events SSE 薄代理；上游流结束后触发代理层终态落库（幂等）。"""
+    """Runner events SSE 薄代理；连接收尾时触发代理层终态落库（幂等）。"""
 
     def __init__(self, response, client, admission, finalize=None):
         super().__init__(admission)
@@ -428,13 +309,18 @@ class WebCEventResponse(ObserverResponse):
             if len(chunk) > FRAME_BYTES:
                 return
             await send(chunk)
+
+    async def close(self):
+        # finalize 放在 close 而不是 pump：基类 __call__ 的 cleanup 整体被
+        # asyncio.shield 保护，客户端提前断开（如前端观察到 terminal 后主动
+        # 断流）或上游异常取消 pump 时同样走到 close，保证终态落库不依赖
+        # 访客保持连接。finalize 内部对 HTTPException 静默，其余异常仅记日志
+        # （落库还有扫描器与 messages 拉取补写兜底）。
         if self._finalize is not None:
             try:
                 await self._finalize()
             except Exception:
-                logger.opt(exception=True).warning("[web_c] SSE 终态落库失败（messages 拉取兜底补写）")
-
-    async def close(self):
+                logger.opt(exception=True).warning("[web_c] SSE 终态落库失败（扫描器与拉取补写兜底）")
         await close_event_transport(self.response, self.client)
 
 
@@ -500,11 +386,15 @@ def _create_extra_session_sync(identity: WebCIdentity, user_id: str) -> dict:
 
     session_id 须满足归属前缀 {tenant}_web_c_{uid}_（_assert_session_owned 校验），
     以 _s{12hex} 随机后缀与默认会话区分；uid 模式（仅 userid 链接）依赖该随机
-    后缀保证会话 id 不可由 userid 推算（48bit 熵，设计 §3.5）。channel_chat_id
-    用唯一 token 使 get_or_create_session 默认查找（按 chat_id 为空过滤）与缓存
-    key 均不冲突。
+    后缀保证会话 id 不可由 userid 推算（48bit 熵，设计 §3.5）。
+
+    channel_chat_id 恒为 NULL：Runner 侧 _channel_in_tx 把请求 chat_id 与
+    channel_sessions.channel_chat_id 严格比对（web_c 代理对 Runner 的 submit/
+    快照/SSE/cancel 调用全程 channel_chat_id=None，2026-11-19 聊易生产
+    CHANNEL_ACTOR_FORBIDDEN 事故），额外会话与默认会话的区分改用 metadata
+    extra_session 标记（get_or_create_session 默认查找按该标记排除），
+    不得再把唯一 token 写进 channel_chat_id 列。
     """
-    token = f"n_{uuid.uuid4().hex[:12]}"
     session_id = (
         f"{identity.tenant_id}_web_c_{identity.channel_user_id}_"
         f"{identity.subagent_type or ''}_s{uuid.uuid4().hex[:12]}"
@@ -514,10 +404,10 @@ def _create_extra_session_sync(identity: WebCIdentity, user_id: str) -> dict:
         channel_type="web_c",
         channel_user_id=identity.channel_user_id,
         tenant_id=identity.tenant_id,
-        channel_chat_id=token,
+        channel_chat_id=None,
         user_info={"user_id": user_id, "name": identity.display_name or ""},
         subagent_id=identity.subagent_type or "",
-        metadata={"channel_config_id": identity.config_id},
+        metadata={"channel_config_id": identity.config_id, "extra_session": "1"},
     )
 
 
@@ -570,12 +460,11 @@ async def bootstrap(tenant_id: str, config_id: str, request: Request):
     from src.saas.services.agent_name_resolver import resolve_agent_names
 
     # uid 模式（设计 §3.5）：userid 不验签，只登记归属不派生默认会话；
-    # 最近会话摘要与历史入口在服务端强制置空（开关只挡 UI 不挡 API）
+    # 最近会话摘要在服务端强制置空（开关只挡 UI 不挡 API）
     if identity.mode == "uid":
         await _ensure_web_c_user(identity)
         await asyncio.to_thread(_backfill_session_channel_config, identity)
         recent = []
-        show_history = False
     else:
         _, sessions = await _ensure_user_and_session(identity)
         recent = await asyncio.to_thread(
@@ -583,7 +472,9 @@ async def bootstrap(tenant_id: str, config_id: str, request: Request):
             "web_c", None, identity.tenant_id, None, None, identity.channel_user_id, 10,
         )
         recent.sort(key=lambda x: x.get("updated_at") or x.get("created_at") or "", reverse=True)
-        show_history = bool(conf.get("show_history", False))
+    # 历史会话入口仅签名链接（ext）模式开放：uid 不验签无跨访问历史；anon 模式
+    # 强制关闭（2026-11-19 与渠道配置弹框禁用置灰同口径，开关只挡 UI 不挡 API）
+    show_history = bool(conf.get("show_history", False)) and identity.mode == "ext"
     subagent = None
     if identity.subagent_type:
         names = resolve_agent_names(tenant_id, [identity.subagent_type])
@@ -597,7 +488,7 @@ async def bootstrap(tenant_id: str, config_id: str, request: Request):
         # 附件上传开关（渠道 config，默认 False：隐藏附件按钮 + 服务端拒绝上传）
         "allow_attachment": bool(conf.get("allow_attachment", False)),
         # 历史会话入口开关（渠道 config，默认 False：不显示右上角「历史会话」按钮；
-        # uid 模式服务端强制 False，见 §3.5）
+        # 仅 ext 模式生效，uid/anon 服务端强制 False，见 §3.5）
         "show_history": show_history,
         "identity": {
             "mode": identity.mode,
@@ -705,11 +596,11 @@ async def chat(tenant_id: str, config_id: str, body: WebCChatRequest, request: R
     response = {"success": True, "session_id": session_id, "runner_id": runner_id,
                 "status": row.get("status"), "direct_reply": None}
     if row.get("status") == "waiting":
-        question = _waiting_text(row)
+        question, wait_id = _clarification_question(row)
         if question:
             await asyncio.to_thread(
-                _persist_assistant_message, tenant_id, session_id, runner_id,
-                question, [], "clarification")
+                _persist_clarification_message, tenant_id, session_id,
+                runner_id, question, wait_id)
         response["waiting_text"] = question
     return response
 
@@ -722,6 +613,13 @@ async def get_runner(tenant_id: str, config_id: str, runner_id: str, request: Re
     row = await _get_owned_runner(identity, runner_id)
     waiting = _waiting_text(row)
     if waiting:
+        # 中途 ask_user 反问落库（幂等 by wait_id）：SSE 对 waiting 不关闭，
+        # 终态落库覆盖不到，C 端轮询本端点时补写，保证接待页与历史可见
+        session_id = ((row.get("session") or {}).get("session_id")) or ""
+        _, wait_id = _clarification_question(row)
+        await asyncio.to_thread(
+            _persist_clarification_message, tenant_id, session_id,
+            runner_id, waiting, wait_id)
         row = dict(row)
         row["waiting_text"] = waiting
     return {"success": True, "runner": row}
@@ -752,7 +650,8 @@ async def runner_events(tenant_id: str, config_id: str, runner_id: str, request:
         async def finalize():
             try:
                 row = await _get_owned_runner(identity, runner_id, client)
-                await _persist_runner_result(identity, row["session"]["session_id"], row)
+                await _persist_runner_result(
+                    identity.tenant_id, row["session"]["session_id"], row)
             except HTTPException:
                 pass
 
@@ -814,7 +713,7 @@ async def session_messages(tenant_id: str, config_id: str, session_id: str, requ
     identity = _resolve_identity(request, tenant_id, config_id)
     _assert_session_owned(identity, session_id)
     try:
-        await _backfill_terminal_runners(identity, session_id)
+        await _backfill_session_runners(identity.tenant_id, session_id)
     except Exception:
         logger.opt(exception=True).warning(f"[web_c] 终态补写检查失败 session={session_id[:40]}")
     result = await asyncio.to_thread(

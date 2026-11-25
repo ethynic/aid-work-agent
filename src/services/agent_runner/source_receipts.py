@@ -1,4 +1,4 @@
-"""共享控制/Browser 的存储错误与异步 SQL 收尾。"""
+"""共享控制的存储错误与异步 SQL 收尾。"""
 
 import asyncio
 from src.core.agent_engine.contracts import CheckpointFailure

@@ -343,6 +343,7 @@ function toggleScope(tableId: string) {
 }
 
 async function handleSaveScope() {
+  if (savingSource.value) return
   if (!draftScope.value.size) {
     toast.error('至少保留一个分类（如需整体停用请联系平台管理员）')
     return
@@ -358,6 +359,7 @@ async function handleSaveScope() {
 }
 
 async function handleTrigger() {
+  if (triggerLoading.value) return
   triggerLoading.value = true
   try {
     const resp = await triggerSource(props.modulePath)

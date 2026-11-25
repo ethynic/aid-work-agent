@@ -110,13 +110,18 @@ flowchart TD
 
 2026-10-23自主升级实测修正：历史根按发行追加后达到17项，旧Host额外的16项硬上限导致NSIS安装冷握手code9，虽验包通过仍无法完成安装。Host0.2.23移除此冗余数量上限，保留固定来源、无链接、65536字节文件上限及全部逐项校验；不删除历史根或扩大信任权限。独立29项及CR通过，最终Runtime0.0.28携18根的冷H1安装检查及本机NSIS实装通过，原配对与旧BOSS启用状态迁移保留。失败批次0.0.27已撤回；新BOSS0.3.26随后由用户原生导入，清单及代码摘要核对通过，原会话三轮新增入库9份及滚动后筛选复验通过，详见恢复计划§20；Runtime安装与插件导入仍分开核验。详情见[恢复计划§19](../plans/plan-runner-local-tool-recovery-lockup-fix.md#19-根滚动视口修复与自主更新验收2026-10-23)。共同H1/Device/schema不变。
 
-2026-10-15跨电脑构建修正：已交付验收包的公开信任根统一保存在版本管理的`clients/runtime-plugin-packaging/trust/acceptance-roots.json`，r15原始四根及来源摘要另存`trust/history/`。构建机没有自己的发行身份；换机必须消费同一已登记信任集合。prepare、打包与最终验包均拒绝遗漏历史根、同key_id替换公钥或改变授权Provider范围，以及未登记的新根。新验收签名使用唯一key_id，再显式追加登记公开根；私钥、设备身份和配对凭据不得入库。历史key_id即使带旧交付命名也原样保留，不能为重命名破坏旧签名。生产信任与Windows签名门保持独立，不因取消交付文件名的trial标记而降级。实现与升级实包验证见[组合包计划](../plans/plan-runtime-ui-boss-trial-bundle.md)。
+2026-10-15跨电脑构建修正：已交付验收包和 agent2 共用版本管理中的`configs/runtime-plugin-trust/acceptance-roots.json`，r15原始四根及来源摘要另存`clients/runtime-plugin-packaging/trust/history/`。构建机没有自己的发行身份；换机必须消费同一已登记信任集合。prepare、打包与最终验包均拒绝遗漏历史根、同key_id替换公钥或改变授权Provider范围，以及未登记的新根。新验收签名使用唯一key_id，再显式追加登记公开根；私钥、设备身份和配对凭据不得入库。历史key_id即使带旧交付命名也原样保留，不能为重命名破坏旧签名。生产信任与Windows签名门保持独立，不因取消交付文件名的trial标记而降级。实现与升级实包验证见本节末「开发完成记录」。
 
 Node 固定22.23.3 / Windows x64 / ABI127；Host 资源从模块路径解析，不靠 cwd。独立验收产品 cn.aidingyi.agent.runtime.acceptance 使用独立 userData 与 %APPDATA%/aidwork-tool-runtime-acceptance，不覆盖生产目录。验收安装器 NotSigned、生产要求 Valid Windows 签名；无正式证书或信任根不能自动降级。
 
 首期 Host 是 main 的直属 child，用继承的私有 IPC；受管入口先监听再初始化，初始化失败回复原 describe。原生选包给 renderer selection_ref/label，私有 callback 再返回受控外 ZIP 快照；不把绝对路径或任意文件 API 给 renderer。没有受控通道的外置实例报冲突，不强抢或另建 TCP 接管服务。
 
 关窗收至托盘，显式退出等待安全停止和真实 child 退出。断连或超时不等于停止，也不自动重放管理变更。具体构建与人工步骤见[手册第12节](../guides/clients/desktop-agent-client-build-manual.md#12-独立runtime首期验收包)。
+
+**开发完成记录（2026-11-24 补记；原组合包计划与干净安装计划已清理，Git 历史可查）**：两项均已开发完成，各阶段经独立测试与 CR。
+
+- Runtime UI 与 BOSS 老用户试用组合包（Phase 1～17，2026-10-12～15）：登录自启、签名 BOSS 插件与匹配 UI 安装器、agent2 冷启动能力自举、自动升级与异常退出恢复、自助连接恢复（r3～r15）、跨电脑构建信任固化与新版组合包均完成；旧 0.3.9 升级、最终 Host 与 EXE 独验通过，14 文件 ZIP 摘要复核。遗留：实际客户重启续装、UAC 及客户机实装验收未完成，未部署。
+- 干净安装（Phase 1～9，2026-10-14～15）：安装代际隔离与旧配置选择性迁移、注册协议 3 与一次配对自动激活、安装前运行检测、正常交互安装退出修复、存量迁移水位补偿、Windows 长路径监管、BOSS 脚本短路径执行均完成；r11～r15 实际安装、包内 Host 与载荷比对通过。遗留：正式库水位补偿待发布验收。
 
 ## 8. 第一方插件与迁移
 
@@ -270,7 +275,7 @@ S4实际边界：升级保留当前/上一版，卸载提交tombstone后回收�
 
 ## 14. 客户端内置诊断留存与一键导出（2026-10-31，待开发）
 
-用户明确要求：客户排障不应长期依赖单独下载脚本、找临时目录或手工拼接日志；本项是 Runtime 稳定性迭代的**必做交付项**。2026-10-31先完成方案；2026-11-02按第15节实现通用安全日志查看导出及Main留存并通过独测/CR，BOSS专用窗口跨层关联与实包故障验收仍未完成；本节保留初期方案标题以兼容已有链接。进度唯一登记在[统一计划第14节](../plans/plan-runtime-plugin-host.md#14-内置诊断留存与一键导出开发计划2026-10-31)。来源为 [BOSS 隐藏窗口事故](../incidents/boss-agent2-widget-stuck-hidden-20261030.md)及[本次临时取证附件](../plans/plan-boss-widget-incident-evidence-collection.md)；附件已交付不代表本项已完成，也不代表 BOSS 故障已修复。
+用户明确要求：客户排障不应长期依赖单独下载脚本、找临时目录或手工拼接日志；本项是 Runtime 稳定性迭代的**必做交付项**。2026-10-31先完成方案；2026-11-02按第15节实现通用安全日志查看导出及Main留存并通过独测/CR，BOSS专用窗口跨层关联与实包故障验收仍未完成；本节保留初期方案标题以兼容已有链接。进度唯一登记在[统一计划第14节](../plans/plan-runtime-plugin-host.md#14-内置诊断留存与一键导出开发计划2026-10-31)。来源为 [BOSS 隐藏窗口事故](../incidents/boss-agent2-widget-stuck-hidden-20261030.md)（含已交付的临时取证附件记录，原专项计划已清理）；附件已交付不代表本项已完成，也不代表 BOSS 故障已修复。
 
 ### 14.1 已有能力与需要补齐的行为
 

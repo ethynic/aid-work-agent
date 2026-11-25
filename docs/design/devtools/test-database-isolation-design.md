@@ -1,8 +1,10 @@
 # 测试数据库隔离与 Runtime 断言修复
 
-日期：2026-10-26；来源为[WeCom计划W9](../../plans/plan-wecom-cli-group-chat-experiment.md)；进度见[开发计划](../../plans/plan-test-database-isolation-runtime-assertions.md)。本次仅测试设施与断言，不改产品数据库连接策略、Runtime工具权限或公共wire。
+日期：2026-10-26；来源为[WeCom计划W9](../../plans/plan-wecom-cli-group-chat-experiment.md)。本次仅测试设施与断言，不改产品数据库连接策略、Runtime工具权限或公共wire。
 
 实施状态：本地开发、独立TEST与CR已完成；CREATE成功资格在游标退出前登记，收尾故障修复已验证。真实Docker未运行，仅验证GitBash/stub入口；pgvector不在本轮验收范围。未提交、部署或恢复监听。
+
+开发完成记录（2026-11-24 补记；原开发计划已清理，Git 历史可查）：✅ 开发完成。Python 测试入口、驱动 guard 与 Runtime 三项断言于 2026-10-26 完成——无 DB 25 项加 28 subtests、私有 PG 28 项加 28 subtests 自测通过，Runtime 22 项通过；独立子进程安全反证与真实私有 PG 回归通过，CR 修复到无未解决 P0/P1/P2。2026-11-17 追加本地常驻测试 PG（Compose 一键运行真实 SQL 测试，WSL2 真实 SQL 17 项通过，独立验证冷启动、复用、工作区挂载及失败清理）、本地开发环境复用与指定工作区挂载（WSL2 验证 API 与 Runner 启动、三类自测、Web 构建和依赖复用，PG 与 Redis 未重建）。统一执行入口见[本地开发环境手册](../../guides/development/local-dev-environments.md)。
 
 ## 问题与目标
 

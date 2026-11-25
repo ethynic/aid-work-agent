@@ -2,7 +2,7 @@
 
 **Runtime、BOSS 和 WeCom 从源码到最终 ZIP 的操作流程见[完整打包手册](../../docs/guides/deployment/runtime-boss-release-guide.md)。** 手册包含验收签名配置默认路径及 WeCom 便携 Python 准备步骤。
 
-此目录仅在构建机运行。客户机接收 `.aidplugin.zip`，验证签名与清单后解包，不运行 npm、pip、Git 或安装 hook。支持 BOSS、微信、企业微信；工具集合由本次插件 `version --json` 和 `runtime-manifest.json` 产生，不把历史工具数量当作当前清单。Host 可执行范围由 Runtime 的受信策略决定。
+此目录仅在构建机运行。客户机接收 `.aidplugin.zip`，验证签名与清单后解包，不运行 npm、pip、Git 或安装 hook。支持 BOSS、微信、企业微信和浏览器。工具集合由本次插件 `version --json` 和 `runtime-manifest.json` 产生，Host 按 Runtime 的受信策略执行。
 
 ## 包格式
 
@@ -10,7 +10,9 @@
 
 ## 低层打包器及公钥文件
 
-`package.mjs` 接收已构建的 Provider 源码。`--provider boss`、`--provider wecom`、`--provider weixin` 分别选择一个 Provider，省略会遍历三个。验收公钥登记表在 `trust/acceptance-roots.json`，已交付的公开根快照在 `trust/history/`。登记工具只追加公钥，Provider 范围按实际用途设定。
+`package.mjs` 接收已构建的 Provider 源码。`--provider boss`、`--provider wecom`、`--provider weixin`、`--provider browser` 分别选择一个 Provider。省略时打包 BOSS、企业微信和微信。验收公钥登记表由服务端和打包器共用，已交付的公开根快照在 `trust/history/`。登记工具只追加公钥，Provider 范围按实际用途设定。 [验收公钥登记表](../../configs/runtime-plugin-trust/acceptance-roots.json)
+
+浏览器插件携带锁定版本的 Windows x64 `agent-browser` 执行器及上游许可，运行时使用本机 Chrome。用 `--provider browser --test --test-key-id aid-isolated-<唯一值>` 并传入 `--node` 和独立的 `--output` 构建隔离测试包。生成的测试根只授权 `ai.aidwork.browser`。运行该包需要支持按信任根登记 Provider 和插件工具自声明的 Runtime Host。 [浏览器插件设计](../../docs/tools/browser/browser_tool_rebuild_design.md)
 
 ## 微信驱动与企微本地库 Python 资产
 

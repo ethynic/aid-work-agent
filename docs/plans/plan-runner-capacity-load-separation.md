@@ -2,7 +2,7 @@
 
 > 日期：2026-11-11。设计依据：[Runner 槽位容量与轻重负载分离方案](../system/runner-capacity-and-load-separation-design.md)（v3：纯容器拓扑 12 轻专用 + 8 通用 = 20 执行体 + 非对称双池 + PG 120；2026-11-12 判型口径收窄 §4.2 + A 方案恢复 §6）。本计划覆盖设计 §7 实施顺序 1~9；备选方案 B（§8）只登记触发条件不排期。
 >
-> 关联：[执行槽隔离计划](plan-runner-execution-slot-isolation-and-alerts.md)（P0①② 来源，Phase 4 待整改清单）、[Excel 读取性能计划](plan-excel-read-performance.md)（TPG80509，待部署，随 Phase 5 同窗上线）。
+> 关联：[执行槽隔离计划](plan-runner-execution-slot-isolation-and-alerts.md)（P0①② 来源，Phase 4 待整改清单）、[Excel 读取性能设计](../tools/excel-read-performance-design.md)（TPG80509，待部署，随 Phase 5 同窗上线）。
 
 ## 阶段总览
 

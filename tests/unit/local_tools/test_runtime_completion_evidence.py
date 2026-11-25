@@ -1,6 +1,6 @@
 """契约 2.20 候选「正常结束的事实」：BOSS 调用 _runtime_completion 结束证据的服务端核验与消费。
 
-场景（docs/plans/plan-boss-filter-input-and-local-recovery.md Phase 3）：
+场景（docs/system/agent-application-architecture-design.md「BOSS 本机操作恢复」；原开发计划 Phase 3）：
 - Runtime 在受权结果 data 附加 _runtime_completion={version:1}（仅 boss、仅结构化终态停稳），
   服务端在原幂等回执入口 write_result 核验四要素：原设备+领取凭据（FOR UPDATE 行核验）
   + 原调用（本行）+ 设备能力串 runtime_boss_completion_v1 与证据版本。

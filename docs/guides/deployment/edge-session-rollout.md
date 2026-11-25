@@ -2,7 +2,7 @@
 
 日期：2026-09-15。适用场景仅 `weixin.conversation.v1`。当前 **禁止灰度**（C5 隔离 fake 综合验证通过但真机灰度门禁未开，结论与记录见 [设计文档文末实现与验证记录](../../design/desktop-automation/edge-session-task-design.md)）。本文件是后续操作规程，不代表已执行发布。
 
-2026-11-17 决议：微信云端自动回复停用，旧版开启步骤作为历史记录保留。当前采集与监控入口见[原生读取与本地轮询](../../plans/plan-weixin-cli-remove-ocr.md#phase-4-历史与持续观察)。
+2026-11-17 决议：微信云端自动回复停用，旧版开启步骤作为历史记录保留。当前采集与监控入口见[微信 CLI 设计 §13](../../design/weixin/weixin-cli-design.md#13-移除本地-ocr)。
 
 ## 放行前置条件
 

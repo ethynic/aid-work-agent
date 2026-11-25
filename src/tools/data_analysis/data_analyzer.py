@@ -185,10 +185,25 @@ class DataAnalyzer:
                 f"请检查源文件/数据库连接器是否仍存在"
             )
 
+        # 值级确定性清洗（'10万'/'-'/杂空格日期等 -> 标准值），报告并入表元信息
+        # 供分析 LLM 使用（excel-upload-validation-design.md §7）。清洗失败退回
+        # 原始 df 不阻断（fail-open）。缺失标记置空同时消除混合列导致 parquet
+        # 写入 ArrowInvalid 的隐患（2026-11-20 生产事故同因）。
+        column_quality = {}
+        try:
+            from src.services.data_analysis.value_cleaner import clean_dataframe
+            df, column_quality = clean_dataframe(df)
+        except Exception:
+            logger.opt(exception=True).warning(f"[DataAnalyzer] 值清洗失败，使用原始数据 table={table_id}")
+
         # 状态介导落盘后立即释放内存（§5.1 去驻留：同时只有 1 张表在内存）
         row_count, column_count = len(df), len(df.columns)
         self._tables[table_id] = self._write_state(df, f"table_{_safe_state_stem(table_id)}")
         self._table_rows[table_id] = row_count
+        if column_quality:
+            metadata = dict(metadata) if isinstance(metadata, dict) else metadata
+            if isinstance(metadata, dict):
+                metadata["column_quality"] = column_quality
         self._table_meta[table_id] = metadata
         logger.info(f"[DataAnalyzer] 加载表 {table_id}: {row_count} 行, {column_count} 列")
         return table_id
@@ -209,14 +224,28 @@ class DataAnalyzer:
             return "csv"
 
     def _write_state(self, df: "pd.DataFrame", stem: str) -> str:
-        """DataFrame 写状态文件（parquet 优先），返回路径；不保留内存引用。"""
+        """DataFrame 写状态文件（parquet 优先，写失败降级 CSV），返回路径；不保留内存引用。"""
         os.makedirs(self.state_dir, exist_ok=True)
         engine = self._state_engine()
         path = os.path.join(self.state_dir, f"{stem}.{engine}")
         if engine == "parquet":
-            df.to_parquet(path, index=False)
-        else:
-            df.to_csv(path, index=False, encoding="utf-8-sig")
+            try:
+                df.to_parquet(path, index=False)
+                return path
+            except Exception as e:
+                # 混合列（如数字 + “—”占位符，pd.read_excel 读成 object）pyarrow 无法
+                # 推断统一列类型报 ArrowInvalid（2026-11-20 生产事故）。降级 CSV 保持
+                # object 列原值落盘——与去内存驻留（07317bc3f）之前内存中 object 列的
+                # 行为对齐；_read_state 按返回路径后缀自动选 read_csv，无需调用方感知
+                logger.opt(exception=True).warning(
+                    f"[DataAnalyzer] 状态 parquet 写入失败（列含混合类型），降级 CSV: {e}"
+                )
+                try:
+                    os.remove(path)  # 清理 to_parquet 失败残留的半截文件
+                except OSError:
+                    pass
+                path = os.path.join(self.state_dir, f"{stem}.csv")
+        df.to_csv(path, index=False, encoding="utf-8-sig")
         return path
 
     @staticmethod

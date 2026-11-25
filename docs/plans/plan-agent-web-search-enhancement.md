@@ -31,7 +31,7 @@
 
 ## 当前下一批顺序（2026-10-22，前三项已授权）
 
-用户明确排除当前浏览器工具，后续研究装配/探针不调用browser_automation或其旁路；浏览器重构单列，不在本批顺手修复。现有生产装配尚未因本次文档修改而停用。实施清单见[设计§12](../system/agent-web-search-enhancement-design.md#12-当前补齐清单与实施顺序用户排除现有浏览器)。
+本批研究装配和探针聚焦公开页面静态取证。实施清单见[设计§12](../system/agent-web-search-enhancement-design.md#12-静态取证实施顺序)。
 
 1. 修web_search结果保留与正文落盘/回读：每条来源元数据完整，不再任意掐断序列化JSON。
 2. 加无浏览器依赖的web_fetch：普通HTML与文字型公开PDF正文、来源元数据及明确错误。
@@ -222,7 +222,7 @@ Phase1G正式结果：1686.08秒/35轮/8搜索/12Fetch8成功（7html+1pdf），
 | CSV与业务语义 | research_validate、validation.py、identity.py、report.py | 解析真实CSV、比对原文/规则；官网、人数、邮箱资格；生成确定性MD | CSV/来源核对可复用；人数/官网规则已有保守误拒，MD列名和措辞固定为获客业务，不是通用完成验证，暂缓整体提交 |
 | 实验资产 | scripts/probes三脚本、probe审计单测、docs/research实验JSON与研究/计划 | 重现对照并审计真实来源/代码/产物 | 可选实验包，和生产功能分别提交；整Skill复跑已按用户范围调整停止，不作为生产依赖 |
 
-已确认没有修改write/edit/cp/skill_execute本体、浏览器工具、原附件Skill或新增桌面Runtime；这里修改的是现有Agent core与Runtime适配层，影响范围不能仅按工具个数估算。WeCom本地数据库及相关调研等其他工作区改动不属于本任务提交范围。
+已确认没有修改write/edit/cp/skill_execute本体、原附件Skill或新增桌面Runtime；这里修改的是现有Agent core与Runtime适配层，影响范围不能仅按工具个数估算。WeCom本地数据库及相关调研等其他工作区改动不属于本任务提交范围。
 
 关键提交阻点：ToolDispatcher.validate_completion在有搜索来源且research_validate已装配时即启用，即使没有research_plan或入口research_delivery声明；completion_errors会将本次write产生的全部CSV要求research_validate。用户只想搜索后导出普通表格，也可能被强迫补研究来源列。这是对适用范围的审查结论，不是Search/Fetch接口必需条件；应收敛为显式启用，不能因为定向测试通过就整批默认合入。
 

@@ -12,6 +12,14 @@ import markdown
 
 REPLY_FILE_NAME = "详细答复.md"
 FILE_NOTICE = f"\n\n完整回复请查看发送的文件《{REPLY_FILE_NAME}》。"
+# MD 无法交付、又没有可用文字发给客户时的告知话术
+FAILED_REPLY_TEXT = "完整回复文件暂时无法生成，请稍后重试。"
+UNSENT_REPLY_TEXT = "完整回复文件暂时无法发送，请稍后重试。"
+
+
+def strip_file_notice(text: str) -> str:
+    """去掉前缀文字里的文件提示。投影为空时 build_prefix_preview 返回不带换行的提示，两种形态都要去掉。"""
+    return text.replace(FILE_NOTICE, "").replace(FILE_NOTICE.strip(), "").strip()
 
 _FENCE = re.compile(r"^ {0,3}(?:> ?)*(?:(?:[-*+] |\d+[.)] ))?(`{3,}|~{3,})(.*)$")
 _DELIMITER = re.compile(r":?-{3,}:?$")

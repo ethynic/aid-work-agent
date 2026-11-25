@@ -392,6 +392,7 @@ function onArticleFilterChange() {
 }
 
 async function handleEnqueueSelected() {
+  if (enqueuing.value) return
   if (selectedIds.value.length === 0) return
   enqueuing.value = true
   try {
@@ -505,6 +506,7 @@ function clearImport() {
 }
 
 async function handleImport() {
+  if (importing.value) return
   if (parsedValidUrls.value.length === 0) return
   importing.value = true
   importError.value = ''

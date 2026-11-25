@@ -337,8 +337,10 @@ def _get_agent_token(tenant_id: str, subagent_name: Optional[str]) -> Optional[s
     """AGENT_TOKEN 存于租户级子智能体环境变量（subagent_env_vars 表）
 
     recap 是后台任务，无请求上下文（env_vars 不注入 os.environ），必须按
-    tenant_id 显式查库。先按当前子智能体精确查（副本实例解析为父定义名，
-    副本无独立环境变量配置入口），未配置则兜底遍历租户全部。
+    tenant_id 显式查库。仅按当前子智能体精确查（副本实例解析为父定义名，
+    副本无独立环境变量配置入口）。2026-11-24 定版：移除「兜底遍历租户全部」
+    语义，环境变量按智能体隔离——未配置即放弃推送，不再借用同租户其他
+    智能体的凭证（曾致对话内容推到错误的外部系统）。
     """
     try:
         from src.db.subagent_env_var import SubagentEnvVarDB
@@ -349,9 +351,6 @@ def _get_agent_token(tenant_id: str, subagent_name: Optional[str]) -> Optional[s
             for var in SubagentEnvVarDB.get_vars(tenant_id, base_name):
                 if var.get("var_name") == "AGENT_TOKEN" and var.get("var_value"):
                     return var["var_value"]
-        for var in SubagentEnvVarDB.get_all_vars_for_tenant(tenant_id):
-            if var.get("var_name") == "AGENT_TOKEN" and var.get("var_value"):
-                return var["var_value"]
     except Exception as e:
         logger.warning(f"[external_push] 读取租户 AGENT_TOKEN 失败 tenant={tenant_id}: {e}")
     return None

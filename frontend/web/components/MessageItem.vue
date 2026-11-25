@@ -83,16 +83,6 @@
 
       <ReplyContent v-if="!showInputHint" :message="message" :is-processing="isProcessing" />
 
-      <HumanAssistanceCard
-        v-if="message.browserAssistance"
-        :key="message.browserAssistance.run_id + ':' + message.browserAssistance.assistance_id"
-        :runner-id="message.runnerId"
-        :assistance="message.browserAssistance"
-        :auth-headers="authHeaders"
-        @updated="updateAssistance"
-        @continuation="handleContinuation"
-      />
-
       <!-- 结构化提问卡片（ask_user）：waiting.form 投影到问题消息时可作答 -->
       <QuestionCard
         v-if="message.questionCard"
@@ -180,7 +170,6 @@ import { useAttachmentPreview } from '@/composables/useAttachmentPreview'
 import { renderMarkdown } from '@/utils/markdown'
 import { useReplyResources } from '@/utils/replyResources'
 import { useDebugMode } from '@/composables/useDebugMode'
-import HumanAssistanceCard from './browser/HumanAssistanceCard.vue'
 import QuestionCard from './chat/QuestionCard.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import { useAgent } from '@/composables/useAgent'
@@ -200,32 +189,6 @@ const props = withDefaults(defineProps<Props>(), {
 const { openPreview } = useAttachmentPreview()
 const { isDebugEnabled } = useDebugMode()
 const authHeaders = computed(() => useTenantAuth().getAuthHeader())
-
-function updateAssistance(assistance: any) {
-  if (props.message.runnerId) return
-  props.message.browserAssistance = assistance
-}
-
-function handleContinuation(events: any[]) {
-  if (props.message.runnerId) return
-  const responseText = events
-    .filter(event => event.type === 'response' && typeof event.data === 'string')
-    .map(event => event.data)
-    .join('')
-  if (responseText) props.message.content += responseText
-  const nextAssistance = events.find(event => event.type === 'browser_human_required')
-  if (nextAssistance) {
-    props.message.browserAssistance = { ...nextAssistance, state: 'pending' }
-    return
-  }
-  const terminal = events.find(event =>
-    event.type === 'agent_continuation_completed' || event.type === 'browser_run_closed'
-  )
-  if (!terminal || !props.message.browserAssistance) return
-  props.message.browserAssistance.state = terminal.type === 'browser_run_closed'
-    ? 'failed'
-    : 'resumed'
-}
 
 const isExpanded = ref(false)
 

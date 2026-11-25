@@ -1,6 +1,7 @@
 """Platform administrator views and thresholds for Runner duration alerts."""
 
 import asyncio
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from loguru import logger
@@ -13,11 +14,20 @@ from src.services.agent_runner.runner_alerts import DEFAULT_THRESHOLD_MINUTES, R
 
 router = APIRouter(prefix='/api/platform', tags=['Runner 运行告警'])
 
+# admin-cancel 转发的稳定错误码 -> 用户可读文案（其余走通用文案）
+_RUNNER_STOP_ERRORS = {
+    'RUNNER_NOT_FOUND': 'Runner 任务不存在',
+    'RUNNER_GATEWAY_NOT_CONFIGURED': 'Runner 服务未配置，无法停止任务',
+    'RUNNER_SERVICE_UNAVAILABLE': 'Runner 服务暂不可用，请稍后重试',
+    'SCHEDULED_CONTROL_FORBIDDEN': '该任务类型不支持此操作',
+}
+
 
 class ThresholdUpdate(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
     tenant_id: str = Field(min_length=1, max_length=128)
-    profile_id: str = Field(min_length=1, max_length=128)
+    # 允许空串：空 = 租户级覆盖（对该租户全部数字员工生效），规范化为 '*'
+    profile_id: str = Field(max_length=128)
     minutes: int = Field(ge=1)
 
 
@@ -93,6 +103,29 @@ async def get_runner_alert(request: Request, alert_id: str):
     return {'success': True, **result}
 
 
+@router.post('/runners/{runner_id}/cancel')
+async def cancel_platform_runner(request: Request, runner_id: str):
+    """平台管理员停止运行中的 Runner 任务（系统健康页告警处置入口）。
+
+    主 API 只负责 platform_admin 全局上下文核验与转发；取消语义由
+    runner 服务的 admin-cancel（manager.admin_cancel）以完整协作式
+    取消流程执行，主 API 不直写 agent_runners 状态。
+    """
+    await _require_platform_context(request)
+    runner_id = _bounded_id(runner_id)
+    from src.config.settings import settings
+    from src.services.agent_runner.contracts import RunnerError
+    from src.services.agent_runner.web_client import RunnerServiceClient
+    try:
+        return await RunnerServiceClient(settings.agent_runner).request(
+            'POST', '/v1/runners/' + quote(runner_id, safe='') + '/admin-cancel',
+            authorization='')
+    except RunnerError as error:
+        raise HTTPException(error.status, detail={
+            'error': _RUNNER_STOP_ERRORS.get(error.code, '停止 Runner 任务失败，请稍后重试'),
+            'debug': error.code}) from None
+
+
 @router.get('/runner-alert-thresholds')
 async def get_runner_alert_thresholds(request: Request):
     await _require_platform_context(request)
@@ -109,9 +142,11 @@ async def put_runner_alert_threshold(request: Request):
     except (ValidationError, ValueError):
         _invalid_request()
     _bounded_id(body.tenant_id)
-    _bounded_id(body.profile_id)
+    profile_id = '*' if not body.profile_id.strip() else body.profile_id.strip()
+    if profile_id != '*':
+        _bounded_id(profile_id)
     await _read(RunnerAlertRepository().set_threshold, body.tenant_id,
-                body.profile_id, body.minutes)
+                profile_id, body.minutes)
     return {'success': True}
 
 
@@ -119,6 +154,9 @@ async def put_runner_alert_threshold(request: Request):
 async def delete_runner_alert_threshold(request: Request):
     await _require_platform_context(request)
     tenant_id = _bounded_id(request.query_params.get('tenant_id'))
-    profile_id = _bounded_id(request.query_params.get('profile_id'))
+    raw_profile_id = request.query_params.get('profile_id') or ''
+    profile_id = '*' if not raw_profile_id.strip() else raw_profile_id.strip()
+    if profile_id != '*':
+        _bounded_id(profile_id)
     await _read(RunnerAlertRepository().delete_threshold, tenant_id, profile_id)
     return {'success': True}

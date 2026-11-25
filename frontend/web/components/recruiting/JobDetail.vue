@@ -19,7 +19,7 @@
             {{ togglingStatus ? '切换中...' : (job.status === 'active' ? '暂停职位' : '恢复在招') }}
           </BaseButton>
           <BaseButton size="sm" @click="showEditModal = true">编辑</BaseButton>
-          <BaseButton size="sm" intent="danger-ghost" @click="handleDeleteJob">删除</BaseButton>
+          <BaseButton size="sm" intent="danger-ghost" :disabled="deletingJob" @click="handleDeleteJob">删除</BaseButton>
         </template>
       </div>
     </div>
@@ -103,7 +103,7 @@
                   <div class="flex gap-1 flex-shrink-0">
                     <BaseButton intent="secondary" size="sm" class="whitespace-nowrap text-xs" @click="copyScript(script)">复制</BaseButton>
                     <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openEditScript(script)">编辑</BaseButton>
-                    <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleDeleteScript(script)">删除</BaseButton>
+                    <BaseButton intent="danger-ghost" size="sm" :disabled="deletingScript" class="whitespace-nowrap text-xs" @click="handleDeleteScript(script)">删除</BaseButton>
                   </div>
                 </div>
                 <p class="text-sm text-default leading-relaxed whitespace-pre-wrap">{{ script.content }}</p>
@@ -302,6 +302,8 @@ const requirementsGroups = computed(() => requirementGroups(job.value?.job_requi
 // ============== 状态切换 / 删除 ==============
 
 const togglingStatus = ref(false)
+const deletingJob = ref(false)
+const deletingScript = ref(false)
 
 // 状态互切：active ↔ paused，confirm 后 updateJob
 async function handleToggleStatus() {
@@ -329,15 +331,21 @@ async function handleToggleStatus() {
 }
 
 async function handleDeleteJob() {
+  if (deletingJob.value) return
   const current = job.value
   if (!current) return
   if (!confirm(`确定删除职位「${current.job_name}」？其 ${current.script_count} 条话术将一并删除。`)) return
-  const res = await deleteJob(current.id)
-  if (res.success) {
-    toast.success('职位已删除')
-    router.push(jobListPath(route))
-  } else {
-    toast.error(res.error || '删除失败')
+  deletingJob.value = true
+  try {
+    const res = await deleteJob(current.id)
+    if (res.success) {
+      toast.success('职位已删除')
+      router.push(jobListPath(route))
+    } else {
+      toast.error(res.error || '删除失败')
+    }
+  } finally {
+    deletingJob.value = false
   }
 }
 
@@ -413,6 +421,7 @@ function openEditScript(script: JobScript) {
 }
 
 async function handleSubmitScript() {
+  if (submitting.value) return
   if (!canSubmitScript.value || !job.value) return
   submitting.value = true
   try {
@@ -439,13 +448,19 @@ async function handleSubmitScript() {
 }
 
 async function handleDeleteScript(script: JobScript) {
+  if (deletingScript.value) return
   if (!confirm(`确定删除话术「${script.title}」？`)) return
-  const res = await deleteJobScript(script.id)
-  if (res.success) {
-    toast.success('话术已删除')
-    await loadJob()
-  } else {
-    toast.error(res.error || '删除失败')
+  deletingScript.value = true
+  try {
+    const res = await deleteJobScript(script.id)
+    if (res.success) {
+      toast.success('话术已删除')
+      await loadJob()
+    } else {
+      toast.error(res.error || '删除失败')
+    }
+  } finally {
+    deletingScript.value = false
   }
 }
 

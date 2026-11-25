@@ -8,15 +8,11 @@ from .source_receipts import source_offload
 
 
 class ControlApplication:
-    PUBLIC_ACTIONS = frozenset({'pause','resume','reply'})
-
     def __init__(self, manager, controls=None):
         self.manager = manager
         self.controls = controls or ControlRepository(manager.repository.connection_factory)
 
     def _find(self, runner_id, request, credentials):
-        if request.action not in self.PUBLIC_ACTIONS:
-            raise RunnerError('CONTROL_COMPLETION_FORBIDDEN',403)
         self.manager.authorizer.verify_service(credentials['service_id'],credentials['service_token'],None)
         row = self.manager.repository.get(runner_id)
         if row.get('source') == 'scheduled':

@@ -1,5 +1,5 @@
 <template>
-  <div class="h-screen flex flex-col bg-canvas" :class="{ 'embed-mode': isEmbed }">
+  <div ref="rootEl" class="h-screen chat-root flex flex-col bg-canvas" :class="{ 'embed-mode': isEmbed }">
     <!-- 页头（iframe embed 模式隐藏，设计 §4.5） -->
     <header v-if="!isEmbed" class="flex items-center gap-3 px-4 py-3 bg-surface border-b border-default">
       <div class="w-9 h-9 rounded-full bg-primary-50 text-primary-600 flex items-center justify-center shrink-0">
@@ -27,7 +27,7 @@
       </button>
     </header>
 
-    <div class="flex-1 flex min-h-0">
+    <div class="flex-1 flex min-h-0 relative">
       <!-- 历史会话侧栏（仅 anon 模式本浏览器历史；uid 模式服务端强制无历史，ext 按userid跨设备续聊无本地历史侧栏） -->
       <aside v-if="showHistoryEnabled && showHistory && identityMode === 'anon'" class="w-64 border-r border-default bg-surface flex flex-col max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-10">
         <div class="px-3 py-2 border-b border-default flex items-center justify-between gap-2">
@@ -90,7 +90,8 @@
                   v-html="renderMarkdown(msg.content)"
                 ></div>
                 <div v-if="msg.files && msg.files.length" class="space-y-2">
-                  <DownloadFileCard v-for="(f, i) in msg.files" :key="i" :file="f" />
+                  <!-- download-only：本页未挂载 AttachmentPreviewPanel，可预览类型点击会静默无响应 -->
+                  <DownloadFileCard v-for="(f, i) in msg.files" :key="i" :file="f" download-only />
                 </div>
                 <div v-if="msg.created_at" class="ml-2 mt-1 text-xs text-muted tabular-nums">{{ formatMsgTime(msg.created_at) }}</div>
               </div>
@@ -136,6 +137,7 @@
               </svg>
             </label>
             <textarea
+              ref="inputEl"
               v-model="inputText"
               class="flex-1 resize-none border border-default rounded-xl px-3 py-2 text-sm text-default focus:outline-none focus:ring-1 focus:ring-primary-400 bg-canvas"
               :rows="1"
@@ -155,6 +157,11 @@
     <div v-if="errorMessage" class="fixed bottom-20 left-1/2 -translate-x-1/2 bg-danger-50 text-danger-700 text-xs px-3 py-2 rounded-lg shadow z-20">
       {{ errorMessage }}
     </div>
+
+    <!-- 真机诊断启用进度提示（3 秒内连点 10 次启用，见 onPageTap） -->
+    <div v-if="tapHint" class="fixed bottom-2 left-2 bg-surface border border-default rounded px-2 py-1 text-xs text-muted z-50">
+      {{ tapHint }}
+    </div>
   </div>
 </template>
 
@@ -169,6 +176,7 @@ import {
   type ChannelMessage
 } from '@/api/webC'
 import { renderMarkdown } from '@/utils/markdown'
+import { generateUuid } from '@/utils/uuid'
 import ImageGallery from '@/components/ui/ImageGallery.vue'
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -212,6 +220,57 @@ const streamFailed = ref(false)
 const isTerminal = ref(true)
 const streamingActive = ref(false)
 const scrollContainer = ref<HTMLElement | null>(null)
+const inputEl = ref<HTMLTextAreaElement | null>(null)
+const rootEl = ref<HTMLElement | null>(null)
+const tapHint = ref('')
+
+// ============== 真机诊断开关（2026-11-24 iOS 微信右侧裁切排查） ==============
+// 3 秒内连点页面 10 次启用 vConsole 布局诊断（真机-only 问题无法在桌面复现，
+// 靠测试同学点「复制诊断」回传视口/缩放数据）。启用后 sessionStorage 记忆，
+// 本次会话内刷新/跳转不丢；会话结束自动失效，不影响普通用户。
+const DIAG_TAPS = 10
+const DIAG_WINDOW_MS = 3000
+const DIAG_STORAGE_KEY = 'webc_vconsole'
+let tapCount = 0
+let tapFirstAt = 0
+let tapHintTimer: ReturnType<typeof setTimeout> | null = null
+let diagnosticsOn = false
+
+function enableDiagnostics() {
+  if (diagnosticsOn) return
+  diagnosticsOn = true
+  tapHint.value = ''
+  if (tapHintTimer) { clearTimeout(tapHintTimer); tapHintTimer = null }
+  try { sessionStorage.setItem(DIAG_STORAGE_KEY, '1') } catch { /* 隐私模式等场景忽略 */ }
+  void import('@/utils/webCDiagnostics').then(m =>
+    m.setupWebCDiagnostics({
+      getTextarea: () => inputEl.value,
+      getScrollContainer: () => scrollContainer.value,
+    }))
+}
+
+function onPageTap() {
+  if (diagnosticsOn) return
+  const now = Date.now()
+  if (now - tapFirstAt > DIAG_WINDOW_MS) tapCount = 0
+  if (tapCount === 0) tapFirstAt = now
+  tapCount++
+  if (tapCount >= DIAG_TAPS) {
+    enableDiagnostics()
+    return
+  }
+  if (tapCount >= 4) {
+    tapHint.value = `再点 ${DIAG_TAPS - tapCount} 次启用诊断`
+    if (tapHintTimer) clearTimeout(tapHintTimer)
+    tapHintTimer = setTimeout(() => { tapHint.value = '' }, 1500)
+  }
+}
+
+/** 回焦输入框：流式期间 textarea 被 disabled 导致焦点丢失，每轮结束后自动归还 */
+async function focusInput() {
+  await nextTick()
+  inputEl.value?.focus()
+}
 
 let observeAbort = new AbortController()
 const activeRunnerId = ref('')
@@ -221,6 +280,7 @@ onBeforeUnmount(() => {
   observeAbort.abort()
   submitting.value = false
   streamingActive.value = false
+  rootEl.value?.removeEventListener('click', onPageTap)
 })
 
 const canSubmit = computed(() => (inputText.value.trim().length > 0 || pendingAttachments.value.length > 0))
@@ -228,6 +288,11 @@ const canSubmit = computed(() => (inputText.value.trim().length > 0 || pendingAt
 const isUidMode = computed(() => identityMode.value === 'uid')
 
 onMounted(async () => {
+  // 真机诊断：会话内已启用过（sessionStorage 记忆）则直接恢复；否则监听连点手势
+  try {
+    if (sessionStorage.getItem(DIAG_STORAGE_KEY) === '1') enableDiagnostics()
+  } catch { /* sessionStorage 不可用忽略 */ }
+  rootEl.value?.addEventListener('click', onPageTap)
   identity.value = buildIdentityQuery(configId.value, route.query as Record<string, unknown>)
   try {
     const data = await getBootstrap(tenantId.value, configId.value, identity.value)
@@ -302,10 +367,8 @@ function formatMsgTime(value?: string): string {
 // ============== 消息加载与渲染 ==============
 
 function newClientId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `wc_${crypto.randomUUID()}`
-  }
-  return `wc_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`
+  // 经工具函数兜底：旧内核（Chromium <92）无 crypto.randomUUID
+  return `wc_${generateUuid()}`
 }
 
 /** 本地乐观渲染消息的时间戳（服务端权威校准以 reload 为准） */
@@ -497,6 +560,7 @@ async function submit() {
       submitting.value = false
       streamingActive.value = false
       isTerminal.value = true
+      void focusInput()
       return
     }
     if (reply.runner_id) {
@@ -507,6 +571,7 @@ async function submit() {
       submitting.value = false
       streamingActive.value = false
       isTerminal.value = true
+      void focusInput()
     }
   } catch (e) {
     submitting.value = false
@@ -514,6 +579,7 @@ async function submit() {
     isTerminal.value = true
     streamFailed.value = !waitingText.value
     errorMessage.value = e instanceof Error ? e.message : '发送失败'
+    void focusInput()
   }
 }
 
@@ -521,6 +587,7 @@ async function cancel() {
   // 停止按钮：服务端 cancel 终止当前执行，本地复位输入状态
   const runnerId = activeRunnerId.value
   resetStreamState()
+  void focusInput()
   if (runnerId) {
     try {
       await cancelRunner(tenantId.value, configId.value, identity.value, runnerId)
@@ -532,8 +599,14 @@ async function cancel() {
 
 function applySnapshot(runner: RunnerSnapshot) {
   if (runner.waiting_text) {
+    // ask_user 停车等用户回复：主动结束本轮观察。SSE 事件流对 waiting（非终态）
+    // 不关闭，不主动断开将令 submitting 恒为 true、输入框永久禁用（测试反馈 2026-11-19）。
+    // 反问经 finally 落入消息流，用户回复走新一轮 /chat，由后端应答等待中的澄清
     waitingText.value = runner.waiting_text
     streamingText.value = ''
+    isTerminal.value = true
+    streamFailed.value = false
+    observeAbort.abort()
     return
   }
   waitingText.value = ''
@@ -640,6 +713,9 @@ async function observeRunner(runnerId: string) {
     }
     if (streamFailed.value === false && streamingText.value) {
       messages.value.push({ role: 'assistant', content: streamingText.value, created_at: nowIso(), attachments: [], images: [], files: [] })
+    } else if (waitingText.value) {
+      // ask_user 反问作为 assistant 消息入列（服务端按 wait_id 幂等落库，reload 权威校准去重）
+      messages.value.push({ role: 'assistant', content: waitingText.value, created_at: nowIso(), attachments: [], images: [], files: [] })
     }
     streamingText.value = ''
     waitingText.value = ''
@@ -647,6 +723,7 @@ async function observeRunner(runnerId: string) {
     submitting.value = false
     // 服务端权威校准（同时触发终态补写）
     await reloadMessages()
+    void focusInput()
   }
 }
 </script>
@@ -654,6 +731,32 @@ async function observeRunner(runnerId: string) {
 <style scoped>
 .embed-mode {
   background: transparent;
+}
+/* iOS 微信真机适配（2026-11-24 反馈）：
+   1. 100vh 在微信内置浏览器常大于可视高度（标题栏/键盘），dvh 修正「上滑不到顶部」；
+      不支持 dvh 的旧内核回落 100vh（h-screen）。
+   2. overflow-x: clip 把横向溢出就地裁切，防止 iOS WebKit 按溢出内容平移/展开
+      整页布局视口——表现为右侧内容被裁、justify-end 的用户气泡整个出屏看不到。 */
+.chat-root {
+  height: 100vh;
+  height: 100dvh;
+  max-width: 100%;
+  overflow-x: clip;
+}
+.markdown-body {
+  overflow-wrap: anywhere;
+}
+/* iOS 聚焦自动放大防御（2026-11-24 二次反馈）：WKWebView 对 font-size < 16px 的
+   输入控件聚焦时会 zoom 页面（scale ≈ 16/字号），微信内核键盘收起后不还原，
+   表现为页面宽于视口可横向平移、右侧锚定内容（用户气泡/时间戳/停止按钮）出屏。
+   移动端输入框字号提到 16px 使 Safari 跳过聚焦缩放；桌面端保持 text-sm。 */
+.chat-root textarea {
+  font-size: 16px;
+}
+@media (min-width: 768px) {
+  .chat-root textarea {
+    font-size: 14px;
+  }
 }
 .markdown-body :deep(p) {
   margin: 0.25rem 0;

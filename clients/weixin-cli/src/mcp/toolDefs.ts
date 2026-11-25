@@ -10,6 +10,8 @@
  * 未过 probe 门禁的能力不得在此占位（设计 §10.3）。
  */
 import { z } from 'zod'
+import { dailySummaryShape } from '../operations/groupDailySummary.js'
+import { rangeSummaryShape } from '../operations/groupRangeSummary.js'
 
 export interface WeixinToolDef {
   name: string
@@ -115,4 +117,16 @@ export const TOOL_DEFS: WeixinToolDef[] = [
 TOOL_DEFS.push(
   { name:'weixin_chat_latest', title:'同步微信最新消息', description:'同步当前已打开会话的本机加密副本。仅返回同步状态、扫描页数和新增条数，正文与截图保留在本机。', zodShape:{target_name:z.string().min(1).max(128)}, annotations:{title:'同步微信最新消息',readOnlyHint:true,destructiveHint:false,idempotentHint:false,openWorldHint:true}},
 )
+TOOL_DEFS.push({
+  name: 'weixin_group_daily_summary', title: '生成微信群聊今日总结',
+  description: '核对已打开群聊，仅将用户授权的当天文字交给配对服务生成总结。回执仅含摘要和覆盖统计。',
+  zodShape: dailySummaryShape,
+  annotations: { title: '生成微信群聊今日总结', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+})
+TOOL_DEFS.push({
+  name: 'weixin_group_range_summary', title: '生成微信群聊时段总结',
+  description: '连接中心专用。原生核对群聊，只向配对服务提交获准固定区间的文字。回执仅含摘要和覆盖统计。',
+  zodShape: rangeSummaryShape,
+  annotations: { title: '生成微信群聊时段总结', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+})
 export const TOOL_NAMES = TOOL_DEFS.map((t) => t.name)

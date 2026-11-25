@@ -10,7 +10,8 @@
       <template #menu-items="{ closeMenu }">
         <button
           v-if="isAdmin"
-          class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover"
+          class="w-full text-left px-4 py-2 text-sm text-default hover:bg-surface-hover disabled:opacity-50"
+          :disabled="runningReview"
           @click="confirmRunReview(); closeMenu()"
         >
           手动复盘昨天
@@ -114,7 +115,7 @@
           <template #actions="{ row }">
             <div class="flex items-center justify-end gap-1">
               <BaseButton intent="ghost" size="sm" @click="openDetail(row)">详情</BaseButton>
-              <BaseButton v-if="isAdmin" intent="danger-ghost" size="sm" @click="confirmDelete(row)">删除</BaseButton>
+              <BaseButton v-if="isAdmin" intent="danger-ghost" size="sm" :disabled="deletingOutcome" @click="confirmDelete(row)">删除</BaseButton>
             </div>
           </template>
           <template #empty>
@@ -315,6 +316,8 @@ const total = ref(0)
 const stats = ref<OutcomeStats | null>(null)
 const detail = ref<WorkOutcome | null>(null)
 const showDetail = ref(false)
+const deletingOutcome = ref(false)
+const runningReview = ref(false)
 const subagentNameMap = ref<Record<string, string>>({})
 const filters = ref({
   outcome_type: '',
@@ -440,24 +443,32 @@ function openDetail(row: WorkOutcome | Record<string, any>) {
 }
 
 async function confirmDelete(row: WorkOutcome | Record<string, any>) {
+  if (deletingOutcome.value) return
   const r = row as WorkOutcome
   if (!confirm(`确定删除工作成果「${r.summary.slice(0, 40)}...」？`)) return
+  deletingOutcome.value = true
   try {
     await deleteOutcome(r.outcome_id)
     await refresh()
   } catch (e: any) {
     alert(`删除失败: ${e.message}`)
+  } finally {
+    deletingOutcome.value = false
   }
 }
 
 async function confirmRunReview() {
+  if (runningReview.value) return
   if (!confirm('手动触发复盘昨天的工作成果？此操作会消耗少量 LLM 积分。')) return
+  runningReview.value = true
   try {
     const res = await runReviewManually()
     alert(`复盘任务已触发，批次 ID: ${res.data.review_batch_id}\n点击刷新查看新成果。`)
     await refresh()
   } catch (e: any) {
     alert(`触发复盘失败: ${e.message}`)
+  } finally {
+    runningReview.value = false
   }
 }
 

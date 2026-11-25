@@ -141,6 +141,22 @@ class UsageRepository:
             self.uncertain_in_tx(conn.cursor(), attempt, receipt_id)
             conn.commit()
 
+    def abandon_inflight_skill_calls(self, attempt):
+        """执行器超时 kill 子进程组后收口其在途 skill-call 收据。
+
+        被 SIGKILL 的子进程无法上报用量，phase='started' 的 skill-call 收据
+        （boundary 以 skill-call: 开头，仅子进程记账写入）标记为 unknown——
+        与 uncertain 相同的「不可虚构零用量、留待对账」语义；已 observed 的
+        收据与主循环（boundary='main'）收据不受影响。"""
+        with self.connection_factory() as conn:
+            cursor = conn.cursor()
+            lock_runner(cursor, attempt.runner_id)
+            cursor.execute("""UPDATE agent_runner_usage_receipts SET phase='unknown'
+                WHERE runner_id=%s AND authorized_attempt=%s AND phase='started'
+                  AND boundary LIKE 'skill-call:%%'""",
+                (attempt.runner_id, attempt.number))
+            conn.commit()
+
     @staticmethod
     def uncertain_in_tx(cursor, attempt, receipt_id):
         lock_runner(cursor, attempt.runner_id)

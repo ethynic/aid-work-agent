@@ -63,7 +63,7 @@
       </svg>
     </div>
   </button>
-  <WechatDownloadGuide v-model="showWechatGuide" />
+  <WechatDownloadGuide v-model="showWechatGuide" :download-url="wechatGuideUrl" />
 </template>
 
 <script setup lang="ts">
@@ -88,6 +88,16 @@ const { resolver } = useReplyResources()
 
 const downloading = ref(false)
 const showWechatGuide = ref(false)
+const wechatGuideUrl = ref('')
+
+/** 相对路径转绝对 URL（微信引导弹框复制的链接要在系统浏览器独立打开，必须是完整地址） */
+function toAbsoluteUrl(url: string): string {
+  try {
+    return new URL(url, window.location.origin).href
+  } catch {
+    return url
+  }
+}
 
 async function handleDownload() {
   if (downloading.value) return
@@ -95,6 +105,10 @@ async function handleDownload() {
   // 策略见 utils/download.ts：微信引导 / 移动端小文件 blob / 其余原生
   const strategy = resolveDownloadStrategy(props.file.file_size)
   if (strategy === 'wechat_guide') {
+    // 复制直链方案（2026-11-24 iOS 微信真机反馈）：uid 模式聊天页「在浏览器打开」
+    // 是新会话（sessionStorage 持有，设计 §3.5），引导用户在浏览器打开页面重新下载
+    // 走不通；文件直链自带身份参数，粘贴打开即可直接下载。
+    wechatGuideUrl.value = toAbsoluteUrl(url)
     showWechatGuide.value = true
     return
   }

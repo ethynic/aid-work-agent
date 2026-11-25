@@ -15,6 +15,8 @@ LLM Provider 调用日志记录器
 
 import json
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -22,6 +24,25 @@ from typing import Any, Dict, Optional
 
 # 日志根目录
 _LOG_DIR = Path("log/llm")
+_private_call = ContextVar('private_llm_provider_call', default=False)
+
+
+@contextmanager
+def private_provider_call():
+    """Process model input in memory; provider logging retains usage metadata only."""
+    token = _private_call.set(True)
+    try:
+        yield
+    finally:
+        _private_call.reset(token)
+
+
+def provider_content_private():
+    return _private_call.get()
+
+
+def provider_response_text(text):
+    return '[redacted]' if provider_content_private() else text
 
 
 def _get_log_file() -> Path:
@@ -60,14 +81,15 @@ def log_llm_invoke(
         duration_ms: 调用耗时（毫秒）
     """
     try:
+        private = provider_content_private()
         record = {
             "request_id": request_id,
             "timestamp": datetime.now().isoformat(),
             "provider": provider,
             "model": model,
-            "request": request_params,
-            "response": response_data,
-            "error": error,
+            "request": None if private else request_params,
+            "response": None if private else response_data,
+            "error": "[redacted]" if private and error else error,
             "usage": usage,
             "duration_ms": duration_ms,
         }

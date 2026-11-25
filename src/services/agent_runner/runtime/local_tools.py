@@ -29,6 +29,7 @@ class LocalToolAdapter:
         cancel_check: Optional[Callable[[], bool]] = None,
         context=None,
         recover=False,
+        recovery_tool=None,
     ) -> AsyncGenerator[tuple, None]:
         """执行 LOCAL_REQUIRED 本地工具并流式产出进度（m05-implementation-spec §5）
 
@@ -52,10 +53,12 @@ class LocalToolAdapter:
         execution_args["_progress_queue"] = progress_queue
         from src.local_tools.durable_flow import LocalContinuationRequired
         from src.local_tools.lifecycle import local_operation_scope, current_local_operation
-        tool = self.tool_executor.registry.get_tool(tool_name)
+        tool = recovery_tool if recover and recovery_tool else self.tool_executor.registry.get_tool(tool_name)
         owner = None
         from src.local_tools.domain_flow import supports_owned_tool, recover_owned_tool
-        if getattr(self.control, 'durable_owner', False) and supports_owned_tool(tool):
+        from src.local_tools.plugin_tool import RuntimePluginTool
+        plugin = isinstance(tool, RuntimePluginTool)
+        if getattr(self.control, 'durable_owner', False) and (plugin or supports_owned_tool(tool)):
             from ..local_owner import RunnerLocalLifecycle
             owner = RunnerLocalLifecycle(self.control, self.state, context.tool_call_id)
         async def execute():
@@ -63,6 +66,8 @@ class LocalToolAdapter:
                 if owner is None:
                     raise LocalContinuationRequired('LOCAL_DOMAIN_CONTINUATION_REQUIRED')
                 with tool_execution_scope(context):
+                    if plugin:
+                        return await tool.recover(current_local_operation(), progress_queue)
                     return await recover_owned_tool(tool, current_local_operation(), progress_queue,
                         arguments=tool_args)
             return await self.tool_executor.execute(tool_name, execution_args, context=context)

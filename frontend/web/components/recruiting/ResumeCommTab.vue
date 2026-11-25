@@ -27,6 +27,7 @@
           <BaseButton
             intent="danger-ghost"
             size="sm"
+            :disabled="deletingLog"
             class="whitespace-nowrap text-xs flex-shrink-0"
             @click="handleDelete(log)"
           >删除</BaseButton>
@@ -129,6 +130,7 @@ async function loadLogs() {
 
 const showModal = ref(false)
 const submitting = ref(false)
+const deletingLog = ref(false)
 const form = ref<{ direction: string; channel: string; content: string }>({
   direction: 'out',
   channel: 'boss',
@@ -143,6 +145,7 @@ function openCreateModal() {
 }
 
 async function handleSubmit() {
+  if (submitting.value) return
   if (!canSubmit.value) return
   submitting.value = true
   try {
@@ -168,7 +171,9 @@ async function handleSubmit() {
 // ============== 删除 ==============
 
 async function handleDelete(log: CommLog) {
+  if (deletingLog.value) return
   if (!confirm('确定删除这条沟通记录？')) return
+  deletingLog.value = true
   try {
     const res = await deleteCommLog(log.id)
     if (res.success) {
@@ -179,6 +184,8 @@ async function handleDelete(log: CommLog) {
     }
   } catch (e: any) {
     toast.error(e.message || '删除异常')
+  } finally {
+    deletingLog.value = false
   }
 }
 

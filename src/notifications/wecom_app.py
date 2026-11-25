@@ -203,6 +203,10 @@ class WecomAppAdapter:
         等非终态映射已删除，误接事件 fail loud。会话名快照沿用事件参数
         （生产者已按 contracts.session_title 清洗），Adapter 不查库；时长取
         事件参数 duration_seconds（触发判定带入，0/缺省=未知）走旧文案兜底。"""
+        from .events import weixin_batch_text
+
+        if batch := weixin_batch_text(parameters):
+            return batch
         session = parameters.get('session_title') or '任务'
         duration = _duration_label(parameters.get('duration_seconds'))
         if event_type == 'task.completed':

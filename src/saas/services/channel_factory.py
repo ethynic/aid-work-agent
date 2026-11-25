@@ -38,6 +38,31 @@ _NOTIFY_ONLY = "notify_only"
 # 支持「通知用途」的渠道类型（与 saas/api/channel_config.py 口径一致）
 _NOTIFY_USAGE_CHANNEL_TYPES = ("wecom", "feishu", "dingtalk")
 
+# ==================== 媒体识别开关（2026-11-19） ====================
+# 租户渠道 config JSON 可选字段：ASR 语音识别（默认开）、图片识别（默认关）。
+# 识别会消耗租户积分（ASR 按次、图片走多模态/image_read VL），租户可按渠道关闭。
+# 与 notify_usage 同为配置元数据而非 adapter 构造参数——构造器不接受未知关键字
+# 参数，实例化前剥离，经 adapter.media_switches 注入（配置变更随缓存重建生效）。
+MEDIA_SWITCH_KEYS = ("asr_enabled", "image_recognition_enabled")
+# 键 → 缺省值（存量配置不含键时按缺省执行：ASR 保持现状开启、图片识别默认关闭）
+DEFAULT_MEDIA_SWITCHES = {"asr_enabled": True, "image_recognition_enabled": False}
+# 支持媒体识别开关的渠道类型
+MEDIA_SWITCH_CHANNEL_TYPES = ("wecom", "wecom_kf", "dingtalk", "feishu")
+
+
+def extract_media_switches(channel_type: str, config: Optional[dict]) -> Dict[str, bool]:
+    """从渠道 config 提取媒体识别开关（布尔规整，非法/缺省回退缺省值）。
+
+    非支持渠道类型返回空 dict；支持渠道返回的 dict 恒含全部键。
+    """
+    if channel_type not in MEDIA_SWITCH_CHANNEL_TYPES:
+        return {}
+    result: Dict[str, bool] = {}
+    for key, default in DEFAULT_MEDIA_SWITCHES.items():
+        val = (config or {}).get(key, default)
+        result[key] = val if isinstance(val, bool) else default
+    return result
+
 
 def _is_notify_only(cfg: dict) -> bool:
     """应用配置是否为「仅通知」用途（对话渠道实例化时跳过；企微/飞书/钉钉同模式）。"""
@@ -93,6 +118,11 @@ async def _build_adapter(tenant_id: str, channel_type: str, config: dict) -> Any
     # adapter 实例属性，避免每个 adapter 构造器重复实现。必须从构造参数中移除——
     # wecom/dingtalk/feishu 构造器不接受未知关键字参数。
     verbose_feedback_cfg = build_config.pop("verbose_feedback", None)
+    # 媒体识别开关（2026-11-19）：同为配置元键，剥离后经 adapter.media_switches
+    # 注入；媒体门控点（channel_routes）从该属性读取，缺失时回退缺省值
+    media_switches = extract_media_switches(channel_type, build_config)
+    for _key in MEDIA_SWITCH_KEYS:
+        build_config.pop(_key, None)
     adapter = ChannelFactory.create_adapter(channel_type, build_config)
     # 若 adapter 支持接收 tenant_id（用于租户隔离存储路径等），注入
     if hasattr(adapter, "set_tenant_id"):
@@ -108,6 +138,14 @@ async def _build_adapter(tenant_id: str, channel_type: str, config: dict) -> Any
         except Exception as e:
             logger.warning(
                 f"adapter.verbose_feedback 注入失败: tenant={tenant_id}, "
+                f"type={channel_type}, error={e}"
+            )
+    if media_switches:
+        try:
+            adapter.media_switches = media_switches
+        except Exception as e:
+            logger.warning(
+                f"adapter.media_switches 注入失败: tenant={tenant_id}, "
                 f"type={channel_type}, error={e}"
             )
     return adapter
@@ -153,9 +191,12 @@ class ChannelFactory:
         module = importlib.import_module(module_path)
         adapter_class = getattr(module, class_name)
 
-        # 传入配置参数创建实例（notify_usage 为配置元键，非构造参数，剔除防 TypeError；
-        # verify 等直连路径同样经过此处）
-        build_config = {k: v for k, v in (config or {}).items() if k != _NOTIFY_USAGE_KEY}
+        # 传入配置参数创建实例（notify_usage / 媒体识别开关为配置元键，非构造参数，
+        # 剔除防 TypeError；verify 等直连路径同样经过此处）
+        build_config = {
+            k: v for k, v in (config or {}).items()
+            if k != _NOTIFY_USAGE_KEY and k not in MEDIA_SWITCH_KEYS
+        }
         return adapter_class(**build_config)
 
     @classmethod
@@ -237,6 +278,30 @@ class ChannelFactory:
             }
             _ADAPTER_CACHE[cache_key] = entry
             return adapter, used_config_id, cfg.get("subagent_type")
+
+    @classmethod
+    def load_media_switches(
+        cls,
+        tenant_id: str,
+        channel_type: str,
+        config_id: Optional[str] = None,
+    ) -> Dict[str, bool]:
+        """按租户渠道配置读取媒体识别开关（与 _load_config 选择口径一致）。
+
+        供无 adapter 上下文的路径（如 wecom_kf 人工期/员工消息落库）按需查询；
+        与 create_from_tenant_config 同源，配置变更经 cfg_updated_at 校验自然生效。
+        同步 DB 查询，异步调用方需自行 asyncio.to_thread 包裹。
+        查询失败回退缺省值（ASR 开、图片识别关，调用方按需降级）。
+        """
+        try:
+            cfg, _ = cls._load_config(tenant_id, channel_type, config_id)
+        except Exception as e:
+            logger.warning(
+                f"[ChannelFactory] 媒体识别开关读取失败，回退缺省: "
+                f"tenant={tenant_id}, type={channel_type}, error={e}"
+            )
+            return dict(DEFAULT_MEDIA_SWITCHES)
+        return extract_media_switches(channel_type, (cfg or {}).get("config"))
 
     @classmethod
     def _load_config(

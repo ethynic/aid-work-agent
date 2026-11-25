@@ -98,8 +98,9 @@
             </button>
             <button
               v-if="isTenantAdmin && agent.type === 'tenant_instance'"
-              class="h-9 px-3 flex-shrink-0 rounded-lg border border-danger-200 text-sm font-medium text-danger-600 hover:bg-danger-50 transition-colors"
+              class="h-9 px-3 flex-shrink-0 rounded-lg border border-danger-200 text-sm font-medium text-danger-600 hover:bg-danger-50 transition-colors disabled:opacity-50"
               title="删除该副本"
+              :disabled="deletingCopy"
               @click.stop="handleDeleteCopy(agent)"
             >
               删除
@@ -243,14 +244,21 @@ function handleCustomize(agent: SubagentListItem) {
 }
 
 // 删除副本实例：被渠道配置占用时后端拒绝，前端提示需先解除渠道绑定
+// 防重复提交：进行中禁止重复触发
+const deletingCopy = ref(false)
+
 async function handleDeleteCopy(agent: SubagentListItem) {
+  if (deletingCopy.value) return
   if (!confirm('确定删除该副本？删除后新会话无法继续使用。')) return
+  deletingCopy.value = true
   try {
     await deleteTenantAgentInstance(agent.agent_id)
     await handleAgentChanged()
   } catch (e: any) {
     console.error('删除副本失败:', e)
     alert(e?.message || '删除失败')
+  } finally {
+    deletingCopy.value = false
   }
 }
 

@@ -136,7 +136,7 @@ class Processes:
         environment = dict(os.environ, **(environment or {}))
         assert urlsplit(environment.get("DATABASE_URL", "")).path.lstrip("/") == self.database.name
         # A worker must never inherit the developer's separate trace database.
-        environment.update(TMPDIR=str(getattr(self, 'browser_temporary_directory', self.root)), PYTHONUNBUFFERED="1",
+        environment.update(TMPDIR=str(self.root), PYTHONUNBUFFERED="1",
                            LOGS_DATABASE_URL=environment["DATABASE_URL"])
         working_directory = None
         if private_working_directory:

@@ -240,6 +240,23 @@ display_names，避免前端展示临时文件名。零 token 消耗（不读源
             src = project_root / src
         src = src.resolve()
 
+        # file_id 兜底（2026-11-20 trace 排查）：word/excel/pdf 工具内置
+        # resolve_uploaded_file_path 解析（Redis uploaded_file 元数据 + 磁盘
+        # 扫描），cp 此前缺失——租户模板文件（subagent_template_files，注入
+        # 提示词给的是 file_id）经 cp 复制进技能工作目录时报「源文件不存在」，
+        # 模板路线中断。磁盘路径未命中时按 file_id 解析一次；解析结果仍走
+        # 下方租户边界守卫，不放大读取权限。
+        if not src.exists():
+            try:
+                from src.core.storage import resolve_uploaded_file_path
+                resolved = resolve_uploaded_file_path(source_file_path)
+            except Exception as resolve_err:
+                logger.warning(f"cp 源路径 file_id 解析异常: {resolve_err}")
+                resolved = None
+            if resolved:
+                logger.info(f"cp 源路径按 file_id 解析: {source_file_path} -> {resolved}")
+                src = Path(resolved).resolve()
+
         from src.core.tenant_path_guard import find_foreign_tenant_owner
 
         from src.tools.context import current_tool_execution_context

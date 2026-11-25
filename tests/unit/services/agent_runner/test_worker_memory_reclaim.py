@@ -26,8 +26,7 @@ from src.services.agent_runner.worker import (
 def _runner_config():
     return SimpleNamespace(enabled=True, slot_concurrency=1,
         watchdog_threshold=15, heartbeat_seconds=10, lease_seconds=30,
-        poll_seconds=0.05, durable_sleep_enabled=False, concurrency=1,
-        browser_owner=None)
+        poll_seconds=0.05, durable_sleep_enabled=False, concurrency=1)
 
 
 def _make_worker(monkeypatch):

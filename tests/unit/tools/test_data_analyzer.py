@@ -350,6 +350,71 @@ class TestStateMediation:
         assert "v" not in analyzer._artifact_paths
 
 
+class TestStateMediationMixedColumn:
+    """混合列（数字 + 占位符）降级场景：2026-11-20 生产事故回归
+
+    根因：to_parquet 遇 object 混合列（如单价列同时含数字与 — 占位符）
+    报 ArrowInvalid，load_table 直接失败。修复：parquet 写失败降级 CSV。
+    """
+
+    @pytest.fixture
+    def mixed_df(self):
+        """模拟生产事故形态：pd.read_excel 读出的 object 混合列"""
+        return pd.DataFrame({
+            "成本项": ["原料", "人工", "能耗"],
+            "单价(元)": [12.5, "—", 8.3],
+        })
+
+    def test_write_state_mixed_column_falls_back_to_csv(self, analyzer, mixed_df):
+        if analyzer._state_engine() != "parquet":
+            pytest.skip("无 pyarrow 环境本就走 CSV，降级逻辑不触发")
+        path = analyzer._write_state(mixed_df, "table_mixed")
+        assert path.endswith(".csv"), f"混合列应降级为 CSV，实际: {path}"
+        assert os.path.exists(path)
+        # 半截 parquet 残留必须清理
+        parquet_path = path[:-4] + ".parquet"
+        assert not os.path.exists(parquet_path)
+
+    def test_write_state_mixed_column_roundtrip(self, analyzer, mixed_df):
+        if analyzer._state_engine() != "parquet":
+            pytest.skip("无 pyarrow 环境本就走 CSV，降级逻辑不触发")
+        path = analyzer._write_state(mixed_df, "table_mixed")
+        back = analyzer._read_state(path)
+        assert list(back.columns) == ["成本项", "单价(元)"]
+        assert len(back) == 3
+        # 占位符原值保留（读回为 CSV 文本形态）
+        assert str(back.loc[1, "单价(元)"]).strip() == "—"
+
+    def test_store_dataframe_mixed_column(self, analyzer, mixed_df):
+        """store_dataframe 同走 _write_state，混合列不炸（LLM transform 产物路径）"""
+        path = analyzer.store_dataframe("v_mixed", mixed_df)
+        assert os.path.exists(path)
+        assert len(analyzer._resolve_source("v_mixed")) == 3
+
+    @pytest.mark.asyncio
+    async def test_load_table_mixed_excel_column(self, analyzer, tmp_path, mixed_df):
+        """端到端复现生产事故：Excel 单价列含数字 + — 占位符，load_table 不再失败"""
+        if analyzer._state_engine() != "parquet":
+            pytest.skip("无 pyarrow 环境本就走 CSV，降级逻辑不触发")
+        xlsx = str(tmp_path / "cost_baseline.xlsx")
+        mixed_df.to_excel(xlsx, index=False)
+        tid = await analyzer.load_table({
+            "table_id": "4462",
+            "source": {"type": "excel", "file_path": xlsx},
+        })
+        assert tid == "4462"
+        assert analyzer.table_rows("4462") == 3
+        df = analyzer._resolve_source("4462")
+        assert list(df.columns) == ["成本项", "单价(元)"]
+
+    def test_write_state_numeric_column_still_parquet(self, analyzer):
+        """纯数字列（含 None）不受影响，仍走 parquet 快路径"""
+        if analyzer._state_engine() != "parquet":
+            pytest.skip("无 pyarrow 环境本就走 CSV")
+        path = analyzer._write_state(pd.DataFrame({"a": [1.5, None, 2.5]}), "table_num")
+        assert path.endswith(".parquet")
+
+
 # ==================== 过滤引擎：_apply_filters ====================
 
 

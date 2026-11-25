@@ -16,7 +16,7 @@
 import os
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -492,3 +492,49 @@ class TestExecutionWorkspaceAllowlist:
         assert result["success"] is True
         kwargs = executor.execute_skill_command.await_args.kwargs
         assert kwargs["workdir"] == str(workdir)
+
+
+class TestFileIdResolution:
+    """skill_executor file_id 解析兜底（2026-11-20 trace 排查）。
+
+    租户模板 file_id 传给技能脚本（prep.py --templates）时曾被当作相对路径，
+    样版目录为空导致未按模板生成。磁盘查找未命中时按 file_id 解析
+    （resolve_uploaded_file_path：Redis 元数据 + 磁盘扫描）。
+    """
+
+    def test_resolve_file_path_hits_file_id(self, executor):
+        with patch(
+            "src.core.storage.resolve_uploaded_file_path",
+            return_value="/app/storage/tenants/t1/templates/file_tplabc12345.docx",
+        ):
+            resolved = executor._resolve_file_path("file_tplabc12345")
+        assert resolved == "/app/storage/tenants/t1/templates/file_tplabc12345.docx"
+
+    def test_resolve_file_path_non_file_id_untouched(self, executor):
+        """非 file_ 前缀输入解析不到时不抛异常，返回 None"""
+        with patch(
+            "src.core.storage.resolve_uploaded_file_path",
+            return_value=None,
+        ):
+            assert executor._resolve_file_path("nonexistent_rel.md") is None
+
+    def test_command_templates_param_resolved(self, executor, tmp_path):
+        """--templates file_xxx 在命令预处理中被解析为实际路径"""
+        target = "/app/storage/tenants/t1/templates/file_tplabc12345.docx"
+        with patch(
+            "src.core.storage.resolve_uploaded_file_path",
+            return_value=target,
+        ):
+            cmd = executor._resolve_file_paths_in_command(
+                "python3 prep.py --work /tmp/w --templates file_tplabc12345"
+            )
+        assert target in cmd
+
+    def test_command_existing_path_not_rewritten(self, executor, tmp_path):
+        """已存在的真实路径优先按原路径命中，不走 file_id 解析"""
+        real = tmp_path / "tpl.docx"
+        real.write_bytes(b"x")
+        cmd = executor._resolve_file_paths_in_command(
+            f"python3 prep.py --templates {real}"
+        )
+        assert str(real) in cmd

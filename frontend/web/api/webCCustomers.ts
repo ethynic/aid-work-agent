@@ -51,6 +51,8 @@ export interface WebCCustomer {
   avatar_url: string | null
   first_session_at?: string
   last_session_at?: string
+  /** 会话粒度行（group_by_session）携带：每条渠道会话一行 */
+  session_id?: string
 }
 
 export function listWebCCustomers(params: { username?: string; config_id?: string; page?: number; page_size?: number }): Promise<{ success: boolean; users: WebCCustomer[]; total: number }> {

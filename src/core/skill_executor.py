@@ -428,7 +428,13 @@ Follow the instructions in the skill above to complete the user's task."""
             except asyncio.TimeoutError:
                 from src.core.subprocess_owner import stop_process_group_async
                 await stop_process_group_async(process)
-                observe_child_exit(None)
+                # 执行器主动超时 kill：与 observe_child_exit 的异常退出语义
+                # 区分，不得标记记账存储故障（否则命令超时会放大为整个
+                # runner 中断，2026-11-24 聊易 CHANNEL_EXECUTION_INTERRUPTED
+                # 事故）；在途子进程收据按 uncertain 口径交由对账，超时结果
+                # 作为工具失败返回模型继续执行。
+                from src.llm.call_observer import observe_child_timeout
+                observe_child_timeout()
                 duration = time.time() - start_time
                 
                 return ExecutionResult(
@@ -961,6 +967,21 @@ Follow the instructions in the skill above to complete the user's task."""
                         logger.info(f"Resolved file path: {file_path} -> {candidate}")
                         return candidate.absolute().as_posix()
         
+        # file_id 兜底（2026-11-20 trace 排查）：word/excel/pdf 工具内置
+        # resolve_uploaded_file_path 解析，技能脚本链路此前缺失——租户模板
+        # file_id（注入提示词的「可用模板文件」）传给技能脚本（如
+        # doc-layout-clone prep.py --templates）时被当作相对路径，样版目录
+        # 为空。磁盘查找未命中时按 file_id 解析一次（仅 file_ 前缀生效，
+        # Redis 元数据 + 磁盘扫描，不抛异常）。
+        try:
+            from src.core.storage import resolve_uploaded_file_path
+            resolved_file = resolve_uploaded_file_path(file_path)
+        except ImportError:
+            resolved_file = None
+        if resolved_file:
+            logger.info(f"Resolved file id: {file_path} -> {resolved_file}")
+            return resolved_file
+
         logger.warning(f"Could not resolve file path: {file_path}")
         return None
     
@@ -1045,6 +1066,11 @@ Follow the instructions in the skill above to complete the user's task."""
             '--file',
             '--source',
             '--document',
+            # doc-layout-clone prep.py：--templates 样版目录/文件、--template 样版
+            # 文件名（2026-11-20 trace 排查：租户模板 file_id 未被解析，
+            # templates_count=0 导致未按模板生成）
+            '--templates',
+            '--template',
         ]
         
         # 处理 --param=value 格式

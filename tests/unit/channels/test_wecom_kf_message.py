@@ -336,6 +336,6 @@ class TestShouldProcessKfMessage:
 
 class TestKfFilterHintMessage:
     def test_filter_hint_message_defined(self):
-        """拦截 video/file 等不支持消息时回复客户的固定话术已定义（image 已放行）。"""
+        """拦截 video/file 等不支持消息时回复客户的固定话术已定义（不引导发图，图片识别可能已关闭）。"""
         from src.channels.wecom_kf.message import KF_FILTER_HINT_MESSAGE
-        assert KF_FILTER_HINT_MESSAGE == "我无法识别该类型文件，请直接发送图片，并用文字描述您的需求。"
+        assert KF_FILTER_HINT_MESSAGE == "我无法识别该类型文件，请用文字描述您的需求。"

@@ -150,6 +150,8 @@ class WebPushAdapter:
                 'installation_ref':target['installation_ref'],
                 'binding_version':target['binding_version'],
                 'expiry':int(message['expires_at'].timestamp())}
+        if state := message['parameters'].get('weixin_batch_status'):
+            payload['weixin_batch_status'] = state
         if (message['event_type'] in ('task.completed', 'task.failed')
                 and message['parameters'].get('task_id')
                 and message.get('_task_result_share_key')):

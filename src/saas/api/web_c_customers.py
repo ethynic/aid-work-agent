@@ -104,11 +104,13 @@ def _session_config_id(session: dict, fallback_config_id: Optional[str]) -> str:
 async def list_users(request: Request, username: Optional[str] = None,
                      config_id: Optional[str] = None,
                      page: int = Query(default=1, ge=1), page_size: int = Query(default=20, ge=1, le=200)):
-    """官网客服客户列表（users × web_c 渠道会话组合，最近活跃倒序）。
+    """官网客服客户列表（用户 × web_c 渠道会话，每条会话一行，最近活跃倒序）。
 
-    行字段：uid 徽标（channel_user_id，ext_*/anon_* 前缀区分身份模式）、
-    名称（签名 name / 官网访客xxxx）、会话日期区间、归属渠道
+    行字段：uid 徽标（channel_user_id，ext_*/uid_* 实名、anon_* 匿名，前缀区分身份模式）、
+    名称（签名 name / 官网访客xxxx）、会话起止时间、session_id、归属渠道
     （channel_config_id / channel_name，存量无归属会话回退最早渠道）。
+    按会话拆行（group_by_session）：uid 模式访客每次进入即新会话（设计 §3.5），
+    按用户折叠会让「前面的问答」看似消失（2026-11-19 测试反馈裁决）。
     config_id：渠道下拉筛选（可选）。
     """
     tenant_id = _require_tenant(request)
@@ -118,6 +120,7 @@ async def list_users(request: Request, username: Optional[str] = None,
         tenant_id=tenant_id,
         username=username,
         channel_type=_CHANNEL_TYPE,
+        group_by_session=True,
         channel_config_id=config_id or None,
         channel_config_fallback_id=fallback_id,
         page=page,
@@ -235,6 +238,14 @@ async def get_session_messages(request: Request, session_id: str,
         raise HTTPException(status_code=403, detail="无权访问此会话")
     if session.get("channel_type") != _CHANNEL_TYPE:
         raise HTTPException(status_code=403, detail="无权访问此会话")
+    # 服务端兜底：接待页拉取前补写未落库的终态回复/澄清反问（访客离线场景；
+    # 与 C 端 messages 拉取补写同一套幂等实现，扫描器为最终兜底）
+    try:
+        from src.saas.services.web_c_runner_persist import backfill_session_runners
+
+        await backfill_session_runners(tenant_id, session_id)
+    except Exception:
+        logger.opt(exception=True).warning(f"[web_c] 接待页终态补写失败 session={session_id[:40]}")
     result = channel_session_manager.get_messages_paginated(
         session_id=session_id, content_search=content_search,
         page=page, page_size=page_size,

@@ -67,6 +67,7 @@
                   <BaseButton
                     v-if="!row.is_system"
                     size="sm" intent="danger-ghost" class="whitespace-nowrap text-xs"
+                    :disabled="deletingRule"
                     @click="handleDelete(row as NotificationRule)"
                   >删除</BaseButton>
                 </div>
@@ -122,7 +123,7 @@
               ]"
             >
               渠道层（不限账号）
-              <span class="block text-xs font-normal mt-0.5">任一客服账号的留资都命中</span>
+              <span class="block text-xs font-normal mt-0.5">任一客服账号/官网渠道的留资都命中</span>
             </button>
             <button
               type="button"
@@ -135,18 +136,18 @@
               ]"
             >
               客服账号层
-              <span class="block text-xs font-normal mt-0.5">仅所选客服账号的留资命中</span>
+              <span class="block text-xs font-normal mt-0.5">仅所选客服账号/官网渠道的留资命中</span>
             </button>
           </div>
           <div v-if="form.scope === 'kf_config'" class="mt-3">
             <label class="block text-sm text-default mb-1">
-              客服账号（来自渠道配置的微信客服）<span class="text-danger-500">*</span>
+              客服账号 / 官网渠道<span class="text-danger-500">*</span>
             </label>
             <div v-if="kfConfigOptions.length === 0" class="text-xs text-muted py-2">
-              暂无微信客服账号，请先到「渠道接入」添加
+              暂无微信客服账号或官网渠道，请先到「渠道接入」添加
             </div>
             <BaseSelect v-else v-model="form.kf_config_id">
-              <option value="">请选择客服账号</option>
+              <option value="">请选择客服账号/官网渠道</option>
               <option v-for="opt in kfSelectOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
             </BaseSelect>
           </div>
@@ -228,7 +229,7 @@
                 <BaseButton size="sm" intent="ghost" :disabled="testingId === t.target_id" @click="handleTargetTest(t)">
                   {{ testingId === t.target_id ? '发送中...' : '测试' }}
                 </BaseButton>
-                <BaseButton size="sm" intent="danger-ghost" @click="handleTargetRevoke(t)">停用</BaseButton>
+                <BaseButton size="sm" intent="danger-ghost" :disabled="revokingTarget" @click="handleTargetRevoke(t)">停用</BaseButton>
               </div>
             </div>
           </template>
@@ -433,6 +434,8 @@ function goToChat() {
 
 const loading = ref(true)
 const saving = ref(false)
+const deletingRule = ref(false)
+const revokingTarget = ref(false)
 const rules = ref<NotificationRule[]>([])
 const allTargets = ref<TenantTarget[]>([])
 const kfConfigOptions = ref<{ value: string; label: string }[]>([])
@@ -445,7 +448,7 @@ const kfSelectOptions = computed(() => {
   const current = form.kf_config_id
   if (current && !opts.some((o) => o.value === current)) {
     const ch = channelNameMap.value[current]
-    opts.unshift({ value: current, label: ch ? `微信客服渠道：${ch}` : `${current}（已失效）` })
+    opts.unshift({ value: current, label: ch ? `渠道：${ch}` : `${current}（已失效）` })
   }
   return opts
 })
@@ -617,10 +620,20 @@ async function loadKfConfigs() {
     const channels = channelsRes?.channels || []
     channelNameMap.value = {}
     for (const c of channels) channelNameMap.value[c.config_id] = c.name || c.config_id
+    // 账号层选项 = wecom_kf 客服账号（open_kfid）+ web_c 官网渠道（config_id，
+    // 无账号维度，渠道配置行即语义终点，2026-11-20 起支持）
     kfConfigOptions.value = (accountsRes?.accounts || []).map((acc: any) => ({
       value: acc.open_kfid,
       label: `${acc.name || acc.open_kfid}（${channelNameMap.value[acc.config_id] || acc.config_id}）`,
     }))
+    for (const c of channels) {
+      if (c.channel_type === 'web_c') {
+        kfConfigOptions.value.push({
+          value: c.config_id,
+          label: `${c.name || c.config_id}（官网渠道）`,
+        })
+      }
+    }
   } catch {
     // 账号列表加载失败不阻断页面，客服账号层选项显示为空并提示
   }
@@ -697,6 +710,7 @@ function buildConditions(): NotificationRule['conditions'] {
 }
 
 async function handleSave() {
+  if (saving.value) return
   message.value = ''
   if (!form.name.trim()) {
     message.value = '请填写规则名称'
@@ -772,12 +786,16 @@ async function handleSave() {
 }
 
 async function handleDelete(rule: NotificationRule) {
+  if (deletingRule.value) return
   if (!confirm(`确定删除规则「${rule.name}」？其规则级外发目标将一并停用。`)) return
+  deletingRule.value = true
   try {
     await notificationsAPI.deleteRule(rule.rule_id)
     await loadData()
   } catch (e) {
     showError(e, '删除失败')
+  } finally {
+    deletingRule.value = false
   }
 }
 
@@ -818,6 +836,7 @@ function registerTargetForRule(ruleId: string, provider: string, configValue: st
 }
 
 async function handleTargetSave() {
+  if (savingTarget.value) return
   if (!newTarget.configValue.trim()) return
   const p = PROVIDER_CHANNELS[newTarget.provider]
   if (!p) return
@@ -849,17 +868,22 @@ async function handleTargetSave() {
 }
 
 async function handleTargetRevoke(t: TenantTarget) {
+  if (revokingTarget.value) return
   if (!confirm('确定停用该外发目标？')) return
+  revokingTarget.value = true
   try {
     await notificationsAPI.revokeTenantTarget(t.target_id, t.binding_version)
     const targetsRes = await notificationsAPI.listTenantTargets()
     allTargets.value = targetsRes.targets
   } catch (e) {
     showError(e, '停用失败')
+  } finally {
+    revokingTarget.value = false
   }
 }
 
 async function handleTargetTest(t: TenantTarget) {
+  if (testingId.value) return
   testingId.value = t.target_id
   targetMessage.value = ''
   try {

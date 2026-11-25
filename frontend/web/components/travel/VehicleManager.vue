@@ -6,7 +6,7 @@
         <BaseButton size="sm" @click="handleSearch(searchKeyword)">搜索</BaseButton>
       </div>
       <div class="page-toolbar-right">
-        <BaseButton :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
+        <BaseButton :disabled="batchDeleting || selectedArr.length === 0" intent="danger" @click="handleBatchDelete">批量删除 ({{ selectedArr.length }})</BaseButton>
         <BaseButton @click="openCreate">新增车辆</BaseButton>
         <BaseButton intent="secondary" :disabled="importing" @click="triggerFileInput(fileInput)">
           {{ importing ? '导入中...' : '导入 Excel' }}
@@ -46,7 +46,7 @@
       <template #actions="{ row }">
         <div class="flex gap-2">
           <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openEdit(row)">编辑</BaseButton>
-          <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleDelete(row)">删除</BaseButton>
+          <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" :disabled="deletingItem" @click="handleDelete(row)">删除</BaseButton>
         </div>
       </template>
       <template v-if="loading" #empty>加载中...</template>
@@ -123,7 +123,7 @@
       </div>
       <template #footer>
         <BaseButton intent="secondary" @click="showModal = false">取消</BaseButton>
-        <BaseButton @click="handleSave">保存</BaseButton>
+        <BaseButton :disabled="savingItem" @click="handleSave">保存</BaseButton>
       </template>
     </BaseModal>
 
@@ -170,6 +170,9 @@ const allItems = ref<any[]>([])
 const loading = ref(false)
 const showModal = ref(false)
 const editingItem = ref<any>(null)
+const savingItem = ref(false)
+const deletingItem = ref(false)
+const batchDeleting = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const { importing, showImportResult, importResult, handleImport, triggerFileInput } = useUuidImport(importVehicles, loadData)
 
@@ -236,6 +239,8 @@ function openEdit(item: any) {
 }
 
 async function handleSave() {
+  if (savingItem.value) return
+  savingItem.value = true
   try {
     if (editingItem.value) {
       await vehicles.update(editingItem.value.id, form.value)
@@ -247,23 +252,31 @@ async function handleSave() {
   } catch (e) {
     console.error('保存失败', e)
     alert('保存失败，请检查数据')
+  } finally {
+    savingItem.value = false
   }
 }
 
 async function handleDelete(item: any) {
+  if (deletingItem.value) return
   if (!confirm(`确定删除车辆「${item.vehicle_type_label || item.vehicle_type}」？`)) return
+  deletingItem.value = true
   try {
     await vehicles.delete(item.id)
     await loadData()
   } catch (e) {
     console.error('删除失败', e)
     alert('删除失败')
+  } finally {
+    deletingItem.value = false
   }
 }
 
 async function handleBatchDelete() {
+  if (batchDeleting.value) return
   if (selectedArr.value.length === 0) return
   if (!confirm(`确定删除选中的 ${selectedArr.value.length} 个车辆？`)) return
+  batchDeleting.value = true
   try {
     for (const id of selectedArr.value) {
       await vehicles.delete(id)
@@ -274,6 +287,8 @@ async function handleBatchDelete() {
   } catch (e) {
     console.error('批量删除失败', e)
     alert('批量删除失败')
+  } finally {
+    batchDeleting.value = false
   }
 }
 

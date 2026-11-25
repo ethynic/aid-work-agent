@@ -232,6 +232,7 @@ function openCreate() {
 }
 
 async function submitCreate() {
+  if (creating.value) return
   creating.value = true
   try {
     const allowed = createForm.value.allowedTypes
@@ -266,7 +267,7 @@ function askRotate(row: EventSourceItem) {
 }
 
 async function confirmRotate() {
-  if (!rotateTarget.value) return
+  if (!rotateTarget.value || rotating.value) return
   rotating.value = rotateTarget.value.id
   try {
     const result = await rotateEventSourceKey(rotateTarget.value.id)

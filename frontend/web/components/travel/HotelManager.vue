@@ -6,7 +6,7 @@
         <BaseInput v-model="searchQuery" placeholder="输入关键词搜索酒店，如：贵阳 4钻酒店" class="max-w-[500px]" size="sm" @keyup.enter="doSearch" />
         <BaseButton size="sm" :disabled="searching" @click="doSearch">{{ searching ? '搜索中...' : '搜索' }}</BaseButton>
         <BaseButton size="sm" v-if="searched" intent="secondary" @click="clearSearch">显示全部</BaseButton>
-        <BaseButton size="sm" :disabled="selectedArr.length === 0" intent="danger" @click="handleBatchDelete">
+        <BaseButton size="sm" :disabled="batchDeleting || selectedArr.length === 0" intent="danger" @click="handleBatchDelete">
           批量删除 ({{ selectedArr.length }})
         </BaseButton>
       </div>
@@ -53,7 +53,7 @@
       <template #actions="{ row }">
         <div class="flex gap-2">
           <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openEdit(row)">编辑</BaseButton>
-          <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleDelete(row)">删除</BaseButton>
+          <BaseButton intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" :disabled="deletingItem" @click="handleDelete(row)">删除</BaseButton>
         </div>
       </template>
       <template v-if="loading" #empty>加载中...</template>
@@ -103,7 +103,7 @@
       </div>
       <template #footer>
         <BaseButton intent="secondary" @click="showModal = false">取消</BaseButton>
-        <BaseButton @click="handleSave">保存</BaseButton>
+        <BaseButton :disabled="savingItem" @click="handleSave">保存</BaseButton>
       </template>
     </BaseModal>
 
@@ -195,6 +195,9 @@ const searchQuery = ref('')
 // 编辑弹窗
 const showModal = ref(false)
 const editingItem = ref<any>(null)
+const savingItem = ref(false)
+const deletingItem = ref(false)
+const batchDeleting = ref(false)
 const form = ref({ title: '', sub_region: '', diamond_level: '', info: '', price_table: '' })
 const formSnapshot = ref<string>('')
 const isFormDirty = () => JSON.stringify(form.value) !== formSnapshot.value
@@ -273,7 +276,9 @@ async function openEdit(item: any) {
 }
 
 async function handleSave() {
+  if (savingItem.value) return
   if (!editingItem.value) return
+  savingItem.value = true
   try {
     await updateHotelKB(editingItem.value.doc_id, {
       title: form.value.title,
@@ -293,11 +298,15 @@ async function handleSave() {
   } catch (e) {
     console.error('保存失败', e)
     alert('保存失败，请检查数据')
+  } finally {
+    savingItem.value = false
   }
 }
 
 async function handleDelete(item: any) {
+  if (deletingItem.value) return
   if (!confirm(`确定删除酒店「${item.title}」？`)) return
+  deletingItem.value = true
   try {
     await deleteHotelKB(item.doc_id)
     selectedArr.value = selectedArr.value.filter((id: any) => id !== item.doc_id)
@@ -309,12 +318,16 @@ async function handleDelete(item: any) {
   } catch (e) {
     console.error('删除失败', e)
     alert('删除失败')
+  } finally {
+    deletingItem.value = false
   }
 }
 
 async function handleBatchDelete() {
+  if (batchDeleting.value) return
   const count = selectedArr.value.length
   if (!confirm(`确定删除选中的 ${count} 家酒店？`)) return
+  batchDeleting.value = true
   try {
     await batchDeleteHotelsKB([...selectedArr.value])
     clearSelection()
@@ -326,6 +339,8 @@ async function handleBatchDelete() {
   } catch (e) {
     console.error('批量删除失败', e)
     alert('批量删除失败')
+  } finally {
+    batchDeleting.value = false
   }
 }
 

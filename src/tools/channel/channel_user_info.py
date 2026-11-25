@@ -52,7 +52,9 @@ class GetChannelUserInfoTool(BaseTool):
         from src.channels.wecom_kf.context import get_kf_context
 
         kf_ctx = get_kf_context()
-        if kf_ctx:
+        # 仅微信客服渠道（有发送适配器）走 wecom_kf 实时上下文；web_c 等无适配器
+        # 渠道虽然为留资设置了 kf context，但客户信息语义不同，回退 users 表读取
+        if kf_ctx and kf_ctx.get("adapter"):
             return self._from_wecom_kf(kf_ctx)
 
         # 非微信客服渠道：回退到工具执行上下文 + users 表已落库信息

@@ -66,7 +66,7 @@ Write-Output "可用签名配置：$signer"
 
 两个位置都不可访问时，先找原构建会话或由管理员恢复既有签名者。确认确实无法恢复时再安排发布者轮换与 Runtime 配套验证。第 6 节的随机测试根只用于隔离试验，现有客户 Runtime 需要信任发布者才能导入。
 
-验收公开根默认用仓库的 `clients/runtime-plugin-packaging/trust/acceptance-roots.json`。普通补丁复用稳定发布者和现有公开根。新增或轮换发布者按[公开根登记工具](../../../clients/runtime-plugin-packaging/register-publisher-trust.mjs)单独处理。历史公钥、范围和已交付兼容性需要保留。
+验收公开根默认使用仓库的 `configs/runtime-plugin-trust/acceptance-roots.json`。普通补丁复用稳定发布者和现有公开根。新增或轮换发布者用登记工具处理，保留历史公钥、授权范围和已交付兼容性。 [验收公钥登记表](../../../configs/runtime-plugin-trust/acceptance-roots.json) · [公开根登记工具](../../../clients/runtime-plugin-packaging/register-publisher-trust.mjs)
 
 `-ReleaseId` 缺省前缀分别为 `boss-<版本>`、`wecom-<版本>`，封装会追加对应 Provider 后缀。显式提供时作为本批所选插件的公共前缀，后缀仍分别绑定各自 Provider。
 
@@ -99,7 +99,28 @@ powershell.exe -NoProfile -File $release -Component Wecom -SourceRef HEAD -Targe
 
 - **BOSS 独立 npm CLI**供 `npm install -g` 和外部 MCP Host 使用。先在 Windows x64 构建机执行 `npm --prefix clients/shared ci --ignore-scripts` 和 `npm --prefix clients/boss-resume-assistant ci --ignore-scripts`，再从仓库根用 Git Bash 执行 `bash clients/boss-resume-assistant/scripts/pack-release.sh`。该入口输出 `clients/boss-resume-assistant/boss-resume-assistant-<版本>.tgz`。它会随包带上共享 Win32 模块及 koffi 原生依赖。直接运行 `npm pack` 会留下客户机无法解析的仓库相对依赖。独立包交付前在空目录安装，验证 `createKoffiApi()` 可实例化，不能只跑 `version --json`。客户机需 Node ≥ 22 且可访问 npm registry。
 - **WeCom**走表中的签名离线插件入口。当前未维护独立 npm 交付流程。
+- **浏览器**使用 `clients/runtime-plugin-packaging/package.mjs --provider browser`，传入 `--node`、`--output`、`--signer` 和不可复用的 `--release-id`。配套验收 Runtime 需包含 `aidwork-acceptance-browser-v1` 公开根。构建机的签名配置位于 `%LOCALAPPDATA%\AidWorkBuild\signers\acceptance-browser-v1\signer.json`。导入前用目标 Runtime 的固定 Node 和公开根执行 `verify-offline.py`。 [浏览器插件设计](../../tools/browser/browser_tool_rebuild_design.md)
 - **隔离试验**可在独立输出目录显式运行 `package.mjs --test --test-key-id aid-isolated-<唯一值>`，传入所需 Provider 和固定 Node 等参数。随机测试根随该次实验产物单独保存，仅供隔离测试环境。容器格式与低层参数见[插件打包说明](../../../clients/runtime-plugin-packaging/README.md)。
+
+### 微信 CLI 验收包
+
+微信 CLI 使用独立验收发布者 `aidwork-acceptance-weixin-v1`。验收登记表中的公开根仅授权 `ai.aidwork.weixin`，标记为 `test_only`。签名配置和私钥留在构建机。验收 Runtime 与服务端各自从验收配置加载该公开根。
+
+从包含目标版本的源码构建微信 CLI。签名使用构建机的配置文件路径，验包使用目标 Runtime 自带的公开根。微信 CLI 的版本由包目录的 npm 版本及锁文件维护。
+
+```powershell
+$signer = Join-Path $env:LOCALAPPDATA 'AidWorkBuild/signers/acceptance-weixin-v1/signer.json'
+$version = (Get-Content -Raw clients/weixin-cli/package.json | ConvertFrom-Json).version
+$releaseId = "weixin-$version-acceptance-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+$npmCli = Join-Path (Split-Path -Parent (Get-Command npm.cmd).Source) 'node_modules/npm/bin/npm-cli.js'
+npm.cmd --prefix clients/weixin-cli ci --ignore-scripts
+npm.cmd --prefix clients/weixin-cli run build:main
+npm.cmd --prefix clients/runtime-plugin-packaging ci --ignore-scripts
+& $fixedNode clients/runtime-plugin-packaging/package.mjs --provider weixin --node $fixedNode --npm-cli $npmCli --output $outputDirectory --signer $signer --release-id $releaseId
+python.exe clients/runtime-plugin-packaging/verify-offline.py --directory $outputDirectory --node $fixedNode --trust-roots $runtimeTrustRoots
+```
+
+用目标 Runtime 的固定 Node 路径设置 `$fixedNode`，用目标 Runtime 的 `resources/runtime/trust-roots.json` 路径设置 `$runtimeTrustRoots`，并为 `$outputDirectory` 指定本批新目录。产物为 `weixin-<版本>.aidplugin.zip`。已经安装的验收版如果未包含微信验收根，先使用包含该根的配套 Runtime，再通过离线包入口导入。设备上报的清单仍由服务端验签。连接中心验收记录见[开发计划](../../plans/plan-weixin-agent.md#phase-3-配套验收)。
 
 ## 7. 验包与证据
 

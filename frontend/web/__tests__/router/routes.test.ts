@@ -40,7 +40,6 @@ describe('entry route responsibilities', () => {
       [
         "",
         "system-health",
-        "dashboard",
         "tenants",
         "recharge",
         "subagents",
@@ -70,6 +69,7 @@ describe('entry route responsibilities', () => {
         "knowledge/tdoc-imports",
         "connections",
         "connections/external-systems",
+        "connections/email",
         "channels",
         "wechat-mp",
         "hongtao-shop",
@@ -80,6 +80,7 @@ describe('entry route responsibilities', () => {
         "local-tools",
         "daily-report",
         "wecom-agent/:tab(conversations|daily|proxy|scheduled)?",
+        "weixin-agent",
         "wecom-conversations",
         "wecom-conversations/daily",
         "wecom-conversations/proxy",

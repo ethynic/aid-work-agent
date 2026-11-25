@@ -1,0 +1,16 @@
+{
+  "name": "aid-browser-provider",
+  "version": "0.1.0",
+  "private": true,
+  "description": "agent-browser 原生 MCP 的 Runtime 本机 Provider",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@agent-browser/cli-win32-x64-msvc": "0.43.0",
+    "@modelcontextprotocol/sdk": "1.30.0"
+  }
+}

@@ -43,7 +43,7 @@ function presentation(value: RunnerPresentation, timestamp: number): Partial<Cha
     }
   }
   return { progressMessages: progress, downloadableFiles: Array.from(files.values()),
-    verboseMessages: value.verboseMessages || [], browserAssistance: value.browserAssistance }
+    verboseMessages: value.verboseMessages || [] }
 }
 
 export function historyMessages(records: ChatMessageRecord[]): ChatMessage[] {
@@ -74,9 +74,6 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
     placement: image.placement || snapshot.imagesPlacement || 'after_text' }))
   const common = { runnerId: row.runner_id, clientRequestId: row.client_request_id, queueOrder: row.queue_order }
   const details = presentation(display, accepted)
-  // The current safe snapshot may intentionally remove an unproved old card.
-  // Finalization metadata cannot recreate it on the cumulative runner view.
-  details.browserAssistance = snapshot.browserAssistance
   let wait = snapshot.waiting
   let depth = 64
   while (wait?.kind === 'child_wait' && depth-- > 0) wait = wait.child_wait
@@ -145,7 +142,7 @@ export function runnerMessages(row: RunnerView): ChatMessage[] {
       runnerActive: !terminal }
   // 失败详情归到用户消息；已有回复/产物仍保留，不制造空白最终回复框。
   if (row.status !== 'failed' || assistant.content.trim() || images.length
-      || details.downloadableFiles?.length || details.browserAssistance) messages.push(assistant)
+      || details.downloadableFiles?.length) messages.push(assistant)
   return messages
 }
 

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>示例企业官网 - 客服嵌入演示</title>
+<!--
+  官网客服嵌入演示页（userid 链接模式）
+  使用方法：
+  1. 将本文件中所有 __WEB_C_CHAT_URL__ 替换为渠道配置页提供的「聊天页地址」；
+     链接中的 u=0011 与 name=张三 为示例常量，需替换为当前登录用户的实际
+     官网userid 与显示名称（name 为可选显示名称，中文已可直接使用，无需手动编码）
+     （匿名模式链接无 u/name 参数，直接替换即可）
+  2. 用浏览器打开本文件即可看到：右下角 💬 悬浮按钮弹出 iframe 客服窗口，
+     导航栏与首屏的「AI问答」按钮新标签页打开完整聊天页
+-->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: #333; }
+  /* 防横向溢出：iOS WebKit 会按溢出内容平移 fixed 全屏面板（聊天窗右侧被裁） */
+  html, body { overflow-x: hidden; }
+
+  /* ===== 官网部分 ===== */
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 40px; background: #1f2d3d; color: #fff;
+    position: sticky; top: 0; z-index: 10;
+  }
+  header .logo { font-size: 20px; font-weight: bold; }
+  header nav a { color: #cbd5e0; text-decoration: none; margin-left: 24px; font-size: 14px; }
+  header nav a:hover { color: #fff; }
+
+  /* AI 问答按钮 */
+  .btn-ai {
+    display: inline-block; padding: 8px 20px; margin-left: 24px;
+    background: #3b82f6; color: #fff !important; border-radius: 6px;
+    font-size: 14px; text-decoration: none;
+  }
+  .btn-ai:hover { background: #2563eb; }
+  .btn-ai-hero {
+    display: inline-block; padding: 12px 36px; margin-top: 32px;
+    background: #3b82f6; color: #fff; border-radius: 8px;
+    font-size: 16px; text-decoration: none;
+  }
+  .btn-ai-hero:hover { background: #2563eb; }
+
+  .hero {
+    padding: 100px 40px; text-align: center;
+    background: linear-gradient(135deg, #1f2d3d 0%, #3b5998 100%);
+    color: #fff;
+  }
+  .hero h1 { font-size: 40px; margin-bottom: 16px; }
+  .hero p { font-size: 18px; opacity: .85; }
+
+  section { padding: 60px 40px; }
+  section h2 { text-align: center; font-size: 28px; margin-bottom: 32px; }
+  .cards { display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; }
+  .card {
+    width: 280px; padding: 24px; border: 1px solid #e5e5e5;
+    border-radius: 8px; text-align: center;
+  }
+  .card h3 { margin-bottom: 8px; font-size: 18px; }
+  .card p { font-size: 14px; color: #777; }
+
+  footer { padding: 24px 40px; background: #1f2d3d; color: #999; text-align: center; font-size: 13px; }
+
+  /* ===== 右下角客服悬浮窗 ===== */
+  #chat-fab {
+    position: fixed; right: 24px; bottom: 24px; z-index: 100;
+    width: 56px; height: 56px; border-radius: 50%;
+    background: #3b82f6; color: #fff; border: none; cursor: pointer;
+    font-size: 26px; box-shadow: 0 4px 12px rgba(0,0,0,.25);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #chat-fab:hover { background: #2563eb; }
+
+  #chat-panel {
+    position: fixed; right: 24px; bottom: 92px; z-index: 100;
+    width: 400px; height: 600px; max-height: calc(100vh - 120px);
+    border-radius: 12px; overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,.3);
+    display: none; background: #fff;
+  }
+  #chat-panel.open { display: block; }
+  #chat-panel iframe { width: 100%; height: 100%; border: none; }
+
+  /* ===== 手机端适配 ===== */
+  /* 官网页面部分：窄屏收缩内边距，导航允许换行 */
+  @media (max-width: 480px) {
+    header { padding: 12px 16px; flex-wrap: wrap; gap: 8px; }
+    header nav a { margin-left: 12px; }
+    .hero { padding: 60px 16px; }
+    .hero h1 { font-size: 28px; }
+    .hero p { font-size: 15px; }
+    section { padding: 40px 16px; }
+  }
+
+  /* 客服悬浮窗：窄屏全屏铺开（聊天页 WebCChat 自身已适配移动端），
+     关闭按钮 ✕ 仍浮在窗口右下角供收起 */
+  @media (max-width: 480px) {
+    #chat-fab { right: 16px; bottom: 16px; }
+    #chat-panel {
+      right: 0; bottom: 0;
+      width: 100%; height: 100%; max-height: none;
+      /* iOS 微信 100% 基准高度可能含可视外区域，dvh 修正（不支持时回落上一行） */
+      height: 100dvh;
+      border-radius: 0;
+    }
+    /* 全屏时 ✕ 移到右上角，避免压住聊天输入框与发送按钮 */
+    #chat-panel.open ~ #chat-fab { bottom: auto; top: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">示例科技</div>
+  <nav>
+    <a href="#home">首页</a>
+    <a href="#products">产品</a>
+    <a href="#about">关于我们</a>
+    <!-- 聊天页链接：u=0011 为示例官网userid、name=张三 为示例显示名称，集成时请替换为实际值 -->
+    <a class="btn-ai" href="__WEB_C_CHAT_URL__" target="_blank" rel="noopener">AI问答</a>
+  </nav>
+</header>
+
+<div class="hero" id="home">
+  <h1>让企业服务更智能</h1>
+  <p>一站式智能客服与业务解决方案提供商</p>
+  <a class="btn-ai-hero" href="__WEB_C_CHAT_URL__" target="_blank" rel="noopener">AI问答</a>
+</div>
+
+<section id="products">
+  <h2>产品服务</h2>
+  <div class="cards">
+    <div class="card"><h3>智能客服</h3><p>7×24 小时在线，自动应答客户咨询</p></div>
+    <div class="card"><h3>数据分析</h3><p>多维度业务报表，辅助经营决策</p></div>
+    <div class="card"><h3>系统集成</h3><p>对接企业现有业务系统，无缝协作</p></div>
+  </div>
+</section>
+
+<section id="about">
+  <h2>关于我们</h2>
+  <p style="text-align:center; color:#777; max-width:600px; margin:0 auto;">
+    示例科技有限公司成立于 2020 年，专注于企业智能化服务，
+    为数百家企业提供客服与业务自动化解决方案。
+  </p>
+</section>
+
+<footer>© 2026 示例科技有限公司 · 客服嵌入演示页，可自由修改后集成到官网</footer>
+
+<!-- 客服悬浮窗（iframe 嵌入聊天页；embed=1 隐藏聊天页页头） -->
+<div id="chat-panel">
+  <!-- iframe 地址与导航栏链接同源（含 embed=1），u=0011 / name=张三 同样需替换为实际值 -->
+  <iframe
+    src="__WEB_C_IFRAME_SRC__"
+    allow="microphone; clipboard-read; clipboard-write">
+  </iframe>
+</div>
+<button id="chat-fab" title="在线客服">💬</button>
+
+<script>
+  var fab = document.getElementById('chat-fab');
+  var panel = document.getElementById('chat-panel');
+  fab.addEventListener('click', function () {
+    panel.classList.toggle('open');
+    fab.textContent = panel.classList.contains('open') ? '✕' : '💬';
+  });
+</script>
+
+</body>
+</html>

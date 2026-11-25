@@ -30,6 +30,26 @@ test('runtime diagnosis distinguishes successful environment checks from a usabl
   }
 })
 
+test('a visible window without native sessions reports unavailable UIA instead of asking for login', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'wx-window-uia-'))
+  const env = { platform: 'win32' as const, sessionName: 'Console',
+    execFileFn: async (file: string) => ({ stdout: file === 'where.exe' ? 'powershell.exe' : '"Weixin.exe","123"' }) }
+  const runDriverFn = async (options: { args?: string[] }) => ({
+    window_state: 'foreground', login_state: 'unknown', restored: false,
+    ...(options.args?.includes('-RestoreWindow') ? { error_code: 'CONTENT_UNAVAILABLE' } : {}),
+  })
+  try {
+    for (const restoreWindow of [false, true]) {
+      const report = await runDoctorChecks({ env, localAppData: stateDir, runDriverFn, restoreWindow })
+      assert.equal(report.login_state, 'unknown')
+      assert.equal(report.runtime_readiness.ready, false)
+      assert.ok(report.runtime_readiness.reason)
+      assert.match(report.runtime_readiness.reason, /无法读取原生会话列表（UIA）/)
+      assert.doesNotMatch(report.runtime_readiness.reason, /完成登录/)
+    }
+  } finally { await rm(stateDir, { recursive: true, force: true }) }
+})
+
 test('probe and doctor share native readiness and explicit restore failures retain the concrete window state', async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'wx-window-doctor-'))
   const runDriver = async (options: { args?: string[] }) => ({

@@ -379,7 +379,7 @@ MVP 开发包可使用 Node 运行时；对外试用/销售版本应提供签名
 面试演示：boss_goto(chat) → boss_interview_demo
 ```
 
-设备离线、未登录、付费墙、UI 变化、unknown 均必须停止并向用户说明，禁止改用通用 browser tool 绕过。
+设备离线、未登录、付费墙、UI 变化、unknown 均必须停止并向用户说明。
 
 ## 12. 安全、隐私与运行约束
 

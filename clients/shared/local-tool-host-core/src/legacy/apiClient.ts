@@ -6,6 +6,8 @@
  * - 日志绝不输出 token / claim_token。
  */
 
+import type { SignedPluginManifest } from '../plugins/package.js'
+
 export class NetworkError extends Error {
   constructor(message: string, readonly failureKind: 'dns' | 'tls' | 'network' = 'network') {
     super(message)
@@ -78,6 +80,7 @@ export interface HeartbeatResponse {
   server_time?: string
   /** 契约 2.20 支持协商：服务端实现 parallel_only 领取时返回 true；旧服务端缺省 → 视为不支持 */
   parallel_claim?: boolean
+  missing_plugin_manifests?: string[]
 }
 
 export interface ClaimedInvocation {
@@ -328,12 +331,15 @@ export class ApiClient {
     if (res.success !== true || res.selected !== true) throw new ApiError(502, '设备选定尚未确认')
   }
 
-  async heartbeat(req: { runtime_version: string; capabilities: Record<string, unknown>; manifest_digest: string }, signal?: AbortSignal): Promise<HeartbeatResponse> {
+  async heartbeat(req: { runtime_version: string; capabilities: Record<string, unknown>; manifest_digest: string;
+    plugin_manifests?: Record<string, SignedPluginManifest> }, signal?: AbortSignal): Promise<HeartbeatResponse> {
     const res = (await this.post('/api/local-tools/runtime/heartbeat', req, { signal })) as Record<string, unknown>
+    const missing = res['missing_plugin_manifests']
     return {
       selected: Boolean(res['selected']),
       server_time: res['server_time'] as string | undefined,
       parallel_claim: res['parallel_claim'] === true,
+      ...(Array.isArray(missing) ? { missing_plugin_manifests: missing.filter((key): key is string => typeof key === 'string') } : {}),
     }
   }
 
@@ -347,9 +353,11 @@ export class ApiClient {
   /** 长轮询领取 invocation（服务端最长 wait 秒；超时返回 null）。
    *  parallelOnly（契约 2.20）：true 时仅领取并行可领作业——仅在心跳读到服务端
    *  parallel_claim 支持标记后才由调用方传入；旧服务端不传该参数（行为不变）。 */
-  async claim(waitSeconds: number, parallelOnly?: boolean, signal?: AbortSignal): Promise<ClaimedInvocation | null> {
+  async claim(waitSeconds: number, parallelOnly?: boolean, signal?: AbortSignal,
+    pluginManifestDigests?: Record<string, string>): Promise<ClaimedInvocation | null> {
     const query = `wait=${waitSeconds}${parallelOnly ? '&parallel_only=true' : ''}`
-    const res = (await this.post(`/api/local-tools/runtime/claim?${query}`, {}, {
+    const res = (await this.post(`/api/local-tools/runtime/claim?${query}`,
+      pluginManifestDigests ? { plugin_manifest_digests: pluginManifestDigests } : {}, {
       timeoutMs: (waitSeconds + 15) * 1000,
       signal,
     })) as Record<string, unknown>

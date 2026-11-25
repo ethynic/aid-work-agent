@@ -5,6 +5,7 @@ import test from 'node:test'
 
 const driver = fileURLToPath(new URL('../../drivers/ps1/window-doctor.ps1', import.meta.url))
 const win32 = fileURLToPath(new URL('../../drivers/ps1/win32-lib.ps1', import.meta.url))
+const common = fileURLToPath(new URL('../../drivers/ps1/_common.ps1', import.meta.url))
 const load = `
 $ErrorActionPreference='Stop'
 [void](Add-Type -AssemblyName UIAutomationClient)
@@ -104,6 +105,68 @@ ConvertTo-Json -Depth 8 -Compress $out
   assert.deepEqual(result.alreadyRestored.actions, [], 'a window restored by the user must never be toggled through its tray icon')
   assert.equal(result.identityChanged.after.error_code, 'UI_CHANGED')
   assert.deepEqual(result.identityChanged.actions, [])
+})
+
+test('the updates popup is excluded by both window selectors only when UIA confirms its process and class', { skip: process.platform !== 'win32' }, () => {
+  const result = run(`
+$ErrorActionPreference='Stop'
+Add-Type @'
+using System;
+namespace Windows.Automation {
+ public class AutomationElement {
+   public int ProcessId { get; set; }
+   public string ClassName { get; set; }
+   public AutomationElement Current { get { return this; } }
+   public static AutomationElement FromHandle(IntPtr h) {
+     int id = h.ToInt32();
+     if (id == 3) throw new InvalidOperationException();
+     return new AutomationElement {
+       ProcessId = id == 4 ? 8 : 7,
+       ClassName = id == 2 || id == 4 ? "mmui::WhatsNewWindow" : "mmui::MainWindow"
+     };
+   }
+ }
+}
+'@
+function Load-Function($Path,$Name) {
+    $ast=[Management.Automation.Language.Parser]::ParseFile($Path,[ref]$null,[ref]$null)
+    $definition=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $Name},$false)
+    return [ScriptBlock]::Create($definition.Extent.Text)
+}
+. (Load-Function '${common.replaceAll("'", "''")}' 'Test-WeixinWhatsNewWindow')
+. (Load-Function '${common.replaceAll("'", "''")}' 'Resolve-WeixinMainWindowHwnd')
+. (Load-Function '${driver.replaceAll("'", "''")}' 'Get-WeixinDiagnosticWindows')
+. (Load-Function '${win32.replaceAll("'", "''")}' 'Test-WeixinMainIdentity')
+$script:WeixinTitle='fixture'
+function Get-Process($Id,$Name,$ErrorAction) { return @{Id=7;SessionId=1} }
+function Get-VisibleWindowList([switch]$IncludeHidden,$ProcessIds) {
+    foreach ($h in $script:handles) { @{Hwnd=$h;ProcessPath='fixture.exe'} }
+}
+function Get-WindowIdentityByHwnd($h) { return [pscustomobject]@{
+    Hwnd=$h;ProcessId=7;ProcessPath='fixture.exe';ClassName='Qt51514QWindowIcon';Title='fixture'
+} }
+function Test-WeixinExecutablePath($Path) { return $Path -eq 'fixture.exe' }
+function Throw-DriverError($Code,$Message) { throw $Code }
+function Case([long[]]$Ids) {
+    $script:handles=$Ids
+    $resolved=try { Resolve-WeixinMainWindowHwnd } catch { $_.Exception.Message }
+    return @{resolved=$resolved;diagnostic=@(Get-WeixinDiagnosticWindows | ForEach-Object {$_.Hwnd})}
+}
+ConvertTo-Json -Compress @{
+    popup=Case @(2,1)
+    popupOnly=Case @(2)
+    secondMain=Case @(1,5)
+    unavailableUia=Case @(3)
+    foreignProvider=Case @(1,4)
+}
+`)
+  assert.deepEqual(result, {
+    popup: { resolved: 1, diagnostic: [1] },
+    popupOnly: { resolved: 'WEIXIN_NOT_FOUND', diagnostic: [] },
+    secondMain: { resolved: 'WINDOW_AMBIGUOUS', diagnostic: [1, 5] },
+    unavailableUia: { resolved: 3, diagnostic: [3] },
+    foreignProvider: { resolved: 'WINDOW_AMBIGUOUS', diagnostic: [1, 4] },
+  })
 })
 
 test('explicit restoration preserves an existing maximized placement and restores an iconic window', { skip: process.platform !== 'win32' }, () => {

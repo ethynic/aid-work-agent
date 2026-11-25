@@ -44,6 +44,8 @@ class RecoveryCoordinator:
                 raise RunnerError('SLEEP_TIMER_MISMATCH',409)
         elif control is None:
             raise RunnerError('RECOVERY_CONTROL_REQUIRED',409)
+        elif control['action'] not in ('resume', 'reply'):
+            raise RunnerError('RECOVERY_CONTROL_STALE',409)
         kwargs={'prepared_source':prepared_source} if prepared_source is not None else {}
         principal = self.authorizer.authorize_persisted(row,**kwargs)
         self.authorizer.assert_credit(principal)
@@ -212,10 +214,6 @@ class RecoveryCoordinator:
                     target.waiting=None
             if manual and control['action']=='reply':
                 self._apply_reply(row,control,root,states,checkpoint)
-            elif manual and control['action']=='browser_complete':
-                if self.tool_recovery is None:
-                    raise RunnerError('RECOVERY_TOOL_VERIFICATION_REQUIRED',409)
-                self.tool_recovery.apply_completion(row,control,states)
             elif manual and self._has_resume_input(control):
                 if root.outcome in {Outcome.FAILED,Outcome.CANCELLED,Outcome.ITERATION_LIMIT}:
                     raise RunnerError('RECOVERY_ROOT_STATE_VERIFICATION_REQUIRED',409)

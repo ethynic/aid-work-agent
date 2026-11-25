@@ -95,16 +95,15 @@ Step 5: 最新动态（2-3 轮搜索）
 
 **搜索工具选择**：
 
-> 2026-11-06：下表中的 `browser_automation`、`browser_get_content` 均已下线（不在工具目录）；当前运行时指引见 `subagents/competitor-research/SUBAGENT.md` 与 `src/skills/competitor-research-1.0.0/SKILL.md`，页面内容采集改用 `web_fetch`。本节保留作历史设计参考。
+> 当前运行时指引见 `subagents/competitor-research/SUBAGENT.md` 与 `src/skills/competitor-research-1.0.0/SKILL.md`。
 
 | 场景 | 工具 | 说明 |
 |------|------|------|
 | 快速信息检索 | `web_search` | Tavily 搜索，返回结构化结果摘要 |
-| 具体页面内容采集 | `browser_get_content` | 直接打开 URL 返回页面 markdown（最长 50000 字符），适合采集文章、报告等静态页面 |
-| 需要交互的页面采集 | `browser_automation` | LLM 驱动的浏览器操作（点击、翻页、填表），内部提取页面内容后返回 LLM 总结 |
+| 具体页面内容采集 | `web_fetch` | 读取公开网页正文，按需通过返回的文件路径用 `read` 分页阅读 |
 | 中文搜索补充 | `use_skill("baidu-search")` | 百度 AI 搜索，适合国内竞品 |
 
-> **典型组合**：先用 `web_search` 搜索获取相关 URL 列表，再用 `browser_get_content` 逐个打开采集完整内容。如果页面需要交互（如点击展开、登录后查看），则改用 `browser_automation`。
+> **典型组合**：先用 `web_search` 获取相关 URL，再用 `web_fetch` 逐个采集页面内容。
 
 ### 2.3 材料文件格式
 
@@ -614,7 +613,7 @@ storage/competitor_research/{session_id}/report/
     │     │
     │     ├── 阶段一：深度搜索研究（材料 MD 不进入 Agent 上下文）
     │     │     ├── web_search → 多轮搜索竞品信息
-    │     │     ├── browser_get_content → 静态页面内容采集
+    │     │     ├── web_fetch → 公开页面内容采集
     │     │     ├── use_skill("baidu-search") → 中文搜索补充
     │     │     └── file_write(generate_prompt) → 搜索结果整理为 MD 材料文件
     │     │
@@ -624,8 +623,7 @@ storage/competitor_research/{session_id}/report/
     │     │
     │     └── 使用的工具
     │           ├── web_search — 互联网搜索
-    │           ├── browser_get_content — 静态页面内容采集（返回 markdown）
-    │           ├── browser_automation — 需交互的页面采集
+    │           ├── web_fetch — 公开页面内容采集
     │           ├── file_write — 内部生成 HTML 并写入文件（generate_prompt 模式）
     │           └── file_write — 合并多页为完整报告（merge_files 模式）
     │
@@ -683,7 +681,7 @@ storage/competitor_research/{session_id}/report/
 
 继续搜索产品功能分析...
 [调用 web_search 搜索 "飞书 核心功能 产品分析"]
-[调用 browser_automation 打开飞书产品页采集详细信息]
+[调用 web_fetch 读取搜索结果中的公开飞书产品页]
 ...
 
 📄 第 2 页「产品功能分析」已生成。
@@ -714,7 +712,7 @@ storage/competitor_research/{session_id}/report/
 智能体：好的，我来重点搜索知乎上关于飞书的用户评价。
 [调用 web_search 搜索 "飞书 知乎 评价 优缺点"]
 [调用 web_search 搜索 "飞书 使用体验 吐槽"]
-[调用 browser_automation 打开知乎相关帖子采集详细内容]
+[调用 web_fetch 读取公开的相关帖子]
 
 已收集到 15 条知乎用户评价，更新了口碑材料。
 📄 第 5 页「用户口碑与评价」已更新，你可以重新预览。
@@ -805,7 +803,7 @@ context:
 3. **渐进产出**：逐页生成、逐页可预览，用户不需要等全部完成；最终合并为完整报告
 4. **文件存储**：材料文件和报告文件都存文件系统，不引入新的数据库表
 5. **上下文保护**：HTML 生成必须使用 `file_write(generate_prompt=...)` 内部生成，**禁止**两步调用（content_generate + file_write），避免 HTML 内容膨胀 Agent 上下文窗口
-6. **复用现有工具**：web_search、browser_get_content、browser_automation、file_write
+6. **复用现有工具**：web_search、web_fetch、file_write
 7. **对话式交互**：所有功能通过自然语言对话触发
 8. **安全预览**：子页面 HTML 纯 CSS + HTML（无脚本），汇总页仅含导航脚本
 

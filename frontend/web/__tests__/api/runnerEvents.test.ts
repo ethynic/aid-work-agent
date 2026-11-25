@@ -1,6 +1,7 @@
 /** Prepared original client over controlled external HTTP bytes; no serviceE2E claim. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { RunnerClient } from '@/api/runner'
+import type { RunnerView } from '@/api/runner'
 import { controlledRunnerEventFetch } from '../mocks/runnerEventFetch'
 import { runnerView } from '../mocks/runnerView'
 
@@ -283,5 +284,65 @@ describe('Original RunnerClient event enhancement keeps authoritative GET as dis
     expect(display).toHaveBeenCalledOnce()
     expect(error).not.toHaveBeenCalled()
     expect(network.requests.every(item => item.method === 'GET')).toBe(true)
+  })
+})
+
+describe('Parked waiting rows poll at slow cadence', () => {
+  let network: ReturnType<typeof controlledRunnerEventFetch>
+  let client: RunnerClient
+  const flush = async () => { for (let index = 0; index < 24; index++) await Promise.resolve() }
+  const queries = () => network.requests.filter(item => new URL(item.url).pathname === '/api/chat/runners/runner-A')
+  const query = () => {
+    const item = network.pending.find(item => new URL(item.url).pathname === '/api/chat/runners/runner-A')
+    expect(item, 'Expected original authoritative GET').toBeDefined()
+    return item!
+  }
+  beforeEach(() => {
+    vi.useFakeTimers()
+    network = controlledRunnerEventFetch()
+    vi.stubGlobal('fetch', network.fetch)
+    client = new RunnerClient()
+  })
+  afterEach(async () => {
+    client.detach()
+    network.detachOutstanding()
+    await flush()
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  const waitingRow = (overrides: Partial<RunnerView> = {}) => runnerView({ status: 'waiting',
+    snapshot: { input: { message_id: 'runner-A:user', text: 'original input', attachments: [] },
+      waiting: { kind: 'clarification', wait_id: 'wait-1' } }, ...overrides })
+
+  it('waiting row drops from 1s fallback to 30s authority checks while parked', async () => {
+    client.installCapabilities(caps(false))
+    client.observe('runner-A', headers, vi.fn(), vi.fn())
+    query().respond({ success: true, runner: waitingRow() })
+    await flush()
+    expect(queries()).toHaveLength(1)
+    // 旧实现 1s 档会在此窗口内多次查询；parked 行 30s 内不再查询
+    await vi.advanceTimersByTimeAsync(29000)
+    expect(queries()).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(queries()).toHaveLength(2)
+    query().respond({ success: true, runner: waitingRow({ view_revision: 2 }) })
+    await flush()
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(queries()).toHaveLength(3)
+  })
+
+  it('waiting row resumes fast fallback cadence once the authoritative GET reports running', async () => {
+    client.installCapabilities(caps(false))
+    client.observe('runner-A', headers, vi.fn(), vi.fn())
+    query().respond({ success: true, runner: waitingRow() })
+    await flush()
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(queries()).toHaveLength(2)
+    // 服务端 timer 唤醒 / 控制流恢复后回到 running，恢复快档
+    query().respond({ success: true, runner: runnerView({ status: 'running', view_revision: 2 }) })
+    await flush()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(queries()).toHaveLength(3)
   })
 })

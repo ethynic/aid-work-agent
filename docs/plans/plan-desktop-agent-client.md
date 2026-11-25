@@ -8,15 +8,15 @@
 
 2026-10-22复审修复兼容检查点：Runner私有工具代次/累计BIGINT及历史产物退休由同一修复角色负责；snapshot可选history_revision仅为历史更新水位，Web拉取既有历史，旧消费者可忽略，Device/Host不变。实现与独测/CR结论统一见[休眠计划第17节](plan-agent-runner-durable-sleep.md#17-复审修复与验证2026-10-22)，本地Runner/Web独测及CR已通过，未部署；本条不宣称Desktop或真机Runtime已验收。
 
-2026-10-20恢复检查点：按共同契约2.5保留独立v2页面观察，Web新增显式停止旧工具进程并解锁设备动作，可能关闭Runtime启动的浏览器；其他任务真实活动时不停止，不重发原任务。v3受管边界可覆盖存量无generation未知BOSS调用，页面目标不可核验不阻断资源停止。恢复开发智能体唯一写代码/文档，源码及dist冻结，独立120项及宽窄UI通过，CR无阻断；唯一进度见[BOSS恢复计划Phase10](plan-boss-resume-next-recovery-fix.md)。未发行或部署。
+2026-10-20恢复检查点：按共同契约2.5保留独立v2页面观察，Web新增显式停止旧工具进程并解锁设备动作，可能关闭Runtime启动的浏览器；其他任务真实活动时不停止，不重发原任务。v3受管边界可覆盖存量无generation未知BOSS调用，页面目标不可核验不阻断资源停止。恢复开发智能体唯一写代码/文档，源码及dist冻结，独立120项及宽窄UI通过，CR无阻断；完成记录见[Runner 增量设计 §5.6](../system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量)（原 BOSS 恢复计划已清理）。未发行或部署。
 
-2026-10-20恢复增量检查点：按[共同契约恢复增量](../system/runner-desktop-runtime-integration-contract.md#2026-10-20-本地未知调用恢复与web结束等待兼容增量)开发Web结束等待、迟到回执对账与设备冲突阻断；唯一代码写入者为恢复开发子智能体，无Desktop壳或Device wire变更。进度与独立验证唯一记录在[BOSS恢复计划Phase 6～8](plan-boss-resume-next-recovery-fix.md)，本计划仅引用。
+2026-10-20恢复增量检查点：按[共同契约恢复增量](../system/runner-desktop-runtime-integration-contract.md#2026-10-20-本地未知调用恢复与web结束等待兼容增量)开发Web结束等待、迟到回执对账与设备冲突阻断；唯一代码写入者为恢复开发子智能体，无Desktop壳或Device wire变更。进度与独立验证记录在[Runner 增量设计 §5.6](../system/agent-application-architecture-design.md#56-本地调用对账与同会话结束等待2026-10-20增量)（原 BOSS 恢复计划已清理），本计划仅引用。
 
 2026-10-20共同检查点：共同契约2.2及[BOSS计划23](desktop-automation/plan-boss-operation-verification-visual-recovery.md#23-runtime配对身份复用纠正2026-10-20)复用Runtime配对身份。主控唯一修改Supervisor去掉旧BOSS env透传、Runtime/BOSS接线及版本元数据，backend角色唯一新增设备视觉API及账务主体隔离。无renderer/IPC新配置，不改H1/H3、设备配对或claim/permit，独立TEST/CR及实际包核验后交付，不部署。
 
-2026-10-14共同检查点：独立Runtime按[干净安装计划](plan-runtime-clean-install.md)与共同契约2.1改造安装代际及自动连接。安装角色唯一维护productConfiguration/installer与新installation模块，主控唯一维护Main/H3消费，服务端角色唯一维护Device协议3；完整Desktop现有协议保持兼容。
+2026-10-14共同检查点：独立Runtime按干净安装方案（已完成，记录见[Runtime 架构设计 §7](../system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)）与共同契约2.1改造安装代际及自动连接。安装角色唯一维护productConfiguration/installer与新installation模块，主控唯一维护Main/H3消费，服务端角色唯一维护Device协议3；完整Desktop现有协议保持兼容。
 
-同日追加安装确认：Runtime主控接管NSIS/PowerShell唯一写入，安装前只读检测旧运行，确定才自动退出并安装，取消保持旧运行；不改完整Desktop/H3/wire。增量验证统一见干净安装计划Phase5。
+同日追加安装确认：Runtime主控接管NSIS/PowerShell唯一写入，安装前只读检测旧运行，确定才自动退出并安装，取消保持旧运行；不改完整Desktop/H3/wire。增量验证记录见[Runtime 架构设计 §7](../system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)（干净安装 Phase 5）。
 
 2026-10-12 r7共同检查点：[恢复计划Phase10](plan-runtime-upgrade-recovery.md#phase10-最终交付与服务端状态复核2026-10-12)已交付自助诊断/管理修复/归档新配对；主控维护Core/Runtime/Main和UI，资源角色仅维护资源helper，独立角色只读验证。H1/Device/binding不变，Runtime-only H3可选端口与私有connection v1、续装控制保持单一写入者；实际包和独立验证通过，未部署服务器。
 
@@ -26,13 +26,13 @@
 
 2026-10-12 r4 共同检查点：[恢复计划Phase 4/5](plan-runtime-upgrade-recovery.md)由Runtime当前主控唯一维护NSIS及core/managed-entry/Supervisor/Main生命周期；完整Desktop不启用Runtime安装钩子。历史记录不阻止当前未拥有执行的管理进程退出，须确认直属Host实际退出；直属私有生命周期v1绑定实例与generation，H1、Device与binding不变。
 
-2026-10-12 升级退出检查点：[试用包Phase 5](plan-runtime-ui-boss-trial-bundle.md)由当前主控唯一写入公共NSIS钩子与诊断交付；Runtime窗口X仍仅隐藏到托盘，安全退出走既有stopAndExit。安装器运行检查只读拒绝，不默认终止进程，不改变共同wire或自行清旧运行事实。
+2026-10-12 升级退出检查点：试用包 Phase 5（已完成，记录见[Runtime 架构设计 §7](../system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)）由当前主控唯一写入公共NSIS钩子与诊断交付；Runtime窗口X仍仅隐藏到托盘，安全退出走既有stopAndExit。安装器运行检查只读拒绝，不默认终止进程，不改变共同wire或自行清旧运行事实。
 
-2026-10-12 BOSS 冷启动增量检查点：[试用包计划Phase 4](plan-runtime-ui-boss-trial-bundle.md)由当前主控修改Runtime共享store及Host组合层，Desktop继续消费同一Host，不另写Chrome启动或业务调用；UI ready诊断不变，wire/binding/许可保持。
+2026-10-12 BOSS 冷启动增量检查点：试用包 Phase 4（已完成，记录见[Runtime 架构设计 §7](../system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)）由当前主控修改Runtime共享store及Host组合层，Desktop继续消费同一Host，不另写Chrome启动或业务调用；UI ready诊断不变，wire/binding/许可保持。
 
-2026-10-12 共同检查点：[老用户试用组合包](plan-runtime-ui-boss-trial-bundle.md)由当前主控唯一写入公共 Electron main、自启适配/测试及打包白名单/NSIS钩子；仅安装的独立Runtime产品启用登录自启，完整Desktop不启用。复用正常Host管理start，不改H1/H2/Device schema，v2.0与候选0.3保持。
+2026-10-12 共同检查点：老用户试用组合包（已完成，记录见[Runtime 架构设计 §7](../system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)）由当前主控唯一写入公共 Electron main、自启适配/测试及打包白名单/NSIS钩子；仅安装的独立Runtime产品启用登录自启，完整Desktop不启用。复用正常Host管理start，不改H1/H2/Device schema，v2.0与候选0.3保持。
 
-2026-10-11 MCP 大结果回传检查点：共享 Runtime core 的唯一写入者为 [BOSS/Runtime 修复会话](desktop-automation/plan-boss-card-coordinate-precision.md)，文件为 `src/legacy/providerManager.ts` 及 Runtime 传输测试/fixture/helper。Desktop 继续消费同一 core，不另实现 stdio；有限预算与脱敏诊断详见链接计划 Phase 5。旧构造调用兼容；不改管理/Device wire、binding、许可、公共壳或 H4 新产物协议，契约 v2.0 / wire 候选0.3不变。
+2026-10-11 MCP 大结果回传检查点：共享 Runtime core 的唯一写入者为 BOSS/Runtime 修复会话（已完成，记录见[BOSS 原生 CDP 设计 §10.7.1](../design/recruiting/boss-resume-assistant-native-cdp-design.md#1071-推荐列表续筛的-css-输入桥接2026-10-11)），文件为 `src/legacy/providerManager.ts` 及 Runtime 传输测试/fixture/helper。Desktop 继续消费同一 core，不另实现 stdio；有限预算与脱敏诊断见该设计的开发完成记录。旧构造调用兼容；不改管理/Device wire、binding、许可、公共壳或 H4 新产物协议，契约 v2.0 / wire 候选0.3不变。
 
 2026-10-11 共同检查点：BOSS 续筛业务契约 v1 见[续筛计划](desktop-automation/plan-boss-screening-continuation.md)。共用核心注册的唯一写入者为该任务主控，仅改 `clients/shared/local-tool-host-core/src/legacy/providers.ts`、`providerManager.ts` 及对应测试，桌面端不另实现续筛。新增工具与旧 Provider 拒绝兼容，不改管理 wire、binding、许可或桌面对话循环。
 

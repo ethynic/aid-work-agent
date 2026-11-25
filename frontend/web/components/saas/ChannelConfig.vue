@@ -37,10 +37,10 @@
             </BaseBadge>
           </div>
           <div class="flex items-center gap-2">
-            <BaseButton v-if="ch.channel_type !== 'wecom_app_notify'" intent="ghost" size="sm" @click="handleVerify(ch.config_id)">验证连接</BaseButton>
+            <BaseButton v-if="ch.channel_type !== 'wecom_app_notify'" intent="ghost" size="sm" :disabled="verifying" @click="handleVerify(ch.config_id)">验证连接</BaseButton>
             <BaseButton intent="ghost" size="sm" @click="editChannel(ch)">编辑</BaseButton>
             <BaseButton intent="ghost" size="sm" @click="openAbusePolicy(ch)">防滥用</BaseButton>
-            <BaseButton intent="danger-ghost" size="sm" @click="handleDelete(ch.config_id)">删除</BaseButton>
+            <BaseButton intent="danger-ghost" size="sm" :disabled="deletingChannel" @click="handleDelete(ch.config_id)">删除</BaseButton>
           </div>
         </div>
         <!-- 回调地址展示（企业微信应用通知为纯外发通知渠道，无回调地址；
@@ -100,9 +100,9 @@
       <div>
         <!-- 操作按钮区（第一行） -->
         <div class="flex items-center gap-2 mb-3">
-          <BaseButton @click="handleSubmit">保存</BaseButton>
-          <BaseButton intent="secondary" @click="handleSaveAndClose">保存并关闭</BaseButton>
-          <BaseButton v-if="editingId && form.channel_type !== 'wecom_app_notify'" intent="ghost" @click="handleVerify(editingId)">验证连接</BaseButton>
+          <BaseButton :disabled="submitting" @click="handleSubmit">保存</BaseButton>
+          <BaseButton intent="secondary" :disabled="submitting" @click="handleSaveAndClose">保存并关闭</BaseButton>
+          <BaseButton v-if="editingId && form.channel_type !== 'wecom_app_notify'" intent="ghost" :disabled="verifying" @click="handleVerify(editingId)">验证连接</BaseButton>
         </div>
 
         <p v-if="!editingId" class="text-sm text-muted mb-3">选择 IM 平台，然后填写应用凭证</p>
@@ -210,27 +210,68 @@
           </div>
         </div>
 
+        <!-- 媒体识别开关（2026-11-19）：语音 ASR 默认开、图片识别默认关，识别消耗租户积分 -->
+        <div v-if="supportsMediaSwitches" class="mt-3 pt-3 border-t border-default space-y-2">
+          <div class="text-sm font-medium text-default">媒体识别（消耗积分）</div>
+          <div class="flex items-start gap-2">
+            <input
+              id="media-asr-enabled"
+              type="checkbox"
+              v-model="form.config.asr_enabled"
+              class="mt-1 w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+            />
+            <label for="media-asr-enabled" class="text-sm text-default cursor-pointer">语音识别（ASR）</label>
+            <p class="text-xs text-muted">默认开启，语音自动转文字后进入对话（按次消耗积分）；关闭后语音不再转文字、不产生识别消耗</p>
+          </div>
+          <div class="flex items-start gap-2">
+            <input
+              id="media-image-enabled"
+              type="checkbox"
+              v-model="form.config.image_recognition_enabled"
+              class="mt-1 w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500"
+            />
+            <label for="media-image-enabled" class="text-sm text-default cursor-pointer">图片识别</label>
+            <p class="text-xs text-muted">默认关闭；开启后客户发来的图片会传给数字员工判读（多模态积分消耗较高）；关闭后图片不识别、不产生识别消耗</p>
+          </div>
+        </div>
+
         <!-- 官网客服专属：身份模式 / 签名密钥 / 集成代码（设计 §4.8） -->
         <div v-if="form.channel_type === 'web_c'" class="mt-3 pt-3 border-t border-default space-y-3">
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="text-sm text-muted mb-1 block">身份模式</label>
-              <BaseSelect v-model="form.config.identity_mode">
-                <option value="anon">匿名（默认）</option>
-                <option value="uid">userid 链接（免签名）</option>
-                <option value="ext">签名链接</option>
-              </BaseSelect>
+              <div class="flex items-center gap-2">
+                <BaseSelect v-model="form.config.identity_mode" class="flex-1">
+                  <option value="anon">匿名（默认）</option>
+                  <option value="uid">userid 链接（免签名）</option>
+                  <option value="ext">签名链接</option>
+                </BaseSelect>
+                <BaseButton v-if="form.config.identity_mode !== 'ext'" size="md" @click="downloadWebCDemo">下载 demo 页面</BaseButton>
+              </div>
+              <p v-if="form.config.identity_mode !== 'ext'" class="mt-1 text-xs text-muted">可下载一个极简官网演示页（含 iframe 悬浮客服窗与「AI问答」按钮），链接已按当前渠道生成，可直接交给官网开发人员参考集成</p>
               <p class="mt-1 text-xs text-muted">三种单一身份模式：匿名：浏览器本地保留，换浏览器丢失；userid 链接：官网仅改前端嵌入带 userid 的链接，无需后端签名，但不验签故无跨访问历史（每次进入为新会话，管理员可在官网接待客户页查看全部）；签名：官网服务端按密钥生成，同一官网用户跨设备可见历史。Safari 对第三方 iframe 的本地存储约 7 天不活跃清除（浏览器策略，非缺陷）。</p>
             </div>
-            <div v-if="editingId">
+            <!-- 签名密钥仅签名链接模式需要（anon/uid 不签名，隐藏避免误导） -->
+            <div v-if="editingId && form.config.identity_mode === 'ext'">
               <label class="text-sm text-muted mb-1 block">签名密钥</label>
               <div class="flex items-center gap-2">
                 <code class="text-xs bg-canvas rounded px-2 py-2 flex-1 truncate font-mono break-all whitespace-normal">{{ form.config.channel_secret || '保存后由服务端生成' }}</code>
                 <BaseButton size="sm" intent="ghost" @click="copyWebCSecret">复制</BaseButton>
-                <BaseButton size="sm" intent="secondary" @click="rotateWebCSecretKey">重置</BaseButton>
+                <BaseButton size="sm" intent="secondary" :disabled="rotatingWebCSecret" @click="rotateWebCSecretKey">重置</BaseButton>
               </div>
               <p class="mt-1 text-xs text-muted">服务端自动生成；重置后旧签名链接全部失效，需同步更新官网签名服务。</p>
             </div>
+          </div>
+
+          <!-- 留资归属员工（2026-11-20 方案 2）：留资线索 assigned_to + 留资通知
+               「线索归属员工」接收人来源；官网客服无客服账号体系，按渠道配置 -->
+          <div>
+            <label class="text-sm text-muted mb-1 block">留资归属员工</label>
+            <BaseSelect v-model="form.config.lead_assignee_user_id">
+              <option value="">未设置（留资不归属员工，仅租户管理员可收留资通知）</option>
+              <option v-for="u in tenantUsers" :key="u.user_id" :value="u.user_id">{{ tenantUserName(u.user_id) }}</option>
+            </BaseSelect>
+            <p class="mt-1 text-xs text-muted">客户在官网客服留资时，线索归属此员工；通知规则「站内信接收人=线索归属员工」时通知该员工。默认未设置，可在「管理菜单 → 通知规则」配置留资通知。</p>
           </div>
 
           <!-- 附件上传开关（默认关：纯文字聊天） -->
@@ -245,17 +286,18 @@
             <p class="text-xs text-muted">默认关闭，聊天页仅支持纯文字；开启后访客可上传文件/图片（单次最多 10 个，单个 20MB）</p>
           </div>
 
-          <!-- 历史会话入口开关（默认关；uid 模式服务端强制关闭，此处禁用置灰让管理员可见该约束） -->
+          <!-- 历史会话入口开关（默认关；仅签名链接模式可开，anon/uid 服务端强制关闭，
+               此处禁用置灰让管理员可见该约束） -->
           <div class="flex items-start gap-2">
             <input
               id="webc-show-history"
               type="checkbox"
               v-model="form.config.show_history"
-              :disabled="form.config.identity_mode === 'uid'"
+              :disabled="form.config.identity_mode !== 'ext'"
               class="mt-1 w-4 h-4 rounded border-primary-200 text-primary-600 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
             />
-            <label for="webc-show-history" class="text-sm text-default cursor-pointer" :class="form.config.identity_mode === 'uid' ? 'text-muted' : ''">显示历史会话入口</label>
-            <p class="text-xs text-muted">默认关闭，聊天页右上角不显示「历史会话」按钮；开启后匿名身份可查看本浏览器历史会话（仅匿名模式生效）{{ form.config.identity_mode === 'uid' ? '；userid 链接模式不验签无跨访问历史，该入口强制关闭' : '' }}</p>
+            <label for="webc-show-history" class="text-sm text-default cursor-pointer" :class="form.config.identity_mode !== 'ext' ? 'text-muted' : ''">显示历史会话入口</label>
+            <p class="text-xs text-muted">默认关闭，聊天页右上角不显示「历史会话」按钮；开启后签名身份可跨设备查看历史会话（仅签名链接模式生效）{{ form.config.identity_mode === 'uid' ? '；userid 链接模式不验签无跨访问历史，该入口强制关闭' : (form.config.identity_mode === 'anon' ? '；匿名模式无签名身份，该入口强制关闭' : '') }}</p>
           </div>
 
           <!-- 集成代码 -->
@@ -293,8 +335,8 @@
             </div>
           </details>
 
-          <!-- 签名算法说明（ext 模式；uid 模式不使用签名故隐藏） -->
-          <details v-if="form.config.identity_mode !== 'uid'" class="bg-canvas rounded-lg p-3">
+          <!-- 签名算法说明（仅 ext 模式；anon/uid 不使用签名故隐藏） -->
+          <details v-if="form.config.identity_mode === 'ext'" class="bg-canvas rounded-lg p-3">
             <summary class="flex items-center justify-between cursor-pointer text-sm font-medium text-default">
               <span>签名链接算法说明（官网有登录体系时必读）</span>
               <BaseButton size="sm" intent="ghost" @click.stop.prevent="copyWebCSignDoc">复制MD</BaseButton>
@@ -348,7 +390,7 @@
                     <BaseButton intent="ghost" size="sm" @click="goNotificationRules('kf_config', acc.open_kfid)">通知规则</BaseButton>
                     <BaseButton intent="ghost" size="sm" @click="viewKfQr({ config_id: editingId }, acc)">二维码</BaseButton>
                     <BaseButton intent="ghost" size="sm" @click="openKfAccountEdit({ config_id: editingId }, acc)">编辑</BaseButton>
-                    <BaseButton intent="danger-ghost" size="sm" @click="handleDeleteKfAccount({ config_id: editingId }, acc)">删除</BaseButton>
+                    <BaseButton intent="danger-ghost" size="sm" :disabled="deletingKfAccount" @click="handleDeleteKfAccount({ config_id: editingId }, acc)">删除</BaseButton>
                   </div>
                 </div>
               </div>
@@ -1117,6 +1159,7 @@ function viewKfQr(_ch: any, acc: any) {
 }
 
 async function handleKfSubmit() {
+  if (kfSubmitting.value) return
   const name = (kfForm.value.name || '').trim()
   if (!name) { kfFormError.value = '请填写客服名称'; return }
   if (!kfForm.value.tenant_user_id) { kfFormError.value = '请选择用户'; return }
@@ -1181,8 +1224,11 @@ async function handleKfSubmit() {
   }
 }
 
+const deletingKfAccount = ref(false)
 async function handleDeleteKfAccount(_ch: any, acc: any) {
+  if (deletingKfAccount.value) return
   if (!confirm(`确定删除客服账号「${acc.name}」吗？删除后已发放的二维码将失效，客户将无法继续通过该二维码进入会话。`)) return
+  deletingKfAccount.value = true
   try {
     await deleteKfAccount(acc.open_kfid)
     toast.success('删除成功')
@@ -1190,6 +1236,8 @@ async function handleDeleteKfAccount(_ch: any, acc: any) {
     syncKfAccountsToForm()
   } catch (e: any) {
     toast.error(e.message || '删除失败')
+  } finally {
+    deletingKfAccount.value = false
   }
 }
 
@@ -1324,6 +1372,26 @@ const notifyUsage = computed({
 const isNotifyOnly = computed(() =>
   supportsNotifyUsage.value && notifyUsage.value === 'notify_only')
 
+// ==================== 媒体识别开关（2026-11-19） ====================
+// 语音 ASR（默认开）/ 图片识别（默认关）；识别消耗租户积分，租户可按渠道关闭。
+// 与后端 channel_factory.MEDIA_SWITCH_CHANNEL_TYPES 口径一致
+const MEDIA_SWITCH_CHANNEL_TYPES = ['wecom', 'wecom_kf', 'dingtalk', 'feishu']
+
+const supportsMediaSwitches = computed(() =>
+  MEDIA_SWITCH_CHANNEL_TYPES.includes(form.value.channel_type) && !isNotifyOnly.value)
+
+// checkbox 绑定需显式初值：存量配置不含键时按缺省回填（须在快照捕获前调用，避免误报脏状态）
+function applyMediaSwitchDefaults() {
+  if (supportsMediaSwitches.value) {
+    if (form.value.config.asr_enabled === undefined) form.value.config.asr_enabled = true
+    if (form.value.config.image_recognition_enabled === undefined) form.value.config.image_recognition_enabled = false
+  }
+  // web_c 留资归属员工（2026-11-20）：存量配置不含键时补空串初值（空串=未配置）
+  if (form.value.channel_type === 'web_c' && form.value.config.lead_assignee_user_id === undefined) {
+    form.value.config.lead_assignee_user_id = ''
+  }
+}
+
 // 钉钉「仅通知」用途补填字段：工作通知发送需应用 AgentId（2026-11-16 钉钉通知接入；
 // agent_only/both 保持原两项表单不变——存量行为零变更）
 const DINGTALK_NOTIFY_ONLY_AGENT_FIELD: { key: string; label: string; placeholder: string; hint?: string; location: string; type?: 'text' | 'file' | 'password' } =
@@ -1332,12 +1400,13 @@ const DINGTALK_NOTIFY_ONLY_AGENT_FIELD: { key: string; label: string; placeholde
 const channelFields = computed(() => {
   const fields = channelFieldMap[form.value.channel_type] || []
   if (isNotifyOnly.value && form.value.channel_type === 'wecom') {
-    // 企微仅通知用途：无回调链路，回调 Token / EncodingAESKey 免填（保存时剔除旧值）
+    // 企微仅通知用途：无回调链路，回调 Token / EncodingAESKey 免填（保存时不提交，
+    // 库内旧值由后端保留）
     return fields.filter(f => f.key !== 'token' && f.key !== 'encoding_aes_key')
   }
   if (isNotifyOnly.value && form.value.channel_type === 'feishu') {
     // 飞书仅通知用途：纯服务端 API 发消息，Verification Token / Encrypt Key 免填
-    //（encrypt_key 本就可选），保存时剔除旧值
+    //（encrypt_key 本就可选），保存时不提交，库内旧值由后端保留
     return fields.filter(f => f.key !== 'verification_token' && f.key !== 'encrypt_key')
   }
   if (isNotifyOnly.value && form.value.channel_type === 'dingtalk') {
@@ -1371,16 +1440,22 @@ function selectChannelType(type: string) {
   }
 }
 
-// web_c 身份模式切换到 uid 时强制关闭历史会话入口（与服务端 bootstrap 强制 False 同口径）
-watch(() => form.value.config.identity_mode, (mode) => {
-  if (form.value.channel_type === 'web_c' && mode === 'uid' && form.value.config.show_history) {
-    form.value.config.show_history = false
+// web_c 历史会话入口仅签名链接模式可用：anon/uid 模式强制 false（含装载存量
+// anon+true 配置的场景；与服务端 bootstrap 强制 False 同口径）
+watch(
+  () => [form.value.channel_type, form.value.config.identity_mode, form.value.config.show_history] as const,
+  ([type, mode, sh]) => {
+    if (type === 'web_c' && mode !== 'ext' && sh) {
+      form.value.config.show_history = false
+    }
   }
-})
+)
 
 // ==================== 配置指引（简短版，弹窗内） ====================
 
-const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: string }> = {
+// notifyOnlySteps：「仅通知」用途不接对话、无回调链路，指引只保留取发消息凭据与发送前提，
+// 不再引导配置回调地址（否则会让人误以为仅通知也要填回调）
+const quickGuideMap: Record<string, { title: string; steps: string[]; notifyOnlySteps?: string[]; docUrl: string }> = {
   wecom: {
     title: '企业微信接入步骤',
     steps: [
@@ -1389,6 +1464,11 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '在应用详情页找到「接收消息」→ 点击「设置 API 接收」',
       '将下方回调地址填入 URL 栏，生成 Token 和 EncodingAESKey',
       '先在此页面保存凭证，再到企业微信后台点击保存完成验证',
+    ],
+    notifyOnlySteps: [
+      '前往企业微信管理后台 →「应用管理」→「创建应用」',
+      '记录 CorpID、AgentId、Secret',
+      '「仅通知」不接对话，无需配置回调地址；填写后保存即可',
     ],
     docUrl: 'https://work.weixin.qq.com/wework_admin/frame',
   },
@@ -1414,6 +1494,12 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '记录 AppKey、AppSecret（钉钉回调签名只用 AppSecret，不需要 Token / EncodingAESKey）',
       '仅任务通知（不接对话）时，「通知用途」选「仅通知」，需 AppKey / AppSecret / AgentId 三项',
     ],
+    notifyOnlySteps: [
+      '前往钉钉开放平台 →「开发者后台」→ 创建应用',
+      '开通「工作通知」接口权限（仅通知发送必须）',
+      '记录 AppKey、AppSecret、AgentId（仅通知需这三项）',
+      '「仅通知」不接对话，无需配置回调地址；填写后保存即可',
+    ],
     docUrl: 'https://open.dingtalk.com/',
   },
   wechat_mp: {
@@ -1437,6 +1523,12 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
       '将下方回调地址填入请求地址',
       '记录 App ID、App Secret、Verification Token、Encrypt Key',
       '仅任务通知（不接对话）时，「通知用途」选「仅通知」，只需 App ID / App Secret 两项',
+    ],
+    notifyOnlySteps: [
+      '前往飞书开放平台 →「开发者后台」→ 创建企业自建应用',
+      '启用「机器人」能力并发布应用，需要接收通知的成员须在应用可用范围内',
+      '记录 App ID、App Secret（仅通知只需这两项）',
+      '「仅通知」不接对话，无需配置回调地址；填写后保存即可',
     ],
     docUrl: 'https://open.feishu.cn/',
   },
@@ -1462,7 +1554,13 @@ const quickGuideMap: Record<string, { title: string; steps: string[]; docUrl: st
   },
 }
 
-const currentGuide = computed(() => quickGuideMap[form.value.channel_type] || { title: '', steps: [], docUrl: '' })
+// 「仅通知」用途换用不含回调配置步骤的指引（isNotifyOnly 仅对 wecom/feishu/dingtalk 成立，
+// 三者均已定义 notifyOnlySteps）
+const currentGuide = computed(() => {
+  const guide = quickGuideMap[form.value.channel_type]
+  if (guide && isNotifyOnly.value) return { ...guide, steps: guide.notifyOnlySteps as string[] }
+  return guide || { title: '', steps: [], docUrl: '' }
+})
 
 // ==================== 回调地址 ====================
 
@@ -1560,6 +1658,7 @@ function resetMpTokenState() {
 }
 
 async function handleRotateMpToken() {
+  if (rotatingToken.value) return
   if (!editingId.value) return
   if (!confirm('重置后旧 Token 立即失效，需到公众平台后台同步更新并重新保存服务器配置。确定重置吗？')) return
   rotatingToken.value = true
@@ -1698,6 +1797,7 @@ function stopMpPolling() {
 }
 
 async function handleStartScan() {
+  if (mpBusy.value) return
   mpBusy.value = true
   mpScan.value.error = ''
   try {
@@ -1758,6 +1858,7 @@ function scheduleMpPoll(scanId: string) {
 }
 
 async function handleRefreshQr() {
+  if (mpBusy.value) return
   await handleStartScan()
 }
 
@@ -1767,6 +1868,7 @@ function handleCancelScan() {
 }
 
 async function handleUnbind() {
+  if (mpBusy.value) return
   if (!confirm('解绑后停止自动同步该公众号内容（已入库文章保留），确定解绑吗？')) return
   mpBusy.value = true
   try {
@@ -1856,6 +1958,7 @@ function copyHistoryLink(it: ListHistoryItem) {
 function openAddChannel() {
   editingId.value = null
   form.value = { channel_type: 'wecom', name: '', config: {}, subagent_type: '' }
+  applyMediaSwitchDefaults()
   formError.value = ''
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
   resetWaitingIndicator()
@@ -1866,6 +1969,7 @@ function openAddChannel() {
 function editChannel(ch: any) {
   editingId.value = ch.config_id
   form.value = { channel_type: ch.channel_type, name: ch.name || '', config: { ...ch.config }, subagent_type: ch.subagent_type || '' }
+  applyMediaSwitchDefaults()
   formError.value = ''
   formInitialSnapshot.value = JSON.parse(JSON.stringify(form.value))
   loadWaitingIndicator(ch.config?.waiting_indicator)
@@ -1897,7 +2001,7 @@ const webCChatUrl = computed(() => {
 const webCIframeCode = computed(() => {
   if (!editingId.value) return ''
   const sep = webCChatUrl.value.includes('?') ? '&' : '?'
-  return `<iframe src="${webCChatUrl.value}${sep}embed=1" style="width:420px;height:640px;border:0" allow="clipboard-write"></iframe>`
+  return `<iframe src="${webCChatUrl.value}${sep}embed=1" style="width:min(420px,100%);height:min(640px,90vh);border:0" allow="clipboard-write"></iframe>`
 })
 
 function copyText(text: string, label: string) {
@@ -1911,6 +2015,41 @@ function copyWebCSecret() {
     return
   }
   copyText(secret, '签名密钥')
+}
+
+// 官网客服 demo 页面下载（anon/uid 模式可用；ext 模式链接由官网服务端签名生成，不提供 demo）
+// 模板位于 frontend/public/web_c_embed_demo.html（构建后随 dist 根目录发布），
+// 占位符 __WEB_C_CHAT_URL__ / __WEB_C_IFRAME_SRC__ 替换为当前渠道实际链接后以 Blob 下载
+async function downloadWebCDemo() {
+  if (!editingId.value) {
+    toast.warning('请先保存配置，生成渠道地址后再下载 demo 页面')
+    return
+  }
+  const base = `${window.location.origin}/c/${tenantId.value}/${editingId.value}`
+  const mode = form.value.config.identity_mode || 'anon'
+  // uid 模式预填示例常量 u=0011 / name=张三，使 demo 页开箱即可聊天（见下载函数注释）；匿名模式为纯链接
+  const chatUrl = mode === 'uid'
+    ? `${base}?u=0011&name=张三`
+    : base
+  const iframeSrc = `${chatUrl}${chatUrl.includes('?') ? '&' : '?'}embed=1`
+  try {
+    const resp = await fetch('/web_c_embed_demo.html')
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const html = (await resp.text())
+      .split('__WEB_C_IFRAME_SRC__').join(iframeSrc)
+      .split('__WEB_C_CHAT_URL__').join(chatUrl)
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'web_c_chat_demo.html'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(a.href)
+    toast.success('demo 页面已下载，可交给官网开发人员')
+  } catch (e) {
+    toast.error(`下载 demo 页面失败：${e instanceof Error ? e.message : String(e)}`)
+  }
 }
 
 // web_c 签名说明：示例代码（页面展示与「复制MD」共用一份，占位符统一为 {userid} / channel_secret）
@@ -1964,15 +2103,20 @@ function copyWebCSignDoc() {
   copyText(md, '签名算法说明MD')
 }
 
+const rotatingWebCSecret = ref(false)
 async function rotateWebCSecretKey() {
+  if (rotatingWebCSecret.value) return
   if (!editingId.value) return
   if (!confirm('确定重置签名密钥？重置后旧签名链接全部失效，需同步更新官网的签名服务配置。')) return
+  rotatingWebCSecret.value = true
   try {
     const res = await rotateWebCSecret(editingId.value)
     if (res.channel_secret) form.value.config.channel_secret = res.channel_secret
     toast.success(res.message || '签名密钥已重置')
   } catch (e: any) {
     toast.error(e.message || '重置失败')
+  } finally {
+    rotatingWebCSecret.value = false
   }
 }
 
@@ -2039,7 +2183,8 @@ async function saveChannel(): Promise<boolean> {
       subagent_type: form.value.subagent_type || undefined
     }
     // 企微/飞书/钉钉应用：写入通知用途（缺省 agent_only，存量行为不变）；
-    // 仅通知用途无回调链路，剔除回调字段旧值（表单已隐藏或本就无回调字段）
+    // 仅通知用途无回调链路，隐藏的回调字段不随保存提交（库内旧值由后端保留，
+    // 改回 agent_only/both 时免重填）
     if (form.value.channel_type === 'wecom' || form.value.channel_type === 'feishu' || form.value.channel_type === 'dingtalk') {
       payload.config.notify_usage = notifyUsage.value
       if (notifyUsage.value === 'notify_only') {
@@ -2125,6 +2270,7 @@ async function saveChannel(): Promise<boolean> {
 
 // 保存按钮：仅保存，不关闭弹窗
 async function handleSubmit() {
+  if (submitting.value) return
   const isCreate = !editingId.value
   const ok = await saveChannel()
   if (ok) toast.success(isCreate ? '创建成功' : '保存成功')
@@ -2132,11 +2278,15 @@ async function handleSubmit() {
 
 // 保存并关闭按钮：保存后关闭弹窗
 async function handleSaveAndClose() {
+  if (submitting.value) return
   const ok = await saveChannel()
   if (ok) closeModal()
 }
 
+const verifying = ref(false)
 async function handleVerify(configId: string) {
+  if (verifying.value) return
+  verifying.value = true
   try {
     const res = await verifyChannel(configId)
     const ch = channels.value.find((c: any) => c.config_id === configId)
@@ -2156,17 +2306,24 @@ async function handleVerify(configId: string) {
     await loadChannels()
   } catch (e: any) {
     toast.error(e.message || '验证失败')
+  } finally {
+    verifying.value = false
   }
 }
 
+const deletingChannel = ref(false)
 async function handleDelete(configId: string) {
+  if (deletingChannel.value) return
   if (!confirm('确定要删除此渠道配置吗？删除后对应渠道将无法接收消息。')) return
+  deletingChannel.value = true
   try {
     await deleteChannel(configId)
     toast.success('删除成功')
     await loadChannels()
   } catch (e: any) {
     toast.error(e.message || '删除失败')
+  } finally {
+    deletingChannel.value = false
   }
 }
 

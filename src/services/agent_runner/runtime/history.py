@@ -4,11 +4,13 @@ from loguru import logger
 from src.config.settings import settings
 
 from src.core.agent_engine.context import reorder_history
+from ..presentation import PLUGIN_TOOL_NAMES
 
 class SessionHistory:
     def __init__(self, memory, source_type, reader, tolerate_read_failure=False, session_kind=None):
         self.memory, self.source_type, self.reader = memory, source_type, reader
         self.tolerate_read_failure = tolerate_read_failure
+        self.runtime_plugin_tool_names = set()
         self.session_kind = session_kind or ("channel" if source_type in {
             "wecom", "wecom_kf", "feishu", "dingtalk", "channel"} else "web")
 
@@ -32,6 +34,7 @@ class SessionHistory:
                     limit=self.memory.short_term.max_messages,
                 )
                 self.memory.clear(session_id)
+                self.runtime_plugin_tool_names.clear()
                 if not db_messages:
                     return
                 history_messages: List[Dict[str, Any]] = []
@@ -57,6 +60,7 @@ class SessionHistory:
                         }
                         if meta.get("tool_calls"):
                             entry["tool_calls"] = meta["tool_calls"]
+                            self.runtime_plugin_tool_names.update(meta.get(PLUGIN_TOOL_NAMES, ()))
                         if isinstance(meta.get("reasoning_content"), str):
                             entry["reasoning_content"] = meta["reasoning_content"]
                         history_messages.append(entry)

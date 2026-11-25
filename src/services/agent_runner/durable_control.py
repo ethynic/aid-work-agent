@@ -285,6 +285,9 @@ class DurableObserver:
                 await asyncio.to_thread(self.context_repository.update_context_tokens, count)
 
     async def event(self, state, event):
+        from .presentation import redact_runtime_plugin_event
+        if 'child_execution_id' not in event:
+            redact_runtime_plugin_event(state, event)
         if self.trace_collector is not None:
             self.trace_collector.on_event(event)
         await self.control.project(self.control.state or state, event)

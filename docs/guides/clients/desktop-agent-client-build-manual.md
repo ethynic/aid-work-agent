@@ -320,7 +320,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 ## 12. 独立Runtime首期验收包
 
-现行流程见[统一打包手册](../deployment/runtime-boss-release-guide.md)。首期签名摘要、测试和交付记录见[Runtime 计划](../../plans/plan-runtime-plugin-host.md#10-最终交付与验证记录)及[组合包历史计划](../../plans/plan-runtime-ui-boss-trial-bundle.md)。
+现行流程见[统一打包手册](../deployment/runtime-boss-release-guide.md)。首期签名摘要、测试和交付记录见[Runtime 计划](../../plans/plan-runtime-plugin-host.md#10-最终交付与验证记录)；组合包历史交付记录见 [Runtime 架构设计 §7](../../system/runtime-plugin-host-architecture-design.md#7-runtime-ui-与产品壳)。
 
 ### 12.1 BOSS完整人工验收：构建到招聘智能体调用
 

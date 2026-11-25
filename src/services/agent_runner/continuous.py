@@ -28,7 +28,7 @@ def interrupted_candidate(row):
     root = checkpoint.get('execution')
     def manual_wait(node):
         if (node.get('waiting') or {}).get('kind') in {
-                'clarification','child_clarification','human_assistance','continuous_guard'}:
+                'clarification','child_clarification','continuous_guard'}:
             return True
         return any(manual_wait(child['checkpoint']) for child in node.get('children',{}).values()
             if isinstance(child,dict) and isinstance(child.get('checkpoint'),dict) and child['checkpoint'].get('outcome') not in {

@@ -175,16 +175,6 @@ tools:
     max_results: 5
     include_answer: true
     search_depth: basic
-  browser:
-    headless: true  # 服务端默认使用无头模式，与 BrowserToolConfig 默认值保持一致
-    timeout: 30000  # 默认超时时间（毫秒）
-    task_timeout: 300  # 单次工具总超时（秒）
-    command_timeout: 30  # worker 单命令超时（秒）
-    owner_lease_ttl: 30  # owner lease TTL（秒）
-    owner_renew_interval: 10  # owner lease 续租间隔（秒）
-    reaper_interval: 15  # 过期 run 回收周期（秒）
-    viewport_width: 1920
-    viewport_height: 1080
   maps:
     amap_api_key: ${AMAP_API_KEY}
 
@@ -525,6 +515,9 @@ agent_runner:
   # 本地容器验证（2026-10-04）：Web 闭环走 Runner；令牌明文仅在 .env。
   enabled: true
   web_enabled: true
+  # 插件发布者公开信任文件。空值时仅 agent2（aid-network2）默认使用 configs/runtime-plugin-trust 下的验收公钥。
+  # AGENT_RUNNER_PLUGIN_TRUST_ROOTS 优先，显式为空时关闭清单同步。
+  plugin_trust_roots: ""
   # 同池 API/worker 全部升级并完成隔离验收后才显式开启。
   durable_sleep_enabled: false
   # 原 invocation 所属插件。留空时沿用已有恢复流程。
@@ -569,20 +562,6 @@ agent_runner:
     # image_render 观察期留轻容器不远程（设计 §3：AI 生图是网络等待，本地重活仅参考图解码）
   # heavy_skills 清单已随判型退役删除（2026-11-13 §9）：interior-render 的重负载
   # 随 image_render 观察结论走；paddleocr-doc-parsing 的重负载在工具远程化后消失。
-  # Server-only KF migration; text admission is opt-in, delivery remains separate.
-  browser_owner:
-    enabled: false
-    endpoint: "http://127.0.0.1:8092/internal/runner-browser"
-    allowed_endpoints: ["http://127.0.0.1:8092/internal/runner-browser"]
-    # Each Worker container has its own network namespace; the same loopback
-    # port does not conflict across replicas. Browser view is disabled by default.
-    view_enabled: false
-    bind_host: "127.0.0.1"
-    bind_port: 8092
-    gateway_service_id: "browser-web"
-    # Only dedicated Browser gateway hashes, never inherited channel peers.
-    # Caller plaintext stays solely in AGENT_RUNNER_BROWSER_GATEWAY_TOKEN.
-    gateway_peers: {}
 
 # 通用用户通知（常开，无总开关）；VAPID 密钥和 subject 由环境注入。
 notifications:
@@ -636,5 +615,10 @@ tencent_docs:
   client_id: ${TDOC_CLIENT_ID:-}
   access_token: ${TDOC_ACCESS_TOKEN:-}
   open_id: ${TDOC_OPEN_ID:-}
+  # OAuth 第三方应用（任务 #2）：client_secret 仅存服务器 .env，禁止进仓库
+  oauth_client_id: ${TDOC_OAUTH_CLIENT_ID:-}
+  oauth_client_secret: ${TDOC_OAUTH_CLIENT_SECRET:-}
+  oauth_redirect_uri: ${TDOC_OAUTH_REDIRECT_URI:-https://agent.aidingyi.cn/api/knowledge/tdoc/oauth/callback}
+  oauth_state_ttl_seconds: ${TDOC_OAUTH_STATE_TTL:-600}
   request_timeout: 30
   export_daily_limit: 9

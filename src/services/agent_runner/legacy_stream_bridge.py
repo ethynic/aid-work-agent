@@ -162,7 +162,6 @@ class _LegacyFrameState:
         self.verbose = 0
         self.images = 0
         self.progress_tail, self.verbose_tail, self.images_tail = [], [], []
-        self.assistance = None
         self.clarification = None
 
     def project(self, row):
@@ -195,17 +194,6 @@ class _LegacyFrameState:
             frames.append({'type': 'images', 'images': fresh,
                            'placement': snapshot.get('imagesPlacement') or 'after_text'})
         self.images,self.images_tail = len(images),copy.deepcopy(images[-48:])
-        assistance = snapshot.get('browserAssistance')
-        if (isinstance(assistance, dict) and assistance.get('assistance_id')
-                and assistance.get('assistance_id') != self.assistance
-                and assistance.get('completion_status') == 'pending'
-                and assistance.get('state') in ('pending', 'controlling')):
-            self.assistance = assistance['assistance_id']
-            # Legacy semantics: the SSE turn ends once the human card is live;
-            # the old card then follows its continuation stream on its own.
-            frames.append({'type': 'browser_human_required', 'surface': 'server_web', **assistance})
-            frames.append({'type': 'complete', 'timestamp': _now_ms()})
-            return frames, True
         waiting = _leaf_waiting(snapshot)
         if waiting.get('kind') == 'clarification':
             marker = waiting.get('wait_id') or waiting.get('tool_call_id')

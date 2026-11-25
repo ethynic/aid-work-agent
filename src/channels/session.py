@@ -327,9 +327,11 @@ class ChannelSessionManager:
                 lookup_sql += " AND channel_chat_id = %s"
                 lookup_params = (tenant_id, channel_type, channel_user_id, subagent_id, channel_chat_id)
             else:
-                # 默认会话查找只匹配 chat_id 为空（NULL/空串）的会话：多会话渠道
-                # （web_c 新会话）的额外会话带唯一 chat_id token，不得被默认路径命中
-                lookup_sql += " AND (channel_chat_id IS NULL OR channel_chat_id = '')"
+                # 默认会话查找只匹配 chat_id 为空（NULL/空串）且非额外会话的行：
+                # 多会话渠道（web_c 新会话）的额外会话带 extra_session 标记
+                # （chat_id 恒为空，与 Runner 调用口径一致），不得被默认路径命中
+                lookup_sql += (" AND (channel_chat_id IS NULL OR channel_chat_id = '')"
+                               " AND COALESCE(metadata->>'extra_session', '') <> '1'")
             cursor.execute(lookup_sql, lookup_params)
 
             row = cursor.fetchone()
@@ -422,7 +424,7 @@ class ChannelSessionManager:
         channel_type: str,
         channel_user_id: str,
         tenant_id: str,
-        channel_chat_id: str,
+        channel_chat_id: Optional[str],
         user_info: Optional[Dict[str, Any]] = None,
         subagent_id: str = "",
         metadata: Optional[Dict[str, Any]] = None,
@@ -431,9 +433,11 @@ class ChannelSessionManager:
         按显式 session_id 创建渠道会话（多会话渠道用，如 web_c「新会话」）。
 
         - session_id 由调用方生成并保证唯一（须满足该渠道的归属前缀约定）；
-        - channel_chat_id 必须传唯一 token：与默认 get_or_create 会话区分
-          （默认查找按 chat_id 为空过滤，不会命中本方法创建的会话），
-          同时使缓存 key 按 chat_id 分片、互不覆盖。
+        - channel_chat_id 非空时传唯一 token：缓存 key 按 chat_id 分片互不覆盖，
+          默认 get_or_create 查找（按 chat_id 为空过滤）也不会命中；
+        - channel_chat_id 为空（None/空串）时调用方必须在 metadata 标记
+          extra_session=1 与默认会话区分（默认查找按该标记排除）；此时本方法
+          不写会话缓存（缓存 key 与默认会话相同，写入会互相覆盖，读方直查 DB）。
 
         Returns:
             会话信息字典（含 created_at/updated_at/last_message_at）
@@ -482,10 +486,12 @@ class ChannelSessionManager:
             "updated_at": ts_row["updated_at"],
             "last_message_at": ts_row["last_message_at"],
         }
-        set_cached(CacheKeys.CHANNEL_SESSION,
-                   *self._session_cache_args(tenant_id, channel_type, channel_user_id,
-                                             subagent_id, channel_chat_id),
-                   value=result, ttl=600)
+        # chat_id 为空时缓存 key 与默认会话相同，写入会互相覆盖——不缓存（读方直查 DB）
+        if channel_chat_id:
+            set_cached(CacheKeys.CHANNEL_SESSION,
+                       *self._session_cache_args(tenant_id, channel_type, channel_user_id,
+                                                 subagent_id, channel_chat_id),
+                       value=result, ttl=600)
         return result
 
     def rebind_existing_session_channel_user(

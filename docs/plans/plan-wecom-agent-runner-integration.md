@@ -31,7 +31,7 @@
 参考实现及审核证据：
 
 - [飞书计划](../channel/feishu/implementation_plan.md#agentrunner-接入后续独立事项)、[钉钉计划](../channel/dingtalk/implementation_plan.md#agentrunner-接入后续独立事项)：代码已接入，文档仍登记待部署真机验收。
-- [微信客服恢复计划](plan-wecom-kf-channel-restore.md)：已有独立 Runner 接入和真机验收记录。
+- 微信客服恢复接入（原计划已清理，记录见 [AgentRunner 架构设计](../system/agent-application-architecture-design.md)文首）：已有独立 Runner 接入和真机验收记录。
 - [飞书、钉钉审核](../reviews/feishu-dingtalk-agentrunner-review-2026-10-09.md)：沿用其失败分流、用户重建、skip_save 与真实接线测试要求，避免重复引入已修问题。
 
 现有文档有三处与代码不一致，规划以代码事实为准：

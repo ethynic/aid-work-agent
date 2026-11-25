@@ -72,11 +72,11 @@
                   <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="openDetail(row)">查看明细</BaseButton>
                   <BaseButton
                     v-if="row.user_status !== 'suspended'"
-                    intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs"
+                    intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs" :disabled="togglingStatus"
                     @click="handleToggleStatus(row, 'suspended')"
                   >停用</BaseButton>
                   <BaseButton
-                    v-else intent="ghost" size="sm" class="whitespace-nowrap text-xs"
+                    v-else intent="ghost" size="sm" class="whitespace-nowrap text-xs" :disabled="togglingStatus"
                     @click="handleToggleStatus(row, 'active')"
                   >启用</BaseButton>
                 </div>
@@ -116,7 +116,7 @@
               <template #actions="{ row }">
                 <div class="flex gap-2">
                   <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="goUsageDetail(row)">查看消耗</BaseButton>
-                  <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" @click="handleToggleStatus(row, 'active')">启用</BaseButton>
+                  <BaseButton intent="ghost" size="sm" class="whitespace-nowrap text-xs" :disabled="togglingStatus" @click="handleToggleStatus(row, 'active')">启用</BaseButton>
                 </div>
               </template>
             </BaseTable>
@@ -343,11 +343,14 @@ async function openDetail(row: any) {
   }
 }
 
+const togglingStatus = ref(false)
 async function handleToggleStatus(row: any, status: 'active' | 'suspended') {
+  if (togglingStatus.value) return
   const tip = status === 'suspended'
     ? '确定停用该用户吗？停用后其 Web 与渠道侧均无法继续使用。'
     : '确定启用该用户吗？'
   if (!confirm(tip)) return
+  togglingStatus.value = true
   try {
     await updateUserStatus(row.user_id, status)
     toast.success(status === 'suspended' ? '用户已停用' : '用户已启用')
@@ -356,6 +359,8 @@ async function handleToggleStatus(row: any, status: 'active' | 'suspended') {
     suspendedPage.value = 1
   } catch (e: any) {
     toast.error(e.message || '更新用户状态失败')
+  } finally {
+    togglingStatus.value = false
   }
 }
 

@@ -387,6 +387,7 @@ async function onIntervalChange(value: string) {
 }
 
 async function handleTrigger() {
+  if (triggerLoading.value) return
   triggerLoading.value = true
   try {
     const resp = await triggerSource()
@@ -483,6 +484,7 @@ async function handleSelectionMode(mode: 'all' | 'ids') {
 }
 
 async function handleSaveSelection() {
+  if (savingSelection.value) return
   savingSelection.value = true
   try {
     const resp = await patchSource({

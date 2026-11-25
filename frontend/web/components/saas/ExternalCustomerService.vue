@@ -563,7 +563,7 @@
             <BaseSelect v-model="leadDetailStage" size="sm" class="w-32">
               <option v-for="(s, key) in leadStageOptions" :key="key" :value="key">{{ s.label }}</option>
             </BaseSelect>
-            <BaseButton size="sm" @click="saveLeadStage">保存</BaseButton>
+            <BaseButton size="sm" :disabled="savingLeadStage" @click="saveLeadStage">保存</BaseButton>
           </div>
         </div>
       </div>
@@ -1186,9 +1186,12 @@ async function openLeadDetail(row: any) {
   }
 }
 
+const savingLeadStage = ref(false)
 async function saveLeadStage() {
+  if (savingLeadStage.value) return
   if (!leadDetail.value) return
   if (leadDetailStage.value === leadDetail.value.stage) return
+  savingLeadStage.value = true
   try {
     const res = await updateLeadStage(leadDetail.value.lead_id, leadDetailStage.value)
     if (res.success) {
@@ -1201,6 +1204,8 @@ async function saveLeadStage() {
     }
   } catch (e: any) {
     toast.error(e.message || '更新线索阶段失败')
+  } finally {
+    savingLeadStage.value = false
   }
 }
 

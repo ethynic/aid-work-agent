@@ -34,3 +34,7 @@
 - 日志路径：`/var/log/nginx/access.log`（按天轮转），错误日志 `error.log`
 - Fail2Ban 基于 access.log 工作（jail/filter 配置见 [fail2ban.md](fail2ban.md)）
 - 分析日志注意事项（勿误判）：先排除 Fail2Ban 白名单办公 IP；`/api/saas/*` 偶发 401 是 token 过期自动重登；漏扫命中任意路径返回 200/642B 是 SPA 兜底页，不代表接口存在
+
+## 微信群聊总结请求
+
+提供微信 Agent 的站点需要同步仓库中对应站点的 Nginx 配置。精确路由 `/api/local-tools/runtime/weixin-summary` 保留原后端与访问限制，使用 HTTP/1.1 直接转发最多 160 KiB 的请求，并关闭请求体缓冲。其他反向代理也按此路由转发，避免在模型总结链路落盘群聊原文。

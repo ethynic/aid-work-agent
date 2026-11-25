@@ -181,6 +181,25 @@ def _collect_runner_section() -> "tuple[Dict[str, Any], List[str]]":
         cur.execute("SELECT COUNT(*) AS cnt FROM agent_runner_alerts WHERE ended_at IS NULL")
         section["active_alerts"] = int(cur.fetchone()["cnt"])
 
+        # runner-monitor 告警扫描心跳（agent_runner_monitor_status 由 runner-monitor
+        # 容器每 60s 刷新；缺行/超 3 分钟未成功扫描 = 告警链路停滞，判定口径与
+        # RunnerAlertRepository.monitor_status 一致：无记录也视为停滞）
+        from src.services.agent_runner.runner_alerts import MONITOR_KEY
+
+        cur.execute(
+            "SELECT last_successful_scan_at, "
+            "last_successful_scan_at IS NULL OR "
+            "last_successful_scan_at < clock_timestamp() - INTERVAL '3 minutes' AS stalled "
+            "FROM agent_runner_monitor_status WHERE monitor_key = %s",
+            (MONITOR_KEY,),
+        )
+        row = cur.fetchone()
+        section["monitor_stalled"] = bool(row["stalled"]) if row else True
+        section["monitor_last_scan_at"] = (
+            row["last_successful_scan_at"].isoformat(timespec="seconds")
+            if row and row["last_successful_scan_at"] else None
+        )
+
     # 槽位 = 部署配置口径（与 worker 容器共用同一 .env）；
     # 配置值非容器实况（副本崩溃不扣减），仅作容量对照展示。
     # 2026-11-13 重工具服务化 §9：单一 runner-worker 服务，执行体容量
@@ -218,10 +237,20 @@ def _probe_heavy_tools(_env_int) -> Dict[str, Any]:
         import httpx
 
         from src.services.heavy_tool_service.config import heavy_tools_url
-        response = httpx.get(
-            f"{heavy_tools_url().rstrip('/')}/internal/heavy-tools/health", timeout=2.0
-        )
-        if response.status_code == 200:
+        # 重试 1 次（间隔 1s）：单次 2-3s 超时在重任务连发窗口易瞬时误报
+        # （2026-11-23 agent2 事故：heavy 正常执行 excel 任务期间探测被判不可用）
+        url = f"{heavy_tools_url().rstrip('/')}/internal/heavy-tools/health"
+        response = None
+        for attempt in range(2):
+            try:
+                response = httpx.get(url, timeout=3.0)
+                if response.status_code == 200:
+                    break
+            except Exception:
+                response = None
+            if attempt == 0:
+                time.sleep(1.0)
+        if response is not None and response.status_code == 200:
             body = response.json()
             section["available"] = True
             section["running_jobs"] = body.get("running_jobs")
@@ -326,6 +355,7 @@ def _collect_business_section() -> Dict[str, Any]:
 
         cur.execute(
             "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE status = 'failed') AS failed, "
+            "COUNT(*) FILTER (WHERE duration_ms > 0) AS samples, "
             "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms > 0) AS p50, "
             "percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms > 0) AS p95 "
             "FROM chat_records WHERE created_at >= date_trunc('day', clock_timestamp())"
@@ -335,6 +365,9 @@ def _collect_business_section() -> Dict[str, Any]:
         failed = int(row["failed"] or 0)
         section["requests_today"] = total
         section["error_rate_today"] = round(failed / total, 4) if total else None
+        # 耗时样本数：P50/P95 的有效样本量，供研判层小样本门槛与前端展示（2026-11-23）
+        duration_samples = int(row["samples"] or 0)
+        section["duration_samples"] = duration_samples
         section["duration_p50_ms"] = int(row["p50"]) if row["p50"] is not None else None
         section["duration_p95_ms"] = int(row["p95"]) if row["p95"] is not None else None
 

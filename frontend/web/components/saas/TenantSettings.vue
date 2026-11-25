@@ -125,10 +125,6 @@
           </div>
         </div>
 
-        <!-- 租户邮箱（邮箱三层解析第 2 层兜底，AI获客等数字员工发信用） -->
-        <div id="tenant-email" class="scroll-mt-4">
-          <TenantEmailSettings />
-        </div>
       </div>
     </div>
   </div>
@@ -139,7 +135,6 @@ import { ref, computed, onMounted, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import LogoUpload from '@/components/ui/LogoUpload.vue'
-import TenantEmailSettings from '@/components/email/TenantEmailSettings.vue'
 import { getTenantInfo, updateTenantInfo, getTenantScheduler, updateTenantScheduler, updateTenantPreferences, type TenantSchedulerSettings } from '@/api/saasTenant'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 
@@ -222,6 +217,7 @@ async function loadSettings() {
 }
 
 async function handleSave() {
+  if (saving.value) return
   saving.value = true
   message.value = ''
   try {
@@ -268,6 +264,7 @@ async function loadSchedulerSettings() {
 }
 
 async function handleSaveScheduler() {
+  if (schedulerSaving.value) return
   const value = Number(schedulerMaxTasks.value.trim())
   if (!Number.isInteger(value) || value < 1) {
     schedulerMessage.value = '每人活跃任务上限必须为正整数'
@@ -278,6 +275,7 @@ async function handleSaveScheduler() {
 }
 
 async function handleResetScheduler() {
+  if (schedulerSaving.value) return
   await saveSchedulerOverride(null)
 }
 
@@ -310,6 +308,7 @@ const prefMessageType = ref<'success' | 'error'>('success')
 showAiBadge.value = tenantInfo.value?.show_ai_badge !== false
 
 async function handleSavePreferences() {
+  if (prefSaving.value) return
   prefSaving.value = true
   prefMessage.value = ''
   try {

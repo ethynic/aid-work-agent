@@ -40,7 +40,8 @@
       <div class="p-4 border-t border-gray-700">
         <button
           @click="handleLogout"
-          class="w-full py-2 text-sm text-muted hover:text-white transition-colors"
+          :disabled="loggingOut"
+          class="disabled:opacity-50 w-full py-2 text-sm text-muted hover:text-white transition-colors"
         >
           退出登录
         </button>
@@ -113,6 +114,7 @@ const { isMobile } = useMobile()
 
 // 侧边栏折叠状态（手机端默认收起）
 const sidebarCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
+const loggingOut = ref(false)
 
 // 可用数字员工列表（带缓存，避免重复请求）
 const { availableSubagents, loadAvailableSubagents } = useSubagentList()
@@ -213,10 +215,8 @@ const logoUrl = computed(() => {
 // /portal 下的菜单（仅平台管理员）
 // icon 字段为统一的 SVG path 数据，使用 stroke="currentColor" 的细线描边风格
 const portalMenuItems = [
-  // 系统健康：心跳波形（登录后默认页）
+  // 系统健康：心跳波形（登录后默认页，原仪表盘已由系统健康页接管并移除）
   { path: '/portal/system-health', label: '系统健康', icon: 'M22 12h-4l-3 9L9 3l-3 9H2' },
-  // 仪表盘：九宫格统计图（与参考图风格一致）
-  { path: '/portal', label: '仪表盘', icon: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z' },
   // 租户管理：办公建筑
   { path: '/portal/tenants', label: '租户管理', icon: 'M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M9 12h.01M9 15h.01M9 18h.01M15 9h.01M15 12h.01M15 15h.01M15 18h.01' },
   // 租户充值：钱包/充值
@@ -231,7 +231,6 @@ const portalMenuItems = [
   { path: '/portal/wechat-mp', label: '公众号内容', icon: 'M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 9h8M8 13h8M8 17h5' },
   // 追踪查看：搜索/放大镜
   { path: '/portal/monitoring', label: '追踪查看', icon: 'M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 100-15 7.5 7.5 0 000 15z' },
-  { path: '/portal/runner-alerts', label: 'Runner 告警', icon: 'M12 3a9 9 0 019 9c0 4-3 7-3 7H6s-3-3-3-7a9 9 0 019-9zM12 8v5M12 16h.01' },
   // 上下文压缩：压缩/方块缩小
   { path: '/portal/context-compression', label: '上下文压缩', icon: 'M4 9h6V3M20 15h-6v6M4 15l4-4M20 9l-4 4' },
   // 客户端运行日志：列表
@@ -256,18 +255,22 @@ const currentMenuItems = computed(() => {
 })
 
 function isActive(path: string) {
-  // 处理 /portal 路由
-  if (path === '/portal') return route.path === '/portal'
   return route.path.startsWith(path)
 }
 
 async function handleLogout() {
-  await logout()
-  // 根据当前路由决定跳转
-  if (isTenantRoute.value) {
-    router.push(`/t/${tenantId.value}/login`)
-  } else {
-    router.push('/portal/login')
+  if (loggingOut.value) return
+  loggingOut.value = true
+  try {
+    await logout()
+    // 根据当前路由决定跳转
+    if (isTenantRoute.value) {
+      router.push(`/t/${tenantId.value}/login`)
+    } else {
+      router.push('/portal/login')
+    }
+  } finally {
+    loggingOut.value = false
   }
 }
 

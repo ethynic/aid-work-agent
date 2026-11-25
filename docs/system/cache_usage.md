@@ -50,37 +50,6 @@
 
 `CacheKeys` 类定义了所有缓存的命名前缀：`TOKEN`、`USER`、`AGENT_QUOTA`、`USER_AGENTS`、`PROMPT_REGISTRY`、`PROMPT_LABEL`、`PROMPT_CONTENT`。
 
-### 1.3 Browser Run 缓存（Phase 2）
-
-| Key | TTL | 用途 | Redis 不可用时 |
-|-----|----:|------|----------------|
-| `browser_run:{tenant_id}:{run_id}` | 600s | 脱敏状态摘要；终态后由生命周期收口 | 仅当前请求内存态，禁止跨请求恢复 |
-| `browser_owner:{tenant_id}:{run_id}` | 30s | worker owner lease；每次 acquire 生成唯一 epoch token，每 10s 原子续租；命令写 IPC 前 fence | 不模拟跨 worker owner |
-| `browser_control:{tenant_id}:{run_id}` | 随状态 | Agent/人工控制锁；仅 `RUNNING_HUMAN` 可转发输入 | 不模拟跨 worker 控制 |
-| `browser_view_ticket:{jti}` | 60s | 一次性观看票据；值绑定 tenant/user/run，连接时原子删除 | 禁止降级 |
-| `browser_assistance:{tenant_id}:{assistance_id}` | 人工租约 + 120s | 脱敏条件、步骤索引、控制状态 | 禁止降级 |
-| `agent_tool_suspension:{tenant_id}:{agent_execution_id}:{tool_call_id}` | 人工租约 + 120s | 原工具挂起引用 | 禁止降级 |
-| `agent_session_suspension:{tenant_id}:{session_id}` | 人工租约 + 120s | 同会话 Agent loop 并发门禁 | 禁止降级 |
-| `agent_continuation_events:{tenant_id}:{continuation_id}` | 900s | 带递增 seq 的断线补取事件 | 禁止降级 |
-
-Phase 3R（2026-07-22）起，恢复任务的事实源改为 PostgreSQL
-`bs_browser_resume_jobs` 持久 lease 队列，不再依赖 Redis Stream、consumer group
-或 `XADD/XREAD`。continuation events 保持为 Redis JSON 短期事件窗口，通过 CAS
-递增 `seq`；Redis 仍只承担短状态、控制锁和可丢弃缓存，不承担持久任务队列。
-入队后可选向 `browser_resume_jobs:notify` 频道 `publish` 通知以降低延迟，丢通知
-时 worker 靠短轮询恢复，通知不是唯一队列。应用启动时 `redis_client.probe_phase3_primitives()`
-一次性探测 Phase 3 实际使用的 Redis 原语（SET NX/EX、GET、DEL、TTL、SCAN、
-publish、Lua CAS，不含已迁移的 Stream），缺失时记录单条告警并禁用人工接管，
-不形成高频异常循环。
-
-安全说明：Browser RunManager 必须先用 `redis_client.is_available()` 判断真实
-Redis。透明内存 fallback 不能被视为分布式可用；降级只允许单请求
-`server/local` run，并在请求 `finally` 关闭。
-
-Phase 4+ 已预登记但尚未启用的前缀包括：`browser_web_presence`、
-`browser_launch_ticket`、`browser_desktop_runtime_session`。browser runtime 复用
-Agent Desktop installation identity，不建立浏览器专用长期设备记录。
-
 ---
 
 ## 2. 缓存分类总览
@@ -334,7 +303,8 @@ ImageRegistry 管理的图片资产元信息（复用 cp 的 `uploaded_file:{fil
 **存储**：Redis + 内存降级（锁经 `acquire_lock`/`release_lock`，pending 经 set/getdel）
 **键模式**：`wecom_kf_pull_lock:{tenant_id}:{open_kfid}`、`wecom_kf_pull_pending:{tenant_id}:{open_kfid}`
 **TTL**：锁 900s（单任务最长执行时间兜底，worker 崩溃时靠超时自动释放）；pending 900s（须 >= 锁 TTL：任务实际时长可能接近锁上限，过期会让补偿拉取静默丢失）
-**失效时机**：拉取任务结束时主动 `release_lock` + `getdel` 消费 pending；TTL 自动过期兜底
+**失效时机**：拉取任务结束时主动 `release_lock` + `getdel` 消费 pending；TTL 自动过期兜底；API 启动自愈（见下）
+**启动自愈**（2026-11-19 聊易事故修复）：部署重启/崩溃杀掉在跑拉取任务时 `finally` 未执行，锁残留至 TTL 且 pending 补偿永不触发（该客服号最长 15 分钟盲区）。API 启动时（`main.py` lifespan）调用 `recover_wecom_kf_pull_state` 清理持有超过 30s 的残留锁（年龄保护，避免误删并行启动 worker 刚持有的在跑锁）并对残留 pending 标记触发补偿拉取
 **关键约束**：防止同一 `open_kfid` 并发起多个 `sync_msg` 拉取任务撞微信 45009 限频（2026-10-11 演示事故）。新回调在任务进行中只置 pending，任务结束后补偿拉取一次。Redis 不可用时降级为进程内锁（仅单 worker 去重）
 **源文件**：`src/saas/api/channel_routes.py`（`_try_start_kf_pull_task` / `_kf_pull_task_wrapper`）
 
@@ -507,6 +477,16 @@ AI 获客邮件打开追踪的定时合并任务（每 10 分钟）记录已扫�
 
 **失效时机**：TTL 过期即视为采集中断（页面 60s 未更新显示「采集中断」）；采集器恢复后下一轮自动重写
 **源文件**：`src/services/system_health/collector.py`、`src/services/system_health/assessment.py`（前缀注册：`src/core/cache_utils.py`）
+
+### 7.9 腾讯文档 OAuth 回调 state
+
+腾讯文档知识库导入 OAuth 授权流（任务 #2）的回调防 CSRF 一次性 state，绑定发起授权的 (tenant_id, user_id)。
+
+**存储**：Redis + 内存降级
+**键模式**：`tdoc_oauth_state:{state}`（state 为 uuid4 hex，一次性）
+**TTL**：600s（不小于授权 code 的 10 分钟有效期）
+**失效时机**：回调消费时 GETDEL 原子取删（防重放）；TTL 过期自动失效。消费侧 `getdel` 禁降级（Redis 不可用返回 None，回调 fail-closed 引导重试）
+**源文件**：`src/services/tencent_docs/oauth.py`（前缀注册：`src/core/cache_utils.py`）
 
 ---
 

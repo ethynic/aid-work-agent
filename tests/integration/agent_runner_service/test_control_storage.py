@@ -123,10 +123,10 @@ def test_null_tenant_does_not_allow_another_global_owner_to_retry_control(storag
         controls.submit(other, row["runner_id"], request)
 
 
-@pytest.mark.parametrize("target", ["parent", "missing_child", "stale_wait", "browser_kind"])
+@pytest.mark.parametrize("target", ["parent", "missing_child", "stale_wait", "wrong_kind"])
 def test_reply_must_match_exact_child_wait_and_kind(storage, controls, actors, service_database, target):
     row, principal, child_id = park_waiting(storage, actors["a"],
-                                          kind="human_assistance" if target == "browser_kind" else "clarification")
+                                          kind="verification" if target == "wrong_kind" else "clarification")
     request = reply(child_id)
     if target == "parent":
         request = request.model_copy(update={"target_execution_id": "root-execution"})
@@ -134,7 +134,7 @@ def test_reply_must_match_exact_child_wait_and_kind(storage, controls, actors, s
         request = request.model_copy(update={"target_execution_id": "never-existed-child"})
     elif target == "stale_wait":
         request = request.model_copy(update={"wait_id": "previous-wait"})
-    expected = "CONTROL_WAIT_KIND_MISMATCH" if target == "browser_kind" else "CONTROL_WAIT_STALE"
+    expected = "CONTROL_WAIT_KIND_MISMATCH" if target == "wrong_kind" else "CONTROL_WAIT_STALE"
     with pytest.raises(RunnerError, match=expected):
         controls.submit(principal, row["runner_id"], request)
     assert ledger(service_database, row["runner_id"]) == []
@@ -223,13 +223,3 @@ def test_cancel_takes_priority_over_new_reply_or_pause(storage, controls, actors
             controls.submit(principal, row["runner_id"], request)
     assert ledger(service_database, row["runner_id"]) == []
     assert repository.get(row["runner_id"])["cancel_requested"]
-
-
-def test_browser_completion_reference_cannot_self_attest_without_private_owner_repository(
-        storage, controls, actors, service_database):
-    row, principal, target = park_waiting(storage, actors["a"], kind="human_assistance")
-    forged = command("browser_complete", target_execution_id=target, wait_id="original-wait",
-                     completion_ref="untrusted-caller-says-completed")
-    with pytest.raises(RunnerError, match="CONTROL_COMPLETION_FORBIDDEN") as caught:
-        controls.submit(principal, row["runner_id"], forged)
-    assert caught.value.status == 403 and ledger(service_database, row["runner_id"]) == []

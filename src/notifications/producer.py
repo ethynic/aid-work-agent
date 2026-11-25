@@ -310,7 +310,7 @@ def publish_runner_waiting_in_tx(cursor, runner, config=None):
 
 # 确需用户动作的等待类型（设计 §8.1：设备确认/人工辅助/登录；远程结果与
 # 子执行等待是系统自行推进的正常状态，不通知防噪声——按下钻叶子实际类型判断）。
-NEEDS_ACTION_WAIT_KINDS = {'verification', 'human_assistance'}
+NEEDS_ACTION_WAIT_KINDS = {'verification'}
 
 
 def _needs_action_leaf(waiting):
@@ -328,14 +328,13 @@ def _needs_action_leaf(waiting):
 
 _ACTION_LABELS = {
     'verification': '需要在设备上确认操作结果',
-    'human_assistance': '需要人工处理（如登录或页面确认）',
 }
 
 
 def publish_runner_needs_action_in_tx(cursor, runner, config=None):
     """scheduled 非提问类等待停车通知（Phase 3，设计 §8.1）。
 
-    仅确需用户动作的等待（verification/human_assistance）生产；event_key 按
+    仅确需用户动作的等待（verification）生产；event_key 按
     (runner, wait 标识) 幂等——同一次停车的重复 park 不重复通知，恢复后再次
     停车产生新通知。"""
     if config is None:

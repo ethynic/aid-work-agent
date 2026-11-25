@@ -15,18 +15,20 @@ import uuid as _uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
 from src.api.auth import get_current_user
+from src.config.settings import settings
 from src.db.client_binding_db import ClientUsageLogDB
 from src.db.models import UserDB
 from src.desktop_automation import audit, payload_resolver
 from src.desktop_automation.adapters import AdapterNotFoundError
 from src.desktop_automation.constants import BUSINESS_KIND_DESKTOP_AUTOMATION, OPERATION_PROTOCOL_V2
-from src.local_tools import catalog, operation_result, pairing, permits, repository
+from src.local_tools import catalog, operation_result, pairing, permits, repository, weixin_summary, weixin_tracking, weixin_tracking_schedule
 from src.local_tools.models import (
+    ClaimRequest,
     HeartbeatRequest,
     OperationResultRequest,
     PairRequest,
@@ -37,10 +39,12 @@ from src.local_tools.models import (
     StartedRequest,
     WriteAuthorizeRequest,
 )
+from src.local_tools.plugin_manifests import PLUGIN_PHASE
 from src.local_tools.pricing import RESUME_RECOGNITION_TOOL_NAME, resume_recognition_price
 from src.services import recruiting_match_service, resume_vl_service
 from src.services.boss_visual_service import BossVisualRequestBody, RuntimeVisualCaller, diagnose_visual
 from src.saas.db.tenant_db import TenantDB
+from src.saas.services.credit_gate import check_tenant_credit_blocked
 from src.local_tools.security import generate_claim_token, sha256_hex
 from src.utils import sanitize_error_info
 
@@ -117,26 +121,6 @@ def _iso(value: Any) -> Optional[str]:
     return value.isoformat() if hasattr(value, "isoformat") else (str(value) if value else None)
 
 
-def _device_parallel_tools(capabilities_json: Any) -> Dict[str, List[str]]:
-    """设备心跳上报的并行工具映射（契约 2.20）：{provider_key: [tool,...]}。
-
-    只做最小形态归一（防止异常上报形态让 jsonb 过滤在 SQL 端抛 500）：非 dict 或
-    值非字符串列表的键丢弃；结果为空时调用方匹配不到任何并行作业。
-    """
-    if not isinstance(capabilities_json, dict):
-        return {}
-    raw = capabilities_json.get("parallel_tools")
-    if not isinstance(raw, dict):
-        return {}
-    tools_map: Dict[str, List[str]] = {}
-    for key, tools in raw.items():
-        if isinstance(key, str) and isinstance(tools, list):
-            names = [tool for tool in tools if isinstance(tool, str)]
-            if names:
-                tools_map[key] = names
-    return tools_map
-
-
 def _valid_uuid(value: str) -> bool:
     """路径参数 UUID 形态预检：非法形态直接按 404 处理（P2-6），避免 DB 端 DataError 500"""
     try:
@@ -147,6 +131,171 @@ def _valid_uuid(value: str) -> bool:
 
 
 # ==================== Web 用户 API ====================
+
+
+@router.post("/weixin-summary/runs")
+async def create_weixin_summary_run(body: weixin_summary.CreateRun, request: Request):
+    user, tenant_id = await _current_user_and_tenant(request)
+    if not body.confirmed or not body.target_name.strip():
+        raise _http_error(400, '请输入完整群名并确认本次总结用途')
+    credit = await asyncio.to_thread(check_tenant_credit_blocked, tenant_id)
+    if credit is not None:
+        raise HTTPException(status_code=credit.status_code, detail={
+            'error': '积分余额已耗尽，无法生成今日总结', 'code': 'NO_CREDIT',
+        })
+    try:
+        return await asyncio.to_thread(
+            weixin_summary.create_run, tenant_id, user['user_id'], str(body.device_id), body.target_name,
+        )
+    except weixin_summary.RunUnavailable as error:
+        code = str(error)
+        message = {
+            'DEVICE_NOT_SELECTED': '运行设备已变化，请刷新页面或到本地工具重新选择设备',
+            'DEVICE_OFFLINE': '选定的 Runtime 当前离线',
+            'WEIXIN_SUMMARY_PLUGIN_UNAVAILABLE': '选定设备未启用支持今日总结的签名微信插件',
+        }[code]
+        raise HTTPException(status_code=409, detail={'error': message, 'code': code}) from None
+    except repository.DeviceOperationUnresolved:
+        raise _http_error(409, '选定设备当前有待核对的操作') from None
+
+
+@router.get("/weixin-summary/runs/{run_id}")
+async def get_weixin_summary_run(run_id: str, request: Request):
+    user, tenant_id = await _current_user_and_tenant(request)
+    if not _valid_uuid(run_id):
+        raise _http_error(404, '微信总结任务不存在')
+    result = await asyncio.to_thread(weixin_summary.get_run, run_id, tenant_id, user['user_id'])
+    if result is None:
+        raise _http_error(404, '微信总结任务不存在')
+    return result
+
+
+@router.post("/runtime/weixin-summary")
+async def runtime_weixin_summary(request: Request):
+    auth = request.headers.get('Authorization', '')
+    grant = auth[7:] if auth.startswith('Bearer ') else ''
+    if len(grant) != 43 or not all(char.isascii() and (char.isalnum() or char in '-_') for char in grant):
+        raise _http_error(401, '微信总结授权无效')
+    upload = await weixin_summary.read_upload(request)
+    if upload is None:
+        raise _http_error(400, '微信总结请求格式无效')
+    for_range = isinstance(upload, weixin_summary.RangeUpload)
+    if for_range:
+        run = await asyncio.to_thread(
+            weixin_summary.consume_range_grant, upload.tenant_id, upload.start_at, upload.end_at, sha256_hex(grant),
+        )
+    else:
+        run = await asyncio.to_thread(
+            weixin_summary.consume_grant, upload.tenant_id, upload.business_date, sha256_hex(grant),
+        )
+    if not run:
+        raise _http_error(403, '微信总结授权已失效')
+    credit = await asyncio.to_thread(check_tenant_credit_blocked, upload.tenant_id)
+    if credit is not None:
+        return credit
+    summary = await weixin_summary.summarize(
+        upload.messages, upload.tenant_id, run['user_id'], **({'for_range': True} if for_range else {}),
+    )
+    if summary is None:
+        raise _http_error(502, '微信总结生成失败')
+    return {'summary': summary}
+
+
+
+_WEIXIN_TRACKING_ERRORS = {
+    'BATCH_NOT_FOUND': (404, '微信总结批次不存在'),
+    'GROUP_NOT_FOUND': (404, '找不到所选跟踪群'),
+    'SCHEDULE_NOT_FOUND': (404, '定时总结不存在'),
+    'GROUP_DUPLICATE': (409, '已保存同名跟踪群'),
+    'GROUP_NOT_RETRYABLE': (409, '仅可重试本次执行中失败的群聊'),
+    'INVALID_RANGE': (400, '请选择最近 168 小时内的非空时间段'),
+    'DEVICE_NOT_SELECTED': (409, '运行设备已变化或解绑，请核对本地工具中的设备'),
+    'DEVICE_OFFLINE': (409, '运行设备当前离线'),
+    'WEIXIN_RANGE_PLUGIN_UNAVAILABLE': (409, '运行设备未启用支持时间段总结的签名微信插件'),
+    'NO_CREDIT': (403, '积分余额已耗尽，无法生成微信总结'),
+    'RULE_UNAVAILABLE': (409, '这条群机器人规则已停用或未配置总结适用的终态事件'),
+}
+
+
+async def _weixin_tracking_call(request, operation, *args):
+    user, tenant_id = await _current_user_and_tenant(request)
+    try:
+        return await asyncio.to_thread(operation, tenant_id, user['user_id'], *args)
+    except weixin_tracking.Unavailable as error:
+        code = str(error)
+        status, message = _WEIXIN_TRACKING_ERRORS[code]
+        raise HTTPException(status_code=status, detail={'error': message, 'code': code}) from None
+    except repository.DeviceOperationUnresolved:
+        raise HTTPException(status_code=409, detail={
+            'error': '运行设备当前有待核对的操作', 'code': 'DEVICE_OPERATION_UNRESOLVED',
+        }) from None
+
+
+@router.get('/weixin-agent/groups')
+async def list_weixin_groups(request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking.groups)
+
+
+@router.post('/weixin-agent/groups')
+async def add_weixin_group(body: weixin_tracking.GroupName, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking.save_group, body.name)
+
+
+@router.put('/weixin-agent/groups/{group_id}')
+async def update_weixin_group(group_id: _uuid.UUID, body: weixin_tracking.GroupName, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking.save_group, body.name, str(group_id))
+
+
+@router.delete('/weixin-agent/groups/{group_id}', status_code=204, response_class=Response)
+async def remove_weixin_group(group_id: _uuid.UUID, request: Request):
+    await _weixin_tracking_call(request, weixin_tracking.remove_group, str(group_id))
+    return Response(status_code=204)
+
+
+@router.post('/weixin-agent/batches')
+async def start_weixin_batch(body: weixin_tracking.BatchRequest, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking.create_batch, body)
+
+
+@router.get('/weixin-agent/batches')
+async def list_weixin_batches(request: Request, group_id: _uuid.UUID | None = None, offset: int = Query(0, ge=0)):
+    return await _weixin_tracking_call(request, weixin_tracking.list_batches, str(group_id) if group_id else None, offset)
+
+
+@router.get('/weixin-agent/batches/{batch_id}')
+async def get_weixin_batch(batch_id: _uuid.UUID, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking.get_batch, str(batch_id))
+
+
+@router.post('/weixin-agent/batches/{batch_id}/retry/{group_id}')
+async def retry_weixin_group(batch_id: _uuid.UUID, group_id: _uuid.UUID, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking.retry_group, str(batch_id), str(group_id))
+
+
+@router.get('/weixin-agent/schedules')
+async def list_weixin_schedules(request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking_schedule.list_schedules)
+
+
+@router.get('/weixin-agent/notification-rules')
+async def list_weixin_notification_rules(request: Request):
+    _, tenant_id = await _current_user_and_tenant(request)
+    return await asyncio.to_thread(weixin_tracking_schedule.rules, tenant_id)
+
+
+@router.post('/weixin-agent/schedules')
+async def create_weixin_schedule(body: weixin_tracking_schedule.Definition, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking_schedule.save_schedule, body)
+
+
+@router.put('/weixin-agent/schedules/{schedule_id}')
+async def update_weixin_schedule(schedule_id: _uuid.UUID, body: weixin_tracking_schedule.Definition, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking_schedule.save_schedule, body, str(schedule_id))
+
+
+@router.patch('/weixin-agent/schedules/{schedule_id}')
+async def change_weixin_schedule_state(schedule_id: _uuid.UUID, body: weixin_tracking_schedule.ScheduleState, request: Request):
+    return await _weixin_tracking_call(request, weixin_tracking_schedule.set_paused, str(schedule_id), body.paused)
 
 
 @router.post("/pairing-tickets")
@@ -349,6 +498,9 @@ async def runtime_heartbeat(body: HeartbeatRequest, device: Dict = Depends(_requ
             body.runtime_version,
             body.capabilities,
             body.manifest_digest,
+            tenant_id=device["tenant_id"],
+            plugin_manifests=body.plugin_manifests,
+            plugin_trust_roots=settings.agent_runner.plugin_trust_roots,
         )
         if not row:
             raise _http_error(404, "设备不存在")
@@ -359,6 +511,8 @@ async def runtime_heartbeat(body: HeartbeatRequest, device: Dict = Depends(_requ
             # 契约 2.20 支持协商：服务端实现 parallel_only 领取即恒回 True；
             # 旧客户端忽略该字段，新版 Runtime 读到后才发送 parallel_only
             "parallel_claim": True,
+            **({'missing_plugin_manifests': row['missing_plugin_manifests']}
+               if row.get('missing_plugin_manifests') else {}),
         }
     except HTTPException:
         raise
@@ -368,7 +522,8 @@ async def runtime_heartbeat(body: HeartbeatRequest, device: Dict = Depends(_requ
 
 
 @router.post("/runtime/claim")
-async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dict = Depends(_require_device)):
+async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dict = Depends(_require_device),
+                        body: Optional[ClaimRequest] = None):
     """长轮询领取 invocation（claim_token 明文仅此一次返回）。
     超时返回 {"success": true, "invocation": null}（200，简化客户端）。
 
@@ -394,8 +549,9 @@ async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dic
     provider_keys = catalog.get_provider_keys_for_device(device.get("capabilities_json"))
     parallel_tools: Optional[Dict[str, List[str]]] = None
     if parallel_only:
-        parallel_tools = _device_parallel_tools(device.get("capabilities_json"))
+        parallel_tools = catalog.parallel_tools_for_device(device.get("capabilities_json"))
     wait = max(0, min(wait, CLAIM_MAX_WAIT))
+    plugin_digests = (body.plugin_manifest_digests if body else None) or {}
 
     try:
         # 顺带清理租约过期的 claimed/running（MVP 无后台任务）
@@ -413,14 +569,20 @@ async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dic
                 provider_keys,
                 parallel_only=parallel_only,
                 parallel_tools=parallel_tools,
+                **({"plugin_manifest_digests": plugin_digests} if plugin_digests else {}),
             )
             if invocation:
                 # 校验 tool_name 在该 invocation Provider（行 provider_key 优先）批准的
                 # tools 内；声明设备以 declared_tools 分流（含并行领取路径）
                 row_provider_key = invocation.get("provider_key")
                 invocation_provider = row_provider_key or default_provider_key
+                ref = (invocation.get('business_ref') or {}) if invocation.get('business_kind') == 'agent_runner' else {}
+                is_plugin = (ref.get('branch') == PLUGIN_PHASE
+                             or invocation.get('business_kind') == catalog.WEIXIN_DAILY_SUMMARY_KIND)
+                capabilities = (invocation.get('device_capabilities') if is_plugin
+                                else device.get('capabilities_json'))
                 if not catalog.is_tool_allowed_for_device(
-                    device.get("capabilities_json"), row_provider_key,
+                    capabilities, row_provider_key,
                     invocation["tool_name"], default_provider_key,
                 ):
                     logger.warning(
@@ -441,8 +603,7 @@ async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dic
                         f"后端日志：invocation {invocation['id']} 被设备 {device_id} 领取 "
                         f"tool={invocation['tool_name']} provider={invocation_provider}"
                     )
-                    receipt_version = catalog.execution_receipt_version(
-                        device.get("capabilities_json"), invocation)
+                    receipt_version = catalog.execution_receipt_version(capabilities, invocation)
                     return {
                         "success": True,
                         "invocation_id": str(invocation["id"]),

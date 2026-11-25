@@ -448,7 +448,7 @@ CREATE TABLE IF NOT EXISTS prompt_drafts (
 | 层级 | 位置 | 内容 |
 |------|------|------|
 | tools 参数 | API 调用 `tools` 字段 | 工具名 + 参数 schema（JSON Schema） |
-| system prompt | `{{{tool_usage_guides}}}` 区块 | 4 个工具的详细 usage_guide（file_write、browser_automation、content_generate、http_api） |
+| system prompt | `{{{tool_usage_guides}}}` 区块 | 工具的详细 usage_guide（如 file_write、content_generate、http_api） |
 
 **分析**：两层都有存在的必要。`tools` 参数告诉 LLM 工具的参数结构，但无法传达"正确使用姿势"（如 `file_write` 的三种模式、`content_generate` 好坏 prompt 示例）。`usage_guide` 补充了这些关键上下文。
 

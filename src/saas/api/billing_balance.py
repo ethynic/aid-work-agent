@@ -416,7 +416,7 @@ async def get_daily_usage_detail(
             # 用 COALESCE 取非空标题，避免渠道会话标题显示空
             #
             # 双类型明细（P3 客户端计费统一接入 §4.3）：chat（智能体对话）+ client（客户端计费行，
-            # credit_cost>0 排除遥测行）。client 行 source_type=stage 标签（boss_tool→BOSS 工具），
+            # credit_cost>0 排除遥测行）。client 行按台账来源映射展示标签，
             # command/arguments 取自 detail，用户经 detail->>'user_id' 反查 users。两子查询列按位对齐，
             # record_id 加 'client-' 前缀防与 chat record_id 撞 key。
             #
@@ -511,10 +511,13 @@ async def get_daily_usage_detail(
                     u2.username,
                     u2.phone,
                     u2.nickname,
-                    CASE cl.stage
-                        WHEN 'boss_tool' THEN 'BOSS 工具'
-                        WHEN 'llm' THEN '客户端 LLM'
-                        WHEN 'ocr' THEN 'OCR 识别'
+                    CASE
+                        WHEN cl.stage = 'boss_tool' AND cl.model = 'wecom_message_send'
+                            AND starts_with(cl.session_id, 'wecom_scheduled_send:')
+                            THEN '企业微信定时发送'
+                        WHEN cl.stage = 'boss_tool' THEN 'BOSS 工具'
+                        WHEN cl.stage = 'llm' THEN '客户端 LLM'
+                        WHEN cl.stage = 'ocr' THEN 'OCR 识别'
                         ELSE cl.stage
                     END AS source_type,
                     NULL AS user_message,

@@ -9,11 +9,14 @@ import test from 'node:test'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..')
 const script = resolve(root, 'clients/agent-desktop/scripts/release-batch.ps1')
 const runPlan = (...args) => JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', script, ...args, '-Plan'], { encoding: 'utf8', windowsHide: true }))
+const registry = 'configs/runtime-plugin-trust/acceptance-roots.json'
+const historicalRegistry = 'clients/runtime-plugin-packaging/trust/acceptance-roots.json'
 
 test('release plan selects components independently and never edits versions or publisher history', () => {
+  const trustRegistry = existsSync(resolve(root, registry)) ? registry : historicalRegistry
   const files = ['clients/agent-desktop/package.json', 'clients/agent-desktop/package-lock.json',
     'clients/boss-resume-assistant/package.json', 'clients/boss-resume-assistant/package-lock.json',
-    'clients/runtime-plugin-packaging/trust/acceptance-roots.json']
+    trustRegistry]
   const before = files.map(file => readFileSync(resolve(root, file)))
   const boss = runPlan('-Component', 'Boss', '-Signer', 'C:/isolated-fixture/not-read.json', '-BossVersion', '1.2.3')
   assert.equal(boss.boss, true); assert.equal(boss.runtime, false)
@@ -22,12 +25,34 @@ test('release plan selects components independently and never edits versions or 
   const runtime = runPlan('-Component', 'Runtime', '-RuntimeVersion', '2.3.4')
   assert.equal(runtime.runtime, true); assert.equal(runtime.boss, false)
   assert.equal(runtime.versions.runtime, '2.3.4')
+  assert.equal(resolve(runtime.trustRoots), resolve(root, trustRegistry))
   assert.ok(!runtime.steps.includes('sign-plugin'), 'Runtime-only packaging must not replace the BOSS signer or package')
   const unsigned = runPlan('-Component', 'Runtime', '-Profile', 'production', '-TrustRoots', 'C:/isolated-fixture/public-roots.json', '-Unsigned')
   assert.equal(unsigned.runtimeSigning, 'unsigned', 'Windows signing may be omitted explicitly without changing the product profile')
   const both = runPlan('-Signer', 'C:/isolated-fixture/not-read.json', '-RuntimeVersion', '2.3.4', '-BossVersion', '1.2.3')
   assert.deepEqual(both.versions, { runtime: '2.3.4', boss: '1.2.3' }, 'Component versions do not have to move together')
   files.forEach((file, i) => assert.deepEqual(readFileSync(resolve(root, file)), before[i], 'Plan must return before package writes or trust registration'))
+})
+
+test('packaging an older source uses the registry from that archive', () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), 'aid-release-archived-roots-'))
+  try {
+    const archivedScript = resolve(workspace, 'clients/agent-desktop/scripts/release-batch.ps1')
+    mkdirSync(dirname(archivedScript), { recursive: true })
+    writeFileSync(archivedScript, readFileSync(script))
+    for (const directory of ['agent-desktop', 'boss-resume-assistant', 'wecom-cli']) {
+      const manifest = resolve(workspace, 'clients', directory, 'package.json')
+      mkdirSync(dirname(manifest), { recursive: true })
+      writeFileSync(manifest, '{"version":"1.2.3"}')
+    }
+    const historical = resolve(workspace, historicalRegistry)
+    mkdirSync(dirname(historical), { recursive: true })
+    writeFileSync(historical, '{}')
+    const plan = JSON.parse(execFileSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-File', archivedScript, '-Component', 'Runtime', '-WorkspacePrepared', '-Plan',
+    ], { encoding: 'utf8', windowsHide: true }))
+    assert.equal(resolve(plan.trustRoots), historical)
+  } finally { rmSync(workspace, { recursive: true, force: true }) }
 })
 
 test('acceptance plugins share a fixed build-machine signer while production requires its own', () => {

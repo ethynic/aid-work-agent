@@ -27,6 +27,7 @@
             <BaseButton
               intent="danger-ghost"
               size="sm"
+              :disabled="deletingInvite"
               class="whitespace-nowrap text-xs"
               @click="handleDelete(inv)"
             >删除</BaseButton>
@@ -206,6 +207,7 @@ async function loadInvitations() {
 
 const showModal = ref(false)
 const submitting = ref(false)
+const deletingInvite = ref(false)
 
 interface InviteFormState {
   id: number
@@ -253,6 +255,7 @@ function buildInterviewAt(): string {
 }
 
 async function handleSubmit() {
+  if (submitting.value) return
   submitting.value = true
   try {
     const interview_at = buildInterviewAt()
@@ -325,7 +328,9 @@ async function handleStatusChange(inv: Invitation, nextStatus: string) {
 // ============== 删除（误录入的邀约） ==============
 
 async function handleDelete(inv: Invitation) {
+  if (deletingInvite.value) return
   if (!confirm('确定删除这条邀约记录？')) return
+  deletingInvite.value = true
   try {
     const res = await deleteInvitation(inv.id)
     if (res.success) {
@@ -336,6 +341,8 @@ async function handleDelete(inv: Invitation) {
     }
   } catch (e: any) {
     toast.error(e.message || '删除异常')
+  } finally {
+    deletingInvite.value = false
   }
 }
 

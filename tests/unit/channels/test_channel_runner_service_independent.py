@@ -519,7 +519,6 @@ def test_finalizer_settles_execution_once_releases_claim_and_leaves_integrated_c
     finalizer = RunnerFinalizer(lambda: connection)
     with patch('src.services.agent_runner.finalizer.lock_runner', return_value=row), \
             patch.object(finalizer, '_settle', return_value=('settled', 5, 0.0)) as settle, \
-            patch('src.services.agent_runner.finalizer.project_terminal_public_state', return_value=({}, row['checkpoint']['pending_finalization'])), \
             patch('src.services.agent_runner.finalizer.write_history') as history, \
             patch('src.services.agent_runner.control_repository.close_pending_controls'), \
             patch('src.services.agent_runner.finalizer.EventRepository.notify_in_tx', return_value=finished), \
@@ -710,6 +709,101 @@ async def test_worker_rejects_foreign_session_before_adapter_construction(bridge
 
 
 @pytest.mark.asyncio
+async def test_worker_web_c_scope_sets_kf_context_for_lead_capture(bridge):
+    """web_c 执行上下文：复用 get_kf_context 消费口径（留资工具可达），字段按
+    web_c 语义降维（open_kfid=None、adapter=None、kf_config_id=渠道配置行 id）。"""
+    from src.channels.wecom_kf.context import _kf_context, get_kf_context
+    from src.services.agent_runner.channel_context import channel_runtime_scope
+    bridge.store.sessions['web-session'] = {**bridge.store.sessions['session'],
+        'session_id': 'web-session', 'channel_type': 'web_c', 'channel_user_id': 'anon_uid',
+        'channel_chat_id': None, 'user_id': 'web-user-1', 'metadata': {'lead_capture': {'stage': 'none'}}}
+    # web_c 绑定查询带 channel_type 第三个参数，键为三元组
+    bridge.store.configs[('tenant', 'web-config', 'web_c')] = {
+        'subagent_type': 'web-reception', 'config': {'enabled': True}}
+    request = RunnerSubmit(source='web_c', session={'kind': 'channel', 'session_id': 'web-session'},
+        channel_user_id='anon_uid', channel_chat_id=None, client_request_id='request', text='request',
+        profile_id='web-reception', request_data={'channel_config_id': 'web-config'})
+    row = {'source': 'web_c', 'session_id': 'web-session', 'tenant_id': 'tenant',
+        'client_request_id': 'request', 'input': request.intent()}
+    token = _kf_context.set({'outer': True})
+    try:
+        async with channel_runtime_scope(row, bridge.store.connection):
+            context = get_kf_context()
+            assert context['adapter'] is None and context['open_kfid'] is None
+            assert context['kf_config'] == {} and context['kf_config_id'] == 'web-config'
+            assert context['session_id'] == 'web-session' and context['tenant_id'] == 'tenant'
+            assert context['user_id'] == 'web-user-1'
+            assert context['external_userid'] == 'anon_uid'
+            assert context['lead_capture'] == {'stage': 'none'}
+        assert get_kf_context() == {'outer': True}
+    finally:
+        _kf_context.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_worker_web_c_scope_injects_lead_assignee(bridge):
+    """web_c 渠道配置含 lead_assignee_user_id 时注入 kf_config.tenant_user_id
+    （2026-11-20 方案 2：留资 assigned_to 与通知 kf_assignee 接收人复用）。"""
+    from src.channels.wecom_kf.context import _kf_context, get_kf_context
+    from src.services.agent_runner.channel_context import channel_runtime_scope
+    bridge.store.sessions['web-session'] = {**bridge.store.sessions['session'],
+        'session_id': 'web-session', 'channel_type': 'web_c', 'channel_user_id': 'anon_uid',
+        'channel_chat_id': None, 'user_id': 'web-user-1', 'metadata': {}}
+    bridge.store.configs[('tenant', 'web-config', 'web_c')] = {
+        'subagent_type': 'web-reception',
+        'config': {'enabled': True, 'lead_assignee_user_id': 'emp-1'}}
+    request = RunnerSubmit(source='web_c', session={'kind': 'channel', 'session_id': 'web-session'},
+        channel_user_id='anon_uid', channel_chat_id=None, client_request_id='request', text='request',
+        profile_id='web-reception', request_data={'channel_config_id': 'web-config'})
+    row = {'source': 'web_c', 'session_id': 'web-session', 'tenant_id': 'tenant',
+        'client_request_id': 'request', 'input': request.intent()}
+    token = _kf_context.set({'outer': True})
+    try:
+        async with channel_runtime_scope(row, bridge.store.connection):
+            context = get_kf_context()
+            assert context['kf_config'] == {'tenant_user_id': 'emp-1'}
+            assert context['kf_config_id'] == 'web-config'
+        assert get_kf_context() == {'outer': True}
+    finally:
+        _kf_context.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_worker_web_c_scope_rejects_profile_mismatch(bridge):
+    """web_c 渠道级子智能体绑定与请求 profile 不一致时拒绝（防止跨智能体留资）。"""
+    from src.services.agent_runner.channel_context import channel_runtime_scope
+    bridge.store.sessions['web-session'] = {**bridge.store.sessions['session'],
+        'session_id': 'web-session', 'channel_type': 'web_c', 'channel_user_id': 'anon_uid',
+        'channel_chat_id': None, 'user_id': None, 'metadata': {}}
+    bridge.store.configs[('tenant', 'web-config', 'web_c')] = {
+        'subagent_type': 'web-reception', 'config': {'enabled': True}}
+    request = RunnerSubmit(source='web_c', session={'kind': 'channel', 'session_id': 'web-session'},
+        channel_user_id='anon_uid', channel_chat_id=None, client_request_id='request', text='request',
+        profile_id='other-agent', request_data={'channel_config_id': 'web-config'})
+    row = {'source': 'web_c', 'session_id': 'web-session', 'tenant_id': 'tenant',
+        'client_request_id': 'request', 'input': request.intent()}
+    with pytest.raises(RunnerError, match='CHANNEL_PROFILE_MISMATCH'):
+        async with channel_runtime_scope(row, bridge.store.connection):
+            pytest.fail('Profile mismatch must never enter tool execution context')
+
+
+@pytest.mark.asyncio
+async def test_worker_web_c_scope_requires_channel_config(bridge):
+    """web_c 提交缺 channel_config_id 时拒绝（与 wecom_kf 同闸门）。"""
+    from src.services.agent_runner.channel_context import channel_runtime_scope
+    bridge.store.sessions['web-session'] = {**bridge.store.sessions['session'],
+        'session_id': 'web-session', 'channel_type': 'web_c', 'channel_user_id': 'anon_uid',
+        'channel_chat_id': None, 'user_id': None, 'metadata': {}}
+    request = RunnerSubmit(source='web_c', session={'kind': 'channel', 'session_id': 'web-session'},
+        channel_user_id='anon_uid', channel_chat_id=None, client_request_id='request', text='request')
+    row = {'source': 'web_c', 'session_id': 'web-session', 'tenant_id': 'tenant',
+        'client_request_id': 'request', 'input': request.intent()}
+    with pytest.raises(RunnerError, match='CHANNEL_CONFIG_REQUIRED'):
+        async with channel_runtime_scope(row, bridge.store.connection):
+            pytest.fail('Missing channel config must never enter tool execution context')
+
+
+@pytest.mark.asyncio
 async def test_real_recovery_reply_on_fresh_schema_uses_generic_control_without_retired_source_table(bridge):
     from src.core.agent_engine.contracts import AgentMode, ExecutionState, Identity, Outcome, ToolCall, ToolFact
     from src.services.agent_runner.recovery import RecoveryCoordinator
@@ -748,7 +842,6 @@ async def test_real_recovery_reply_on_fresh_schema_uses_generic_control_without_
                                    {'consumed_at': datetime.now(timezone.utc)}, resumed]
     with patch('src.services.agent_runner.recovery_repository.lock_runner', return_value=row) as fence, \
             patch('src.services.agent_runner.recovery_repository.ControlRepository', StoredControls), \
-            patch('src.services.agent_runner.recovery_repository.sync_public_display', side_effect=lambda cursor, row, **kwargs: row), \
             patch('src.services.agent_runner.recovery_repository.EventRepository.notify_in_tx', return_value=resumed):
         value = RecoveryRepository(lambda: connection).claim_resume('runner-1', 'worker', 30,
             revision=1, control_id=control['control_id'], checkpoint=recovered.checkpoint,

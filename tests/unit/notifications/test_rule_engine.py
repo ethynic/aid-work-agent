@@ -517,8 +517,8 @@ class TestScheduledTaskRuleRecipientMode:
 
 
 class TestKfConfigOwnershipValidation:
-    """kf_config 层条件归属校验：渠道 config_id（存量语义）与客服账号
-    open_kfid（账号级）均需归属本租户。"""
+    """kf_config 层条件归属校验：渠道 config_id（存量语义）、客服账号
+    open_kfid（账号级）、web_c 渠道 config_id（官网渠道条目）均需归属本租户。"""
 
     @staticmethod
     def _cursor_with_configs(rows):
@@ -528,20 +528,21 @@ class TestKfConfigOwnershipValidation:
 
     def test_channel_config_id_accepted(self):
         cursor = self._cursor_with_configs(
-            [{'config_id': 'chan_a', 'config': json.dumps({'kf_account': []})}])
+            [{'config_id': 'chan_a', 'channel_type': 'wecom_kf',
+              'config': json.dumps({'kf_account': []})}])
         NotificationRepository._validate_rule_kf_configs(
             make_repo(), cursor, T1, {'kf_config_ids': ['chan_a']})
 
     def test_open_kfid_accepted(self):
         cursor = self._cursor_with_configs(
-            [{'config_id': 'chan_a',
+            [{'config_id': 'chan_a', 'channel_type': 'wecom_kf',
               'config': json.dumps({'kf_account': [{'open_kfid': 'wk_acc1'}]})}])
         NotificationRepository._validate_rule_kf_configs(
             make_repo(), cursor, T1, {'kf_config_ids': ['wk_acc1']})
 
     def test_foreign_open_kfid_rejected(self):
         cursor = self._cursor_with_configs(
-            [{'config_id': 'chan_a',
+            [{'config_id': 'chan_a', 'channel_type': 'wecom_kf',
               'config': json.dumps({'kf_account': [{'open_kfid': 'wk_acc1'}]})}])
         with pytest.raises(NotificationError, match='NOTIFICATION_KF_CONFIG_INVALID'):
             NotificationRepository._validate_rule_kf_configs(
@@ -549,7 +550,22 @@ class TestKfConfigOwnershipValidation:
 
     def test_corrupt_config_rejected(self):
         cursor = self._cursor_with_configs(
-            [{'config_id': 'chan_a', 'config': 'not-json'}])
+            [{'config_id': 'chan_a', 'channel_type': 'wecom_kf', 'config': 'not-json'}])
+        with pytest.raises(NotificationError, match='NOTIFICATION_KF_CONFIG_INVALID'):
+            NotificationRepository._validate_rule_kf_configs(
+                make_repo(), cursor, T1, {'kf_config_ids': ['wk_acc1']})
+
+    def test_web_c_config_id_accepted(self):
+        cursor = self._cursor_with_configs(
+            [{'config_id': 'wc_a', 'channel_type': 'web_c', 'config': '{}'}])
+        NotificationRepository._validate_rule_kf_configs(
+            make_repo(), cursor, T1, {'kf_config_ids': ['wc_a']})
+
+    def test_web_c_config_does_not_leak_wecom_kf_accounts(self):
+        # web_c 渠道行不再参与 kf_account 解析（无客服账号维度），仅 config_id 可选
+        cursor = self._cursor_with_configs(
+            [{'config_id': 'wc_a', 'channel_type': 'web_c',
+              'config': json.dumps({'kf_account': [{'open_kfid': 'wk_acc1'}]})}])
         with pytest.raises(NotificationError, match='NOTIFICATION_KF_CONFIG_INVALID'):
             NotificationRepository._validate_rule_kf_configs(
                 make_repo(), cursor, T1, {'kf_config_ids': ['wk_acc1']})

@@ -7,10 +7,13 @@ from src.core.agent_engine.contracts import CheckpointFailure
 from src.db.models import MessageDB, ChatRecordDB
 from src.db.channel_message_repository import insert_message, touch_session
 from src.core.agent_events import mask_tool_args
+from .presentation import PLUGIN_TOOL_NAMES
 
 
 def write_history(cursor, runner, result):
     session_id = runner['session_id']
+    execution = (runner.get('checkpoint') or {}).get('execution') or {}
+    plugin_names = execution.get('resources', {}).get(PLUGIN_TOOL_NAMES, ())
     table = 'chat_sessions' if runner['session_kind'] == 'web' else 'channel_sessions'
     cursor.execute(f'SELECT * FROM {table} WHERE session_id=%s FOR UPDATE', (session_id,))
     session = cursor.fetchone()
@@ -85,6 +88,11 @@ def write_history(cursor, runner, result):
         for key in ('tool_calls','tool_call_id','reasoning_content'):
             if key in message:
                 metadata[key] = message[key]
+        if plugin_names and message.get('tool_calls'):
+            used_plugins = {call['function']['name'] for call in message['tool_calls']
+                            if (call.get('function') or {}).get('name') in plugin_names}
+            if used_plugins:
+                metadata[PLUGIN_TOOL_NAMES] = sorted(used_plugins)
         content = '' if message.get('tool_calls') else message.get('content','')
         if not isinstance(content,str):
             content = json.dumps(content,ensure_ascii=False)
@@ -157,9 +165,11 @@ def execution_statistics(state, runner_id, envelope=None):
     children = []
     tools = []
     envelope = envelope or {}
+    plugin_names = (state.get('resources') or {}).get(PLUGIN_TOOL_NAMES, ())
     for call_id,fact in state.get('tools',{}).items():
         call = fact.get('call') or {}
-        tools.append({'tool_name':call.get('name'),'tool_args':mask_tool_args(call.get('arguments') or {}),
+        arguments = {} if call.get('name') in plugin_names else mask_tool_args(call.get('arguments') or {})
+        tools.append({'tool_name':call.get('name'),'tool_args':arguments,
                       'result':str(fact.get('result'))[:2000] if fact.get('result') is not None else None,
                       'success':fact.get('success',False),'error':None,
                       'duration_ms':(envelope.get('tool_durations') or {}).get(call_id,0)})

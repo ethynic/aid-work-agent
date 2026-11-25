@@ -77,6 +77,10 @@ fi
 #      按 Compose 副本序号命名 agent2-runner-worker-1..N，旧 general/light
 #      模式匹配不到导致 TMPDIR 权限修复被跳过（2026-11-13 部署手工兜底）；
 #      heavy-tools 纳入同一兜底循环
+#  10. 2026-11-20 [11] 步增量依赖安装由「仅主 API 容器」改为「本 compose project
+#      内全部同镜像容器」（api/background/runner-api/worker/heavy-tools/monitor）：
+#      docker exec 的 pip 安装只落在单容器可写层，Runner 不继承主 API 的安装，
+#      导致 rfc8785 仅主 API 有、4 个 worker 全缺
 # ==============================================================================
 
 set -e
@@ -177,24 +181,24 @@ docker run --rm \
     npm install --no-audit --no-fund --prefer-offline
 
 
-# 3. 前端类型检查 + 边界检查（不产出 dist，nginx 服务不受影响；
-#    先于后端重启执行，类型/边界错误能在此中止，避免白白停一次服务）
-echo "[3] 前端类型检查 + 边界检查..."
-docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm run typecheck
-docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
-    node scripts/check-dependency-boundaries.mjs --scope=web
-
-# 4. 前端编译到 dist.new（后台执行，与后端重启并行）。
-#    旧 dist 一直保留到原子切换，编译期间前端零空窗。
-#    校验链拆开跑：typecheck/boundary 已在 [3]，build 用 npx vite build --outDir
-echo "[4] 前端编译 dist.new（后台）..."
+# 3. 前端校验 + 编译到 dist.new（后台执行，与后端重启并行，2026-11-24 优化）。
+#    typecheck/边界检查不产出 dist、不影响 nginx，只需在 dist 原子切换前通过；
+#    移入后台校验链与后端重启并行（原串行卡在重启前约 2 分钟）。
+#    校验链任一失败都不会生成 dist.new，等待段会在切换前中止，前端零空窗；
+#    代价：类型/边界错误时后端已重启（多一次服务重启），属可接受取舍。
+#    build 用 npx vite build --outDir（npm run build 是复合命令，追加 --outDir
+#    会透传给最后的 verify 脚本导致误解析）
+echo "[3] 前端校验 + 编译 dist.new（后台，与后端重启并行）..."
 sudo rm -rf "$DIST_DIR.new"
 mkdir -p "$(dirname "$BUILD_LOG")"
 (
-  docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+  docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm run typecheck \
+  && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+      node scripts/check-dependency-boundaries.mjs --scope=web \
+  && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
       npx vite build --outDir dist.new \
-    && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
-        node scripts/verify-web-build.mjs /app/dist.new
+  && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+      node scripts/verify-web-build.mjs /app/dist.new
 ) > "$BUILD_LOG" 2>&1 &
 FRONTEND_PID=$!
 
@@ -331,11 +335,43 @@ sudo chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上�
 
 # 11. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
 #     新依赖不会自动安装；下次重建镜像后可移除此步骤）
-echo "[11] 增量安装新增依赖..."
-docker exec -u root aid-agent-api2 \
-    pip install --no-cache-dir -r /app/requirements.txt \
-    -i https://mirrors.cloud.tencent.com/pypi/simple \
-    --quiet || echo "  警告：依赖安装失败，部分新功能可能不可用"
+#     注意：api/background/runner-api/runner-worker/heavy-tools/runner-monitor 共用
+#     同一镜像，docker exec 的安装只落在单个容器的可写层，其它容器不会继承；而
+#     [6] 的 --force-recreate 又会丢弃容器内既有安装。因此必须对本 compose project
+#     内所有同镜像容器逐个安装，否则 Runner 侧运行时 import 新依赖直接失败
+#     （2026-11-20 事故：仅主 API 装了 rfc8785，4 个 Runner worker 全部缺包）。
+#     彻底解法仍是定期重建镜像，使依赖固化进镜像层。
+echo "[11] 增量安装新增依赖（本项目全部同镜像容器）..."
+PIP_PROJECT=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' aid-agent-api2 2>/dev/null || true)
+[ -z "$PIP_PROJECT" ] && PIP_PROJECT="${PWD##*/}"
+PIP_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=$PIP_PROJECT" \
+    --format '{{.Image}} {{.Names}}' | awk '$1 == "aid-agent-api:latest" {print $2}')
+if [ -z "$PIP_CONTAINERS" ]; then
+    echo "  警告：未匹配到同镜像容器，退回仅安装 aid-agent-api2"
+    PIP_CONTAINERS="aid-agent-api2"
+fi
+PIP_TMPDIR=$(mktemp -d)
+PIP_RUNNING=0
+for c in $PIP_CONTAINERS; do
+    echo "    -> $c"
+    ( docker exec -u root "$c" \
+          pip install --no-cache-dir -r /app/requirements.txt \
+          -i https://mirrors.cloud.tencent.com/pypi/simple \
+          --quiet || echo "$c" >> "$PIP_TMPDIR/failed" ) &
+    PIP_RUNNING=$((PIP_RUNNING + 1))
+    # 限制并发 4 个：9 个容器同时跑 pip 的内存峰值对测试机偏高
+    if [ "$PIP_RUNNING" -ge 4 ]; then
+        wait -n || true
+        PIP_RUNNING=$((PIP_RUNNING - 1))
+    fi
+done
+wait || true
+if [ -s "$PIP_TMPDIR/failed" ]; then
+    echo "  警告：以下容器依赖安装失败，对应功能可能不可用：$(tr '\n' ' ' < "$PIP_TMPDIR/failed")"
+else
+    echo "    全部容器依赖安装完成"
+fi
+rm -rf "$PIP_TMPDIR"
 
 echo ""
 echo "更新完成！"

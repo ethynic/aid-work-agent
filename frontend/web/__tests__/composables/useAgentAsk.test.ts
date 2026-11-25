@@ -231,7 +231,8 @@ describe('useAgent structured ask submission (WP4 提交链路)', () => {
       status: 'rejected', error_code: 'CONTROL_WAIT_STALE' } })
     await flush()
     // 下一次快照刷新按当前事实重算：wait 仍在 waiting 且无在途受理 → 冲突解除
-    await vi.advanceTimersByTimeAsync(1000)
+    // （0b47761a 起 waiting parked 行权威查询降频至 30s）
+    await vi.advanceTimersByTimeAsync(30000)
     request('/runners/runner-A').respond({ success: true, runner: theirRow(3) })
     await flush()
     expect(conflicted()).toMatchObject({ errorCode: 'RUNNER_RESUME_PENDING', conflictCleared: true })

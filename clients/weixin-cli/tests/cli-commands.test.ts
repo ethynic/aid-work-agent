@@ -101,6 +101,14 @@ test('read chat-latest always returns JSON so its one-time incremental result ca
   }
 })
 
+test('read group-history reaches the local OperationResult without accepting a missing group name', () => {
+  const { status, stdout } = runCli(['read', '--domain', 'group-history', '--json'])
+  assert.equal(status, 2)
+  const parsed = JSON.parse(stdout.trim())
+  assert.equal(parsed.code, 'INVALID_ARGUMENT')
+  assert.deepEqual(parsed.data, {})
+})
+
 test('doctor restore shares the CLI and MCP mutex and returns a failed report before any native action when busy', async () => {
   const scope = 'doctor-restore-busy-' + process.pid
   const mutex = new NamedMutex(scope)
