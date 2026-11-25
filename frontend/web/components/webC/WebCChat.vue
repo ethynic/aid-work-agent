@@ -1,5 +1,5 @@
 <template>
-  <div ref="rootEl" class="h-screen chat-root flex flex-col bg-canvas" :class="{ 'embed-mode': isEmbed }">
+  <div ref="rootEl" class="h-screen chat-root flex flex-col bg-canvas touch-manipulation" :class="{ 'embed-mode': isEmbed }">
     <!-- 页头（iframe embed 模式隐藏，设计 §4.5） -->
     <header v-if="!isEmbed" class="flex items-center gap-3 px-4 py-3 bg-surface border-b border-default">
       <div class="w-9 h-9 rounded-full bg-primary-50 text-primary-600 flex items-center justify-center shrink-0">
@@ -280,7 +280,7 @@ onBeforeUnmount(() => {
   observeAbort.abort()
   submitting.value = false
   streamingActive.value = false
-  rootEl.value?.removeEventListener('click', onPageTap)
+  rootEl.value?.removeEventListener('pointerdown', onPageTap)
 })
 
 const canSubmit = computed(() => (inputText.value.trim().length > 0 || pendingAttachments.value.length > 0))
@@ -292,7 +292,9 @@ onMounted(async () => {
   try {
     if (sessionStorage.getItem(DIAG_STORAGE_KEY) === '1') enableDiagnostics()
   } catch { /* sessionStorage 不可用忽略 */ }
-  rootEl.value?.addEventListener('click', onPageTap)
+  // 用 pointerdown 计数：iOS WKWebView 上快速连点会被 double-tap-to-zoom 手势
+  // 判定吞掉合成 click（10 下物理点击只有部分到达），pointerdown 按下即触发不受影响
+  rootEl.value?.addEventListener('pointerdown', onPageTap)
   identity.value = buildIdentityQuery(configId.value, route.query as Record<string, unknown>)
   try {
     const data = await getBootstrap(tenantId.value, configId.value, identity.value)
