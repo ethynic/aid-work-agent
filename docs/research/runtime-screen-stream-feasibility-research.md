@@ -31,9 +31,9 @@
 | 设备记录 | 表 `local_tool_devices`，能力存于 `capabilities_json`；不记录设备来源地址；设备列表接口刻意不下发能力原始内容 | 需要新增一个明确的「支持实时画面」投影字段 |
 | 服务端 | FastAPI，Gunicorn 以 uvicorn worker 运行（3～6 个）；跨请求数据必须放 Redis 或数据库 | 会话状态放数据库即可，多个 worker 之间天然共享 |
 | 网页 | Vue 3 加自研 Base* 组件；设备入口在「本地工具」页的设备表格；没有使用过 WebRTC | 入口放在设备行操作列，观看用大弹框 |
-| 已有画面类功能 | 「服务端浏览器」只读画面：服务器把 JPEG 帧经 WebSocket 推给网页 | 帧全部过服务器，同样受 5 Mbps 限制，不适合桌面连续画面；其状态条样式可作为参考 |
+| 已有画面类功能 | 调研时仓库里有「服务端浏览器」只读画面：服务器把 JPEG 帧经 WebSocket 推给网页。master 已于 2026-11-19 整体移除（提交 `943209e6`） | 仓库里现在没有可复用的画面传输代码。那种做法帧全部过服务器，同样受 5 Mbps 限制，本来也不适合桌面连续画面 |
 
-源码位置：[设备接口](../../src/local_tools/api.py)、[设备数据访问](../../src/local_tools/repository.py)、[设备表结构](../../deploy/init-postgres.sql)、[Host 轮询循环](../../clients/shared/local-tool-host-core/src/legacy/pollLoop.ts)、[能力构造](../../clients/shared/local-tool-host-core/src/legacy/config.ts)、[Electron 主进程](../../clients/agent-desktop/electron/main.ts)、[Runtime 管理页](../../frontend/desktop/features/runtime/RuntimeManagementPage.vue)、[本地工具页](../../frontend/web/components/saas/LocalToolDevices.vue)、[服务端浏览器画面](../../src/api/browser_runs.py)。
+源码位置：[设备接口](../../src/local_tools/api.py)、[设备数据访问](../../src/local_tools/repository.py)、[设备表结构](../../deploy/init-postgres.sql)、[Host 轮询循环](../../clients/shared/local-tool-host-core/src/legacy/pollLoop.ts)、[能力构造](../../clients/shared/local-tool-host-core/src/legacy/config.ts)、[Electron 主进程](../../clients/agent-desktop/electron/main.ts)、[Runtime 管理页](../../frontend/desktop/features/runtime/RuntimeManagementPage.vue)、[本地工具页](../../frontend/web/components/saas/LocalToolDevices.vue)。
 
 ## 3. 技术选型
 
@@ -42,7 +42,7 @@
 | 方案 | 做法 | 判断 |
 | --- | --- | --- |
 | **WebRTC（选用）** | 浏览器与 Electron 自带的实时音视频引擎，双方直接建连，自带加密、拥塞控制和码率自适应 | 浏览器零依赖；画面不过服务器；两端都是 Chromium 内核，兼容性问题少 |
-| 服务器转发图片帧 | Runtime 截图后上传，服务器经 WebSocket 或 SSE 推给网页 | 每秒 15 帧 720p 图片约 7～18 Mbps，远超服务器带宽，延迟也高。只在现有低帧率浏览器画面里合适 |
+| 服务器转发图片帧 | Runtime 截图后上传，服务器经 WebSocket 或 SSE 推给网页 | 每秒 15 帧 720p 图片约 7～18 Mbps，远超服务器带宽，延迟也高。只适合不需要连续画面的场景 |
 | HLS 等直播协议 | 推流到媒体服务器再分发 | 延迟数秒起，需要媒体服务器，画面过服务器 |
 | RDP、VNC | 系统级远程桌面协议 | 需要开启系统远程桌面或自建网关，浏览器不能直连，也不满足点对点 |
 | 自研 UDP 传输 | 自己实现打包、加密、拥塞控制 | 重复实现 WebRTC 已有能力，不建议 |

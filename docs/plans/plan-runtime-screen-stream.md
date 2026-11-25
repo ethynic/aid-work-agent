@@ -23,7 +23,7 @@
 - 2026-11-25 用户确认：资源不足时先降低画质继续观看，降低后仍然不够才停止观看，任务结束后恢复（设计 4.5）。Phase 2 开工前先在单机确认降低画质的接口确实能减轻编码负载。
 - 「同一台电脑上的浏览器单独走另一条出口时会被当成另一台电脑」按接受的例外写进验收（设计 4.2、第 13 节第 10 项）。2026-11-25 用户确认接受，规则 3 不改。
 - 2026-11-25 已按设计文档第 9 节登记为[共同契约](../system/runner-desktop-runtime-integration-contract.md) 2.25（初稿拟的 2.23 已被占用）。本批要改的共享文件由本任务的对应开发角色唯一写入，同一批里其他会话不并行写：`contracts/runtime-host/v1`、`clients/shared/local-tool-host-core`、`clients/agent-tool-runtime`、`clients/agent-desktop/electron`、`frontend/desktop/features/runtime` 归 Runtime 开发角色；`src/local_tools`、新增系统表、`src/config/settings.py` 与 `configs/config.yaml` 归服务端开发角色；`frontend/web` 归 Web 开发角色。
-- 本分支落后 master 一百多个提交（2026-11-25 为 116 个）。Phase 1 开工前先把 master 合并进本分支并重跑受影响的验证，合并由用户决定。
+- 2026-11-25 经用户同意，已把 master 合并进本分支（合并提交 `e73e91d9`，此前落后 116 个提交）。合并后重跑了验证程序单测和文档链接检查，并更正了调研报告里一处因 master 移除旧服务端浏览器而过时的引用。
 - 本功能属高风险：涉及设备鉴权、屏幕内容、跨模块契约、新数据表和 Runtime 核心装配。Phase 1～4 每个阶段走完整三智能体流程，Phase 0 的验证程序不进产品代码。
 - 在 `runtime-optimization` 分支开发。提交和推送按仓库 Git 规范，提交说明关联本计划。任何环境的部署都需要用户当场明确指示。
 
