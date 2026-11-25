@@ -230,6 +230,12 @@ const pendingAttachments = ref<UploadRef[]>([])
 const submitting = ref(false)
 const streamingText = ref('')
 const waitingText = ref('')
+/** 当前等待反问的 wait_id（与 waitingText 同步维护，供回复提交后识别陈旧等待） */
+const waitingWaitId = ref('')
+/** 刚提交回复所对应的 wait_id：control 消费是异步的，受理后短时间内快照
+ * 仍可能读到旧 waiting 状态（agent2 2026-11-25 追问回复无响应事故根因）。
+ * 观察期间快照里出现同 wait_id 的等待属陈旧快照，忽略并继续观察。 */
+const repliedWaitId = ref('')
 const progressText = ref('')
 const streamFailed = ref(false)
 const isTerminal = ref(true)
@@ -459,6 +465,7 @@ function resetStreamState() {
   observeAbort = new AbortController()
   streamingText.value = ''
   waitingText.value = ''
+  waitingWaitId.value = ''
   progressText.value = ''
   streamFailed.value = false
   isTerminal.value = true
@@ -567,6 +574,8 @@ async function submit() {
   inputText.value = ''
   pendingAttachments.value = []
   errorMessage.value = ''
+  // 回复追问时先记下所应答的 wait_id，供观察期间识别 control 消费前的陈旧 waiting 快照
+  repliedWaitId.value = waitingWaitId.value
   resetStreamState()
 
   // 本地先渲染用户消息（服务端落库后由 reload 校准）
@@ -638,11 +647,16 @@ async function cancel() {
 }
 
 function applySnapshot(runner: RunnerSnapshot) {
+  const snapshotWaitId = String((runner.snapshot?.waiting as { wait_id?: unknown } | undefined)?.wait_id ?? '')
   if (runner.waiting_text) {
+    // 追问回复受理后 control 消费是异步的，短窗口内快照仍是旧 waiting（同 wait_id）。
+    // 视为陈旧快照：忽略并继续观察，等恢复后的新一轮反问（新 wait_id）或终态。
+    if (snapshotWaitId && repliedWaitId.value && snapshotWaitId === repliedWaitId.value) return
     // ask_user 停车等用户回复：主动结束本轮观察。SSE 事件流对 waiting（非终态）
     // 不关闭，不主动断开将令 submitting 恒为 true、输入框永久禁用（测试反馈 2026-11-19）。
     // 反问经 finally 落入消息流，用户回复走新一轮 /chat，由后端应答等待中的澄清
     waitingText.value = runner.waiting_text
+    waitingWaitId.value = snapshotWaitId
     streamingText.value = ''
     progressText.value = ''
     isTerminal.value = true

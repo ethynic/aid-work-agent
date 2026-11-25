@@ -5,10 +5,12 @@
 """
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import time
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -22,6 +24,7 @@ from src.saas.api.web_c import (
     _sanitize_filename,
     _validate_attachment_refs,
     _verify_ext_signature,
+    WebCChatRequest,
 )
 from src.saas.services.credit_gate import check_tenant_credit_blocked
 
@@ -653,6 +656,98 @@ class TestClarificationPersistence:
         args = mock_persist.call_args.args
         assert args[:2] == ("t1", "t1_web_c_ext_u1_")
         assert args[3] == "请补充你的城市？" and args[4] == "wait_1"
+
+
+class TestChatStaleWaitingGuard:
+    """追问回复受理后的陈旧 waiting 快照回归（agent2 2026-11-25 事故）。
+
+    control 消费是异步的：/controls 受理返回的 runner 行可能仍是消费前的
+    旧 waiting（同 wait_id）。chat 端点不得把旧反问当新等待返回，否则前端
+    会误判停车并停止观察，恢复后的新一轮反问无人接收。"""
+
+    @staticmethod
+    def _stale_row(wait_id="wait_9"):
+        return {
+            "runner_id": "run_w",
+            "status": "waiting",
+            "snapshot": {"waiting": {"kind": "clarification", "wait_id": wait_id,
+                                     "question": "请补充出行人数？"}},
+        }
+
+    @staticmethod
+    def _patch_chat_common(outcome_row, reply_wait_id):
+        identity = SimpleNamespace(tenant_id="t1", config_id="cfg1", channel_user_id="u0011", mode="uid", subagent_type="x", display_name="")
+        session = {"session_id": "t1_web_c_uid_0011_x_sab"}
+        outcome = SimpleNamespace(direct_response=None, row=outcome_row,
+                                  reply_wait_id=reply_wait_id)
+        fake_agent = MagicMock()
+        fake_agent.submit = AsyncMock(return_value=outcome)
+
+        return patch("src.saas.api.web_c._resolve_identity", return_value=identity), \
+            patch("src.saas.api.web_c._load_web_c_config",
+                  return_value=({}, {"allow_attachment": False})), \
+            patch("src.saas.api.web_c._get_limiters", return_value={
+                "chat_uid": SimpleNamespace(is_allowed=lambda key: True),
+                "chat_ip": SimpleNamespace(is_allowed=lambda key: True)}), \
+            patch("src.saas.api.web_c.check_tenant_credit_blocked", return_value=None), \
+            patch("src.saas.api.web_c._validate_attachment_refs", return_value=[]), \
+            patch("src.saas.api.web_c._ensure_web_c_user", new=AsyncMock(return_value="u1")), \
+            patch("src.saas.api.web_c._assert_session_owned", return_value=session), \
+            patch("src.saas.api.web_c._create_extra_session_sync", return_value=session), \
+            patch("src.saas.api.web_c._align_session_profile", new=MagicMock()), \
+            patch("src.saas.api.web_c._add_user_message", new=MagicMock()), \
+            patch("src.saas.api.web_c.ChannelRunnerAgent", return_value=fake_agent), \
+            patch("src.saas.api.web_c._persist_clarification_message", new=MagicMock())
+
+    @pytest.mark.asyncio
+    async def test_reply_same_wait_id_returns_without_waiting_text(self):
+        from src.saas.api import web_c as web_c_mod
+        chat = web_c_mod.chat
+        _persist_clarification_message = web_c_mod._persist_clarification_message
+
+        body = WebCChatRequest(text="1600w", client_request_id="wc_" + "a" * 8)
+        patches = self._patch_chat_common(self._stale_row("wait_9"), "wait_9")
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await chat("t1", "cfg1", body, request=SimpleNamespace(headers={}, client=None))
+            # 陈旧等待：不回 waiting_text、不重复落库
+            assert "waiting_text" not in response
+            assert response["status"] == "waiting" and response["runner_id"] == "run_w"
+            web_c_mod._persist_clarification_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reply_new_wait_id_returns_waiting_text(self):
+        from src.saas.api import web_c as web_c_mod
+        chat = web_c_mod.chat
+        _persist_clarification_message = web_c_mod._persist_clarification_message
+
+        body = WebCChatRequest(text="1600w", client_request_id="wc_" + "a" * 8)
+        patches = self._patch_chat_common(self._stale_row("wait_new"), "wait_9")
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await chat("t1", "cfg1", body, request=SimpleNamespace(headers={}, client=None))
+            # 新一轮等待（新 wait_id）：正常返回反问并落库
+            assert response["waiting_text"] == "请补充出行人数？"
+            web_c_mod._persist_clarification_message.assert_called_once()
+            assert web_c_mod._persist_clarification_message.call_args.args[4] == "wait_new"
+
+    @pytest.mark.asyncio
+    async def test_new_run_waiting_still_returns_waiting_text(self):
+        from src.saas.api import web_c as web_c_mod
+        chat = web_c_mod.chat
+        _persist_clarification_message = web_c_mod._persist_clarification_message
+
+        body = WebCChatRequest(text="出报告", client_request_id="wc_" + "b" * 8)
+        patches = self._patch_chat_common(self._stale_row("wait_1"), None)
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await chat("t1", "cfg1", body, request=SimpleNamespace(headers={}, client=None))
+            # 新受理（reply_wait_id 为空）：等待正常返回
+            assert response["waiting_text"] == "请补充出行人数？"
+            web_c_mod._persist_clarification_message.assert_called_once()
 
 
 class TestBackfillSessionRunners:

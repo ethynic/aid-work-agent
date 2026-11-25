@@ -635,6 +635,11 @@ async def chat(tenant_id: str, config_id: str, body: WebCChatRequest, request: R
                 "status": row.get("status"), "direct_reply": None}
     if row.get("status") == "waiting":
         question, wait_id = _clarification_question(row)
+        # 追问回复受理后，runner 行快照可能仍是 control 消费前的陈旧 waiting
+        # （wait_id 与刚应答的相同）。此时不能把旧反问当新等待回给前端，
+        # 否则前端会误判停车并停止观察，恢复后的新一轮反问将无人接收。
+        if question and wait_id and wait_id == outcome.reply_wait_id:
+            return response
         if question:
             await asyncio.to_thread(
                 _persist_clarification_message, tenant_id, session_id,
