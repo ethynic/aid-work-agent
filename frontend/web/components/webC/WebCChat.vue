@@ -242,11 +242,18 @@ function enableDiagnostics() {
   tapHint.value = ''
   if (tapHintTimer) { clearTimeout(tapHintTimer); tapHintTimer = null }
   try { sessionStorage.setItem(DIAG_STORAGE_KEY, '1') } catch { /* 隐私模式等场景忽略 */ }
-  void import('@/utils/webCDiagnostics').then(m =>
-    m.setupWebCDiagnostics({
-      getTextarea: () => inputEl.value,
-      getScrollContainer: () => scrollContainer.value,
-    }))
+  void import('@/utils/webCDiagnostics')
+    .then(m =>
+      m.setupWebCDiagnostics({
+        getTextarea: () => inputEl.value,
+        getScrollContainer: () => scrollContainer.value,
+      }))
+    .catch((e) => {
+      // 加载失败必须用户可见（真机上没有 console 可看）
+      tapHint.value = '诊断加载失败'
+      setTimeout(() => { tapHint.value = '' }, 3000)
+      console.warn('[webC诊断] 启用失败', e)
+    })
 }
 
 function onPageTap() {
