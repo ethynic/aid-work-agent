@@ -803,7 +803,20 @@ class RunnerWorker:
                 return
             if finalization_retry:
                 from src.core.trace_persist import update_completion
-                update_completion(collector.trace.trace_id,status=runner['status'],output=collector.trace.output,
+                # 中断投影（2026-11-25，设计 runner-interrupt-observability-design.md §2）：
+                # interrupted 行经 cancel_only finalization 落终态 cancelled（渠道
+                # _cancel_and_wait 收尾/中断清理），obs_traces 若照抄会被标成
+                # 「用户取消」——wecom_kf 等渠道根本没有用户取消入口，排查误导
+                # （聊易 trace 1c300ad9 事故）。claim 已记录 cancel_only_from_status，
+                # 此处把系统中断还原为 interrupted；用户取消 waiting/paused 不受影响。
+                # 投影 interrupted 后 update_completion 的 error_message CASE 走
+                # ELSE 保留分支，中断当轮写入的 EXECUTION_INTERRUPTED 不再被清空。
+                _trace_status = runner['status']
+                _final_checkpoint = runner.get('checkpoint') or {}
+                if (_trace_status == 'cancelled'
+                        and _final_checkpoint.get('cancel_only_from_status') == 'interrupted'):
+                    _trace_status = 'interrupted'
+                update_completion(collector.trace.trace_id,status=_trace_status,output=collector.trace.output,
                     duration_ms=((runner.get('checkpoint') or {}).get('pending_finalization') or {}).get('duration_ms',0),
                     error_message=error_code)
                 return

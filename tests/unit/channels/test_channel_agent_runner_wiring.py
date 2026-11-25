@@ -89,9 +89,13 @@ def _mirror_enqueue():
             response = await kwargs["processor"](
                 lambda: False, kwargs["user_input"]
             )
-        except Exception:
+        except Exception as e:
             return EnqueueResult(
-                status="error", merged_input=kwargs["user_input"], was_merged=False
+                status="error", merged_input=kwargs["user_input"], was_merged=False,
+                # 与 src/core/session_queue.py 契约同步：捕获 RunnerError 的
+                # code 与受理后标记（2026-11-25）
+                error_code=getattr(e, 'code', '') or '',
+                runner_accepted=bool(getattr(e, 'runner_accepted', False)),
             )
         return EnqueueResult(
             status="success",
@@ -322,7 +326,13 @@ async def test_real_entry_runner_failure_sends_notice(bridge, entry_env, channel
     # 失败提示只经 error 分流的 send_message 发一次；异常不得再外溢到入口
     # 兜底 send_text 造成双重通知
     entry_env.adapter.send_text.assert_not_called()
-    entry_env.batch_write.assert_not_called()
+    # 已受理后失败：error 轮补落库 user + 失败占位（runner_accepted 打标，
+    # 设计 runner-interrupt-observability-design.md §3），历史可追溯
+    entry_env.batch_write.assert_called_once()
+    batch = entry_env.batch_write.call_args.args[2]
+    assert [m["role"] for m in batch] == ["user", "assistant"]
+    assert batch[0]["content"] == "你好"
+    assert batch[1]["content"] == "[本次回复生成失败]"
     entry_env.recap.assert_not_called()
     entry_env.queue.finish_processing.assert_not_called()
     record = entry_env.records[-1]
@@ -389,7 +399,12 @@ async def test_real_entry_history_unavailable_sends_notice_without_answer(
     # 失败提示只经 error 分流的 send_message 发一次；异常不得再外溢到入口
     # 兜底 send_text 造成双重通知
     entry_env.adapter.send_text.assert_not_called()
-    entry_env.batch_write.assert_not_called()
+    # runner 已受理（channel-result 读取失败属受理后失败）：error 轮补落库
+    # user + 失败占位（runner_accepted 打标，设计 §3）
+    entry_env.batch_write.assert_called_once()
+    batch = entry_env.batch_write.call_args.args[2]
+    assert [m["role"] for m in batch] == ["user", "assistant"]
+    assert batch[1]["content"] == "[本次回复生成失败]"
     entry_env.recap.assert_not_called()
     entry_env.queue.finish_processing.assert_not_called()
     record = entry_env.records[-1]

@@ -1297,6 +1297,57 @@ class ChannelSessionManager:
                     logger.warning(
                         f"后端日志：error 路径 record_service.mark_error 异常 session={session_id}: {mark_err}"
                     )
+            # 失败轮用户消息补落库（2026-11-25，设计 runner-interrupt-observability-design.md §3）：
+            # user 写入随 success 批量写推迟到此，processor 异常时若直接 return，
+            # 用户消息在接待页历史永久缺失（聊易 trace 1c300ad9 事故：客户问过
+            # 「重新出一版」无据可查）。与成功路径同构落库 user + 失败占位
+            # assistant（原子事务），占位口径与 _ensure_last_not_orphan_user 一致，
+            # 避免末尾孤立 user；写库失败只记日志，不影响兜底话术发送。
+            # 仅受理后失败轮落库（runner_accepted 由 ChannelRunnerAgent 轮询段打标）：
+            # 受理前拒绝（CHANNEL_ACTOR_FORBIDDEN / CHANNEL_SESSION_MISMATCH 等）
+            # 不得写入会话历史，否则他渠道用户的消息会污染会话上下文。
+            try:
+                _error_user_content = (
+                    result.merged_input if result.was_merged else user_content
+                )
+                if _error_user_content and getattr(result, 'runner_accepted', False):
+                    if result.was_merged and result.merged_from_msgids:
+                        _error_user_metadata = {
+                            "open_kfid": (user_metadata or {}).get("open_kfid", "")
+                            if isinstance(user_metadata, dict) else "",
+                            "merged_from_msgids": result.merged_from_msgids,
+                            "merged_segments": result.merged_segments or [],
+                        }
+                    else:
+                        _error_user_metadata = user_metadata
+                    _error_attachments = (
+                        result.merged_attachments_meta
+                        if result.was_merged and result.merged_attachments_meta is not None
+                        else user_attachments_meta
+                    )
+                    _error_write_ok = self.add_messages_batch_transactional(session_id, tenant_id, [
+                        {
+                            "role": "user",
+                            "content": _error_user_content,
+                            "message_type": message_type,
+                            "attachments": _error_attachments or None,
+                            "metadata": _error_user_metadata,
+                            "created_at": user_received_at,
+                        },
+                        {
+                            "role": "assistant",
+                            "content": "[本次回复生成失败]",
+                            "message_type": "text",
+                        },
+                    ])
+                    if _error_write_ok is None:
+                        logger.warning(
+                            f"后端日志：error 路径用户消息补落库失败（事务回滚）session={session_id}"
+                        )
+            except Exception as persist_err:
+                logger.opt(exception=True).error(
+                    f"后端日志：error 路径用户消息补落库异常 session={session_id}: {persist_err}",
+                )
             # 发送非空失败提示（与渠道入口外层兜底文案一致）；adapter 自身故障时
             # 不能再抛，避免掩盖原始错误
             try:

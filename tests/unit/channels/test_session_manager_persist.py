@@ -1145,3 +1145,160 @@ async def test_initial_delivery_owner_loss_stops_verbose_worker_before_any_prepa
     send.assert_not_awaited()
     assert mock_db_ctx[0]["messages"] == []
     patched_session_queue.finish_processing.assert_called_once_with("initial-owner-loss", "lost-owner")
+
+
+# ============================================================
+# error 轮用户消息补落库（2026-11-25，设计 runner-interrupt-observability-design.md §3）
+# 背景：聊易 trace 1c300ad9 事故——processor 异常（如 RunnerError
+# CHANNEL_EXECUTION_INTERRUPTED）时 user 写入已随 success 批量写推迟，
+# 原实现直接 return，用户消息在接待页历史永久缺失。
+# ============================================================
+
+
+class TestErrorRoundUserMessagePersistence:
+    @pytest.mark.asyncio
+    async def test_error_result_persists_user_and_failed_placeholder(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        """processor 异常（error 结果）→ 落库 user + 失败占位 assistant，再发兜底话术。
+
+        为什么重要：中断轮的用户消息必须可追溯（接待页/对账），
+        同时占位 assistant 避免末尾孤立 user（与 _ensure_last_not_orphan_user 同口径）。
+        """
+        memory_store, _conn, spy = mock_db_ctx
+        patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+            status="error",
+            response_text="",
+            merged_input="重新出一版",
+            was_merged=False,
+            runner_accepted=True,
+        )
+
+        send_response = AsyncMock(return_value=True)
+        result = await manager.process_and_persist(
+            session_id="sid_test",
+            tenant_id="t1",
+            user_content="重新出一版",
+            agent=stub_agent,
+            send_response=send_response,
+        )
+
+        assert result["status"] == "error"
+        roles = [m["role"] for m in memory_store["messages"]]
+        assert roles == ["user", "assistant"], (
+            "error 轮应补写 user + 失败占位 assistant；实际: " + str(roles)
+        )
+        assert memory_store["messages"][0]["content"] == "重新出一版"
+        assert memory_store["messages"][1]["content"] == "[本次回复生成失败]"
+        # 兜底话术仍然发送
+        send_response.assert_awaited_once()
+        assert "抱歉" in send_response.await_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_error_result_rejected_before_acceptance_persists_nothing(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        """受理前拒绝（runner_accepted=False）→ 不写任何消息。
+
+        为什么重要：CHANNEL_ACTOR_FORBIDDEN / CHANNEL_SESSION_MISMATCH 等拒绝
+        发生在 runner 受理之前，把消息写入会话历史会让非本会话用户的内容
+        污染上下文（隐私 + 语义错误）。
+        """
+        memory_store, _conn, _spy = mock_db_ctx
+        patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+            status="error",
+            response_text="",
+            merged_input="你好",
+            was_merged=False,
+            runner_accepted=False,
+        )
+
+        send_response = AsyncMock(return_value=True)
+        result = await manager.process_and_persist(
+            session_id="sid_test",
+            tenant_id="t1",
+            user_content="你好",
+            agent=stub_agent,
+            send_response=send_response,
+        )
+
+        assert result["status"] == "error"
+        assert len(memory_store["messages"]) == 0, (
+            "受理前拒绝不得写入会话历史；实际写入: "
+            + str([m["role"] for m in memory_store["messages"]])
+        )
+        # 兜底话术仍发送
+        send_response.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_error_result_merged_owner_persists_merged_user(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        """合并方 error 轮：user 写合并后输入，metadata 带 merged_from_msgids（与成功路径同构）。"""
+        memory_store, _conn, _spy = mock_db_ctx
+        patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+            status="error",
+            response_text="",
+            merged_input="A\nB",
+            was_merged=True,
+            merged_from_msgids=["m1", "m2"],
+            merged_segments=[{"msgid": "m1", "text": "A"}, {"msgid": "m2", "text": "B"}],
+            runner_accepted=True,
+        )
+
+        send_response = AsyncMock(return_value=True)
+        result = await manager.process_and_persist(
+            session_id="sid_test",
+            tenant_id="t1",
+            user_content="B",
+            agent=stub_agent,
+            send_response=send_response,
+        )
+
+        assert result["status"] == "error"
+        roles = [m["role"] for m in memory_store["messages"]]
+        assert roles == ["user", "assistant"]
+        assert memory_store["messages"][0]["content"] == "A\nB", (
+            "合并方 error 轮应与成功路径一致持久化合并后输入"
+        )
+        user_metadata = memory_store["messages"][0]["metadata"]
+        if isinstance(user_metadata, str):
+            user_metadata = json.loads(user_metadata)
+        assert user_metadata["merged_from_msgids"] == ["m1", "m2"]
+
+    @pytest.mark.asyncio
+    async def test_error_result_batch_write_failure_still_sends_notice(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        """补落库失败（DB 异常）只记日志，不得阻断兜底话术发送。"""
+        memory_store, conn, _spy = mock_db_ctx
+        patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+            status="error",
+            response_text="",
+            merged_input="重新出一版",
+            was_merged=False,
+            runner_accepted=True,
+        )
+
+        # 让批量写内部的 insert 抛异常（add_messages_batch_transactional 吞异常返回 None）
+        original_execute = conn.cursor.return_value.execute
+
+        def failing_execute(sql, params=None):
+            if "insert into channel_messages" in sql.lower():
+                raise RuntimeError("db down")
+            return original_execute(sql, params)
+
+        conn.cursor.return_value.execute = failing_execute
+
+        send_response = AsyncMock(return_value=True)
+        result = await manager.process_and_persist(
+            session_id="sid_test",
+            tenant_id="t1",
+            user_content="重新出一版",
+            agent=stub_agent,
+            send_response=send_response,
+        )
+
+        assert result["status"] == "error"
+        send_response.assert_awaited_once(), "补落库失败不得阻断兜底话术"
+        assert "抱歉" in send_response.await_args.args[0]

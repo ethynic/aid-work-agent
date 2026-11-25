@@ -131,7 +131,13 @@ class ExecutionRepository:
             cancel_only = row["status"] in ("waiting", "paused", "interrupted")
             checkpoint = row.get("checkpoint") or {}
             if cancel_only:
-                checkpoint = {**checkpoint, "finalization_intent": "cancel_only"}
+                # cancel_only_from_status（2026-11-25，设计 runner-interrupt-observability-design.md §2）：
+                # 记录收尾前状态，供 _persist_trace 把 interrupted 行的 cancel_only
+                # 终态在 obs_traces 投影为 interrupted（渠道 _cancel_and_wait 收尾
+                # 与用户取消 waiting/paused 都走 cancel_only，终态同是 cancelled，
+                # 不记录则观测层无法区分「系统中断」与「用户取消」）。
+                checkpoint = {**checkpoint, "finalization_intent": "cancel_only",
+                              "cancel_only_from_status": row["status"]}
                 checkpoint.pop('cancel_completion_blocked',None)
             if row['status'] == 'finalizing':
                 # A reclaimed finalizer starts a new attempt without leaving

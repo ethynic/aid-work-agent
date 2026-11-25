@@ -54,6 +54,11 @@ class EnqueueResult:
     merged_from_msgids: Optional[list] = None
     merged_segments: Optional[list] = None
     lease_token: Optional[str] = None
+    # error 路径补充事实（2026-11-25）：processor 异常的 RunnerError code 与
+    # 受理后标记（ChannelRunnerAgent 轮询段打标）。供 process_and_persist 区分
+    # 「受理后失败轮补落库用户消息」与「受理前拒绝不落库」。
+    error_code: str = ""
+    runner_accepted: bool = False
 
 
 class SessionMessageQueue:
@@ -708,6 +713,8 @@ class SessionMessageQueue:
                         merged_attachments_meta=final_meta,
                         merged_from_msgids=final_from_msgids,
                         merged_segments=final_segments,
+                        error_code=getattr(e, 'code', '') or '',
+                        runner_accepted=bool(getattr(e, 'runner_accepted', False)),
                     )
                 else:
                     # processor 成功，立即记录正常返回值
@@ -750,6 +757,8 @@ class SessionMessageQueue:
                         merged_attachments_meta=current.merged_attachments_meta,
                         merged_from_msgids=current.merged_from_msgids,
                         merged_segments=current.merged_segments,
+                        error_code=getattr(e, 'code', '') or '',
+                        runner_accepted=bool(getattr(e, 'runner_accepted', False)),
                     )
 
                 if reprocessed is not None:

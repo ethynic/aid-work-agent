@@ -296,6 +296,14 @@ class ChannelRunnerAgent:
                     raise RunnerError('CHANNEL_EXECUTION_INTERRUPTED', 409)
                 await asyncio.sleep(0.25)
                 row = (await self._request('GET', f'/v1/runners/{runner_id}'))['runner']
+        except RunnerError as error:
+            # 受理后失败标记（2026-11-25，设计 runner-interrupt-observability-design.md §3）：
+            # 能走到轮询段说明 runner 行已受理；受理前的拒绝（CHANNEL_SESSION_MISMATCH、
+            # CHANNEL_ACTOR_FORBIDDEN 等）在 submit 内抛出、不会进入本 handler。
+            # session.py error 路径据此区分「受理后失败轮补落库用户消息」与
+            # 「受理前拒绝不落库」（拒绝消息不得写入会话历史污染上下文）。
+            error.runner_accepted = True
+            raise
         except asyncio.CancelledError:
             await self._finish_cleanup(self._cancel_and_wait(runner_id))
             raise
