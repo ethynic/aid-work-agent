@@ -217,7 +217,8 @@ export function cancelRunner(
 export interface RunnerSnapshot {
   runner_id: string
   status: string
-  snapshot: { output?: string; images?: unknown[]; downloadableFiles?: { file_id: string; name?: string; file_name?: string; size?: number; mime_type?: string; download_url?: string }[]; waiting?: Record<string, unknown> }
+  /** progress = Runner 最新一条过程状态（单行文本，public_view 口径），用于流式期间克制的过程呈现 */
+  snapshot: { output?: string; progress?: string; images?: unknown[]; downloadableFiles?: { file_id: string; name?: string; file_name?: string; size?: number; mime_type?: string; download_url?: string }[]; waiting?: Record<string, unknown> }
   result?: { output?: string; images?: unknown[] } | null
   waiting_text?: string
 }

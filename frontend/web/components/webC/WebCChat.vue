@@ -105,7 +105,7 @@
           </template>
 
           <!-- 流式 AI 回复 -->
-          <div v-if="streamingText || waitingText || streamFailed" class="flex justify-start">
+          <div v-if="streamingText || waitingText || progressText || streamFailed" class="flex justify-start">
             <div class="max-w-[85%] has-[table]:max-w-full space-y-2">
               <div
                 v-if="streamingText"
@@ -117,6 +117,11 @@
                 <div class="mt-2 text-xs text-muted">请直接回复文字继续</div>
               </div>
               <div v-else-if="streamFailed" class="text-xs text-muted">本轮对话未完成，请重试</div>
+              <!-- 过程状态位：正文未出现前的单行克制过程呈现，替代式更新不留痕迹 -->
+              <div v-else-if="progressText" class="flex items-center gap-1.5 px-1 text-xs text-muted">
+                <span class="w-1.5 h-1.5 rounded-full bg-primary-500 animate-pulse shrink-0"></span>
+                <span class="truncate">{{ progressText }}</span>
+              </div>
               <div v-if="streamingText && !isTerminal" class="flex items-center gap-1 text-primary-500">
                 <span class="w-1.5 h-1.5 rounded-full bg-primary-500 animate-pulse"></span>
                 <span class="text-xs text-muted">正在输入…</span>
@@ -182,6 +187,7 @@ import {
   type ChannelMessage
 } from '@/api/webC'
 import { renderMarkdown } from '@/utils/markdown'
+import { restrainedProgress } from '@/utils/webCProgress'
 import { generateUuid } from '@/utils/uuid'
 import ImageGallery from '@/components/ui/ImageGallery.vue'
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
@@ -224,6 +230,7 @@ const pendingAttachments = ref<UploadRef[]>([])
 const submitting = ref(false)
 const streamingText = ref('')
 const waitingText = ref('')
+const progressText = ref('')
 const streamFailed = ref(false)
 const isTerminal = ref(true)
 const streamingActive = ref(false)
@@ -285,6 +292,20 @@ function onPageTap() {
 async function focusInput() {
   await nextTick()
   inputEl.value?.focus()
+}
+
+// ============== 过程状态克制呈现（2026-11-25，小屏单行状态位） ==============
+// 数据来源：Runner 快照 snapshot.progress（durable_control 只保留最新一条 progress
+// 事件文本）。呈现原则：单行替代式更新、正文出现即让位、失败不外显（保持中性）。
+
+// 克制化过滤实现见 utils/webCProgress.ts 的 restrainedProgress（可单测）
+
+/** 用户是否处于消息底部附近（80px 容差）：流式期间仅在此为 true 时跟随滚动，
+ * 避免访客上翻查看历史/过程时被每一帧快照刷新强行拉回底部 */
+function isNearBottom(): boolean {
+  const el = scrollContainer.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 80
 }
 
 let observeAbort = new AbortController()
@@ -438,6 +459,7 @@ function resetStreamState() {
   observeAbort = new AbortController()
   streamingText.value = ''
   waitingText.value = ''
+  progressText.value = ''
   streamFailed.value = false
   isTerminal.value = true
   streamingActive.value = false
@@ -622,15 +644,19 @@ function applySnapshot(runner: RunnerSnapshot) {
     // 反问经 finally 落入消息流，用户回复走新一轮 /chat，由后端应答等待中的澄清
     waitingText.value = runner.waiting_text
     streamingText.value = ''
+    progressText.value = ''
     isTerminal.value = true
     streamFailed.value = false
     observeAbort.abort()
     return
   }
   waitingText.value = ''
+  // 过程状态单行呈现：正文未出现前显示，正文出现后由 streamingText 气泡让位（克制原则）
+  progressText.value = restrainedProgress(runner.snapshot?.progress)
   const output = runner.result?.output || runner.snapshot?.output || ''
   streamingText.value = output
-  scrollToBottom()
+  // 仅当用户本就在底部才跟随滚动，避免每帧快照刷新强拉回底部打断回看
+  if (isNearBottom()) scrollToBottom()
 }
 
 async function refreshOnce(runnerId: string): Promise<'running' | 'terminal'> {
@@ -737,6 +763,7 @@ async function observeRunner(runnerId: string) {
     }
     streamingText.value = ''
     waitingText.value = ''
+    progressText.value = ''
     streamingActive.value = false
     submitting.value = false
     // 服务端权威校准（同时触发终态补写）
