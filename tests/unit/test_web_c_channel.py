@@ -1004,3 +1004,79 @@ class TestAlignSessionProfile:
             _align_session_profile(self._identity(None), session)
         assert cursor.execute.call_args[0][1][0] == ""
         assert session["subagent_id"] == ""
+
+
+class TestWebCConfigTitle:
+    """页面标题（title）规整：2026-11-25 渠道配置新增，嵌入 webview 时导航栏标题。"""
+
+    def test_title_stripped_and_kept(self):
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"title": "  科创惠企咨询  ", "channel_secret": SECRET}
+        _normalize_web_c_config(config)
+        assert config["title"] == "科创惠企咨询"
+
+    def test_title_missing_defaults_empty(self):
+        """缺省/空串 = 未配置（C 端保持系统默认标题），且存量键回填空串。"""
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"channel_secret": SECRET}
+        _normalize_web_c_config(config)
+        assert config["title"] == ""
+
+        config2 = {"title": "   ", "channel_secret": SECRET}
+        _normalize_web_c_config(config2)
+        assert config2["title"] == ""
+
+    def test_title_whitespace_only_treated_as_unset(self):
+        """纯空白覆盖旧值：update 场景传空白视为清空（与其他文本字段同口径）。"""
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"title": "  ", "channel_secret": SECRET}
+        _normalize_web_c_config(config, existing={"title": "旧标题", "channel_secret": SECRET})
+        assert config["title"] == ""
+
+
+class TestRunnerEventsFinalize:
+    """SSE 收尾终态落库回归（agent2 2026-11-25 tr_runner_bc18 事故）。
+
+    persist_runner_result 是同步 DB 函数，finalize 必须经 to_thread 调用；
+    直接 await 其 None 返回值会抛 TypeError，导致 SSE 收尾落库 100% 失败、
+    全靠 120s 扫描器兜底（消息晚约一分钟落库）。"""
+
+    @pytest.mark.asyncio
+    async def test_events_endpoint_finalize_persists_without_error(self):
+        """走真实 runner_events 路由拿到 finalize 闭包：同步落库经 to_thread，
+        调用不再抛 TypeError。"""
+        from src.saas.api import web_c as web_c_mod
+
+        identity = SimpleNamespace(
+            tenant_id="t1", config_id="cfg1", channel_user_id="u0011",
+            mode="uid", subagent_type="x", display_name="",
+            session_prefix="t1_web_c_uid_0011_x_")
+        row = {"runner_id": "run_f", "status": "completed",
+               "session": {"session_id": "t1_web_c_uid_0011_x_sab"}}
+        client = MagicMock()
+        client.request = AsyncMock(return_value={"runner": row})
+        client.open_events = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        mock_persist = MagicMock()
+
+        with patch.object(web_c_mod, "_resolve_identity", return_value=identity), \
+             patch.object(web_c_mod, "_runner_client", return_value=client), \
+             patch.object(web_c_mod, "_persist_runner_result", new=mock_persist):
+            observer = await web_c_mod.runner_events(
+                "t1", "cfg1", "run_f", SimpleNamespace(headers={}),
+                after_seq=None)
+            # 路由返回 WebCEventResponse，finalize 挂在其 _finalize 上
+            await observer._finalize()
+
+        mock_persist.assert_called_once_with("t1", "t1_web_c_uid_0011_x_sab", row)
+
+    @pytest.mark.asyncio
+    async def test_persist_runner_result_is_sync(self):
+        """persist_runner_result 必须保持同步签名——finalize 依赖 to_thread 包装。"""
+        import inspect
+
+        from src.saas.services.web_c_runner_persist import persist_runner_result
+
+        assert not inspect.iscoroutinefunction(persist_runner_result)

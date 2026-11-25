@@ -327,7 +327,8 @@ def _waiting_text(row: dict) -> str:
     return _clarification_question(row)[0]
 
 
-# ============== SSE 透传（事件流在 terminal+settled 时由上游关闭） ==============
+# ============== SSE 透传（事件流在 terminal+settled 或观察寿命上限 120s 时由上游关闭，
+# 非终态断流依赖前端凭 cursor 重连续传） ==============
 
 
 class WebCEventResponse(ObserverResponse):
@@ -524,6 +525,8 @@ async def bootstrap(tenant_id: str, config_id: str, request: Request):
         # 历史会话入口开关（渠道 config，默认 False：不显示右上角「历史会话」按钮；
         # 仅 ext 模式生效，uid/anon 服务端强制 False，见 §3.5）
         "show_history": show_history,
+        # 页面标题（渠道 config，缺省空串：C 端保持系统默认标题不覆盖）
+        "title": str(conf.get("title") or "").strip(),
         "identity": {
             "mode": identity.mode,
             "channel_user_id": identity.channel_user_id,
@@ -693,7 +696,11 @@ async def runner_events(tenant_id: str, config_id: str, runner_id: str, request:
         async def finalize():
             try:
                 row = await _get_owned_runner(identity, runner_id, client)
-                await _persist_runner_result(
+                # persist_runner_result 是同步 DB 函数，必须 to_thread 包裹；
+                # 直接 await 其返回值 None 会抛 TypeError（agent2 2026-11-25
+                # tr_runner_bc18 事故：SSE 收尾落库 100% 失败，全靠扫描器兜底）
+                await asyncio.to_thread(
+                    _persist_runner_result,
                     identity.tenant_id, row["session"]["session_id"], row)
             except HTTPException:
                 pass

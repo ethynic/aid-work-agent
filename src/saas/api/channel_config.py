@@ -181,9 +181,13 @@ def _normalize_web_c_config(config: dict, existing: Optional[dict] = None) -> No
       identity_mode：缺省 anon（2026-11-19 起下线「签名 + 匿名」组合模式，
       仅保留匿名 / 签名 / userid 三种单一模式），
       非法值 400（表单单选来源，出现非法值即为异常调用，不静默纠正）。
+    - title：聊天页 document.title（嵌入小程序 web-view 等容器时导航栏标题）；
+      缺省空串 = 未配置，C 端保持系统默认标题（index.html 的「AID Work Agent」）。
     """
     config["enabled"] = bool(config.get("enabled", True))
     config["greeting"] = str(config.get("greeting") or "").strip() or _WEB_C_DEFAULT_GREETING
+    # 页面标题（2026-11-25）：空串 = 未配置，C 端不覆盖默认标题
+    config["title"] = str(config.get("title") or "").strip()
     # 附件上传开关：默认关闭（纯文字聊天）；开启后 C 端显示附件按钮并放行上传
     config["allow_attachment"] = bool(config.get("allow_attachment", False))
     # 历史会话入口开关：默认关闭（聊天页右上角不显示「历史会话」按钮）

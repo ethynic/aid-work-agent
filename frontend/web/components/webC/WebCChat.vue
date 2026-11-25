@@ -347,6 +347,8 @@ onMounted(async () => {
     allowAttachment.value = data.allow_attachment === true
     showHistoryEnabled.value = data.show_history === true
     headerTitle.value = subagentName.value ? `${subagentName.value}` : '官网客服'
+    // 渠道配置的页面标题：覆盖 document.title（小程序 web-view 等容器导航栏读取它）
+    if (data.title) document.title = data.title
     sessions.value = data.sessions || []
     if (isUidMode.value) {
       await restoreStoredSession()
@@ -724,8 +726,16 @@ async function consumeEvents(runnerId: string, signal: AbortSignal, cursorRef: {
       void reader.cancel().catch(() => {})
     }
     if (terminalHit || signal.aborted) return
-    // 流正常结束（上游在终态结算后关闭）
-    return
+    // 流干净关闭但未见终态：上游观察连接有 120s 硬寿命上限（event_stream
+    // LIFETIME_SECONDS），长任务会在非终态时被服务端断流，必须凭 cursor 续传
+    // 重连；把干净关闭一律当已结算会让观察在 120s 处被静默截断，终态无人接收
+    // （agent2 2026-11-25 tr_runner_bc18 事故：回复落库后页面不显示）。
+    let state: 'running' | 'terminal' = 'running'
+    try {
+      if (await refreshOnce(runnerId) === 'terminal') state = 'terminal'
+    } catch { /* 刷新失败按 running 继续重连 */ }
+    if (state === 'terminal' || signal.aborted) return
+    await new Promise(resolve => setTimeout(resolve, 1000))
   }
 }
 
@@ -750,7 +760,7 @@ async function observeRunner(runnerId: string) {
     while (!signal.aborted) {
       try {
         await consumeEvents(runnerId, signal, cursorRef)
-        break // 流结束 = 已结算
+        break // consumeEvents 仅在终态结算或中止后返回（非终态断流已内部续传）
       } catch {
         if (signal.aborted) return
         failures++

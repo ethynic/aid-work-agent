@@ -1348,6 +1348,7 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
   // 集成代码在下方 web_c 专属面板维护（channel_secret 由服务端自动生成）
   web_c: [
     { key: 'greeting', label: '开场白', placeholder: '您好，我是本公司的智能助手，有什么可以帮您？', hint: '访客打开聊天页时展示的开场欢迎语', location: '' },
+    { key: 'title', label: '页面标题', placeholder: 'AID Work Agent（系统默认）', hint: '嵌入微信小程序 web-view 等容器时顶部导航栏显示的标题；留空使用系统默认', location: '' },
   ],
 }
 
@@ -1389,6 +1390,10 @@ function applyMediaSwitchDefaults() {
   // web_c 留资归属员工（2026-11-20）：存量配置不含键时补空串初值（空串=未配置）
   if (form.value.channel_type === 'web_c' && form.value.config.lead_assignee_user_id === undefined) {
     form.value.config.lead_assignee_user_id = ''
+  }
+  // web_c 页面标题（2026-11-25）：存量配置不含键时补空串初值（空串=系统默认标题）
+  if (form.value.channel_type === 'web_c' && form.value.config.title === undefined) {
+    form.value.config.title = ''
   }
 }
 
@@ -1432,6 +1437,8 @@ function selectChannelType(type: string) {
     if (form.value.config.allow_attachment === undefined) form.value.config.allow_attachment = false
     // 历史会话入口开关：checkbox 绑定需显式初值（默认关）
     if (form.value.config.show_history === undefined) form.value.config.show_history = false
+    // 页面标题：缺省空串（空串=系统默认标题）
+    if (form.value.config.title === undefined) form.value.config.title = ''
   }
   // WP13：切到公众号类型时加载清单源绑定状态（v1 每租户仅一个扫码绑定，
   // 新建弹窗同样展示既有绑定）

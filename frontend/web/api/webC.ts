@@ -149,6 +149,8 @@ export interface BootstrapResponse {
   allow_attachment?: boolean
   /** 历史会话入口开关（渠道 config，默认 false：不显示右上角「历史会话」按钮） */
   show_history?: boolean
+  /** 页面标题（渠道 config，缺省空串：保持系统默认标题不覆盖） */
+  title?: string
   identity: { mode: string; channel_user_id: string; display_name?: string | null }
   subagent: { agent_id: string; name: string } | null
   sessions: { session_id: string; subagent_id: string; updated_at: string; last_message_at: string }[]
