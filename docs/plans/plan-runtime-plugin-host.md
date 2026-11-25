@@ -132,6 +132,7 @@ B2 保留设备私有契约视图、调用版本固定、资源/取消/unknown/�
 | H3公共壳/实例监管 | Desktop：main/preload、选择/监管、package/lock、Node/产品构建和全局入口 | 首期隔离Runtime产品已交付，人工项待验收 |
 | H4插件描述/结果/资源 | Runtime主导，与Device/Runner/Desktop共同验证 | 描述/输出格式已交付；新登记、资源及产物链未完成 |
 | Runtime实现 | core、Host/CLI/bootstrap、三包构建与必要CLI路径、runtime feature | 本批已提交；不由Desktop重建第二套core |
+| [契约 2.25](../system/runner-desktop-runtime-integration-contract.md) Runtime 桌面实时画面 | Runtime开发角色：contracts/runtime-host/v1（升wire候选版本）、core、agent-tool-runtime、agent-desktop/electron的采集窗口与私有IPC、runtime feature；服务端与网页由同一计划的对应开发角色写入 | 编码前约定，未实施；唯一进度见[实时画面计划](plan-runtime-screen-stream.md) |
 
 ## 7. 当前接口与依赖
 

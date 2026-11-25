@@ -370,14 +370,15 @@ Host 状态增加可选字段 `screen`（会话编号、connecting / verifying /
 | 只升级插件、Runtime 不升级 | 与第一行相同 |
 | 未部署 STUN | 只有局域网直连可用；跨网络时提示「当前网络无法直连」 |
 
-## 9. 共同契约检查点草案
+## 9. 共同契约检查点
 
-实施前登记到[共同契约](runner-desktop-runtime-integration-contract.md)，拟为 2.23，全部为加性：
+2026-11-25 已登记到[共同契约](runner-desktop-runtime-integration-contract.md)，编号 2.25，全部为加性，编码前约定、未实施。初稿拟的 2.23 在登记时已被 master 上的其他检查点占用。要点如下，以契约文档为准：
 
 - **能力**：设备心跳 `capabilities` 新增 `screen_stream_v1`，能力体新增可选 `screen_stream: {version: 1}`。生产端为带采集窗口的 Runtime Host，消费端为服务端设备列表与建会话接口。旧 Runtime 不上报，功能对其不可用。
 - **心跳响应**：新增可选 `screen_stream: {version: 1}` 与 `screen_session: {id, state}`；传画面期间每次心跳都带有当前会话，作为 Runtime 画面租约的续期。生产端为服务端，消费端为新版 Runtime；旧 Runtime 忽略。该字段可能缺失（服务端查询画面会话失败时心跳仍然成功），消费端按缺失处理，不影响心跳成败。
 - **Device API**：新增 5.3 的两个设备接口与 5.2 的四个用户接口。不改 claim、permit、result、write-authorize 的任何字段。
-- **Host 管理接口**：`host-state` 新增可选 `screen`（含可选的「是否已降低画质」）；管理方法新增 `screen.stop`。信令 `status` 的 `state` 按设计 5.4 增加取值，同属加性。同步更新 `contracts/runtime-host/v1` 的 schema、fixture 和消费测试。
+- **Host 管理接口**：`host-state` 新增可选 `screen`（含可选的「是否已降低画质」），只在有画面会话时出现；管理方法新增 `screen.stop`。现有 `contracts/runtime-host/v1` 的 schema 顶层不允许未知字段、管理方法是固定枚举，所以必须升 wire 候选版本，同批更新 schema、样例、消费 fake 和消费测试。旧界面连接新 Host 且恰逢画面会话时的表现，Phase 2 验证后登记。信令 `status` 的 `state` 按设计 5.4 增加取值，同属加性。
+- **共享入口的写入者**：本批要改公共壳和服务端公共模型，文件范围与唯一写入者登记在契约 2.25 和开发计划的「进入开发前的条件」里，同一批里其他会话不并行写这些文件。
 - **唯一写入者**：服务端接口与表由服务端开发角色维护；Host、壳、采集页由 Runtime 开发角色维护；网页由 Web 开发角色维护；契约与 schema 由主控维护。独立测试与代码审查只读。
 
 ## 10. 界面交互

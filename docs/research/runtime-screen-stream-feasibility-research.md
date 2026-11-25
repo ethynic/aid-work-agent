@@ -156,7 +156,7 @@ Chrome 142 起（本机当前为 Chrome 158、Edge 156）对「公网页面访�
 
 ## 5. 与现有契约的关系
 
-本功能新增以下共同接口，按[共同契约](../system/runner-desktop-runtime-integration-contract.md)第 8 节需在实施前登记检查点（草案见设计文档第 9 节）：
+本功能新增以下共同接口，已于 2026-11-25 按[共同契约](../system/runner-desktop-runtime-integration-contract.md)第 8 节登记为检查点 2.25（要点见设计文档第 9 节）：
 
 | 接口 | 性质 | 旧端行为 |
 | --- | --- | --- |

@@ -198,6 +198,8 @@
 
 2026-10-09用户逐条复核后修订：Runtime为本批共同契约/schema/fixture唯一写入者，文件范围与进度见[Runtime计划第6节](plan-runtime-plugin-host.md#6-desktop--runtime-共同边界登记)。Desktop暂停对这些共同文件的并行写入；公共入口/H2/H3仍归Desktop。v2.0/候选0.2按用户决定取消插件额外审批并统一code/error；此处仅登记交接，不代表Desktop已经重新消费验证。
 
+2026-11-25：[共同契约 2.25](../system/runner-desktop-runtime-integration-contract.md)登记Runtime桌面实时画面。本批要改公共壳`clients/agent-desktop/electron`（新增隐藏采集窗口、专用preload和私有IPC消息类型，主窗口权限处理器不变）与`contracts/runtime-host/v1`（`screen`状态与`screen.stop`，升wire候选版本）。这些共享文件的唯一写入者是实时画面任务的Runtime开发角色，Desktop工作流本批不并行写；旧界面连接新Host且恰逢画面会话时的表现由该任务在Phase 2验证并登记回契约。进度与验证只见[实时画面计划](plan-runtime-screen-stream.md)，此处只登记写入者，不代表Desktop已经重新消费验证。
+
 Runtime接口产出通知（2026-10-08）：Runtime工作流在共享目录`contracts/runtime-host/v1/`编写首批schema与fixture，入口为该目录README。本批Runtime唯一写入共同产出及本节提示；Desktop可直接读取、消费fixture并提供adapter验证结果。H2/H3及公共壳不在本批改动范围；初版待验证，不将文件落盘视为共同wire已冻结。
 
 **候选0.1已交付**：[共享README与运行命令](../../contracts/runtime-host/v1/README.md)、[管理fixture](../../contracts/runtime-host/v1/fixtures/management.json)、[输出fixture](../../contracts/runtime-host/v1/fixtures/outputs.json)、[测试专用消费fake](../../contracts/runtime-host/v1/fixtures/consumer-fake.mjs)。首批7份schema保持简约，Desktop可直接接管理请求/响应、状态刷新及设备产物展示；不要复制一套不同DTO。请在本计划H1/H4登记真实adapter兼容结果或缺少的具体场景；Runtime将据结果登记共同冻结。H2 binding/grant和H3公共壳仍由本工作流主导，不因该候选自动完成。
