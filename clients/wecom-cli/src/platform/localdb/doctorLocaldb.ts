@@ -39,6 +39,7 @@ import { detectRunning, type RunningInfo } from './running.js'
 import { locateDataDir, type DataDirInfo, type LocateDataDirDeps } from './datadir.js'
 import {
   loadMatrix,
+  lookupCachedVersionBaseline,
   lookupVersion,
   writeLocalState,
   type LocalDbState,
@@ -96,7 +97,7 @@ export interface LocaldbDoctorReport {
   mode_decision: LocaldbModeDecision
   /**
    * localdb-state.json 本次结论是否写入成功（评审 v6）：引导阶段未写状态 → false；
-   * 深检结论写入失败 → false 且 guidance 必须写明「启用未完成」。
+   * 深检结论写入失败 → false 且 guidance 必须写明「启用未完成」；缓存兼容分支不写状态。
    */
   state_saved: boolean
   guidance?: string[]
@@ -206,6 +207,7 @@ export async function runLocaldbDoctor(
   let installVersion: string | null = null
   let install: InstallInfo | null = null
   let login: LoginProbeResult | null = null
+  let cacheOnly = false
 
   // ---- UI 就绪块（独立于本地库门禁；probeEnvironment best-effort，失败全 false 不阻断深检） ----
   let env: EnvironmentProbe = {
@@ -281,13 +283,13 @@ export async function runLocaldbDoctor(
       version: installVersion,
       checked_at: now().toISOString(),
     }
-    const stateWritten = writeState(decision as LocalDbState)
+    const stateWritten = !cacheOnly && writeState(decision as LocalDbState)
     log({
       type: 'mode_decided',
       reason,
-      detail: `mode=${mode}${kind !== undefined ? ` kind=${kind}` : ''} version=${installVersion ?? 'unknown'} state_write=${stateWritten ? 'ok' : 'failed'}`,
+      detail: `mode=${mode}${kind !== undefined ? ` kind=${kind}` : ''} version=${installVersion ?? 'unknown'} state_write=${cacheOnly ? 'skipped' : stateWritten ? 'ok' : 'failed'}`,
     })
-    if (!stateWritten) {
+    if (!cacheOnly && !stateWritten) {
       // 评审 v6：状态保存失败必须用户可见——不得让调用方误以为「已启用」已持久化
       //（后续运行读不到 state 会按 unset 处理，实际行为回退 UI）。
       guidance.push(
@@ -295,7 +297,11 @@ export async function runLocaldbDoctor(
       )
     }
     guidance.push(
-      allOk
+      cacheOnly
+        ? allOk
+          ? '同系列兼容检查通过，当前账号可使用已有本地库缓存'
+          : '同系列兼容检查未通过，请查看失败步骤；此检查保留原有缓存和状态'
+        : allOk
         ? stateWritten
           ? '本地库通道已启用（mode=db）：业务读取优先走本地库，运行时失败自动回退 UI'
           : // 评审 v7：保存失败时不得再输出「已启用」——能力检测通过 ≠ 启用完成，
@@ -442,6 +448,14 @@ export async function runLocaldbDoctor(
         const staleNote = lookup.status === 'stale' ? '（stale，待复核）' : ''
         return { ok: true, detail: `版本 ${assertedInstall.version} 在矩阵${staleNote}` }
       }
+      const baseline = lookup.status === 'unknown' && lookup.entry === null
+        ? lookupCachedVersionBaseline(matrix, assertedInstall.version)
+        : null
+      if (baseline) {
+        matrixEntry = baseline
+        cacheOnly = true
+        return { ok: true, detail: `版本 ${assertedInstall.version} 使用同系列已验证基线，仅复用已有缓存` }
+      }
       return lookup.status === 'broken'
         ? { ok: false, kind: 'compat' as const, detail: `版本 ${assertedInstall.version ?? '未知'} 在矩阵但 status=broken：确认不可用` }
         : { ok: false, kind: 'compat' as const, detail: `版本 ${assertedInstall.version ?? '未知'} 不在版本矩阵（unknown）：未知版本禁止硬扫，需维护者扩展矩阵` }
@@ -534,12 +548,13 @@ export async function runLocaldbDoctor(
   // 密钥材料（keystore 命中或 keyscan 产出的密钥都可能解出历史账号数据）。
   {
     const outcome = await runStep(6, '密钥获取（keystore 复用 / 内存扫描）', async () => {
-      const stored = await (deps.loadKeyFn ?? ((b: KeyBinding) => loadKey({ binding: b })))(binding)
+      const stored = await (deps.loadKeyFn ?? ((b: KeyBinding) => loadKey({ binding: b, preserveOnMismatch: cacheOnly })))(binding)
       if (stored !== null) {
         keyHex = stored.keyHex
         keySource = 'keystore'
         return { ok: true, detail: 'keystore 缓存密钥命中（绑定账号/目录/算法一致；页 1 核验在解密步骤进行）' }
       }
+      if (cacheOnly) return { ok: false, kind: 'compat', detail: '当前账号没有可供同系列兼容使用的本地库缓存' }
       return await attemptKeyScan()
     })
     step6Index = steps.length - 1
@@ -584,6 +599,7 @@ export async function runLocaldbDoctor(
       // 缓存密钥页 1 先知核验明确失败 → 密钥失效：clearKey → keyscan → saveKey → 重试一次
       //（§3.4：仅页 1 核验明确失败才删密钥；快照失败不删、不归因密钥）
       if (isDecryptError(dec, 'KEY_VERIFY_FAILED') && keySource === 'keystore') {
+        if (cacheOnly) return { ok: false, kind: 'compat', detail: '当前账号的本地库缓存校验未通过' }
         ;(deps.clearKeyFn ?? (() => clearKey(deps.stateDir)))()
         const rescan = await attemptKeyScan()
         if (!rescan.ok) {

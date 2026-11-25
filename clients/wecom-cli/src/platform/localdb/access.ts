@@ -1,7 +1,6 @@
 /**
  * 本地库共享访问段（P2 任务 3.1；read-session 与 unread 两执行器共用）：
- *   1. 版本准入（矩阵 validated/stale + algorithm/db_magic/page_size 严格度，forced 只覆盖
- *      落盘状态选择、不绕过实际矩阵）；
+ *   1. 版本准入（精确条目沿用原规则；同系列未登记构建可使用已绑定缓存）；
  *   2. 密钥获取（keystore 命中优先 + keyscan 负缓存，绑定账号/目录/版本/PID 集/doctor epoch）
  *      与可信快照解密段（sweep → workdir 两段发布 → 逐逻辑库指纹/快照/解密，message/user
  *      必需、session 可选容忍；KEY_VERIFY_FAILED 重扫一次）。
@@ -16,7 +15,7 @@ import { basename, join } from 'node:path'
 import { CodedOperationError, CancelledError, type ErrorCode, type OpContext } from '../../operations/types.js'
 import { detectInstall, type DetectInstallDeps, type InstallInfo } from './version.js'
 import { detectRunning, type RunningInfo } from './running.js'
-import { loadMatrix, lookupVersion, type LocalDbState, type VersionMatrix } from './matrix.js'
+import { loadMatrix, lookupCachedVersionBaseline, lookupVersion, type LocalDbState, type VersionMatrix } from './matrix.js'
 import { checkDbFingerprint, type DbFingerprintExpected, type DbFingerprintResult } from './fingerprint.js'
 import { loadKey, saveKey, clearKey, type KeyBinding, type StoredKey } from './keystore.js'
 import { captureSnapshot, type CaptureSnapshotResult } from './snapshot.js'
@@ -81,6 +80,8 @@ export interface VersionAdmission {
   expected: { db_magic: string; page_size: number }
   /** 算法标识（准入已保证 'wxaes128cbc-nonlegacy'；密钥绑定按原值透传） */
   algorithm: string
+  /** 未登记构建仅能使用当前账号已有的缓存。 */
+  cacheOnly: boolean
 }
 
 export async function admitLocaldbVersion(
@@ -93,18 +94,23 @@ export async function admitLocaldbVersion(
   const install = await (deps.detectInstallFn ?? detectInstall)({ processPid: current.windowPid })
   checkCancelled(ctx.signal)
   const version = install.version
-  const entry = lookupVersion((deps.loadMatrixFn ?? loadMatrix)(), version)
-  if (install.pid !== current.windowPid || install.version_source !== 'process' || !version ||
-      (entry.status !== 'validated' && entry.status !== 'stale') ||
-      entry.entry?.algorithm !== 'wxaes128cbc-nonlegacy' ||
-      typeof entry.entry.db_magic !== 'string' || typeof entry.entry.page_size !== 'number' ||
-      (!opts.forced && state?.version && state.version !== version)) {
+  if (install.pid !== current.windowPid || install.version_source !== 'process' || !version) {
+    throw new CodedOperationError('VERSION_UNSUPPORTED', '当前操作主窗口版本不满足本地库准入，请运行 doctor --localdb 核对')
+  }
+  const matrix = (deps.loadMatrixFn ?? loadMatrix)()
+  const exact = lookupVersion(matrix, version)
+  const baseline = lookupCachedVersionBaseline(matrix, version)
+  const entry = baseline ?? (exact.status === 'validated' || exact.status === 'stale' ? exact.entry : null)
+  const cacheOnly = baseline !== null
+  if (entry?.algorithm !== 'wxaes128cbc-nonlegacy' ||
+      typeof entry.db_magic !== 'string' || typeof entry.page_size !== 'number' ||
+      (!cacheOnly && !opts.forced && state?.version && state.version !== version)) {
     throw new CodedOperationError('VERSION_UNSUPPORTED', '当前操作主窗口版本不满足本地库准入，请运行 doctor --localdb 核对')
   }
   return {
-    version,
-    expected: { db_magic: entry.entry.db_magic, page_size: entry.entry.page_size },
-    algorithm: entry.entry.algorithm,
+    version, cacheOnly,
+    expected: { db_magic: entry.db_magic, page_size: entry.page_size },
+    algorithm: entry.algorithm,
   }
 }
 
@@ -116,13 +122,9 @@ export interface PreparedDecryptedDbs {
   sourceId: string
 }
 
-export interface PrepareDecryptedParams {
+export interface PrepareDecryptedParams extends VersionAdmission {
   ctx: OpContext
   current: CurrentAccount
-  version: string
-  expected: { db_magic: string; page_size: number }
-  /** 矩阵条目 algorithm（准入已保证 'wxaes128cbc-nonlegacy'；密钥绑定按原值透传） */
-  algorithm: string
   /** 落盘状态（keyscan 负缓存 context 绑定 checked_at；缺省视为 unset） */
   state: LocalDbState | null
   getState: () => LocalDbState | null
@@ -146,7 +148,7 @@ export async function prepareDecryptedDbs(
   paths: { message: string | null; user: string | null; session: string | null },
   params: PrepareDecryptedParams,
 ): Promise<PreparedDecryptedDbs> {
-  const { ctx, current, version, expected, state, getState, putState, workPrefix, deps } = params
+  const { ctx, current, version, expected, cacheOnly, state, getState, putState, workPrefix, deps } = params
   const log = deps.logFn ?? logLocaldbEvent
   const now = deps.now ?? Date.now
   const getFileId = deps.fileIdentityFn ?? fileIdentity
@@ -157,13 +159,16 @@ export async function prepareDecryptedDbs(
   let existing: StoredKey | null
   try {
     sourceId = getFileId(sourceDb)
-    existing = await (deps.loadKeyFn ?? (b => loadKey({ binding: b, dir: deps.keyDir })))(binding)
+    existing = await (deps.loadKeyFn ?? (b => loadKey({ binding: b, dir: deps.keyDir, preserveOnMismatch: cacheOnly })))(binding)
   } catch {
     checkCancelled(ctx.signal)
     throw unavailable('源库或密钥存储暂时不可用')
   }
   checkCancelled(ctx.signal)
   let key = existing?.keyHex ?? null
+  if (cacheOnly && key === null) {
+    throw new CodedOperationError('VERSION_UNSUPPORTED', '当前构建仅支持复用已有本地库缓存，当前账号没有可用缓存')
+  }
   let work: LocaldbWorkDir | null = null
 
   const call = async (params: string[], input?: string): Promise<Record<string, unknown>> => {
@@ -236,6 +241,9 @@ export async function prepareDecryptedDbs(
         if (key === null) key = await scan()
         const decryptParams = ['decrypt', snapshot.dbSnapshot, snapshot.walSnapshot ?? '-', work.dir]
         let decrypted = await call(decryptParams, key)
+        if (cacheOnly && decrypted.error === 'KEY_VERIFY_FAILED') {
+          throw new CodedOperationError('VERSION_UNSUPPORTED', '当前构建仅支持复用已有本地库缓存，当前账号的缓存校验未通过')
+        }
         if (logical === 'message' && decrypted.error === 'KEY_VERIFY_FAILED' && existing !== null) {
           (deps.clearKeyFn ?? (() => clearKey(deps.keyDir)))()
           key = await scan()
@@ -247,7 +255,7 @@ export async function prepareDecryptedDbs(
         }
       } catch (err) {
         checkCancelled(ctx.signal)
-        if (logical !== 'session' || !params.tolerateSessionFailure ||
+        if (cacheOnly || logical !== 'session' || !params.tolerateSessionFailure ||
             !(err instanceof CodedOperationError) || !LOCALDB_FALLBACK_CODES.has(err.code)) throw err
         // contact已有message中的S会话时不依赖session；空S仍由resolve报告来源不足。
         // 失败解密可能已创建文件，不能把半结果留给后续query。

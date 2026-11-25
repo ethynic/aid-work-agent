@@ -88,6 +88,10 @@ test('binding 三元组任一变化 → null 且文件被清（旧账号残留�
     const file = join(dir, KEY_FILE_NAME)
     assert.ok(existsSync(file))
 
+    assert.equal(await loadKey({ binding: OTHER_BINDING, dir, preserveOnMismatch: true }, { runFn: makeMockRunner(calls) }), null)
+    assert.ok(existsSync(file), '兼容核对不能清除其它账号的缓存')
+    assert.equal(calls.length, 1, '不匹配的绑定不能进入解密')
+
     assert.equal(await loadKey({ binding: OTHER_BINDING, dir }, { runFn: makeMockRunner(calls) }), null)
     assert.ok(!existsSync(file), 'binding 不匹配时顺带 clearKey')
 

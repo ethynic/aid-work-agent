@@ -10,6 +10,8 @@ import { createWecomSessionDirectoryOperation } from '../src/operations/sessionD
 import { createWecomMessageSendOperation } from '../src/operations/messageSend.js'
 import { createWecomSendStatusOperation } from '../src/operations/sendStatus.js'
 import { CodedOperationError } from '../src/operations/types.js'
+import { readLocaldbSession } from '../src/platform/localdb/readSession.js'
+import { loadMatrix } from '../src/platform/localdb/matrix.js'
 import { groupMonitorFixture, changeGroupFixture } from './helpers/groupMonitorFixture.js'
 import type { OpContext } from '../src/operations/types.js'
 
@@ -35,6 +37,46 @@ test('picker directory lists empty targets without monitor cursor and validates 
     const resolved = await op.execute({ mode: 'resolve', sessions: rows.map(row => row.session) }, ctx())
     assert.deepEqual((resolved.data.resolved_targets as { session: string }[]).map(row => row.session), rows.map(row => row.session))
     assert.deepEqual(f.calls, [], 'picker cannot navigate or send')
+  } finally { rmSync(base, { recursive: true, force: true }) }
+})
+
+test('same-series builds use only verified existing cache for directory, reading and send verification', windows, async () => {
+  const base = mkdtempSync(join(tmpdir(), 'wecom-business-compat-'))
+  try {
+    const f = await groupMonitorFixture(base)
+    const install = await f.deps.detectInstallFn!()
+    const priorState = { mode: 'ui', kind: 'transient', version: '5.0.13.6005', scan_failure: { context: 'old' } } as const
+    const mutations: string[] = []
+    f.deps.detectInstallFn = async () => ({ ...install, version: '5.0.13.8035' })
+    f.deps.loadMatrixFn = loadMatrix
+    f.deps.readStateFn = () => priorState
+    f.deps.writeStateFn = () => { mutations.push('state'); return true }
+    f.deps.clearKeyFn = () => { mutations.push('clear'); return true }
+    f.deps.saveKeyFn = async () => { mutations.push('save'); return true }
+    f.deps.detectRunningFn = async () => { throw new Error('compatibility must never attempt to acquire a new key') }
+
+    const directory = createWecomSessionDirectoryOperation(f.deps)
+    const listed = await directory.execute({ mode: 'list' }, ctx())
+    assert.equal(listed.success, true, listed.message)
+    const listedRows = listed.data.conversations as { session: string; name: string }[]
+    const group = listedRows.find(row => row.name === '合成群甲')
+    assert.ok(group)
+    const read = await readLocaldbSession({ name: group.name }, ctx(), f.current, f.deps)
+    assert.equal(read.data?.channel, 'local-db')
+    const sent = await f.send.execute({ session: group.session, text: 'synthetic compatibility check' }, ctx())
+    assert.equal(sent.success, true, sent.message)
+    assert.equal(sent.data.verification, 'local-record')
+
+    f.deps.loadKeyFn = async () => null
+    const missing = await f.send.execute({ session: group.session, text: 'must stop without a cache' }, ctx())
+    assert.equal(missing.code, 'VERSION_UNSUPPORTED', missing.message)
+    assert.match(missing.message, /没有可用缓存/)
+    f.deps.loadKeyFn = async () => ({ keyHex: 'ffffffffffffffffffffffffffffffff', savedAt: 'fixture' })
+    const invalid = await directory.execute({ mode: 'list' }, ctx())
+    assert.equal(invalid.code, 'VERSION_UNSUPPORTED', invalid.message)
+    assert.match(invalid.message, /缓存校验未通过/)
+    assert.deepEqual(f.calls, ['message-send.ps1'], 'only the validated fixture may reach the synthetic send driver')
+    assert.deepEqual(mutations, [])
   } finally { rmSync(base, { recursive: true, force: true }) }
 })
 

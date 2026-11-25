@@ -1,8 +1,8 @@
 /**
  * C4 版本有效性矩阵加载/比对 + 本地动态状态读写（设计 §3.1、§3.2 C4；状态 shape 见 §2）。
  *
- * - version-matrix.json 是随代码发布的只读权威文件（exact-version 精确匹配，无前缀/通配；
- *   未命中一律 unknown——未知版本禁止硬扫，§3.1）；
+ * - version-matrix.json 是随代码发布的只读权威文件；精确命中决定原有准入。
+ *   未登记构建只可尝试同系列的已验证基线与已有缓存，精确查找仍返回 unknown；
  * - localdb-state.json 是本机动态状态（{mode, kind, reason, version, checked_at} + 附加字段，
  *   §2 通道模式），写入走「同目录临时文件 + rename 覆盖」原子路径；读取失败/JSON 损坏/
  *   缺 mode 一律返回 null（视为 unset，不抛出）；
@@ -103,9 +103,10 @@ function normalizeMatrix(raw: unknown): VersionMatrix | null {
   if (entriesRaw !== null && typeof entriesRaw === 'object' && !Array.isArray(entriesRaw)) {
     for (const [key, value] of Object.entries(entriesRaw)) {
       if (key === '__proto__') continue // JSON 的 __proto__ 自有键经赋值会改写对象原型而非存储条目，跳过
-      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-        entries[key] = downgradeIncompleteValidated(value as MatrixEntry)
-      }
+      // 损坏的精确条目也属于已登记构建，保留拒绝状态以免落入同系列兼容。
+      entries[key] = value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? downgradeIncompleteValidated(value as MatrixEntry)
+        : { status: 'unknown' }
     }
   }
   return {
@@ -186,6 +187,24 @@ export function lookupVersion(matrix: VersionMatrix | null, version: string | nu
     return { entry, status }
   }
   return { entry, status: 'unknown' }
+}
+
+/** 只寻找既有缓存的兼容基线；结果不代表当前构建通过精确准入。 */
+export function lookupCachedVersionBaseline(matrix: VersionMatrix | null, version: string): MatrixEntry | null {
+  const buildPattern = /^(5\.0\.(?:0|[1-9]\d*))\.(?:0|[1-9]\d*)$/
+  const series = buildPattern.exec(version)?.[1]
+  if (!matrix || !series || Object.hasOwn(matrix.entries, version)) return null
+  const compatibilityFields = [...REQUIRED_VALIDATED_STRING_FIELDS, PAGE_SIZE_FIELD]
+  let baseline: MatrixEntry | null = null
+  for (const [build, entry] of Object.entries(matrix.entries)) {
+    if (buildPattern.exec(build)?.[1] !== series ||
+        entry.status !== 'validated' || downgradeIncompleteValidated(entry).status !== 'validated') continue
+    if (baseline && compatibilityFields.some(field => baseline?.[field] !== entry[field])) {
+      return null
+    }
+    baseline = entry
+  }
+  return baseline?.algorithm === 'wxaes128cbc-nonlegacy' ? baseline : null
 }
 
 /**
