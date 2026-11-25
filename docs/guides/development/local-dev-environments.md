@@ -105,6 +105,12 @@ docker compose -f docker-compose.test-db.yml run --rm sql tests/integration/agen
 
 首次自动启动专用 PG，之后复用同一个容器。每轮 pytest 连接自己的 `aid_test_*` 库并在结束时清理。测试入口直接使用当前工作区和已有的 `aid-agent-api:latest` 镜像，连接配置已在 Compose 中提供。纯 SQL 路径禁用 Redis，避免等待本地业务 Redis。可用 `docker compose -f docker-compose.test-db.yml ps` 查看状态，用 `docker compose -f docker-compose.test-db.yml up -d --wait postgres` 提前启动。手工验证 SQL 时可在专用 PG 内用 `docker compose -f docker-compose.test-db.yml exec postgres psql -U postgres -d postgres`，按需创建并清理本轮临时库。
 
+导入整个应用（`from src.main import app`）的集成测试需要两个环境变量，在 `run` 上用 `-e` 传入。工作区没有 `.env` 时加 `-e QWEN_API_KEYS=local-dev-placeholder`：应用导入时要求视频供应商配有密钥，占位值即可，否则用例在准备阶段就报错。镜像时区是 `Asia/Shanghai`，专用测试 PostgreSQL 默认是 `Etc/UTC`，用 Python 当前时间减数据库时间的既有用例要加 `-e TZ=UTC` 才能通过。非交互执行时再加 `-T`。
+
+```bash
+docker compose -f docker-compose.test-db.yml run --rm -T -e QWEN_API_KEYS=local-dev-placeholder -e TZ=UTC sql tests/integration/test_local_tools_api.py -p no:cacheprovider -q
+```
+
 已有自定义专用测试 PG 时，可通过环境变量 `DATABASE_URL` 显式提供管理连接，再运行 `bash scripts/dev_test.sh --isolated-db <相关测试>`。管理库名为 `postgres`，连接地址须在测试进程的网络命名空间内通过 loopback 访问。日常 SQL 验证直接使用上面的 Compose 入口。
 
 **Web 前端。** 使用应用镜像内的 Node.js 和 npm。首次命令按 lockfile 安装依赖并写入命名卷，此后测试、构建、Vite 复用该卷。`package.json`、lockfile 或工具链变更时自动刷新。更新同一工作区的依赖前先退出 Vite。并行验证依赖不同的分支时，用 `-p <项目名>` 为其中一个工作区指定自己的缓存卷。
@@ -128,7 +134,7 @@ docker compose -f docker-compose.dev-tools.yml run --rm web-dev
 
 ## 4. 指定工作区验证
 
-先定位目标工作区，核对 `git rev-parse HEAD` 和 `git status --short`。需要测试另一个分支的提交时，可以在当前仓库根用 `git worktree add --detach ../aid-work-review my-feature` 创建独立 checkout。需要验证未提交改动时，直接使用包含改动的那个工作区。
+先定位目标工作区，核对 `git rev-parse HEAD` 和 `git status --short`。在 Windows 侧创建的 worktree，其 `.git` 文件指向 Windows 路径，WSL 内的 git 无法识别（报 `not a git repository`）。这类工作区在 WSL 里只跑 Docker 和测试，git 操作回到 Windows 终端执行。需要测试另一个分支的提交时，可以在当前仓库根用 `git worktree add --detach ../aid-work-review my-feature` 创建独立 checkout。需要验证未提交改动时，直接使用包含改动的那个工作区。
 
 ### 只跑自测
 

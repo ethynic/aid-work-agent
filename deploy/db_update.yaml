@@ -4996,3 +4996,29 @@
         WHERE tool_name='weixin_group_range_summary'
           AND (state IN ('queued','claimed','running','cancel_requested')
                OR (state IN ('failed','unknown','expired','cancelled') AND arguments_json ? 'grant'));
+
+- datetime: "2026-11-25 11:45:00"
+  remark: "新增 Runtime 桌面实时画面会话表 local_tool_screen_sessions：记录发起人、设备、状态、同机判定结果、线路与结束原因，建连信令在会话结束时清空"
+  statements: |
+    CREATE TABLE IF NOT EXISTS local_tool_screen_sessions (
+        id UUID DEFAULT gen_random_uuid() NOT NULL,
+        tenant_id TEXT,
+        user_id TEXT,
+        device_id UUID,
+        state TEXT,
+        end_reason TEXT,
+        verdict TEXT,
+        path TEXT,
+        signals JSONB DEFAULT '[]'::jsonb,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        connected_at TIMESTAMP,
+        started_at TIMESTAMP,
+        ended_at TIMESTAMP,
+        viewer_seen_at TIMESTAMP,
+        runtime_seen_at TIMESTAMP,
+        PRIMARY KEY (id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_lt_screen_sessions_device_created
+        ON local_tool_screen_sessions (device_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_lt_screen_sessions_active
+        ON local_tool_screen_sessions (device_id) WHERE state <> 'ended';

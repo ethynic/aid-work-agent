@@ -750,6 +750,31 @@ run + pending items，worker 按租户串行领取（事务内 queued→running�
 - 新库及现有库增量定义分别维护于 `init-postgres.sql` 与 `db_update.yaml`；该段是待部署实现语义，不代表agent2已更新。
 - 旧设备撤销后不能通过在途HTTP鉴权继续领取/续租或新签写许可：local claim、progress续租、write-authorize以及session task claim/renew在事务中先取设备active行 `FOR SHARE`，再锁任务/subject。撤销只锁设备不取任务锁，提交后的等待调用会重验并拒绝；不改旧任务结果事实。
 
+### 11.11 Runtime 桌面实时画面会话表（2026-11-25，待部署）
+
+`local_tool_screen_sessions` 记录一次「网页查看某台 Runtime 电脑实时桌面画面」的会话，同时是审计记录：谁在何时查看了哪台电脑、同机判定结果、走了哪条线路、何时因何结束。画面走 WebRTC 点对点直连，不经过服务器；服务器只做鉴权、记录会话、在两端之间转交建连信令。设计见 [runtime-screen-stream-design.md](runtime-screen-stream-design.md) 第 3、5 节，契约登记在共同契约 2.25。
+
+- `id UUID`：会话编号，主键。
+- `tenant_id TEXT`、`user_id TEXT`：发起查看的租户和账号（登录态取自服务端，不接受请求自报）。
+- `device_id UUID`：被查看的 Runtime 设备，对应 `local_tool_devices.id`；不建外键。同一设备同一时间只允许一个未结束的会话，创建时在同一事务内锁设备行判断。
+- `state TEXT`：`pending`（等待 Runtime 应答）→ `prepared`（Runtime 已应答）→ `connecting`（建立不含画面的连接）→ `verifying`（Runtime 确认观看设备）→ `streaming`（画面传输中）→ `ended`。状态由信令触发、服务器判定。
+- `end_reason TEXT`：`viewer_closed`（网页关闭或点结束）、`runtime_stopped`（Runtime 端停止）、`runtime_rejected`（Runtime 端拒绝）、`same_machine`（确认是本机，未采集）、`machine_check_unknown`（无法确认，未采集）、`connect_failed`（当前网络无法直连，未采集）、`renewal_timeout`（Runtime 连续 30 秒没拿到续期）、`resource_busy`（这台电脑正在执行任务，降低画质后资源仍然不足）、`device_offline`（30 秒内未应答）、`runtime_offline`（传画面期间设备心跳超时）。中间七个由 Runtime 报告，服务器只接受这七个；`viewer_closed`、`device_offline`、`runtime_offline` 只由服务器判定，超时收敛时服务器也会写入 `viewer_closed`、`connect_failed`、`machine_check_unknown`。
+- `verdict TEXT`：同机判定结果，由服务器按 Runtime 的信令得出。报告 `streaming` 记 `other`（确认不是本机）；以 `same_machine` 结束记 `same`；以 `machine_check_unknown` 结束记 `unknown`；其余为空。
+- `path TEXT`：实际线路，`lan`（局域网直连）或 `p2p`（点对点直连），由 Runtime 报告，可以没有。
+- `signals JSONB`：建连期间转交的信令数组，每项 `{"seq": 序号, "dir": "web"|"rt", "type": 信令类型, "payload": 原样转交的内容}`。序号在会话内单调递增，两个方向共用一个计数；每个会话最多 128 条，单条序列化后不超过 16 KB。**会话结束时清空为 `[]`**，所以握手描述（含本次连接的密钥指纹、可能的内网地址候选）只在建连期间短暂存在。
+- `created_at TIMESTAMP`：网页创建会话的时间；`pending` 的 30 秒从这里起算。
+- `connected_at TIMESTAMP`：Runtime 报告连接已建立（仍无画面）的时间。
+- `started_at TIMESTAMP`：Runtime 报告开始出画面的时间。这之后结束的会话，在结束后 30 秒内每次心跳都继续通知 Runtime（让它收到结束）。
+- `ended_at TIMESTAMP`：会话结束的时间。
+- `viewer_seen_at TIMESTAMP`、`runtime_seen_at TIMESTAMP`：网页、Runtime 最后一次访问会话的时间，创建时 `viewer_seen_at` 为创建时刻、`runtime_seen_at` 为空。超时从被等待的一方最后一次访问起算：`prepared` 等网页发 `start`（60 秒）、`connecting` 和 `verifying` 等 Runtime 的结果（30 秒、15 秒）、`streaming` 等网页轮询（30 秒）和设备心跳（30 秒）。时间戳一律写数据库的 `NOW()`，比较也用数据库时钟。
+- 索引：`idx_lt_screen_sessions_device_created (device_id, created_at)`，心跳按设备取最新一条有关会话；`idx_lt_screen_sessions_active (device_id) WHERE state <> 'ended'`，创建会话时查该设备是否已有未结束会话。
+
+超时收敛不设后台任务：创建会话、读取会话（两端轮询、追加信令）和设备心跳时顺带判定，超时的会话改为 `ended` 并写结束原因。心跳只在三种情况下带会话通知：有待应答的 `pending` 会话；传画面期间每次心跳都带当前会话（作为续期）；开始传画面之后结束的 30 秒内带 `ended`。其余阶段 Runtime 自己在轮询信令，不经心跳通知；未出画面就超时的会话只在被心跳收敛的那一次带回 `ended`。
+
+**这张表不保留的信息**：不保存任何画面内容、截图；不保存两端的来源地址（内网地址候选、公网映射地址只在 `signals` 里随信令转交，会话结束即清空，不写入单独的列，也不写日志）；不保存设备令牌或任何凭据；不计费、不创建工具调用。`screen_stream.enabled` 设为 `false` 时六个接口返回 503，表保留，不影响其他功能。
+
+新部署在 `deploy/init-postgres.sql`，现有环境由 `deploy/db_update.yaml` 增量块幂等添加（除主键外无 `NOT NULL`，无外键）。
+
 ## 12. 核心表关系图
 
 ```

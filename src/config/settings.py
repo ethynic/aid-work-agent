@@ -783,6 +783,17 @@ class AgentRunnerConfig(BaseModel):
         return value
 
 
+class ScreenStreamConfig(BaseModel):
+    """Runtime 桌面实时画面（runtime-screen-stream-design.md 5.6）。
+
+    画面走 WebRTC 点对点直连，服务器只转交建连信令，所以这里只配 STUN、不配 TURN，
+    也不签发任何中转凭据。enabled=False 时六个接口返回 503，心跳不再带画面字段。
+    """
+    enabled: bool = True
+    # 为空时只有局域网直连可用，跨网络会以「当前网络无法直连」结束
+    stun_urls: List[str] = Field(default_factory=list)
+
+
 class NotificationPreviousKey(BaseModel):
     private_key: SecretStr = Field(default_factory=lambda: SecretStr(''))
     accept_until: datetime | None = None
@@ -867,6 +878,7 @@ class Settings(BaseModel):
     boss_visual: BossVisualConfig = Field(default_factory=BossVisualConfig)
     desktop_agent: DesktopAgentConfig = Field(default_factory=DesktopAgentConfig)
     agent_runner: AgentRunnerConfig = Field(default_factory=AgentRunnerConfig)
+    screen_stream: ScreenStreamConfig = Field(default_factory=ScreenStreamConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     anti_abuse: AntiAbuseConfig = Field(default_factory=AntiAbuseConfig)
     tencent_docs: TencentDocsConfig = Field(default_factory=TencentDocsConfig)

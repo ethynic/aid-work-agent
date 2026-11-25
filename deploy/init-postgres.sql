@@ -6124,3 +6124,29 @@ CREATE INDEX IF NOT EXISTS idx_lt_weixin_range_pending ON local_tool_invocations
     WHERE tool_name='weixin_group_range_summary'
       AND (state IN ('queued','claimed','running','cancel_requested')
            OR (state IN ('failed','unknown','expired','cancelled') AND arguments_json ? 'grant'));
+
+-- =================== Runtime 桌面实时画面会话（runtime-screen-stream-design.md 5.5）===================
+-- 只存发起人、设备、状态、同机判定结果、线路、起止时间和结束原因，以及建连期间转交的信令（会话结束时清空）；
+-- 不存画面内容、两端来源地址和任何凭据。超时在读取会话时顺带收敛，没有后台清扫任务。
+CREATE TABLE IF NOT EXISTS local_tool_screen_sessions (
+    id UUID DEFAULT gen_random_uuid() NOT NULL,
+    tenant_id TEXT,
+    user_id TEXT,
+    device_id UUID,
+    state TEXT,
+    end_reason TEXT,
+    verdict TEXT,
+    path TEXT,
+    signals JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    connected_at TIMESTAMP,
+    started_at TIMESTAMP,
+    ended_at TIMESTAMP,
+    viewer_seen_at TIMESTAMP,
+    runtime_seen_at TIMESTAMP,
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS idx_lt_screen_sessions_device_created
+    ON local_tool_screen_sessions (device_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_lt_screen_sessions_active
+    ON local_tool_screen_sessions (device_id) WHERE state <> 'ended';

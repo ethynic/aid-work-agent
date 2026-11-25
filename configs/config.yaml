@@ -622,3 +622,9 @@ tencent_docs:
   oauth_state_ttl_seconds: ${TDOC_OAUTH_STATE_TTL:-600}
   request_timeout: 30
   export_daily_limit: 9
+
+# Runtime 桌面实时画面：画面走 WebRTC 点对点直连，服务器只转交建连信令，这里只配 STUN、不配任何中转
+# stun_urls 留空时只有局域网直连可用；enabled 设为 false 时六个接口返回 503
+screen_stream:
+  enabled: true
+  stun_urls: []

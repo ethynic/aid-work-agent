@@ -26,7 +26,7 @@ from src.db.models import UserDB
 from src.desktop_automation import audit, payload_resolver
 from src.desktop_automation.adapters import AdapterNotFoundError
 from src.desktop_automation.constants import BUSINESS_KIND_DESKTOP_AUTOMATION, OPERATION_PROTOCOL_V2
-from src.local_tools import catalog, operation_result, pairing, permits, repository, weixin_summary, weixin_tracking, weixin_tracking_schedule
+from src.local_tools import catalog, operation_result, pairing, permits, repository, screen_stream, weixin_summary, weixin_tracking, weixin_tracking_schedule
 from src.local_tools.models import (
     ClaimRequest,
     HeartbeatRequest,
@@ -319,6 +319,7 @@ async def list_devices(request: Request):
     try:
         devices = await asyncio.to_thread(repository.list_devices, tenant_id, user["user_id"])
         now = datetime.now()
+        screen_stream_enabled = settings.screen_stream.enabled
         items = []
         for d in devices:
             last_seen = d.get("last_seen_at")
@@ -335,6 +336,9 @@ async def list_devices(request: Request):
                     "online": online,
                     "last_seen_at": _iso(last_seen),
                     "created_at": _iso(d.get("created_at")),
+                    # 契约 2.25：只下发「是否支持实时画面」的结论，同样不暴露原始能力内容
+                    "screen_stream": screen_stream_enabled and screen_stream.supports_screen_stream(
+                        d.get("capabilities_json")),
                 }
             )
         return {"success": True, "devices": items}
@@ -413,6 +417,117 @@ async def revoke_device(device_id: str, request: Request):
     except Exception as e:
         logger.opt(exception=True).error(f"后端日志：撤销设备失败 device={device_id}: {e}")
         raise _http_error(500, "撤销设备失败，请稍后重试", e)
+
+
+# ---- 实时画面（设计 runtime-screen-stream-design.md 第 5 节，契约 2.25）----
+# 画面走 WebRTC 点对点，服务端只做鉴权、记录会话、转交建连信令。轮询接口不打 info 日志；
+# 信令内容不解析、不写日志。
+
+SCREEN_NOTICE_TIMEOUT_SECONDS = 0.5  # 心跳里查画面会话通知的时限
+
+
+def _screen_stream_http_error(error: screen_stream.ScreenStreamError) -> HTTPException:
+    return HTTPException(status_code=error.status, detail={"error": error.message, "code": error.code, "debug": ""})
+
+
+def _require_screen_stream() -> None:
+    """功能开关：未启用时六个接口一律 503"""
+    if not settings.screen_stream.enabled:
+        raise _screen_stream_http_error(screen_stream.ScreenStreamError("SCREEN_STREAM_DISABLED"))
+
+
+async def _screen_stream_call(operation, *args, **kwargs):
+    """同步的画面会话函数放到线程里执行，类型化错误转成带 code 的 HTTP 错误"""
+    try:
+        return await asyncio.to_thread(operation, *args, **kwargs)
+    except screen_stream.ScreenStreamError as error:
+        raise _screen_stream_http_error(error) from None
+
+
+async def _screen_stream_viewer(request: Request) -> tuple:
+    """网页侧画面接口的公共入口：先登录态，再看功能开关"""
+    user, tenant_id = await _current_user_and_tenant(request)
+    _require_screen_stream()
+    return user, tenant_id
+
+
+def _check_screen_session_path(device_id: str, session_id: str) -> None:
+    """路径里的设备与会话编号形态预检：非法按 404，避免 DB 端 DataError 500"""
+    if not (_valid_uuid(device_id) and _valid_uuid(session_id)):
+        raise _screen_stream_http_error(screen_stream.ScreenStreamError("SCREEN_SESSION_NOT_FOUND"))
+
+
+async def _load_screen_session(scope, session_id, *, viewer, after_seq):
+    """读取会话：不存在或无权访问一律 404，不区分是哪一种"""
+    result = await _screen_stream_call(
+        screen_stream.load_session, scope, session_id,
+        viewer=viewer, after_seq=after_seq, device_offline_seconds=ONLINE_THRESHOLD_SECONDS,
+    )
+    if result is None:
+        raise _screen_stream_http_error(screen_stream.ScreenStreamError("SCREEN_SESSION_NOT_FOUND"))
+    return {"success": True, **result}
+
+
+async def _append_screen_signal(scope, session_id, direction, signal_type, payload):
+    """追加一条信令：不存在或无权访问一律 404"""
+    result = await _screen_stream_call(
+        screen_stream.append_signal, scope, session_id, direction, signal_type, payload,
+        device_offline_seconds=ONLINE_THRESHOLD_SECONDS,
+    )
+    if result is None:
+        raise _screen_stream_http_error(screen_stream.ScreenStreamError("SCREEN_SESSION_NOT_FOUND"))
+    return result
+
+
+@router.post("/devices/{device_id}/screen-sessions")
+async def create_device_screen_session(device_id: str, request: Request):
+    """创建实时画面会话：同一设备同一时间只允许一个未结束会话"""
+    user, tenant_id = await _screen_stream_viewer(request)
+    if not _valid_uuid(device_id):
+        raise _screen_stream_http_error(screen_stream.ScreenStreamError("DEVICE_NOT_FOUND"))
+    session = await _screen_stream_call(
+        screen_stream.create_session, tenant_id, user["user_id"], device_id,
+        device_offline_seconds=ONLINE_THRESHOLD_SECONDS,
+    )
+    return {"success": True, "session": {**session, "stun_urls": list(settings.screen_stream.stun_urls)}}
+
+
+@router.get("/devices/{device_id}/screen-sessions/{session_id}")
+async def get_device_screen_session(request: Request, device_id: str, session_id: str,
+                                    after_seq: int = Query(0, ge=0)):
+    """网页轮询：会话状态和 Runtime 发来的、序号大于 after_seq 的信令"""
+    user, tenant_id = await _screen_stream_viewer(request)
+    _check_screen_session_path(device_id, session_id)
+    return await _load_screen_session(
+        screen_stream.viewer_scope(tenant_id, user["user_id"], device_id), session_id,
+        viewer=True, after_seq=after_seq,
+    )
+
+
+@router.post("/devices/{device_id}/screen-sessions/{session_id}/signals")
+async def append_device_screen_session_signal(request: Request, device_id: str, session_id: str,
+                                              body: screen_stream.ViewerSignalRequest):
+    """追加一条网页信令（start / answer / candidate / end）"""
+    user, tenant_id = await _screen_stream_viewer(request)
+    _check_screen_session_path(device_id, session_id)
+    result = await _append_screen_signal(
+        screen_stream.viewer_scope(tenant_id, user["user_id"], device_id), session_id,
+        screen_stream.DIR_WEB, body.type, body.payload.model_dump(exclude_unset=True),
+    )
+    return {"success": True, "seq": result["seq"]}
+
+
+@router.post("/devices/{device_id}/screen-sessions/{session_id}/end")
+async def end_device_screen_session(request: Request, device_id: str, session_id: str,
+                                    body: screen_stream.ViewerEndRequest = Body(default=screen_stream.ViewerEndRequest())):
+    """网页结束会话（幂等），结束原因固定记 viewer_closed；请求体里的 reason 原样忽略"""
+    user, tenant_id = await _screen_stream_viewer(request)
+    _check_screen_session_path(device_id, session_id)
+    result = await _append_screen_signal(
+        screen_stream.viewer_scope(tenant_id, user["user_id"], device_id), session_id,
+        screen_stream.DIR_WEB, "end", {},
+    )
+    return {"success": True, "session": result["session"]}
 
 
 # ==================== Runtime API ====================
@@ -504,7 +619,7 @@ async def runtime_heartbeat(body: HeartbeatRequest, device: Dict = Depends(_requ
         )
         if not row:
             raise _http_error(404, "设备不存在")
-        return {
+        response = {
             "success": True,
             "selected": bool(row.get("selected")),
             "server_time": datetime.now().isoformat(),
@@ -519,6 +634,59 @@ async def runtime_heartbeat(body: HeartbeatRequest, device: Dict = Depends(_requ
     except Exception as e:
         logger.opt(exception=True).error(f"后端日志：设备心跳失败 device={device['id']}: {e}")
         raise _http_error(500, "心跳失败，请稍后重试", e)
+    # 画面会话通知放在上面的 try/except 之外：设备更新成功就一定返回成功，
+    # 画面查询自己出错或超时只告警，不会被外层 except 变成 500（设计 4.4）
+    await _attach_screen_session_notice(response, str(device["id"]))
+    return response
+
+
+async def _attach_screen_session_notice(response: Dict[str, Any], device_id: str) -> None:
+    """设备更新成功后单独查画面会话通知（契约 2.25），写进心跳响应。
+
+    传画面期间每次心跳都带当前会话，这就是 Runtime 的续期；查询拿不到结果时响应里不带
+    screen_session，只表示这一次不续期。日志里只出现设备编号，不出现信令内容。
+    """
+    if not settings.screen_stream.enabled:
+        return
+    response["screen_stream"] = {"version": screen_stream.PROTOCOL_VERSION}
+    try:
+        notice = await asyncio.wait_for(
+            asyncio.to_thread(screen_stream.heartbeat_notice, device_id,
+                              device_offline_seconds=ONLINE_THRESHOLD_SECONDS),
+            timeout=SCREEN_NOTICE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"后端日志：画面会话查询超时 device={device_id}")
+    except Exception:
+        logger.opt(exception=True).warning(f"后端日志：画面会话查询失败 device={device_id}")
+    else:
+        if notice:
+            response["screen_session"] = notice
+
+
+@router.post("/runtime/screen/session")
+async def get_runtime_screen_session(body: screen_stream.RuntimeSessionRequest,
+                                      device: Dict = Depends(_require_device)):
+    """Runtime 取会话：状态和网页发来的、序号大于 after_seq 的信令"""
+    _require_screen_stream()
+    result = await _load_screen_session(
+        screen_stream.runtime_scope(device["tenant_id"], str(device["id"])), str(body.session_id),
+        viewer=False, after_seq=body.after_seq,
+    )
+    result["session"]["stun_urls"] = list(settings.screen_stream.stun_urls)
+    return result
+
+
+@router.post("/runtime/screen/signal")
+async def append_runtime_screen_signal(body: screen_stream.RuntimeSignalRequest,
+                                        device: Dict = Depends(_require_device)):
+    """Runtime 追加一条信令（prepared / offer / candidate / status / end）"""
+    _require_screen_stream()
+    result = await _append_screen_signal(
+        screen_stream.runtime_scope(device["tenant_id"], str(device["id"])), str(body.session_id),
+        screen_stream.DIR_RT, body.type, body.payload.model_dump(exclude_unset=True),
+    )
+    return {"success": True, "seq": result["seq"]}
 
 
 @router.post("/runtime/claim")
