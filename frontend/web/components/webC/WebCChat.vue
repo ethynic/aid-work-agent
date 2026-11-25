@@ -84,8 +84,14 @@
                 <div v-if="msg.images && msg.images.length" class="max-w-md">
                   <ImageGallery :images="msg.images" />
                 </div>
+                <!-- ask_user 澄清文本是渠道纯文本（\n 分行），按 pre-wrap 渲染；
+                     走 markdown 会把单个换行折叠成同一段落导致题目挤成一坨 -->
                 <div
-                  v-if="msg.content"
+                  v-if="msg.content && msg.kind === 'clarification'"
+                  class="bg-surface border border-default rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words"
+                >{{ msg.content }}</div>
+                <div
+                  v-else-if="msg.content"
                   class="bg-surface border border-default rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm leading-relaxed markdown-body"
                   v-html="renderMarkdown(msg.content)"
                 ></div>
@@ -189,6 +195,8 @@ interface ChatMessage {
   attachments: Record<string, unknown>[]
   images: import('@/types').ImageRef[]
   files: import('@/types').DownloadableFile[]
+  /** 消息种类：clarification = ask_user 澄清反问（渠道纯文本，按 pre-wrap 渲染） */
+  kind?: string
 }
 
 const route = useRoute()
@@ -467,6 +475,7 @@ function toChatMessage(m: ChannelMessage): ChatMessage {
     role: m.role === 'user' ? 'user' : 'assistant',
     content: m.content || '',
     created_at: m.created_at,
+    kind: String((m.metadata as Record<string, unknown> | null | undefined)?.kind || ''),
     attachments: attachments.filter(a => (a as Record<string, unknown>).type !== 'image'),
     images,
     files
@@ -724,7 +733,7 @@ async function observeRunner(runnerId: string) {
       messages.value.push({ role: 'assistant', content: streamingText.value, created_at: nowIso(), attachments: [], images: [], files: [] })
     } else if (waitingText.value) {
       // ask_user 反问作为 assistant 消息入列（服务端按 wait_id 幂等落库，reload 权威校准去重）
-      messages.value.push({ role: 'assistant', content: waitingText.value, created_at: nowIso(), attachments: [], images: [], files: [] })
+      messages.value.push({ role: 'assistant', content: waitingText.value, created_at: nowIso(), kind: 'clarification', attachments: [], images: [], files: [] })
     }
     streamingText.value = ''
     waitingText.value = ''
