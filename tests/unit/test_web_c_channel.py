@@ -845,3 +845,67 @@ class TestWebCRunnerPersistSweeper:
             assert not task.done()  # 首轮异常后仍存活
             await sweeper.stop()
 
+
+
+class TestAlignSessionProfile:
+    """渠道改绑数字员工后的存量会话对齐（CHANNEL_PROFILE_MISMATCH 修复）。"""
+
+    def _identity(self, subagent="sales-assistant"):
+        from src.saas.api.web_c import WebCIdentity
+
+        return WebCIdentity("tenant_x", "chan_1", "anon", "anon_uid1", "访客", subagent)
+
+    def _make_conn(self):
+        conn = MagicMock()
+        cursor = MagicMock()
+        conn.cursor.return_value = cursor
+        conn.__enter__ = MagicMock(return_value=conn)
+        conn.__exit__ = MagicMock(return_value=False)
+        return conn, cursor
+
+    def test_same_binding_no_db_write(self):
+        """subagent_id 与当前绑定一致时不写库。"""
+        from src.saas.api.web_c import _align_session_profile
+
+        session = {"session_id": "tenant_x_web_c_anon_uid1_sales-assistant_sabc", "subagent_id": "sales-assistant"}
+        with patch("src.saas.api.web_c.get_db_connection") as mock_db:
+            _align_session_profile(self._identity("sales-assistant"), dict(session))
+            mock_db.assert_not_called()
+
+    def test_empty_binding_matches_empty(self):
+        """双方均为空（未绑定员工）时不写库。"""
+        from src.saas.api.web_c import _align_session_profile
+
+        with patch("src.saas.api.web_c.get_db_connection") as mock_db:
+            _align_session_profile(self._identity(""), {"session_id": "s1", "subagent_id": ""})
+            mock_db.assert_not_called()
+
+    def test_rebind_migrates_session_row(self):
+        """改绑后提交前把会话 subagent_id 迁移为当前绑定（幂等 UPDATE + 内存同步）。"""
+        from src.saas.api.web_c import _align_session_profile
+
+        conn, cursor = self._make_conn()
+        session = {"session_id": "tenant_x_web_c_anon_uid1_old-agent_sabc123",
+                   "subagent_id": "sales-assistant-tenant-e9b2fab93a2f-ubnn"}
+        with patch("src.saas.api.web_c.get_db_connection", return_value=conn):
+            _align_session_profile(self._identity("sales-assistant"), session)
+        sql = cursor.execute.call_args[0][0]
+        assert "UPDATE channel_sessions SET subagent_id" in sql
+        assert "AND tenant_id = %s" in sql
+        params = cursor.execute.call_args[0][1]
+        assert params[0] == "sales-assistant"  # 迁移为当前绑定
+        assert params[2] == "tenant_x_web_c_anon_uid1_old-agent_sabc123"
+        assert params[3] == "tenant_x"
+        assert session["subagent_id"] == "sales-assistant"  # 内存同步
+        conn.commit.assert_called_once()
+
+    def test_wipe_binding_migrates_to_empty(self):
+        """绑定被清空（None）时会话迁移为空串，提交口径回落 main。"""
+        from src.saas.api.web_c import _align_session_profile
+
+        conn, cursor = self._make_conn()
+        session = {"session_id": "s1", "subagent_id": "old-agent"}
+        with patch("src.saas.api.web_c.get_db_connection", return_value=conn):
+            _align_session_profile(self._identity(None), session)
+        assert cursor.execute.call_args[0][1][0] == ""
+        assert session["subagent_id"] == ""

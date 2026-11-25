@@ -242,6 +242,40 @@ def _resolve_identity(request: Request, tenant_id: str, config_id: str) -> WebCI
 _UID_SESSION_SUFFIX_RE = re.compile(r"_s[0-9a-f]{8,}$", re.IGNORECASE)
 
 
+def _align_session_profile(identity: "WebCIdentity", session: dict) -> None:
+    """渠道改绑数字员工后对齐存量会话（2026-11-25 CHANNEL_PROFILE_MISMATCH 修复）。
+
+    chat() 提交的 profile_id 取当前渠道配置绑定（identity.subagent_type），而
+    channel_sessions.subagent_id 只在会话创建时写入一次；管理员改绑后两者不等，
+    Runner 授权 _channel_in_tx 严格比对（session.subagent_id != request.profile_id）
+    会永久 403 CHANNEL_PROFILE_MISMATCH——旧页面反复报错无法对话，新会话正常。
+
+    web_c 渠道级绑定语义下配置是接待者的唯一事实源：本会话提交前把 subagent_id
+    迁移为当前绑定（幂等；仅在该会话有消息提交时懒迁移，不批量改写其他会话，
+    未再被使用的旧会话保持原状）。session_id 内嵌的旧 subagent 段无解析消费方
+    （归属校验只用不含 subagent 的 session_prefix），迁移后沿用旧 id 无副作用。
+    """
+    current = identity.subagent_type or ""
+    if (session.get("subagent_id") or "") == current:
+        return
+    from datetime import datetime
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE channel_sessions SET subagent_id = %s, updated_at = %s "
+            "WHERE session_id = %s AND tenant_id = %s",
+            (current, now, session["session_id"], identity.tenant_id),
+        )
+        conn.commit()
+    session["subagent_id"] = current
+    logger.info(
+        f"web_c 渠道改绑跟随：会话 {session['session_id']} subagent_id "
+        f"迁移为当前绑定 '{current or 'main'}'（tenant={identity.tenant_id}）"
+    )
+
+
 def _assert_session_owned(identity: WebCIdentity, session_id: str) -> dict:
     """session_id 归属校验：前缀（租户+渠道+身份）+ DB 租户双重过滤。
 
@@ -562,6 +596,10 @@ async def chat(tenant_id: str, config_id: str, body: WebCChatRequest, request: R
     else:
         _, session = await _ensure_user_and_session(identity)
     session_id = session["session_id"]
+
+    # 渠道改绑跟随：管理员改绑数字员工后，存量会话提交前先对齐 subagent_id，
+    # 否则 Runner 授权按旧值严格比对会永久 403 CHANNEL_PROFILE_MISMATCH
+    await asyncio.to_thread(_align_session_profile, identity, session)
 
     # 用户消息落库（幂等）；附件元数据不含内容，Runner 侧按 file_id 租户域解析。
     # 纯附件消息与 agent 输入同文案，保证历史渲染与执行输入一致。
