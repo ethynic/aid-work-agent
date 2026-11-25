@@ -9,20 +9,25 @@
 - 读取会话时顺带收敛超时（SELECT ... FOR UPDATE 后判定并写回），不设后台任务。
 - 每条画面事务的第一条语句是 SET LOCAL，给等锁设上限（见 HEARTBEAT_TIMEOUT_MS、SESSION_LOCK_TIMEOUT_MS）：
   应用层放弃等待并不会停掉线程里的 SQL，只有数据库到点取消语句，连接才会归还（设计 4.4）。
+- 借连接之前先过一道占用闸（见 gate_capacity）：等待上限只管「一个连接被占多久」，管不住
+  「画面请求同时借多少个」；拿不到名额的请求立即让出。画面接口在入口（鉴权之前）就拿名额，
+  名额覆盖整个请求（见 acquire_permit）；设备心跳里的画面查询由 heartbeat_notice 自己过闸。
 - 信令内容只转交和保存，不解析、不写日志；会话结束时清空。
 
 调用方（FastAPI async endpoint）必须用 asyncio.to_thread 包裹，禁止在事件循环内直接调用。
 """
 
 import json
+import threading
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta
 from typing import Annotated, Any, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from psycopg2.extras import Json
 
+from src.db import database
 from src.db.database import get_db_connection
 
 PROTOCOL_VERSION = 1
@@ -367,23 +372,83 @@ def is_database_timeout(error: BaseException) -> bool:
     return getattr(error, "pgcode", None) in (PG_LOCK_NOT_AVAILABLE, PG_QUERY_CANCELED)
 
 
+# 占用闸：画面请求借数据库连接之前先过的一道进程内信号量。
+# 为什么要有：多人同时查看时，网页和 Runtime 两端的轮询会同步成批，一批借走的连接比连接池还多，
+#   心跳、接单、续租、回执会直接报 connection pool exhausted。上面的等待上限只管「一个连接被占多久」，
+#   管不住「同时借多少个」，所以在它外面再加这道闸：拿不到名额的请求立即让出。
+# 为什么是一半：连接池是每个进程一个，画面再繁忙也最多借走一半，至少给核心请求留下一半。
+# 它不是跨请求的业务状态，只是本进程里「此刻有多少个画面请求正占着连接」的计数。
+_gate: Optional[threading.Semaphore] = None
+_gate_lock = threading.Lock()
+
+
+def gate_capacity() -> int:
+    """占用闸的容量：连接池上限的一半，向下取整，至少 1 个。
+
+    连接池上限从连接池本身读（maxconn）；连接池还没初始化时退到 database.DB_POOL_MAX。
+    """
+    pool = database.get_postgres_pool()
+    pool_max = pool.maxconn if pool is not None else database.DB_POOL_MAX
+    return max(1, pool_max // 2)
+
+
+def _connection_gate() -> threading.Semaphore:
+    """第一次使用时按当时的连接池上限创建，之后复用"""
+    global _gate
+    with _gate_lock:
+        if _gate is None:
+            _gate = threading.Semaphore(gate_capacity())
+        return _gate
+
+
+def acquire_permit() -> bool:
+    """非阻塞地拿一个占用闸名额：拿到返回 True；拿不到立即返回 False，不排队、不等待、不借连接。
+
+    画面接口在入口（鉴权之前）调用它，名额覆盖整个请求，请求处理结束时用 release_permit 归还。
+    只把闸放在数据库函数里挡不住成批的同时请求：Runtime 请求的鉴权在进入数据库函数之前就已经借了连接。
+    """
+    return _connection_gate().acquire(blocking=False)
+
+
+def release_permit() -> None:
+    """归还占用闸名额，与 acquire_permit 配对，只归还一次"""
+    _connection_gate().release()
+
+
 @contextmanager
-def _session_transaction() -> Iterator[Tuple[Any, Any]]:
+def _connection_permit() -> Iterator[None]:
+    """占用闸的名额：非阻塞地拿，拿不到立即让出（抛 SCREEN_STREAM_BUSY）。
+
+    无论正常返回、提前返回还是抛异常，名额都会归还。
+    """
+    if not acquire_permit():
+        raise ScreenStreamError("SCREEN_STREAM_BUSY")
+    try:
+        yield
+    finally:
+        release_permit()
+
+
+@contextmanager
+def _session_transaction(*, permit_held: bool = False) -> Iterator[Tuple[Any, Any]]:
     """网页和 Runtime 的画面会话事务，产出 (conn, cursor)。
 
-    第一条语句给等锁设上限：会话行被长期占住时，两端每 500 毫秒一次的轮询会各占一个连接等锁，
-    同样能把连接池占满。等锁超时（55P03）转成 SCREEN_STREAM_BUSY，调用方下一次轮询会重试；
-    其他异常原样抛出。
+    permit_held=False（直接调用，比如单元测试）：这里自己过占用闸、自己归还。
+    permit_held=True（画面接口调用）：请求在接口入口已经拿了名额，这里不再拿、不再还，
+    否则一次请求要占两个名额。
+    借到连接后的第一条语句给等锁设上限：会话行被长期占住时，两端每 500 毫秒一次的轮询会各占一个
+    连接等锁，同样能把连接池占满。等锁超时（55P03）转成 SCREEN_STREAM_BUSY；其他异常原样抛出。
     """
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(_SESSION_LOCK_TIMEOUT_SQL)
-            yield conn, cursor
-    except Exception as error:
-        if getattr(error, "pgcode", None) == PG_LOCK_NOT_AVAILABLE:
-            raise ScreenStreamError("SCREEN_STREAM_BUSY") from None
-        raise
+    with nullcontext() if permit_held else _connection_permit():
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(_SESSION_LOCK_TIMEOUT_SQL)
+                yield conn, cursor
+        except Exception as error:
+            if getattr(error, "pgcode", None) == PG_LOCK_NOT_AVAILABLE:
+                raise ScreenStreamError("SCREEN_STREAM_BUSY") from None
+            raise
 
 
 def _save(cursor, row: Dict[str, Any], seen_column: Optional[str] = None) -> None:
@@ -427,10 +492,13 @@ def _visible_signals(row: Dict[str, Any], direction: str, after_seq: int) -> Lis
 
 
 def create_session(
-    tenant_id: str, user_id: str, device_id: str, *, device_offline_seconds: int,
+    tenant_id: str, user_id: str, device_id: str, *, device_offline_seconds: int, permit_held: bool = False,
 ) -> Dict[str, Any]:
-    """网页创建会话：锁住设备行后依次校验归属、在线、能力、没有未结束会话，再插入 pending 会话"""
-    with _session_transaction() as (conn, cursor):
+    """网页创建会话：锁住设备行后依次校验归属、在线、能力、没有未结束会话，再插入 pending 会话。
+
+    permit_held：请求是否已经在接口入口拿了占用闸的名额，含义见 _session_transaction。
+    """
+    with _session_transaction(permit_held=permit_held) as (conn, cursor):
         cursor.execute(
             """SELECT last_seen_at, capabilities_json, NOW()::timestamp AS db_now
                FROM local_tool_devices
@@ -471,10 +539,14 @@ def load_session(
     viewer: bool,
     after_seq: int = 0,
     device_offline_seconds: int,
+    permit_held: bool = False,
 ) -> Optional[Dict[str, Any]]:
-    """读取会话（网页轮询或 Runtime 取信令）：收敛超时、刷新访问方的时间，返回会话和对方发来的新信令"""
+    """读取会话（网页轮询或 Runtime 取信令）：收敛超时、刷新访问方的时间，返回会话和对方发来的新信令。
+
+    permit_held：请求是否已经在接口入口拿了占用闸的名额，含义见 _session_transaction。
+    """
     caller, peer = (DIR_WEB, DIR_RT) if viewer else (DIR_RT, DIR_WEB)
-    with _session_transaction() as (conn, cursor):
+    with _session_transaction(permit_held=permit_held) as (conn, cursor):
         row = _lock_session(cursor, scope, session_id, device_offline_seconds)
         if row is None:
             return None
@@ -492,13 +564,15 @@ def append_signal(
     payload: Dict[str, Any],
     *,
     device_offline_seconds: int,
+    permit_held: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """追加一条信令并应用状态流转。
 
     返回 {"seq": 新信令的序号, "session": 会话}。end 不占信令存储（会话结束时信令清空），
     seq 为 None；对已结束的会话再发 end 幂等成功，不改任何数据。
+    permit_held：请求是否已经在接口入口拿了占用闸的名额，含义见 _session_transaction。
     """
-    with _session_transaction() as (conn, cursor):
+    with _session_transaction(permit_held=permit_held) as (conn, cursor):
         row = _lock_session(cursor, scope, session_id, device_offline_seconds)
         if row is None:
             return None
@@ -539,8 +613,10 @@ _NOTICE_RENEW_SQL = """
 
 
 def heartbeat_notice(device_id: str, *, device_offline_seconds: int) -> Optional[Dict[str, Any]]:
-    """心跳里的画面会话通知（设计 5.1）：先设等待上限，再执行一到两条按索引的语句，不显式加锁。
+    """心跳里的画面会话通知（设计 5.1）：先过占用闸，再设等待上限，然后执行一到两条按索引的语句。
 
+    占用闸已满（画面请求同时借走的连接到了上限）时不去借连接，抛 ScreenStreamError("SCREEN_STREAM_BUSY")：
+    路由层据此只记一条告警，这次心跳不带会话通知，不算失败。
     续期和收敛要更新会话行，可能等行锁。等锁超过 HEARTBEAT_TIMEOUT_MS 毫秒由数据库取消语句（55P03，
     语句超时是 57014），异常照常抛出、连接随之归还，路由层按「查询超时」处理。不设这个上限的话，
     应用层 0.5 秒放弃等待之后，这条线程还在等锁、连接也不归还。
@@ -549,27 +625,28 @@ def heartbeat_notice(device_id: str, *, device_offline_seconds: int) -> Optional
     ended 只在开始传画面之后结束的 30 秒内带。建连阶段（prepared/connecting/verifying）
     Runtime 自己在轮询信令，不带。没有有关会话返回 None。
     """
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(_HEARTBEAT_LOCK_TIMEOUT_SQL)
-        cursor.execute(_HEARTBEAT_STATEMENT_TIMEOUT_SQL)
-        cursor.execute(_NOTICE_SQL, (device_id, device_id, ENDED_NOTICE_SECONDS))
-        row = cursor.fetchone()
-        if row is None:
-            return None
-        row = dict(row)
-        session_id, state = str(row["id"]), row["state"]
-        if state != STATE_ENDED:
-            reason = evaluate_timeout(row, row["db_now"], row["device_last_seen_at"], device_offline_seconds)
-            if reason is not None:
-                # 超时未结束的会话先收敛，再按已结束处理
-                cursor.execute(_NOTICE_CONVERGE_SQL, (reason, session_id, state))
-                state = STATE_ENDED
-            elif state == STATE_PENDING:
-                return {"id": session_id, "state": state}
-            elif state == STATE_STREAMING:
-                cursor.execute(_NOTICE_RENEW_SQL, (session_id,))
-            else:
+    with _connection_permit():
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_HEARTBEAT_LOCK_TIMEOUT_SQL)
+            cursor.execute(_HEARTBEAT_STATEMENT_TIMEOUT_SQL)
+            cursor.execute(_NOTICE_SQL, (device_id, device_id, ENDED_NOTICE_SECONDS))
+            row = cursor.fetchone()
+            if row is None:
                 return None
-            conn.commit()
-        return {"id": session_id, "state": state}
+            row = dict(row)
+            session_id, state = str(row["id"]), row["state"]
+            if state != STATE_ENDED:
+                reason = evaluate_timeout(row, row["db_now"], row["device_last_seen_at"], device_offline_seconds)
+                if reason is not None:
+                    # 超时未结束的会话先收敛，再按已结束处理
+                    cursor.execute(_NOTICE_CONVERGE_SQL, (reason, session_id, state))
+                    state = STATE_ENDED
+                elif state == STATE_PENDING:
+                    return {"id": session_id, "state": state}
+                elif state == STATE_STREAMING:
+                    cursor.execute(_NOTICE_RENEW_SQL, (session_id,))
+                else:
+                    return None
+                conn.commit()
+            return {"id": session_id, "state": state}

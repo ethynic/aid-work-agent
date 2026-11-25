@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 import yaml
 from dotenv import load_dotenv
 from loguru import logger
-from pydantic import SecretStr, BaseModel, Field, validator
+from pydantic import SecretStr, BaseModel, Field, model_validator, validator
 
 load_dotenv()
 
@@ -796,6 +796,23 @@ class ScreenStreamConfig(BaseModel):
     enabled: bool = True
     # 为空时只有局域网直连可用，跨网络会以「当前网络无法直连」结束
     stun_urls: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _blank_means_default(cls, value):
+        """这一节里留空的值一律按缺省处理，不让只影响画面功能的配置错误拖垮服务启动。
+
+        YAML 里留空读出来是 None：整个 screen_stream: 节留空时 value 是 None，按空字典处理；
+        节里某个键留空（enabled:、stun_urls:）时是值为 None 的键，把它去掉，这个字段就用各自的缺省值
+        （enabled 缺省为真，stun_urls 缺省为空列表）。留空不记告警。
+        注意：模型里目前没有以 None 为有效值的字段，所以可以一律去掉；以后新增字段如果允许 None，
+        要在这里排除。
+        """
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return {key: item for key, item in value.items() if item is not None}
+        return value
 
     @validator("stun_urls", pre=True)
     @classmethod
