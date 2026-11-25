@@ -11,8 +11,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import yaml
-from pydantic import SecretStr, BaseModel, Field, validator
 from dotenv import load_dotenv
+from loguru import logger
+from pydantic import SecretStr, BaseModel, Field, validator
 
 load_dotenv()
 
@@ -21,6 +22,9 @@ load_dotenv()
 _LLM_PROVIDERS = ("qwen", "zhipu", "deepseek")
 # 公开别名：模块外（如 API 层校验）统一 import 此名，不引用私有成员
 LLM_PROVIDERS = _LLM_PROVIDERS
+
+# 实时画面只下发 STUN 服务器地址；stun_urls 里只保留这两种协议（协议名不区分大小写）
+STUN_SCHEMES = ("stun", "stuns")
 
 
 class LLMProviderConfig(BaseModel):
@@ -792,6 +796,27 @@ class ScreenStreamConfig(BaseModel):
     enabled: bool = True
     # 为空时只有局域网直连可用，跨网络会以「当前网络无法直连」结束
     stun_urls: List[str] = Field(default_factory=list)
+
+    @validator("stun_urls", pre=True)
+    @classmethod
+    def _stun_servers_only(cls, value):
+        """只保留协议是 stun 或 stuns 的地址（协议名不区分大小写），顺序不变。
+
+        共同契约 2.25：服务端只下发 STUN 地址。混进来的 TURN 地址（可能带凭据）、不带协议头的、
+        不是字符串的条目一律丢弃并告警；告警里只写丢弃了几条，不写地址。
+        这里不抛异常：只影响画面功能的配置错误，不该让整个服务起不来。
+        """
+        if not isinstance(value, list):
+            return value
+        kept = []
+        for url in value:
+            scheme, colon, _ = url.partition(":") if isinstance(url, str) else ("", "", "")
+            if colon and scheme.lower() in STUN_SCHEMES:
+                kept.append(url)
+        dropped = len(value) - len(kept)
+        if dropped:
+            logger.warning(f"后端日志：实时画面配置 screen_stream.stun_urls 里有 {dropped} 条不是 STUN 地址，已丢弃")
+        return kept
 
 
 class NotificationPreviousKey(BaseModel):

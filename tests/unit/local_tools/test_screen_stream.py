@@ -7,6 +7,9 @@
   信令类型、state、path、结束原因是否合法由请求模型的用例覆盖（TestSignalModels）
 - 信令模型：type/state/path/reason 字面量校验，payload 必须是对象且序列化后不超过 16 KB
 - 数据访问层（mock 连接）：创建会话的拒绝顺序、读取只刷新访问方、end 幂等不写库、心跳查询的语句数
+- 数据库层的等待上限：四个数据库函数的第一条语句是 SET LOCAL；会话路径上等锁超时转成 SCREEN_STREAM_BUSY；
+  心跳路径上数据库取消语句（55P03、57014）按超时告警，其他异常仍按失败告警
+- STUN 配置：只保留 stun: / stuns: 地址，其余丢弃并告警（告警里不写地址）
 - 心跳响应：画面通知字段，功能未启用时不带，查询报错或超时不影响心跳
 - 设备列表：screen_stream 投影
 - 六个接口：功能未启用 503、非法路径 404、鉴权范围参数、类型化错误转换
@@ -20,13 +23,15 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import psycopg2
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from loguru import logger
+from psycopg2 import errors as pg_errors
 from pydantic import TypeAdapter, ValidationError
 
-from src.config.settings import settings
+from src.config.settings import ScreenStreamConfig, settings
 from src.local_tools import api as local_tools_api
 from src.local_tools import screen_stream
 
@@ -38,6 +43,22 @@ DEVICE = "11111111-1111-4111-8111-111111111111"
 SESSION = "22222222-2222-4222-8222-222222222222"
 NOW = datetime(2026, 11, 25, 12, 0, 0)
 ONLINE = 30
+# PostgreSQL 到点取消语句时抛的异常：55P03 是等锁超时（lock_timeout），57014 是语句超时（statement_timeout）。
+# psycopg2 从服务端的错误响应里把 SQLSTATE 填进 pgcode；这个属性只读，手工构造的异常上是 None。
+# 测试里用子类把它固定下来。路由层的判断依据是 SQLSTATE，不是异常类
+class LockTimeout(pg_errors.LockNotAvailable):
+    pgcode = "55P03"
+
+
+class StatementTimeout(pg_errors.QueryCanceled):
+    pgcode = "57014"
+
+
+# (异常类, 服务端给出的消息)：两种「数据库到点取消了语句」
+DATABASE_CANCELS = [
+    pytest.param(LockTimeout, "canceling statement due to lock timeout", id="lock-timeout-55P03"),
+    pytest.param(StatementTimeout, "canceling statement due to statement timeout", id="statement-timeout-57014"),
+]
 
 DEVICE_KEYS = {"device_id", "name", "platform", "runtime_version", "selected", "status", "online",
                "last_seen_at", "created_at"}
@@ -104,7 +125,7 @@ class TestConstants:
 
     def test_error_table(self):
         """错误码、HTTP 状态与用户可见文案"""
-        for code, (status, message) in {
+        expected = {
             "SCREEN_STREAM_DISABLED": (503, "实时画面功能未启用"),
             "DEVICE_NOT_FOUND": (404, "设备不存在"),
             "DEVICE_OFFLINE": (409, "Runtime 电脑不在线"),
@@ -113,7 +134,10 @@ class TestConstants:
             "SCREEN_SESSION_NOT_FOUND": (404, "会话不存在或无权访问"),
             "SCREEN_SESSION_ENDED": (409, "会话已结束"),
             "SCREEN_SIGNAL_LIMIT": (409, "信令条数超过上限"),
-        }.items():
+            "SCREEN_STREAM_BUSY": (503, "实时画面暂时繁忙，请稍后重试"),
+        }
+        assert set(screen_stream.ERRORS) == set(expected)
+        for code, (status, message) in expected.items():
             error = screen_stream.ScreenStreamError(code)
             assert (error.status, error.code, error.message) == (status, code, message)
             assert isinstance(error, ValueError)
@@ -475,15 +499,26 @@ class TestSignalModels:
 
 
 class _FakeCursor:
-    """按语句给出结果集的 mock 游标：第 i 条语句返回的行取自 results[i]"""
+    """按语句给出结果集的 mock 游标：每条语句返回的行依次取自 results（每项是一个行列表）。
 
-    def __init__(self, results, executed, commits):
+    每条画面事务的第一条语句是 SET LOCAL（给等锁设上限），它不返回行，所以不占 results 的位置。
+    fail_on 写明「第几条语句抛什么异常」，用来模拟数据库到点取消语句；语句序号从 0 数起。
+    """
+
+    def __init__(self, results, executed, fail_on):
         self._results = [list(rows) for rows in results]
         self._executed = executed
+        self._fail_on = fail_on
         self._rows = []
 
     def execute(self, sql, params=None):
         self._executed.append((sql, params))
+        error = self._fail_on.get(len(self._executed) - 1)
+        if error is not None:
+            raise error
+        if sql.startswith("SET LOCAL"):
+            self._rows = []
+            return
         self._rows = self._results.pop(0) if self._results else []
 
     def fetchone(self):
@@ -494,11 +529,12 @@ class _FakeCursor:
         return rows
 
 
-def _patch_conn(results):
+def _patch_conn(results, fail_on=None):
     """替换模块里的数据库连接。results 按执行顺序给出每条语句返回的行（每项是一个行列表）；
-    同时记录每条语句的 SQL 与参数，以及 commit 的次数"""
+    同时记录每条语句的 SQL 与参数（含开头的 SET LOCAL），以及 commit 的次数。
+    fail_on 是 {语句序号: 要抛的异常}，用来模拟数据库在时限到点时取消语句"""
     executed, commits = [], []
-    cursor = _FakeCursor(results, executed, commits)
+    cursor = _FakeCursor(results, executed, fail_on or {})
     conn = SimpleNamespace(cursor=lambda *a, **k: cursor, commit=lambda: commits.append(True), rollback=lambda: None)
 
     @contextmanager
@@ -556,12 +592,12 @@ class TestCreateSessionWithMockedConnection:
     def test_success_locks_device_and_inserts_pending_session(self):
         result, executed, commits = self._create()
         assert result == {"id": SESSION, "state": "pending"}
-        select_sql, select_params = executed[0]
+        select_sql, select_params = executed[1]
         assert "FOR UPDATE" in select_sql and "status = 'active'" in select_sql
         # 库时钟取 NOW()::timestamp：与 TIMESTAMP 列同为不带时区的值，才能在 Python 里比较
         assert "NOW()::timestamp AS db_now" in select_sql
         assert select_params == (DEVICE, TENANT, USER)
-        insert_sql, insert_params = executed[2]
+        insert_sql, insert_params = executed[3]
         assert insert_sql.lstrip().startswith("INSERT") and "RETURNING id" in insert_sql
         assert "'pending'" in insert_sql and "viewer_seen_at" in insert_sql and "NOW()" in insert_sql
         assert "runtime_seen_at" not in insert_sql
@@ -570,13 +606,13 @@ class TestCreateSessionWithMockedConnection:
 
     def test_device_not_found(self):
         executed, commits = self._create_rejected("DEVICE_NOT_FOUND", [])
-        assert len(executed) == 1 and commits == []
+        assert len(executed) == 2 and commits == []
 
     @pytest.mark.parametrize("last_seen_at", [NOW - timedelta(seconds=30, microseconds=1), None])
     def test_device_offline_including_never_seen(self, last_seen_at):
         executed, commits = self._create_rejected(
             "DEVICE_OFFLINE", [self._device(last_seen_at=last_seen_at)])
-        assert len(executed) == 1 and commits == []
+        assert len(executed) == 2 and commits == []
 
     def test_device_exactly_at_online_threshold_is_online(self):
         result, _, _ = self._create(device=self._device(last_seen_at=NOW - timedelta(seconds=30)))
@@ -598,7 +634,7 @@ class TestCreateSessionWithMockedConnection:
     def test_rejections_precede_the_active_session_check(self, overrides, code):
         """离线与不支持先于「已有未结束会话」判断：不会去查会话，也没有任何写入"""
         executed, commits = self._create_rejected(code, [self._device(**overrides)])
-        assert len(executed) == 1 and commits == []
+        assert len(executed) == 2 and commits == []
 
     def test_active_session_blocks_creation(self):
         active = _row(state="streaming", started_at=NOW, viewer_seen_at=NOW)
@@ -613,7 +649,7 @@ class TestCreateSessionWithMockedConnection:
         executed, _, conn_patch = _patch_conn([[self._device()], [_row(state="pending")]])
         with conn_patch, pytest.raises(screen_stream.ScreenStreamError):
             screen_stream.create_session(TENANT, USER, DEVICE, device_offline_seconds=ONLINE)
-        session_sql, session_params = executed[1]
+        session_sql, session_params = executed[2]
         assert "device_id = %s AND state <> 'ended'" in session_sql and "FOR UPDATE" in session_sql
         assert "tenant_id" not in session_sql and "user_id" not in session_sql
         # 不带排序：规划器才能直接用部分索引，不必扫过这台设备的全部历史会话
@@ -654,11 +690,11 @@ class TestLoadSessionWithMockedConnection:
         assert result == {"session": {"id": SESSION, "state": "verifying", "end_reason": None},
                           "signals": [{"seq": 1, "type": "prepared", "payload": {}},
                                       {"seq": 3, "type": "status", "payload": {"state": "connected"}}]}
-        select_sql, select_params = executed[0]
+        select_sql, select_params = executed[1]
         assert "FOR UPDATE OF s" in select_sql and "NOW()::timestamp AS db_now" in select_sql
         assert "last_seen_at" in select_sql
         assert select_params == (SESSION, TENANT, USER, DEVICE)
-        assert len(executed) == 2
+        assert len(executed) == 3
         touch_sql, touch_params = _updates(executed)[0]
         assert touch_sql == "UPDATE local_tool_screen_sessions SET viewer_seen_at = NOW() WHERE id = %s"
         assert touch_params == (SESSION,)
@@ -671,8 +707,8 @@ class TestLoadSessionWithMockedConnection:
         assert result == {"session": {"id": SESSION, "state": "prepared", "end_reason": None},
                           "signals": [{"seq": 2, "type": "start", "payload": {}},
                                       {"seq": 4, "type": "candidate", "payload": {"candidate": "host"}}]}
-        assert executed[0][1] == (SESSION, TENANT, DEVICE)
-        assert len(executed) == 2
+        assert executed[1][1] == (SESSION, TENANT, DEVICE)
+        assert len(executed) == 3
         assert _updates(executed)[0] == ("UPDATE local_tool_screen_sessions SET runtime_seen_at = NOW() WHERE id = %s",
                                          (SESSION,))
         assert commits == [True]
@@ -690,7 +726,7 @@ class TestLoadSessionWithMockedConnection:
         with conn_patch:
             result = screen_stream.load_session(VIEWER_SCOPE, SESSION, viewer=True, device_offline_seconds=ONLINE)
         assert result is None
-        assert len(executed) == 1 and commits == []
+        assert len(executed) == 2 and commits == []
 
     def test_timed_out_session_is_ended_before_being_returned(self):
         stale = self._live(state="connecting", runtime_seen_at=NOW - timedelta(seconds=31), signals=self.STORED)
@@ -699,7 +735,7 @@ class TestLoadSessionWithMockedConnection:
             result = screen_stream.load_session(VIEWER_SCOPE, SESSION, viewer=True, device_offline_seconds=ONLINE)
         assert result == {"session": {"id": SESSION, "state": "ended", "end_reason": "connect_failed"}, "signals": []}
         # 收敛只写这一条 UPDATE，之后不再刷新访问时间
-        assert len(executed) == 2
+        assert len(executed) == 3
         _, params = _updates(executed)[0]
         assert params[:3] == ("ended", "connect_failed", None)
         assert params[6] == NOW and _stored(params) == []
@@ -712,7 +748,7 @@ class TestLoadSessionWithMockedConnection:
         with conn_patch:
             result = screen_stream.load_session(VIEWER_SCOPE, SESSION, viewer=True, device_offline_seconds=ONLINE)
         assert result == {"session": {"id": SESSION, "state": "ended", "end_reason": "viewer_closed"}, "signals": []}
-        assert len(executed) == 1 and commits == [True]
+        assert len(executed) == 2 and commits == [True]
 
 
 class TestAppendSignalWithMockedConnection:
@@ -724,7 +760,7 @@ class TestAppendSignalWithMockedConnection:
             result = screen_stream.append_signal(RUNTIME_SCOPE, SESSION, "rt", "status", payload,
                                                  device_offline_seconds=ONLINE)
         assert result == {"seq": 7, "session": {"id": SESSION, "state": "streaming", "end_reason": None}}
-        assert executed[0][1] == (SESSION, TENANT, DEVICE)
+        assert executed[1][1] == (SESSION, TENANT, DEVICE)
         update_sql, params = _updates(executed)[0]
         assert "runtime_seen_at = NOW()" in update_sql and "viewer_seen_at" not in update_sql
         assert params[0] == "streaming" and params[3] == "p2p" and params[5] == NOW
@@ -790,7 +826,7 @@ class TestAppendSignalWithMockedConnection:
         with conn_patch:
             result = screen_stream.append_signal(RUNTIME_SCOPE, SESSION, "rt", "prepared", {}, device_offline_seconds=ONLINE)
         assert result is None
-        assert len(executed) == 1 and commits == []
+        assert len(executed) == 2 and commits == []
 
 
 class TestHeartbeatNoticeWithMockedConnection:
@@ -803,8 +839,8 @@ class TestHeartbeatNoticeWithMockedConnection:
     def test_no_relevant_session_is_a_single_indexed_read(self):
         result, executed, commits = self._notice([[]])
         assert result is None
-        assert len(executed) == 1 and commits == []
-        select_sql, params = executed[0]
+        assert len(executed) == 3 and commits == []
+        select_sql, params = executed[2]
         assert "FOR UPDATE" not in select_sql
         assert "device_id = %s" in select_sql and "ORDER BY created_at DESC" in select_sql and "LIMIT 1" in select_sql
         assert "state <> 'ended'" in select_sql and "started_at IS NOT NULL" in select_sql
@@ -813,7 +849,7 @@ class TestHeartbeatNoticeWithMockedConnection:
     def test_pending_session_is_notified_in_a_single_read(self):
         result, executed, commits = self._notice([[_row(state="pending")]])
         assert result == {"id": SESSION, "state": "pending"}
-        assert len(executed) == 1 and commits == []
+        assert len(executed) == 3 and commits == []
 
     @pytest.mark.parametrize("state", ["prepared", "connecting", "verifying"])
     def test_handshake_states_are_not_notified(self, state):
@@ -821,13 +857,13 @@ class TestHeartbeatNoticeWithMockedConnection:
         live = _row(state=state, viewer_seen_at=NOW, runtime_seen_at=NOW)
         result, executed, commits = self._notice([[live]])
         assert result is None
-        assert len(executed) == 1 and commits == []
+        assert len(executed) == 3 and commits == []
 
     def test_streaming_session_is_notified_and_renews_runtime_seen_at(self):
         live = _row(state="streaming", started_at=NOW, viewer_seen_at=NOW)
         result, executed, commits = self._notice([[live]])
         assert result == {"id": SESSION, "state": "streaming"}
-        assert len(executed) == 2 and commits == [True]
+        assert len(executed) == 4 and commits == [True]
         update_sql, params = _updates(executed)[0]
         assert "runtime_seen_at = NOW()" in update_sql and "state = 'streaming'" in update_sql
         assert params == (SESSION,)
@@ -836,7 +872,7 @@ class TestHeartbeatNoticeWithMockedConnection:
         stale = _row(state="streaming", started_at=NOW, viewer_seen_at=NOW - timedelta(seconds=31))
         result, executed, commits = self._notice([[stale]])
         assert result == {"id": SESSION, "state": "ended"}
-        assert len(executed) == 2 and commits == [True]
+        assert len(executed) == 4 and commits == [True]
         _, params = _updates(executed)[0]
         assert params[:3] == ("viewer_closed", SESSION, "streaming")
 
@@ -844,7 +880,7 @@ class TestHeartbeatNoticeWithMockedConnection:
         stale = _row(state="pending", created_at=NOW - timedelta(seconds=31))
         result, executed, commits = self._notice([[stale]])
         assert result == {"id": SESSION, "state": "ended"}
-        assert len(executed) == 2 and commits == [True]
+        assert len(executed) == 4 and commits == [True]
         _, params = _updates(executed)[0]
         assert params[:3] == ("device_offline", SESSION, "pending")
 
@@ -861,7 +897,200 @@ class TestHeartbeatNoticeWithMockedConnection:
         row = _row(state="ended", end_reason="viewer_closed", started_at=NOW, ended_at=NOW - timedelta(seconds=29))
         result, executed, commits = self._notice([[row]])
         assert result == {"id": SESSION, "state": "ended"}
-        assert len(executed) == 1 and commits == []
+        assert len(executed) == 3 and commits == []
+
+
+class TestDatabaseWaitLimits:
+    """画面这一路的 SQL 在数据库层的等待上限（设计 4.4：画面出问题不拖累设备心跳和任务）。
+
+    应用层 asyncio.wait_for 到 0.5 秒放弃等待时，线程里的 SQL 并不会停，连接也不归还；所以每条画面事务的
+    第一条语句是 SET LOCAL，让 PostgreSQL 到点取消语句。SET LOCAL 只在当前事务内有效，连接归还后不影响别人。
+    """
+
+    # PostgreSQL 的 SET 一条语句只能设一个参数（写成「a = 400, b = 400」是语法错误），所以是两条
+    HEARTBEAT_LOCK_LIMIT = "SET LOCAL lock_timeout = 400"
+    HEARTBEAT_STATEMENT_LIMIT = "SET LOCAL statement_timeout = 400"
+    SESSION_LIMITS = "SET LOCAL lock_timeout = 1000"
+
+    def test_limit_constants(self):
+        assert screen_stream.HEARTBEAT_TIMEOUT_MS == 400
+        assert screen_stream.SESSION_LOCK_TIMEOUT_MS == 1000
+        assert (screen_stream.PG_LOCK_NOT_AVAILABLE, screen_stream.PG_QUERY_CANCELED) == ("55P03", "57014")
+
+    def test_heartbeat_notice_sets_both_limits_first(self):
+        """心跳里的查询：等锁和整条语句都限时 400 毫秒，比应用层的 0.5 秒略短"""
+        executed, commits, conn_patch = _patch_conn([[]])
+        with conn_patch:
+            result = screen_stream.heartbeat_notice(DEVICE, device_offline_seconds=ONLINE)
+        assert result is None
+        assert executed[:2] == [(self.HEARTBEAT_LOCK_LIMIT, None), (self.HEARTBEAT_STATEMENT_LIMIT, None)]
+        assert len(executed) == 3
+
+    def test_create_session_sets_lock_timeout_first(self):
+        executed, commits, conn_patch = _patch_conn([[]])
+        with conn_patch, pytest.raises(screen_stream.ScreenStreamError) as caught:
+            screen_stream.create_session(TENANT, USER, DEVICE, device_offline_seconds=ONLINE)
+        assert caught.value.code == "DEVICE_NOT_FOUND"
+        assert executed[0] == (self.SESSION_LIMITS, None)
+        assert executed[1][1] == (DEVICE, TENANT, USER)
+        assert commits == []
+
+    def test_load_session_sets_lock_timeout_first(self):
+        executed, commits, conn_patch = _patch_conn([[]])
+        with conn_patch:
+            result = screen_stream.load_session(VIEWER_SCOPE, SESSION, viewer=True, device_offline_seconds=ONLINE)
+        assert result is None
+        assert executed[0] == (self.SESSION_LIMITS, None)
+        assert executed[1][1] == (SESSION, TENANT, USER, DEVICE)
+        assert len(executed) == 2 and commits == []
+
+    def test_append_signal_sets_lock_timeout_first(self):
+        executed, commits, conn_patch = _patch_conn([[]])
+        with conn_patch:
+            result = screen_stream.append_signal(RUNTIME_SCOPE, SESSION, "rt", "candidate", {}, device_offline_seconds=ONLINE)
+        assert result is None
+        assert executed[0] == (self.SESSION_LIMITS, None)
+        assert executed[1][1] == (SESSION, TENANT, DEVICE)
+        assert len(executed) == 2 and commits == []
+
+    def test_session_paths_only_limit_lock_wait(self):
+        """三条会话路径只限等锁；整条语句的时限仍用连接池的默认值"""
+        for sql in (self.SESSION_LIMITS, screen_stream._SESSION_LOCK_TIMEOUT_SQL):
+            assert sql == "SET LOCAL lock_timeout = 1000"
+            assert "statement_timeout" not in sql and sql.startswith("SET LOCAL ")
+
+    BUSY = ("SCREEN_STREAM_BUSY", 503, "实时画面暂时繁忙，请稍后重试")
+
+    def test_load_session_lock_wait_timeout_is_busy(self):
+        executed, commits, conn_patch = _patch_conn([[]], fail_on={1: LockTimeout()})
+        with conn_patch, pytest.raises(screen_stream.ScreenStreamError) as caught:
+            screen_stream.load_session(VIEWER_SCOPE, SESSION, viewer=True, device_offline_seconds=ONLINE)
+        assert (caught.value.code, caught.value.status, caught.value.message) == self.BUSY
+        assert commits == []
+
+    def test_append_signal_lock_wait_timeout_is_busy(self):
+        executed, commits, conn_patch = _patch_conn([[]], fail_on={1: LockTimeout()})
+        with conn_patch, pytest.raises(screen_stream.ScreenStreamError) as caught:
+            screen_stream.append_signal(RUNTIME_SCOPE, SESSION, "rt", "candidate", {}, device_offline_seconds=ONLINE)
+        assert (caught.value.code, caught.value.status, caught.value.message) == self.BUSY
+        assert commits == []
+
+    @pytest.mark.parametrize(("statement", "results"), [
+        (1, [[]]),                                   # 等设备行的锁
+        (2, [[TestCreateSessionWithMockedConnection._device()]]),  # 设备行拿到了，等未结束会话行的锁
+    ], ids=["device-row", "session-row"])
+    def test_create_session_lock_wait_timeout_is_busy(self, statement, results):
+        executed, commits, conn_patch = _patch_conn(results, fail_on={statement: LockTimeout()})
+        with conn_patch, pytest.raises(screen_stream.ScreenStreamError) as caught:
+            screen_stream.create_session(TENANT, USER, DEVICE, device_offline_seconds=ONLINE)
+        assert (caught.value.code, caught.value.status, caught.value.message) == self.BUSY
+        assert commits == []
+        assert not [sql for sql, _ in executed if sql.lstrip().startswith(("INSERT", "UPDATE"))]
+
+    @pytest.mark.parametrize("error", [
+        pytest.param(psycopg2.OperationalError("connection pool exhausted"), id="pool-exhausted"),
+        pytest.param(StatementTimeout(), id="statement-timeout"),
+        pytest.param(pg_errors.UndefinedTable("relation does not exist"), id="undefined-table"),
+    ])
+    def test_other_database_errors_are_not_disguised_as_busy(self, error):
+        """只有等锁超时（55P03）才是「稍后重试」；其余数据库异常原样抛出，不当成繁忙"""
+        executed, commits, conn_patch = _patch_conn([[]], fail_on={1: error})
+        with conn_patch, pytest.raises(type(error)) as caught:
+            screen_stream.load_session(VIEWER_SCOPE, SESSION, viewer=True, device_offline_seconds=ONLINE)
+        assert caught.value is error
+        assert commits == []
+
+    @pytest.mark.parametrize(("statement", "has_row"), [
+        (2, False),   # 查询那一条被取消（前两条是 SET LOCAL）
+        (3, True),    # 续期 UPDATE 等行锁被取消：真实被挡住的位置
+    ])
+    @pytest.mark.parametrize(("error_class", "message"), DATABASE_CANCELS)
+    def test_heartbeat_notice_lets_database_cancellation_through(self, statement, has_row, error_class, message):
+        """心跳路径不做转换：数据库取消语句的异常照常抛出，由路由层按「查询超时」处理；没有提交"""
+        error = error_class(message)
+        results = [[_row(state="streaming", started_at=NOW, viewer_seen_at=NOW)]] if has_row else [[]]
+        executed, commits, conn_patch = _patch_conn(results, fail_on={statement: error})
+        with conn_patch, pytest.raises(error_class) as caught:
+            screen_stream.heartbeat_notice(DEVICE, device_offline_seconds=ONLINE)
+        assert caught.value is error
+        assert executed[:2] == [(self.HEARTBEAT_LOCK_LIMIT, None), (self.HEARTBEAT_STATEMENT_LIMIT, None)]
+        assert commits == []
+
+    def test_is_database_timeout(self):
+        """路由层据此区分「数据库到点取消了语句」和其他异常：看 SQLSTATE（55P03、57014），不看异常类"""
+        assert screen_stream.is_database_timeout(LockTimeout()) is True
+        assert screen_stream.is_database_timeout(StatementTimeout()) is True
+        for other in (psycopg2.OperationalError("connection pool exhausted"),
+                      pg_errors.UndefinedTable("relation does not exist"),
+                      pg_errors.LockNotAvailable("not raised by PostgreSQL"),   # 没带 SQLSTATE
+                      asyncio.TimeoutError(), RuntimeError("boom")):
+            assert screen_stream.is_database_timeout(other) is False
+
+
+class TestStunUrlsConfig:
+    """共同契约 2.25：服务端只下发 STUN 服务器地址。配置模型把不是 STUN 的条目丢掉并告警，
+    地址本身不进日志（TURN 地址里可能带凭据）；也不因为这种只影响画面功能的配置错误让服务起不来"""
+
+    DROPPED = [
+        "turn:relay.example.com:3478", "turns:relay.example.net:5349", "TURN:relay.example.org:3478",
+        "Turns:relay.example.org:5349", "relay.example.com", "relay.example.com:3478", "stun.example.com",
+        "stun.example.com:3478", "stun", "stuns", "", " ", 3478, None, ["stun:stun.example.net"],
+        {"url": "stun:stun.example.net"},
+    ]
+
+    @staticmethod
+    def _capture_warnings():
+        records = []
+        handler = logger.add(lambda message: records.append(message.record))
+        return records, handler
+
+    def test_stun_and_stuns_are_kept_in_order(self):
+        urls = ["stuns:stuns.example.net", "STUN:stun.example.net:3478", "Stun:mixed.example.net:3478",
+                "stun:stun.example.org", "stuns:[2001:db8::1]:3478"]
+        assert ScreenStreamConfig(stun_urls=urls).stun_urls == urls
+
+    def test_anything_else_is_dropped(self):
+        kept = ["stuns:first.example.net", "stun:stun.example.net:3478"]
+        assert ScreenStreamConfig(stun_urls=[kept[0], *self.DROPPED, kept[1]]).stun_urls == kept
+        assert ScreenStreamConfig(stun_urls=list(self.DROPPED)).stun_urls == []
+        assert ScreenStreamConfig().stun_urls == []
+
+    def test_dropped_entries_are_warned_about_without_their_addresses(self):
+        records, handler = self._capture_warnings()
+        try:
+            config = ScreenStreamConfig(stun_urls=[
+                "turn:demo-user:demo-pass@relay.example.com:3478",
+                "stun:stun.example.net:3478",
+                "turns:relay.example.net:5349",
+                "relay.example.com",
+                3478,
+            ])
+        finally:
+            logger.remove(handler)
+        assert config.stun_urls == ["stun:stun.example.net:3478"]
+        warnings = [r for r in records if "stun_urls" in r["message"]]
+        assert len(warnings) == 1
+        assert warnings[0]["level"].name == "WARNING"
+        text = warnings[0]["message"]
+        assert "4 条" in text
+        for address in ("relay.example.com", "relay.example.net", "demo-user", "demo-pass", "stun.example.net", "3478"):
+            assert address not in text
+
+    def test_no_warning_when_every_entry_is_stun(self):
+        records, handler = self._capture_warnings()
+        try:
+            ScreenStreamConfig(stun_urls=["stun:stun.example.net:3478", "stuns:stuns.example.net"])
+            ScreenStreamConfig()
+        finally:
+            logger.remove(handler)
+        assert not [r for r in records if "stun_urls" in r["message"]]
+
+    def test_value_that_is_not_a_list_is_left_to_pydantic(self):
+        """校验器只过滤列表里的条目。整个值不是列表是结构错误，照常由 pydantic 报出来
+        （和其他配置项一致），不会被当成一串字符悄悄丢光"""
+        for value in ("stun:stun.example.net", None, 3478):
+            with pytest.raises(ValidationError):
+                ScreenStreamConfig(stun_urls=value)
 
 
 # ---------------------------------------------------------------------------
@@ -962,6 +1191,49 @@ class TestHeartbeatScreenNotice:
         assert f"device={DEVICE}" in warning["message"]
         assert warning["exception"] is not None
         assert not [r for r in records if r["level"].name == "ERROR"]
+
+    @pytest.mark.parametrize(("error_class", "message"), DATABASE_CANCELS)
+    def test_database_cancelled_screen_query_is_reported_as_timeout(self, error_class, message):
+        """PostgreSQL 在库里的等待上限到点、取消了画面查询（55P03 / 57014）：
+        按「查询超时」处理，只记一条不带堆栈的告警，不算失败"""
+        records, handler = self._capture_warnings()
+        try:
+            with patch.object(local_tools_api.repository, "touch_device_seen", lambda *a, **k: {"selected": True}), \
+                 patch.object(screen_stream, "heartbeat_notice", side_effect=error_class(message)):
+                response = _heartbeat(_client())
+        finally:
+            logger.remove(handler)
+        assert response.status_code == 200
+        body = response.json()
+        assert set(body) == {"success", "selected", "server_time", "parallel_claim", "screen_stream"}
+        assert body["success"] is True and body["screen_stream"] == {"version": 1}
+        screen_warnings = [r for r in records if "画面会话查询" in r["message"]]
+        assert len(screen_warnings) == 1
+        warning = screen_warnings[0]
+        assert warning["level"].name == "WARNING" and "画面会话查询超时" in warning["message"]
+        assert f"device={DEVICE}" in warning["message"]
+        assert warning["exception"] is None
+        assert not [r for r in records if r["level"].name == "ERROR"]
+
+    @pytest.mark.parametrize("error", [
+        pytest.param(psycopg2.OperationalError("connection pool exhausted"), id="pool-exhausted"),
+        pytest.param(pg_errors.UndefinedTable("relation does not exist"), id="undefined-table"),
+    ])
+    def test_other_database_errors_are_still_reported_as_failures(self, error):
+        """数据库异常里只有 55P03 和 57014 算超时；其余带堆栈记为「查询失败」"""
+        records, handler = self._capture_warnings()
+        try:
+            with patch.object(local_tools_api.repository, "touch_device_seen", lambda *a, **k: {"selected": True}), \
+                 patch.object(screen_stream, "heartbeat_notice", side_effect=error):
+                response = _heartbeat(_client())
+        finally:
+            logger.remove(handler)
+        assert response.status_code == 200
+        assert "screen_session" not in response.json()
+        screen_warnings = [r for r in records if "画面会话查询" in r["message"]]
+        assert len(screen_warnings) == 1
+        assert "画面会话查询失败" in screen_warnings[0]["message"]
+        assert screen_warnings[0]["exception"] is not None
 
     def test_query_timeout_only_warns_and_heartbeat_returns_within_a_second(self):
         def _slow(*args, **kwargs):
@@ -1265,6 +1537,24 @@ class TestViewerRoutes:
             response = _client().post(f"{SESSION_PATH}/signals", json={"type": "candidate", "payload": {}})
         assert response.status_code == 409
         assert response.json() == {"detail": {"error": "信令条数超过上限", "code": "SCREEN_SIGNAL_LIMIT", "debug": ""}}
+
+    @pytest.mark.parametrize(("method", "path", "json_body", "stub_name"), [
+        ("post", f"/api/local-tools/devices/{DEVICE}/screen-sessions", None, "create_session"),
+        ("get", SESSION_PATH, None, "load_session"),
+        ("post", f"{SESSION_PATH}/signals", {"type": "candidate", "payload": {}}, "append_signal"),
+        ("post", "/api/local-tools/runtime/screen/session", RUNTIME_SESSION_BODY, "load_session"),
+        ("post", "/api/local-tools/runtime/screen/signal", RUNTIME_SIGNAL_BODY, "append_signal"),
+    ])
+    def test_busy_is_503_on_every_screen_endpoint(self, method, path, json_body, stub_name):
+        """等锁超时：503 SCREEN_STREAM_BUSY，调用方下一次轮询会重试"""
+        stubs, stub_patch = _patched_stubs()
+        stubs[stub_name].side_effect = screen_stream.ScreenStreamError("SCREEN_STREAM_BUSY")
+        kwargs = {"json": json_body} if json_body is not None else {}
+        with stub_patch, patch.object(local_tools_api, "get_current_user", _as_user):
+            response = getattr(_client(), method)(path, **kwargs)
+        assert response.status_code == 503
+        assert response.json() == {"detail": {"error": "实时画面暂时繁忙，请稍后重试",
+                                              "code": "SCREEN_STREAM_BUSY", "debug": ""}}
 
 
 class TestRuntimeRoutes:

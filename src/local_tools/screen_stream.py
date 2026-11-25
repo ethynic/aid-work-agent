@@ -7,6 +7,8 @@
 - 超时判定全部用数据库时钟：时间戳写 NOW()，比较用同一条 SELECT 带回的 NOW()::timestamp。
   不能直接取 NOW()：它在 Python 里带时区，而 TIMESTAMP 列不带，两者比较会抛 TypeError。
 - 读取会话时顺带收敛超时（SELECT ... FOR UPDATE 后判定并写回），不设后台任务。
+- 每条画面事务的第一条语句是 SET LOCAL，给等锁设上限（见 HEARTBEAT_TIMEOUT_MS、SESSION_LOCK_TIMEOUT_MS）：
+  应用层放弃等待并不会停掉线程里的 SQL，只有数据库到点取消语句，连接才会归还（设计 4.4）。
 - 信令内容只转交和保存，不解析、不写日志；会话结束时清空。
 
 调用方（FastAPI async endpoint）必须用 asyncio.to_thread 包裹，禁止在事件循环内直接调用。
@@ -14,8 +16,9 @@
 
 import json
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta
-from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Annotated, Any, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from psycopg2.extras import Json
@@ -62,6 +65,18 @@ ENDED_NOTICE_SECONDS = 30
 MAX_SIGNALS = 128
 MAX_PAYLOAD_BYTES = 16 * 1024
 
+# 画面这一路的 SQL 在数据库层的等待上限（毫秒）。应用层的 asyncio.wait_for 到点放弃等待时，
+# 线程里的 SQL 还在等行锁，连接也不归还；连续几次就把连接池占满，拖累设备心跳和任务（设计 4.4）。
+# 所以每条画面事务先用 SET LOCAL 设上限，到点由 PostgreSQL 取消语句，连接随之归还。
+# 心跳里的查询：等锁和整条语句都限时，比应用层的 0.5 秒略短，被取消时按「查询超时」告警
+HEARTBEAT_TIMEOUT_MS = 400
+# 网页和 Runtime 的轮询（每 500 毫秒一次）：只限等锁。超时转成 SCREEN_STREAM_BUSY，下一次轮询会重试；
+# 整条语句的时限沿用连接池的默认值
+SESSION_LOCK_TIMEOUT_MS = 1000
+# PostgreSQL 到点取消语句时的错误码：55P03 是 lock_timeout，57014 是 statement_timeout
+PG_LOCK_NOT_AVAILABLE = "55P03"
+PG_QUERY_CANCELED = "57014"
+
 # 错误码 → (HTTP 状态, 用户可见文案)
 ERRORS = {
     "SCREEN_STREAM_DISABLED": (503, "实时画面功能未启用"),
@@ -72,6 +87,7 @@ ERRORS = {
     "SCREEN_SESSION_NOT_FOUND": (404, "会话不存在或无权访问"),
     "SCREEN_SESSION_ENDED": (409, "会话已结束"),
     "SCREEN_SIGNAL_LIMIT": (409, "信令条数超过上限"),
+    "SCREEN_STREAM_BUSY": (503, "实时画面暂时繁忙，请稍后重试"),
 }
 
 
@@ -325,6 +341,13 @@ _SAVE_SQL = """
 # 读取会话只刷新访问方的访问时间，不重写整行（信令最多 128 条，建连期间两端每 500 毫秒读一次）
 _TOUCH_SQL = "UPDATE local_tool_screen_sessions SET {column} = NOW() WHERE id = %s"
 
+# 每条画面事务的第一条语句。SET LOCAL 只在当前事务内有效，get_db_connection 退出时回滚，
+# 连接归还后不影响别的使用方。毫秒数是上面的模块常量，直接拼进 SQL。
+# PostgreSQL 的 SET 一条语句只能设一个参数，所以心跳路径上是紧挨着的两条
+_SESSION_LOCK_TIMEOUT_SQL = f"SET LOCAL lock_timeout = {SESSION_LOCK_TIMEOUT_MS}"
+_HEARTBEAT_LOCK_TIMEOUT_SQL = f"SET LOCAL lock_timeout = {HEARTBEAT_TIMEOUT_MS}"
+_HEARTBEAT_STATEMENT_TIMEOUT_SQL = f"SET LOCAL statement_timeout = {HEARTBEAT_TIMEOUT_MS}"
+
 
 def viewer_scope(tenant_id: str, user_id: str, device_id: str) -> Scope:
     """网页侧：会话必须同时属于当前租户、当前用户和路径里的设备"""
@@ -334,6 +357,33 @@ def viewer_scope(tenant_id: str, user_id: str, device_id: str) -> Scope:
 def runtime_scope(tenant_id: str, device_id: str) -> Scope:
     """设备侧：会话必须属于当前鉴权设备及其租户"""
     return "tenant_id = %s AND device_id = %s", (tenant_id, device_id)
+
+
+def is_database_timeout(error: BaseException) -> bool:
+    """这条异常是不是数据库到点取消了语句（lock_timeout 或 statement_timeout）。
+
+    心跳里的画面查询被这样取消时按「查询超时」处理：只告警，不算失败。
+    """
+    return getattr(error, "pgcode", None) in (PG_LOCK_NOT_AVAILABLE, PG_QUERY_CANCELED)
+
+
+@contextmanager
+def _session_transaction() -> Iterator[Tuple[Any, Any]]:
+    """网页和 Runtime 的画面会话事务，产出 (conn, cursor)。
+
+    第一条语句给等锁设上限：会话行被长期占住时，两端每 500 毫秒一次的轮询会各占一个连接等锁，
+    同样能把连接池占满。等锁超时（55P03）转成 SCREEN_STREAM_BUSY，调用方下一次轮询会重试；
+    其他异常原样抛出。
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_SESSION_LOCK_TIMEOUT_SQL)
+            yield conn, cursor
+    except Exception as error:
+        if getattr(error, "pgcode", None) == PG_LOCK_NOT_AVAILABLE:
+            raise ScreenStreamError("SCREEN_STREAM_BUSY") from None
+        raise
 
 
 def _save(cursor, row: Dict[str, Any], seen_column: Optional[str] = None) -> None:
@@ -380,8 +430,7 @@ def create_session(
     tenant_id: str, user_id: str, device_id: str, *, device_offline_seconds: int,
 ) -> Dict[str, Any]:
     """网页创建会话：锁住设备行后依次校验归属、在线、能力、没有未结束会话，再插入 pending 会话"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
+    with _session_transaction() as (conn, cursor):
         cursor.execute(
             """SELECT last_seen_at, capabilities_json, NOW()::timestamp AS db_now
                FROM local_tool_devices
@@ -425,8 +474,7 @@ def load_session(
 ) -> Optional[Dict[str, Any]]:
     """读取会话（网页轮询或 Runtime 取信令）：收敛超时、刷新访问方的时间，返回会话和对方发来的新信令"""
     caller, peer = (DIR_WEB, DIR_RT) if viewer else (DIR_RT, DIR_WEB)
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
+    with _session_transaction() as (conn, cursor):
         row = _lock_session(cursor, scope, session_id, device_offline_seconds)
         if row is None:
             return None
@@ -450,8 +498,7 @@ def append_signal(
     返回 {"seq": 新信令的序号, "session": 会话}。end 不占信令存储（会话结束时信令清空），
     seq 为 None；对已结束的会话再发 end 幂等成功，不改任何数据。
     """
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
+    with _session_transaction() as (conn, cursor):
         row = _lock_session(cursor, scope, session_id, device_offline_seconds)
         if row is None:
             return None
@@ -492,7 +539,11 @@ _NOTICE_RENEW_SQL = """
 
 
 def heartbeat_notice(device_id: str, *, device_offline_seconds: int) -> Optional[Dict[str, Any]]:
-    """心跳里的画面会话通知（设计 5.1）：一到两条按索引的语句，不显式加锁。
+    """心跳里的画面会话通知（设计 5.1）：先设等待上限，再执行一到两条按索引的语句，不显式加锁。
+
+    续期和收敛要更新会话行，可能等行锁。等锁超过 HEARTBEAT_TIMEOUT_MS 毫秒由数据库取消语句（55P03，
+    语句超时是 57014），异常照常抛出、连接随之归还，路由层按「查询超时」处理。不设这个上限的话，
+    应用层 0.5 秒放弃等待之后，这条线程还在等锁、连接也不归还。
 
     返回 {"id", "state"}：pending 等 Runtime 应答；streaming 每次心跳都带，作为续期；
     ended 只在开始传画面之后结束的 30 秒内带。建连阶段（prepared/connecting/verifying）
@@ -500,6 +551,8 @@ def heartbeat_notice(device_id: str, *, device_offline_seconds: int) -> Optional
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        cursor.execute(_HEARTBEAT_LOCK_TIMEOUT_SQL)
+        cursor.execute(_HEARTBEAT_STATEMENT_TIMEOUT_SQL)
         cursor.execute(_NOTICE_SQL, (device_id, device_id, ENDED_NOTICE_SECONDS))
         row = cursor.fetchone()
         if row is None:

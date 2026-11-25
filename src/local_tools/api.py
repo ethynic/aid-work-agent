@@ -655,10 +655,13 @@ async def _attach_screen_session_notice(response: Dict[str, Any], device_id: str
                               device_offline_seconds=ONLINE_THRESHOLD_SECONDS),
             timeout=SCREEN_NOTICE_TIMEOUT_SECONDS,
         )
-    except asyncio.TimeoutError:
-        logger.warning(f"后端日志：画面会话查询超时 device={device_id}")
-    except Exception:
-        logger.opt(exception=True).warning(f"后端日志：画面会话查询失败 device={device_id}")
+    except Exception as error:
+        # 两种超时都只记一条不带堆栈的告警：应用层等到 0.5 秒放弃（asyncio.TimeoutError），或者
+        # 数据库在库里的等待上限到点、取消了语句（连接已归还）。其余异常才带堆栈记为失败。
+        if isinstance(error, asyncio.TimeoutError) or screen_stream.is_database_timeout(error):
+            logger.warning(f"后端日志：画面会话查询超时 device={device_id}")
+        else:
+            logger.opt(exception=True).warning(f"后端日志：画面会话查询失败 device={device_id}")
     else:
         if notice:
             response["screen_session"] = notice

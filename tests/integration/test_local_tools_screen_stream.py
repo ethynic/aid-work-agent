@@ -458,6 +458,32 @@ class TestFeatureDisabled:
         assert _heartbeat(client, token)["screen_session"] == {"id": session_id, "state": "pending"}
 
 
+class TestStunUrlsConfiguration:
+    def test_only_stun_addresses_are_handed_out(self, client, users):
+        """共同契约 2.25：只下发 STUN 服务器地址。配置里混进 TURN 地址（可能带凭据）或不带协议头的条目时，
+        配置模型把它们丢掉，下发地址的两个接口只返回 STUN 地址，顺序不变"""
+        from src.config.settings import ScreenStreamConfig, settings
+
+        user = users[0]
+        device_id, token = _online_device(client, user, "配置校验机")
+        mixed = [
+            "turn:demo-user:demo-pass@relay.example.com:3478",
+            "stun:stun.example.net:3478",
+            "relay.example.com",
+            "stuns:stuns.example.net",
+            "turns:relay.example.com:5349",
+        ]
+        with pytest.MonkeyPatch.context() as patcher:
+            patcher.setattr(settings, "screen_stream", ScreenStreamConfig(stun_urls=mixed))
+            created = _create(client, user, device_id)
+            assert created.status_code == 200, created.text
+            session_id = created.json()["session"]["id"]
+            runtime = _runtime_read(client, token, session_id)
+            assert runtime.status_code == 200, runtime.text
+        assert created.json()["session"]["stun_urls"] == ["stun:stun.example.net:3478", "stuns:stuns.example.net"]
+        assert runtime.json()["session"]["stun_urls"] == ["stun:stun.example.net:3478", "stuns:stuns.example.net"]
+
+
 # ---------------------------------------------------------------------------
 # 全流程信令
 # ---------------------------------------------------------------------------
@@ -738,6 +764,195 @@ class TestHeartbeatNotice:
         _age_device(device_id, 300)
         assert _heartbeat(client, token)["screen_session"] == {"id": session_id, "state": "streaming"}
         assert _db_session(session_id)["state"] == "streaming"
+
+
+# ---------------------------------------------------------------------------
+# 画面这一路被行锁挡住时，不占住数据库连接
+# ---------------------------------------------------------------------------
+
+
+class TestBlockedSessionRow:
+    """画面这一路被行锁挡住时，不能占住数据库连接、拖累别的设备（设计 4.4）。
+
+    另一条连接把一条 streaming 会话行锁住、不提交。心跳里的续期 UPDATE 要等这把锁：应用层 0.5 秒后
+    放弃等待时，线程里的 SQL 还在等，连接也不归还，连续心跳几次就把连接池占满，别的设备心跳、领取任务
+    都会报 connection pool exhausted。所以画面这一路的 SQL 在数据库层有自己的等待上限，到点由 PostgreSQL
+    取消语句、归还连接；网页和 Runtime 的轮询等锁超时得到 503，下一次轮询再试。
+    """
+
+    def test_wait_limits_apply_only_inside_the_transaction(self):
+        """等待上限的语句在真实数据库上成立：事务内生效（会话路径等锁 1 秒；心跳路径等锁和整条语句各 400 毫秒，
+        且不动整条语句的时限），事务结束后恢复这条连接原来的值。
+        mock 连接不解析 SQL，语句写法对不对只能在这里验证"""
+        from src.db.database import get_db_connection
+        from src.local_tools import screen_stream
+
+        def limits(cursor):
+            cursor.execute("SHOW lock_timeout")
+            lock_timeout = cursor.fetchone()["lock_timeout"]
+            cursor.execute("SHOW statement_timeout")
+            return lock_timeout, cursor.fetchone()["statement_timeout"]
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            original = limits(cursor)
+            assert original[0] == "0"
+
+            cursor.execute(screen_stream._SESSION_LOCK_TIMEOUT_SQL)
+            assert limits(cursor) == ("1s", original[1])
+            conn.rollback()
+
+            cursor.execute(screen_stream._HEARTBEAT_LOCK_TIMEOUT_SQL)
+            cursor.execute(screen_stream._HEARTBEAT_STATEMENT_TIMEOUT_SQL)
+            assert limits(cursor) == ("400ms", "400ms")
+            conn.rollback()
+
+            assert limits(cursor) == original
+
+    @pytest.mark.slow
+    def test_blocked_session_row_does_not_drain_the_connection_pool(self, client, users):
+        import asyncio
+        import os
+
+        import httpx
+        import psycopg2
+        from loguru import logger
+
+        from src.db import database
+        from src.local_tools import api as local_tools_api
+        from src.local_tools import repository, screen_stream
+
+        dsn = os.environ.get("DATABASE_URL", "")
+        if not dsn:
+            pytest.skip("需要显式的测试库连接")
+        user = users[0]
+        user_headers = _auth(user["token"])
+        device_a, token_a = _online_device(client, user, "会话被锁的设备")
+        device_b, token_b = _online_device(client, user, "另一台设备")
+        session_id = _new_session(client, user, device_a)
+        _reach(client, user, device_a, token_a, session_id, "streaming")
+        # 网页读一次，刷新它的访问时间（免得被当成网页已离开）；再把续期时间改早，
+        # 锁释放之后「续期照常落库」才看得出
+        assert _read(client, user, device_a, session_id).status_code == 200
+        _age(session_id, "runtime_seen_at", 20)
+        busy = {"error": "实时画面暂时繁忙，请稍后重试", "code": "SCREEN_STREAM_BUSY", "debug": ""}
+
+        # 这条连接不走连接池：锁本身不占池里的连接，池里可用的连接数正好是连接池上限
+        blocker = psycopg2.connect(dsn, connect_timeout=10)
+        try:
+            blocker_cursor = blocker.cursor()
+            blocker_cursor.execute("SELECT id FROM local_tool_screen_sessions WHERE id = %s FOR UPDATE", (session_id,))
+            assert blocker_cursor.fetchone() is not None
+
+            async def while_row_is_locked():
+                """行锁占着的时候把被挡住的阶段跑完。
+
+                这里不用 TestClient：它在每个请求结束时会关掉事件循环，并等线程池里还在跑的线程结束，
+                也就是那条在等行锁的数据库查询。于是被挡住的画面查询表现为一次心跳 30 秒才返回（语句超时），
+                连接池根本来不及被占满。真实服务（uvicorn）不等这种线程：处理函数一返回响应就送达，
+                查询留在后台占着连接。所以改用挂在同一个事件循环上的异步客户端，和真实服务一致。
+                无论成败，退出前先释放行锁：否则等锁的线程不会结束，事件循环也收不了尾。
+                """
+                records = []
+                handler = logger.add(lambda message: records.append(message.record), level="WARNING")
+                try:
+                    transport = httpx.ASGITransport(app=client.app, raise_app_exceptions=False)
+                    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as live:
+                        heartbeat = "/api/local-tools/runtime/heartbeat"
+
+                        def connections_checked_out():
+                            """连接池里正被借用的连接数。请求都串行发出，这个数在请求之间应当回到基线"""
+                            return len(database.get_postgres_pool()._used)
+
+                        baseline = connections_checked_out()
+                        # 这台设备连续心跳「连接池上限 + 2」次，每一轮另一台设备也心跳一次
+                        checked_out_after_heartbeat = []
+                        for attempt in range(database.DB_POOL_MAX + 2):
+                            started_at = time.perf_counter()
+                            screen = await live.post(heartbeat, json={}, headers=_auth(token_a))
+                            screen_elapsed = time.perf_counter() - started_at
+                            checked_out_after_heartbeat.append(connections_checked_out())
+                            other = await live.post(heartbeat, json={}, headers=_auth(token_b))
+                            assert other.status_code == 200, f"第 {attempt + 1} 轮：另一台设备的心跳被拖垮 {other.text}"
+                            assert other.json()["success"] is True
+                            assert screen.status_code == 200, f"第 {attempt + 1} 轮：这台设备的心跳失败 {screen.text}"
+                            assert screen.json()["success"] is True and "screen_session" not in screen.json()
+                            assert screen_elapsed < 2.0, f"第 {attempt + 1} 轮：这台设备的心跳 {screen_elapsed:.2f} 秒才返回"
+                        # 每次心跳返回的那一刻，被挡住的画面查询占着的连接已经归还。如果是应用层 0.5 秒放弃等待、
+                        # 线程还在等锁，连接就不会回来，这个数会一轮比一轮多
+                        assert checked_out_after_heartbeat == [baseline] * (database.DB_POOL_MAX + 2)
+                        # 数据库取消语句按「查询超时」告警，不算失败；另一台设备没有画面查询的告警
+                        screen_warnings = [record for record in records if "画面会话查询" in record["message"]]
+                        assert all("画面会话查询超时" in record["message"] for record in screen_warnings)
+                        assert len([record for record in screen_warnings
+                                    if f"device={device_a}" in record["message"]]) == database.DB_POOL_MAX + 2
+                        assert not [record for record in screen_warnings if f"device={device_b}" in record["message"]]
+
+                        # 取消语句的是 PostgreSQL：锁还占着时直接查，抛的是数据库到点取消的异常。
+                        # 两个上限都是 400 毫秒，谁先到点由数据库决定：等锁超时是 55P03，语句超时是 57014
+                        with pytest.raises((psycopg2.errors.LockNotAvailable, psycopg2.errors.QueryCanceled)) as caught:
+                            await asyncio.to_thread(screen_stream.heartbeat_notice, device_a,
+                                                    device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS)
+                        assert caught.value.pgcode in ("55P03", "57014")
+                        assert connections_checked_out() == baseline
+
+                        # 另一台设备照常走完一次完整调用：创建、领取、started、提交结果
+                        invocation_id = repository.create_invocation(
+                            user["tenant_id"], user["user_id"], device_b, "boss_goto", {"url": "https://example.com"})
+                        claim = await live.post("/api/local-tools/runtime/claim?wait=2", headers=_auth(token_b))
+                        assert claim.status_code == 200, claim.text
+                        assert claim.json()["invocation_id"] == invocation_id
+                        claim_token = claim.json()["claim_token"]
+                        invocation = f"/api/local-tools/runtime/invocations/{invocation_id}"
+                        started = await live.post(f"{invocation}/started", json={"claim_token": claim_token},
+                                                  headers=_auth(token_b))
+                        assert started.status_code == 200 and started.json()["state"] == "running", started.text
+                        result = await live.post(
+                            f"{invocation}/result",
+                            json={"claim_token": claim_token, "success": True, "effect": "applied",
+                                  "data": {"ok": True}}, headers=_auth(token_b))
+                        assert result.status_code == 200 and result.json()["state"] == "succeeded", result.text
+
+                        # 被锁住的这条会话：读写都及时返回 503 SCREEN_STREAM_BUSY，而不是挂着等锁
+                        session_path = _path(device_a, session_id)
+                        candidate = {"candidate": "candidate:1 1 udp 1 192.0.2.1 50000 typ host"}
+                        blocked_requests = [
+                            ("网页读取", lambda: live.get(session_path, headers=user_headers)),
+                            ("Runtime 读取", lambda: live.post("/api/local-tools/runtime/screen/session",
+                                                                json={"session_id": session_id, "after_seq": 0},
+                                                                headers=_auth(token_a))),
+                            ("网页追加信令", lambda: live.post(f"{session_path}/signals",
+                                                                json={"type": "candidate", "payload": candidate},
+                                                                headers=user_headers)),
+                            ("Runtime 追加信令", lambda: live.post(
+                                "/api/local-tools/runtime/screen/signal",
+                                json={"session_id": session_id, "type": "candidate", "payload": candidate},
+                                headers=_auth(token_a))),
+                            ("网页创建会话", lambda: live.post(
+                                f"/api/local-tools/devices/{device_a}/screen-sessions", headers=user_headers)),
+                        ]
+                        for label, send in blocked_requests:
+                            started_at = time.perf_counter()
+                            resp = await send()
+                            elapsed = time.perf_counter() - started_at
+                            assert resp.status_code == 503, f"{label}：{resp.status_code} {resp.text[:200]}"
+                            assert _detail(resp) == busy, f"{label}：{resp.text[:200]}"
+                            assert elapsed < 3.0, f"{label}：{elapsed:.2f} 秒才返回"
+                        # 被挡住的这段时间里续期没有落库，会话也没有被改动
+                        assert _is_fresh(session_id, "runtime_seen_at") is False
+                        assert _db_session(session_id)["state"] == "streaming"
+                finally:
+                    logger.remove(handler)
+                    blocker.rollback()  # 释放行锁
+
+            asyncio.run(while_row_is_locked())
+            # 锁释放之后：这台设备的心跳重新带会话通知，续期照常落库
+            body = _heartbeat(client, token_a)
+            assert body["screen_session"] == {"id": session_id, "state": "streaming"}
+            assert _is_fresh(session_id, "runtime_seen_at") is True
+            assert _db_session(session_id)["state"] == "streaming"
+        finally:
+            blocker.close()
 
 
 # ---------------------------------------------------------------------------
