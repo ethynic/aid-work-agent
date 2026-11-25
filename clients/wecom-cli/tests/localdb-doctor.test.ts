@@ -517,6 +517,29 @@ test('步骤 4 版本不在矩阵（unknown）→ ui(compat)', async () => {
   assert.equal(h.snapshotCalls.length, 0)
 })
 
+test('doctor 同系列兼容仅检查已有缓存，成功或失败均保留既有状态', async () => {
+  for (const cache of ['valid', 'missing', 'unverified']) {
+    const h = makeHarness({
+      install: { version: '5.0.11.9999' },
+      storedKey: cache === 'missing' ? null : { keyHex: KEY_HEX, savedAt: 'fixture' },
+      ...(cache === 'unverified' ? { decryptPayload: { ok: false, error: 'KEY_VERIFY_FAILED' } } : {}),
+    })
+    let savedKeys = 0
+    h.deps.saveKeyFn = async () => { savedKeys++; return true }
+    const report = await runLocaldbDoctor({}, h.deps)
+    assert.ok(step(report, 4)!.detail.includes('仅复用已有缓存'))
+    assert.equal(report.localdb_ready, cache === 'valid')
+    if (cache === 'missing') assert.match(report.mode_decision.reason, /没有可供同系列兼容使用/)
+    if (cache === 'unverified') assert.match(report.mode_decision.reason, /缓存校验未通过/)
+    assert.deepEqual(h.pyCalls.map(call => call.args[0]), cache === 'valid'
+      ? ['active-account', 'decrypt', 'query'] : cache === 'missing' ? ['active-account'] : ['active-account', 'decrypt'])
+    assert.equal(h.loadKeyCalls.length, 1)
+    assert.equal(h.clearKeyCalls + savedKeys, 0)
+    assert.deepEqual(h.states, [])
+    assert.equal(report.state_saved, false)
+  }
+})
+
 test('步骤 4 版本 broken → ui(compat)；stale 视为可用继续深检', async () => {
   const broken = makeHarness({
     matrix: { schema_version: 1, entries: { '5.0.11.6029': { ...MATRIX.entries['5.0.11.6029']!, status: 'broken' } } },

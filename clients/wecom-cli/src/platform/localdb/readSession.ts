@@ -68,7 +68,7 @@ export async function readLocaldbSession(
   const prepared = await prepareDecryptedDbs(
     { message: paths.message, user: paths.user, session: paths.session },
     {
-      ctx, current, version: admission.version, expected: admission.expected, algorithm: admission.algorithm,
+      ctx, current, ...admission,
       state, getState, putState, workPrefix: 'read-session',
       tolerateSessionFailure: args.target?.type === 'contact', deps,
     },
@@ -171,12 +171,12 @@ export async function readLocaldbSession(
       cursor, resolved_target: { name: target.name, section: target.type === 'group' ? '群聊' : '联系人', subtitle: '' },
     } }
     const latest = getState()
-    if (latest?.mode === 'ui' && latest.kind === 'transient' && latest.checked_at === state?.checked_at) {
+    if (!admission.cacheOnly && latest?.mode === 'ui' && latest.kind === 'transient' && latest.checked_at === state?.checked_at) {
       const saved = putState({ ...latest, mode: 'db', kind: undefined, version: admission.version, checked_at: new Date(now()).toISOString(), reason: 'runtime_read_ok', scan_failure: undefined })
       outcome.data!.state_saved = saved
       if (!saved) outcome.data!.hint = '本次本地库读取成功，运行时模式提升未保存'
       log({ type: 'mode_decided', reason: saved ? 'runtime_promoted' : 'state_write_failed' })
-    } else if (latest?.scan_failure) {
+    } else if (!admission.cacheOnly && latest?.scan_failure) {
       putState({ ...latest, scan_failure: undefined })
     }
     log({ type: 'db_success', stage: 'read-session' })

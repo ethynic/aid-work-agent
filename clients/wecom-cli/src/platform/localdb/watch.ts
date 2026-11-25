@@ -238,7 +238,7 @@ export async function runLocaldbWatch(
   const prepared = await prepareDecryptedDbs(
     { message: paths.message, user: paths.user, session: paths.session },
     {
-      ctx, current, version: admission.version, expected: admission.expected, algorithm: admission.algorithm,
+      ctx, current, ...admission,
       state, getState, putState, workPrefix: 'watch',
       // focus 解析需要 session（R 群名）；缺 session 时该 focus 项解析失败进 failed，不拖垮整轮
       tolerateSessionFailure: true, deps,
@@ -510,7 +510,7 @@ export async function runLocaldbWatch(
       },
     }
     const latest = getState()
-    if (latest?.scan_failure) putState({ ...latest, scan_failure: undefined })
+    if (!admission.cacheOnly && latest?.scan_failure) putState({ ...latest, scan_failure: undefined })
     log({ type: 'db_success', stage: 'watch' })
   } catch (err) {
     failure = err

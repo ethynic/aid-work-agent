@@ -201,7 +201,7 @@ export async function readLocaldbUnread(
   const prepared = await prepareDecryptedDbs(
     { message: paths.message, user: paths.user, session: paths.session },
     {
-      ctx, current, version: admission.version, expected: admission.expected, algorithm: admission.algorithm,
+      ctx, current, ...admission,
       state, getState, putState, workPrefix: 'unread',
       // 快照语义：focus 单目标解析失败进 failed 部分返回，可选 session 失败不拖垮整个快照
       tolerateSessionFailure: true, deps,
@@ -324,7 +324,7 @@ export async function readLocaldbUnread(
       },
     }
     const latest = getState()
-    if (latest?.scan_failure) putState({ ...latest, scan_failure: undefined })
+    if (!admission.cacheOnly && latest?.scan_failure) putState({ ...latest, scan_failure: undefined })
     log({ type: 'db_success', stage: 'unread' })
   } catch (err) {
     failure = err

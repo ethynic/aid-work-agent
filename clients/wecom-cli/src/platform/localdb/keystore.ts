@@ -7,7 +7,7 @@
  *   key_blob:<dpapi base64>, saved_at}。明文密钥只在单次调用进程内存与 TS→py stdin
  *   管道流转：不落日志、不进命令行参数、不进异常消息、不进返回值之外的业务输出。
  * - 绑定：{user_id, data_dir, algorithm} 三元组精确匹配，任一变化即失效——loadKey 发现
- *   不匹配时顺带 clearKey（旧账号残留不留盘）并返回 null。
+ *   不匹配时返回 null，默认顺带 clearKey；同系列兼容检查保留已有缓存。
  * - 失效语义：文件缺失/损坏/binding 不匹配/DPAPI 解密失败（含 exit≠0）一律返回 null，
  *   视同失效，调用方走重扫；**仅页 1 核验明确失败才删除密钥属调用方职责**——本组件
  *   不做任何 crypto（页 1 先知核验在 py 驱动），binding 不匹配的清除是唯一例外。
@@ -46,6 +46,7 @@ export interface SaveKeyArgs {
 export interface LoadKeyArgs {
   binding: KeyBinding
   dir?: string | null
+  preserveOnMismatch?: boolean
 }
 
 export interface KeystoreDeps {
@@ -130,8 +131,8 @@ export async function saveKey(args: SaveKeyArgs, deps: KeystoreDeps = {}): Promi
 
 /**
  * 读取主密钥。文件缺失/JSON 损坏/shape 不合法/binding 三元组不匹配/DPAPI 解密失败/
- * 解密产物不是合法主密钥 hex → null（binding 不匹配时顺带 clearKey，旧账号残留不留盘；
- * 其余情形保留现场，不臆测清除）。密钥解密后的页 1 先知核验属调用方（本组件不做 crypto）。
+ * 解密产物不是合法主密钥 hex → null。binding 不匹配时默认顺带 clearKey；
+ * 同系列兼容检查可保留已有缓存。密钥解密后的页 1 核验属调用方。
  */
 export async function loadKey(args: LoadKeyArgs, deps: KeystoreDeps = {}): Promise<StoredKey | null> {
   const d = resolveDir(args.dir)
@@ -149,7 +150,7 @@ export async function loadKey(args: LoadKeyArgs, deps: KeystoreDeps = {}): Promi
   if (!isNonEmptyString(record.key_blob)) return null
   if (typeof record.saved_at !== 'string') return null
   if (!sameBinding(args.binding, record.binding)) {
-    clearKey(d) // 三元组任一变化即失效；旧账号残留不留盘（best-effort，清除结果不影响返回）
+    if (!args.preserveOnMismatch) clearKey(d)
     return null
   }
   let keyHex: string

@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   loadMatrix,
   localDbStateDir,
+  lookupCachedVersionBaseline,
   lookupVersion,
   readLocalState,
   writeLocalState,
@@ -97,6 +98,24 @@ test('已验证的小版本复用既有算法，但不放行相邻未验证版�
   }
   assert.equal(lookupVersion(matrix, '5.0.13.6006').status, 'unknown')
   assert.equal(lookupVersion(matrix, '5.0.13').status, 'unknown')
+})
+
+test('仅未登记的同系列构建可以选择一致的已验证缓存基线', () => {
+  const build = '5.0.13.8035'
+  const entries = { '5.0.13.6005': FULL_VALIDATED_ENTRY, '5.0.13.6010': { ...FULL_VALIDATED_ENTRY } }
+  const matrix = loadMatrix({ schema_version: 1, entries })
+  assert.deepEqual(lookupCachedVersionBaseline(matrix, build), FULL_VALIDATED_ENTRY)
+  for (const version of ['5.0.13.6005', '5.0.14.8035', '5.0.13', '5.0.13.08035', '5.0.13.8035 ']) {
+    assert.equal(lookupCachedVersionBaseline(matrix, version), null, version)
+  }
+  for (const entry of [null, { status: 'broken' }, { status: 'validated' }]) {
+    const explicit = loadMatrix({ schema_version: 1, entries: { ...entries, [build]: entry } })
+    assert.equal(lookupCachedVersionBaseline(explicit, build), null)
+  }
+  const disagree = loadMatrix({ schema_version: 1, entries: {
+    ...entries, '5.0.13.6011': { ...FULL_VALIDATED_ENTRY, schema_profile: 'other' },
+  } })
+  assert.equal(lookupCachedVersionBaseline(disagree, build), null)
 })
 
 test('发行布局冒烟：临时目录只含 dist/src 树 + drivers（无 src）——dist 处的编译模块 loadMatrix 默认路径可加载；缺矩阵资产则 null', async () => {
