@@ -80,7 +80,7 @@
             </div>
             <!-- AI 消息 -->
             <div v-else class="flex justify-start">
-              <div class="max-w-[85%] space-y-2">
+              <div class="max-w-[85%] has-[table]:max-w-full space-y-2">
                 <div v-if="msg.images && msg.images.length" class="max-w-md">
                   <ImageGallery :images="msg.images" />
                 </div>
@@ -100,7 +100,7 @@
 
           <!-- 流式 AI 回复 -->
           <div v-if="streamingText || waitingText || streamFailed" class="flex justify-start">
-            <div class="max-w-[85%] space-y-2">
+            <div class="max-w-[85%] has-[table]:max-w-full space-y-2">
               <div
                 v-if="streamingText"
                 class="bg-surface border border-default rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm leading-relaxed markdown-body"
@@ -788,5 +788,30 @@ async function observeRunner(runnerId: string) {
 .markdown-body :deep(img) {
   max-width: 100%;
   border-radius: 8px;
+}
+/* 窄气泡内 Markdown 表格防挤压（2026-11-25）：外盒变 block 后表格总宽由内容
+   决定，超出气泡宽度出横向滚动条，列不再被压成 2~3 字竖条 */
+.markdown-body :deep(table) {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 13px;
+  -webkit-overflow-scrolling: touch;
+}
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  border: 1px solid var(--border-default);
+  padding: 6px 10px;
+  text-align: left;
+  overflow-wrap: normal; /* 覆盖 .markdown-body 继承的 anywhere，价格等短内容不被逐字切断 */
+  min-width: 4em; /* 每列至少 4 字宽，杜绝竖条挤压 */
+}
+.markdown-body :deep(thead th) {
+  background: var(--bg-canvas, #f5f6f8);
+  font-weight: 600;
+  white-space: nowrap; /* 表头不折行 */
 }
 </style>
