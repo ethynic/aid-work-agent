@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>screen-stream-poc p4</title>
+<style>
+  body { margin: 0; padding: 16px; background: #0b0e10; color: #e8ece9; font: 13px/1.6 Consolas, "Microsoft YaHei UI", monospace; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="out">p4 ready</div>
+<script src="stats.js"></script>
+<script>
+// 候选与权限测试页：在真实浏览器里读取「本地网络访问」相关权限状态。不含任何画面，也不发起探测。
+const out = document.getElementById('out');
+window.p4 = {
+  info() {
+    return { origin: location.origin, secure: isSecureContext, ua: navigator.userAgent };
+  },
+  // 逐个询问权限状态；不认识的权限名会抛 TypeError，这本身就是有用的事实。
+  async perms() {
+    const r = {};
+    for (const name of ['local-network-access', 'local-network', 'loopback-network', 'display-capture']) {
+      try { const st = await navigator.permissions.query({ name }); r[name] = st.state; }
+      catch (e) { r[name] = 'ERR:' + (e && e.name); }
+    }
+    return r;
+  },
+};
+out.textContent += '\norigin ' + location.origin + ' secure=' + isSecureContext;
+</script>
+</body>
+</html>

@@ -6,6 +6,7 @@
 
 | 调研主题 | 文档 | 关联功能 |
 |---------|------|---------|
+| Runtime 桌面实时画面技术可行性 | [调研](research/runtime-screen-stream-feasibility-research.md) | 2026-11-23：结论可行。只做 WebRTC 点对点，服务器只转交建连信令，不做中转；同机识别先建不含画面的连接再比对观看端地址，确认非同机才采集，无法确认也不采集；Runtime 靠画面租约在联系不上服务器 30 秒后自行停止；主服务器出口仅 5 Mbps，画面不能走服务器中转。2026-11-24 单机验证：隐藏窗口采集与硬编码连续 10 分钟稳定，Chrome、Edge 可正常观看，同一台电脑时不采集、画面租约到期自停、直连失败不采集、服务器字节不随码率增长均通过；同网段和跨网络靠什么证据放行、与任务并行都待真实设备验证，详见报告第 6 节。开发已立项：[计划](plans/plan-runtime-screen-stream.md)。 |
 | 就业咨询智能体客户数据库同步方案 | [调研](research/employment-agent-db-sync-research.md) | 2026-11-17 定稿（§7 现行方案）：宏陶模式两 module（lyjy_employment+sccy_policy）纯 KB 路线，六分类映射表定版；deadline→expires_at 检索层归零作废滞后；目录全量+内容增量双层 run；岗位电话直接给、求职者 PII 零同步；区域匹配+iframe 嵌官网。开发已立项：[计划](plans/plan-employment-kb-sync.md)。 |
 | 就业咨询智能体关联库表数据字典 | [数据字典](research/employment-agent-db-data-dictionary.md) | 2026-11-11：只读探查 gt_lyjy（聊易就业）与 gt_sccy（水城创业网），筛出 85 张关联表含字段类型与注释；两库无共享主键靠手机号/身份证关联，缺口为机器人会话表与意向/短板回流画像表。 |
 

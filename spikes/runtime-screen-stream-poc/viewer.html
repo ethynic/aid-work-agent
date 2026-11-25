@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>screen-stream-poc viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #030712; color: #e5e7eb; font: 13px/1.5 "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+  video { display: block; width: 100%; height: 100%; object-fit: contain; }
+  #hud { position: fixed; top: 8px; left: 8px; padding: 6px 10px; border-radius: 6px; background: rgba(3, 7, 18, .7); white-space: pre; font: 12px/1.5 Consolas, monospace; }
+</style>
+</head>
+<body>
+<video id="v" muted autoplay playsinline></video>
+<div id="hud">connecting…</div>
+<script src="stats.js"></script>
+<script>
+// 观看端（在真实浏览器里运行）：按设计用 HTTP 轮询取信令、POST 发信令，模拟网页观看弹框。
+// 统计结果同时写到 window.__poc，便于从外部读取。
+const video = document.getElementById('v');
+const hud = document.getElementById('hud');
+const policy = new URLSearchParams(location.search).get('cand') || 'lan';
+window.__poc = { events: [], cands: [], mdns: [], stats: null, startedAt: 0, connectedMs: null, firstFrameMs: null, path: null, pcState: '', endReason: null };
+let pc = null;
+let attached = false;
+let seq = 0;
+let t0 = 0;
+
+const post = (kind, data) => fetch('/api/signal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, data }) }).catch(() => {});
+const mark = (name, extra) => {
+  const ev = Object.assign({ name, dt: Math.round(performance.now() - t0) }, extra || {});
+  window.__poc.events.push(ev);
+  post('viewer-log', ev);
+};
+
+// 用 ontrack 给的轨道。不预先加通道：协商时浏览器未必复用预加的通道，画面会落在另一条通道上。
+function attachTrack(track) {
+  if (!track || attached) return;
+  attached = true;
+  video.srcObject = new MediaStream([track]);
+  video.play().catch((err) => mark('play-error', { text: String(err).slice(0, 80) }));
+}
+
+async function poll() {
+  try {
+    const res = await fetch('/api/session?after=' + seq, { cache: 'no-store' });
+    const body = await res.json();
+    for (const s of body.signals) {
+      seq = s.seq;
+      if (s.kind === 'offer') {
+        mark('offer-received', {});
+        await pc.setRemoteDescription(s.data);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        const sd = pc.currentLocalDescription || pc.localDescription;
+        await post('answer', { type: sd.type, sdp: sd.sdp });
+        mark('answer-posted', { bytes: sd.sdp.length });
+      } else if (s.kind === 'candidate') {
+        await pc.addIceCandidate(s.data).catch(() => {});
+      } else if (s.kind === 'end') {
+        if (!window.__poc.endReason) { window.__poc.endReason = (s.data && s.data.reason) || 'unknown'; mark('runtime-end', { reason: window.__poc.endReason }); }
+      }
+    }
+  } catch (e) {
+    mark('poll-error', { text: String(e).slice(0, 80) });
+  }
+  setTimeout(poll, 500);
+}
+
+async function tick() {
+  if (!pc) return;
+  const s = await POC.collect(pc);
+  window.__poc.stats = s;
+  if (s.pair) window.__poc.path = s.pair.local.kind + ':' + s.pair.local.type + ' <-> ' + s.pair.remote.kind + ':' + s.pair.remote.type;
+  const rx = s.rx || {};
+  hud.textContent = [
+    'pc: ' + pc.connectionState + '  path: ' + (window.__poc.path || '-') + '  relay: ' + (s.pair ? s.pair.relay : '-'),
+    'rx: ' + (rx.framesDecoded || 0) + ' frames  ' + (rx.fps || 0) + ' fps  ' + (rx.w || 0) + 'x' + (rx.h || 0),
+    'codec: ' + (rx.codec || '-') + '  dec: ' + (rx.dec || '-'),
+    'rtt: ' + (s.pair && s.pair.rttMs != null ? s.pair.rttMs + ' ms' : '-') + '  end: ' + (window.__poc.endReason || '-'),
+  ].join('\n');
+}
+
+(async () => {
+  t0 = performance.now();
+  window.__poc.startedAt = Date.now();
+  const conf = await (await fetch('/api/config', { cache: 'no-store' })).json();
+  pc = new RTCPeerConnection({ iceServers: conf.iceServers || [], bundlePolicy: 'max-bundle' });
+  pc.ontrack = (e) => attachTrack(e.track);
+  video.addEventListener('loadeddata', () => { window.__poc.firstFrameMs = Math.round(performance.now() - t0); mark('first-frame', { w: video.videoWidth, h: video.videoHeight }); });
+  pc.onconnectionstatechange = () => {
+    window.__poc.pcState = pc.connectionState;
+    if (pc.connectionState === 'connected') window.__poc.connectedMs = Math.round(performance.now() - t0);
+    mark('state', { pc: pc.connectionState });
+  };
+  pc.onicecandidate = (e) => {
+    if (!e.candidate) return;
+    const c = POC.classify(e.candidate);
+    window.__poc.cands.push(c);
+    if (c.kind === 'mdns') window.__poc.mdns.push(e.candidate.address);
+    post('viewer-log', Object.assign({ name: 'cand' }, c));
+    if (POC.keep(e.candidate, policy)) post('candidate', e.candidate.toJSON());
+  };
+  mark('start', { ua: navigator.userAgent, policy, iceServers: (conf.iceServers || []).length });
+  await post('start', {});
+  poll();
+  setInterval(tick, 2000);
+})();
+</script>
+</body>
+</html>

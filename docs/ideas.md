@@ -34,6 +34,7 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261123-2314 | Runtime 桌面实时画面（网页远程查看） | 🔧 部分完成（Phase 0 单机验证完成，待原型确认与跨机验证） | WebRTC 点对点传画面、服务器只转信令；单机验证通过，跨机与公网待验。 | [设计](system/runtime-screen-stream-design.md) / [调研](research/runtime-screen-stream-feasibility-research.md) / [原型](design/prototypes/runtime-screen-stream-prototype.html) | [计划](plans/plan-runtime-screen-stream.md) |
 | 20261118-1130 | 教程文档中心（docs/guides 集中管理 + Portal 使用教程页） | 🔧 部分完成 | 29 篇教程/手册物理迁移到 docs/guides/ 四分类（deployment/channels/clients/development），全仓引用更新；Portal 新增 /portal/guides 页：自动解析文档目录树+文档内 TOC，复用 marked 渲染栈；后端 catalog/doc API 平台管理员鉴权+.dockerignore 白名单。遗留：portal 登录真实页面冒烟待联调环境。 | [设计](design/guides-center/guides-center-design.md) | [计划](plans/plan-guides-center.md) |
 | 20261117-1600 | 就业咨询智能体数据源同步（聊易就业+水城创业网） | 🔧 部分完成（P1+P2 开发完成待真机验收；P3 为管理员配置与验收无代码） | 宏陶模式两 module（lyjy_employment+sccy_policy）纯知识库路线：六分类映射、目录全量+内容增量双层 run、deadline→expires_at、岗位电话可给/求职者 PII 零同步、portal 开通+租户配频率、iframe 区域匹配。 | [调研](research/employment-agent-db-sync-research.md) | [计划](plans/plan-employment-kb-sync.md) |
 | 20261116-1430 | 官网客服渠道（web_c） | 🔧 部分完成（Phase 1+2 完成，11-19 增 uid 模式免签名 userid 链接，均待部署真机验收） | C 端免登录聊天渠道：签名/匿名双身份、SSE 透传流式、附件上传与代理下载、留资/防滥用/计费接入；租户侧「官网接待客户」查看页。CR P0/P1 已修复；单测回归、前端构建通过；真机验收待办。 | [设计](system/web-c-channel-design.md) | — |

@@ -1,0 +1,7 @@
+{
+  "name": "runtime-screen-stream-poc",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Runtime 桌面实时画面 Phase 0 技术验证程序（不进产品代码）",
+  "main": "main.js"
+}

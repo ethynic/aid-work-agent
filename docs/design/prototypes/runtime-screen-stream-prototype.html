@@ -1,0 +1,1108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>交互原型 · Runtime 桌面实时画面</title>
+<style>
+/* ===== 语义 token：网页端取自 frontend/web/style.css，Runtime 端取自 frontend/desktop/styles/tokens.css ===== */
+:root {
+  --color-primary-50:#E6F0FF; --color-primary-100:#CCE0FF; --color-primary-200:#99C2FF; --color-primary-500:#0066FF;
+  --color-primary-600:#003A8C; --color-primary-700:#002E70;
+  --color-success-100:#D1FAE5; --color-success-500:#10B981; --color-success-700:#047857;
+  --color-warning-100:#FEF3C7; --color-warning-500:#F59E0B; --color-warning-700:#B45309;
+  --color-danger-50:#FFF1F2; --color-danger-100:#FFE4E6; --color-danger-500:#F43F5E; --color-danger-600:#E11D48; --color-danger-700:#BE123C;
+  --color-info-100:#E0F2FE; --color-info-500:#0EA5E9; --color-info-700:#0369A1;
+  --color-gray-50:#F9FAFB; --color-gray-100:#F3F4F6; --color-gray-200:#E5E7EB; --color-gray-300:#D1D5DB;
+  --color-gray-400:#9CA3AF; --color-gray-500:#6B7280; --color-gray-600:#4B5563; --color-gray-700:#374151;
+  --color-gray-800:#1F2937; --color-gray-900:#111827; --color-gray-950:#030712;
+  --bg-canvas:#F8FAFC; --bg-surface:#FFFFFF; --bg-surface-hover:#F1F5F9;
+  --text-default:#111827; --text-muted:#6B7280; --text-inverse:#FFFFFF;
+  --border-default:#E5E7EB; --border-hover:#D1D5DB;
+  --d-bg:#0b0e10; --d-surface:#11161a; --d-surface-raised:#171d21; --d-line:#293238; --d-line-strong:#3b484f;
+  --d-text:#e8ece9; --d-text-muted:#8f9a9d; --d-accent:#b9f13d; --d-accent-ink:#101507;
+  --d-warning:#f3bc4b; --d-danger:#ff6b5f; --d-ready:#70d8aa; --d-radius:3px;
+  --font-web:'PingFang SC','Hiragino Sans GB','Microsoft YaHei','Noto Sans SC',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --font-rt:'Bahnschrift','DIN Alternate','Microsoft YaHei UI',sans-serif;
+  --font-mono:'Cascadia Mono','SFMono-Regular',Consolas,monospace;
+}
+* { box-sizing:border-box; }
+[hidden] { display:none !important; }
+html, body { margin:0; min-height:100%; }
+body { font-family:var(--font-web); font-size:14px; line-height:1.5; color:var(--text-default); background:#e9edf2; -webkit-font-smoothing:antialiased; }
+button { font-family:inherit; touch-action:manipulation; }
+button:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--color-primary-500); outline-offset:2px; }
+svg { flex:none; }
+
+/* ===== 原型外壳 ===== */
+.proto-topbar { position:static; display:flex; flex-wrap:wrap; align-items:center; gap:6px 18px; padding:10px 20px; background:var(--d-bg); color:var(--d-text); }
+.proto-topbar strong { font-size:14px; }
+.proto-topbar .tag { padding:2px 8px; border:1px solid var(--d-accent); border-radius:999px; color:var(--d-accent); font:10px var(--font-mono); letter-spacing:.12em; }
+.proto-topbar .how { flex:1 1 420px; color:var(--d-text-muted); font-size:12px; }
+.proto-grid { display:grid; grid-template-columns:minmax(0,1fr) 384px; gap:16px; align-items:start; padding:16px 20px 28px; }
+.pane-label { margin:0 0 8px; font:600 11px var(--font-mono); letter-spacing:.12em; color:#5b6670; }
+@media (max-width:1180px) { .proto-grid { grid-template-columns:minmax(0,1fr); } }
+
+/* ===== 模拟浏览器（网页观看端） ===== */
+.browser { position:relative; overflow:hidden; border:1px solid #cfd6dd; border-radius:10px; background:#fff; box-shadow:0 10px 40px -10px rgba(0,58,140,.15); }
+.browser-chrome { display:flex; align-items:flex-end; gap:10px; height:42px; padding:6px 12px 0; background:#dde3e9; }
+.tab { display:flex; align-items:center; gap:8px; height:30px; padding:0 14px; border-radius:8px 8px 0 0; background:#fff; font-size:12px; color:#3c4450; max-width:260px; white-space:nowrap; overflow:hidden; }
+.addr { flex:1; display:flex; align-items:center; gap:6px; height:28px; margin-bottom:4px; padding:0 12px; border-radius:14px; background:#fff; font-size:12px; color:#3c4450; min-width:0; }
+.addr span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.browser-viewport { position:relative; isolation:isolate; height:clamp(620px, calc(100vh - 136px), 960px); overflow:hidden; background:var(--bg-canvas); }
+/* 模拟 Chrome「本地网络访问」权限气泡 */
+.perm-bubble { position:absolute; z-index:40; top:8px; right:16px; width:340px; padding:14px; border:1px solid var(--border-default); border-radius:12px; background:#fff; box-shadow:0 12px 34px -8px rgba(0,0,0,.38); font-size:13px; }
+.perm-bubble header { display:flex; align-items:center; gap:8px; margin-bottom:6px; font-weight:600; }
+.perm-bubble header svg { color:var(--color-info-500); }
+.perm-bubble p { margin:0 0 12px; color:var(--color-gray-700); }
+.perm-actions { display:flex; justify-content:flex-end; gap:8px; }
+.perm-note { margin:8px 0 0; font-size:11px; color:var(--text-muted); }
+
+/* ===== 网页应用（对照 frontend/web「本地工具」页） ===== */
+.app { position:absolute; inset:0; display:flex; }
+.sidebar { width:216px; flex:none; display:flex; flex-direction:column; border-right:1px solid var(--color-gray-200); background:#fff; }
+.sidebar .brand { display:flex; align-items:center; gap:8px; height:56px; padding:0 16px; font-weight:700; color:var(--color-primary-600); border-bottom:1px solid var(--color-gray-100); }
+.sidebar .brand i { width:24px; height:24px; border-radius:6px; background:var(--color-primary-600); }
+.sidebar nav { padding:10px 8px; font-size:14px; color:var(--color-gray-700); }
+.sidebar nav div { display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-radius:8px; }
+.sidebar nav div.sub { padding-left:30px; color:var(--color-gray-600); }
+.sidebar nav div.on { background:var(--color-primary-50); color:var(--color-primary-700); font-weight:600; }
+.sidebar nav small { display:block; padding:10px 10px 4px; font-size:11px; color:var(--color-gray-400); }
+.app-main { flex:1; min-width:0; display:flex; flex-direction:column; }
+.app-header { flex:none; display:flex; align-items:center; justify-content:space-between; height:56px; padding:0 16px; border-bottom:1px solid var(--color-gray-200); background:#fff; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+.app-header h1 { margin:0; font-size:14px; font-weight:700; color:var(--color-gray-800); }
+.app-header .user { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--color-gray-600); }
+.app-header .user i { width:28px; height:28px; border-radius:999px; background:var(--color-primary-100); }
+.app-content { flex:1; min-height:0; overflow:auto; padding:24px; }
+/* 设备页容器由 max-w-4xl(896) 放宽到 max-w-6xl(1152)，容纳新增的「实时画面」操作 */
+.app-content .wrap { max-width:1152px; display:flex; flex-direction:column; gap:24px; }
+.card { border:1px solid var(--border-default); border-radius:12px; background:var(--bg-surface); box-shadow:0 1px 2px rgba(0,0,0,.05); }
+.card > header { display:flex; align-items:center; justify-content:space-between; padding:12px 24px; border-bottom:1px solid var(--border-default); }
+.card > header h3 { margin:0; font-size:16px; font-weight:600; }
+.card > .fold { display:flex; align-items:center; justify-content:space-between; padding:12px 24px; font-size:16px; font-weight:600; }
+.card > .fold span { font-size:12px; font-weight:400; color:var(--text-muted); }
+.table-scroll-wrapper { overflow-x:auto; }
+table.dev { width:100%; border-collapse:collapse; font-size:14px; }
+table.dev th { padding:12px 16px; background:var(--color-gray-50); color:var(--text-muted); font-size:12px; font-weight:700; text-align:center; letter-spacing:.05em; white-space:nowrap; }
+table.dev td { padding:6px 16px; border-top:1px solid var(--border-default); text-align:center; white-space:nowrap; }
+table.dev td.name { font-weight:500; }
+.tip-wrap { position:relative; display:inline-flex; }
+.tip-wrap[data-tip]:hover::after, .tip-wrap[data-tip]:focus-within::after { content:attr(data-tip); position:absolute; z-index:5; left:50%; bottom:calc(100% + 6px); transform:translateX(-50%); width:max-content; max-width:260px; padding:6px 10px; border-radius:6px; background:var(--color-gray-900); color:#fff; font-size:12px; font-weight:400; line-height:1.45; white-space:normal; text-align:left; pointer-events:none; }
+
+/* Base* 组件等价样式（与 frontend/web/variants 一致） */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 12px; border:0; border-radius:8px; font-size:14px; font-weight:500; white-space:nowrap; cursor:pointer; transition:background-color .15s,color .15s; }
+.btn:disabled { opacity:.5; pointer-events:none; cursor:not-allowed; }
+.btn-primary { background:var(--color-primary-600); color:#fff; } .btn-primary:hover { background:var(--color-primary-700); }
+.btn-secondary { background:var(--color-gray-100); color:var(--color-gray-700); } .btn-secondary:hover { background:var(--color-gray-200); }
+.btn-ghost { background:transparent; color:var(--color-gray-600); } .btn-ghost:hover { background:var(--color-gray-100); color:var(--color-gray-900); }
+.btn-danger-ghost { background:transparent; color:var(--color-danger-600); } .btn-danger-ghost:hover { background:var(--color-danger-50); }
+.btn-xs { padding:0 8px; font-size:12px; }
+.badge { display:inline-flex; align-items:center; gap:4px; height:20px; padding:0 8px; border-radius:999px; font-size:12px; font-weight:500; white-space:nowrap; }
+.badge-primary { background:var(--color-primary-100); color:var(--color-primary-700); }
+.badge-success { background:var(--color-success-100); color:var(--color-success-700); }
+.badge-warning { background:var(--color-warning-100); color:var(--color-warning-700); }
+.badge-danger { background:var(--color-danger-100); color:var(--color-danger-700); }
+.badge-info { background:var(--color-info-100); color:var(--color-info-700); }
+.badge-neutral { background:var(--color-gray-100); color:var(--color-gray-700); }
+.icon-btn { display:grid; place-items:center; width:28px; height:28px; border:0; border-radius:4px; background:transparent; color:var(--text-muted); cursor:pointer; transition:background-color .15s,color .15s; }
+.icon-btn:hover { background:var(--bg-surface-hover); color:var(--text-default); }
+
+/* ===== 实时画面弹框（BaseModal size="xl" 等价） ===== */
+.overlay { position:absolute; inset:0; z-index:30; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.4); }
+.modal { display:flex; flex-direction:column; width:92%; height:95%; overflow:hidden; border-radius:12px; background:#fff; box-shadow:0 20px 25px -5px rgba(0,0,0,.1),0 8px 10px -6px rgba(0,0,0,.1); }
+.modal.is-full { width:100%; height:100%; border-radius:0; }
+.v-head { flex:none; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 24px; border-bottom:1px solid var(--border-default); }
+.v-head .id { display:flex; align-items:center; gap:10px; min-width:0; }
+.v-head h3 { margin:0; font-size:18px; font-weight:600; white-space:nowrap; }
+.v-head .dev { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted); }
+.dot { width:8px; height:8px; border-radius:999px; background:var(--color-success-500); }
+.dot.warn { background:var(--color-warning-500); animation:blink 1.2s ease-in-out infinite; }
+.chip { display:inline-flex; align-items:center; gap:4px; padding:0 8px; height:22px; border-radius:999px; background:var(--color-gray-100); color:var(--color-gray-700); font-size:12px; white-space:nowrap; }
+.v-tools { display:flex; align-items:center; gap:4px; }
+.v-body { position:relative; flex:1; min-height:0; display:flex; flex-direction:column; }
+/* 连接进度 */
+.progress { flex:1; display:grid; place-items:center; padding:24px; background:#fff; }
+.progress-box { width:min(520px,100%); text-align:center; }
+.steps { display:flex; justify-content:center; gap:0; margin:0 0 20px; padding:0; list-style:none; }
+.step { display:flex; flex-direction:column; align-items:center; gap:6px; width:150px; position:relative; font-size:12px; color:var(--color-gray-500); }
+.step + .step::before { content:''; position:absolute; top:12px; right:calc(50% + 20px); width:110px; height:2px; background:var(--color-gray-200); }
+.step.done::before, .step.active::before, .step.fail::before { background:var(--color-primary-500); }
+.step-dot { position:relative; display:grid; place-items:center; width:24px; height:24px; border-radius:999px; border:2px solid var(--color-gray-300); background:#fff; color:var(--color-gray-500); font-size:12px; font-weight:600; }
+.step.active { color:var(--color-primary-700); font-weight:600; }
+.step.active .step-dot { border-color:var(--color-primary-600); color:var(--color-primary-700); }
+.step.active .step-dot::after { content:''; position:absolute; inset:-7px; border:2px solid transparent; border-top-color:var(--color-primary-600); border-radius:999px; animation:spin .8s linear infinite; }
+.step.done { color:var(--text-default); }
+.step.done .step-dot { border-color:var(--color-primary-600); background:var(--color-primary-600); color:#fff; }
+.step.done .step-dot::before { content:'✓'; }
+.step.done .step-dot i { display:none; }
+.step.fail .step-dot { border-color:var(--color-danger-500); background:var(--color-danger-500); color:#fff; }
+.step.fail .step-dot::before { content:'!'; }
+.step.fail .step-dot i { display:none; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.v-status { margin:0; font-size:16px; font-weight:600; }
+.v-hint { margin:6px 0 0; font-size:13px; color:var(--text-muted); }
+.v-hint.warn { color:var(--color-warning-700); }
+.v-progress-actions { margin-top:20px; }
+/* 视频区 */
+.video { position:relative; flex:1; min-height:0; display:grid; place-items:center; overflow:hidden; background:var(--color-gray-950); }
+.video.native { display:block; }
+.video.native canvas { margin:auto; }
+#stream { display:block; width:1280px; height:720px; background:#000; }
+.hud { position:absolute; top:10px; right:12px; display:flex; gap:6px; pointer-events:none; }
+.hud span { padding:2px 8px; border-radius:6px; background:rgba(3,7,18,.66); color:#e5e7eb; font:12px var(--font-mono); }
+.video-note { position:absolute; top:10px; left:12px; padding:4px 10px; border-radius:8px; background:rgba(3,7,18,.72); color:#fbbf24; font-size:12px; pointer-events:none; }
+.video-cover { position:absolute; inset:0; display:grid; place-items:center; padding:24px; background:rgba(3,7,18,.8); text-align:center; color:#fff; }
+.video-cover .in { max-width:420px; }
+.video-cover svg { color:#fbbf24; }
+.video-cover h4 { margin:10px 0 4px; font-size:18px; font-weight:600; }
+.video-cover p { margin:0; font-size:14px; color:#d1d5db; }
+.video-cover .btn { margin-top:16px; background:rgba(255,255,255,.12); color:#fff; } .video-cover .btn:hover { background:rgba(255,255,255,.2); }
+/* 结束态 */
+.end { flex:1; display:grid; place-items:center; padding:24px; background:#fff; }
+.end .in { width:min(440px,100%); text-align:center; }
+.end-icon { display:grid; place-items:center; width:56px; height:56px; margin:0 auto 14px; border-radius:999px; background:var(--color-gray-100); color:var(--color-gray-500); }
+.end-icon.warn { background:var(--color-warning-100); color:var(--color-warning-700); }
+.end-icon.info { background:var(--color-info-100); color:var(--color-info-700); }
+.end h4 { margin:0 0 6px; font-size:18px; font-weight:600; }
+.end p { margin:0; font-size:14px; color:var(--text-muted); text-align:left; }
+.end .acts { display:flex; justify-content:center; gap:8px; margin-top:20px; }
+/* 底栏 */
+.v-foot { flex:none; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 12px; padding:10px 24px; border-top:1px solid var(--border-default); }
+.seg { display:inline-flex; overflow:hidden; border:1px solid var(--border-default); border-radius:8px; }
+.seg button { height:32px; padding:0 12px; border:0; background:#fff; color:var(--color-gray-600); font-size:14px; cursor:pointer; }
+.seg button + button { border-left:1px solid var(--border-default); }
+.seg button[aria-pressed="true"] { background:var(--color-gray-100); color:var(--color-gray-900); font-weight:500; }
+.v-note { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-muted); text-align:center; }
+@media (max-width:760px) { .v-head { padding:8px 12px; } .v-head .dev, .hud span.opt { display:none; } .v-foot { padding:8px 12px; } .v-note { display:none; } .step { width:112px; } .step + .step::before { width:72px; } }
+
+/* ===== Runtime 端（对照 frontend/desktop/features/runtime） ===== */
+.rt-win { overflow:hidden; border:1px solid #000; border-radius:8px; background:var(--d-bg); color:var(--d-text); font-family:var(--font-rt); box-shadow:0 10px 40px -10px rgba(0,0,0,.45); }
+.rt-titlebar { display:flex; align-items:center; justify-content:space-between; height:30px; padding:0 10px; border-bottom:1px solid var(--d-line); background:var(--d-surface); color:var(--d-text-muted); font-size:11px; }
+.rt-titlebar span i { display:inline-block; width:9px; height:9px; margin-left:8px; border:1px solid var(--d-text-muted); }
+.rt-body { padding:16px; }
+.rt-kicker { margin:0 0 6px; color:var(--d-accent); font:10px var(--font-mono); letter-spacing:.15em; }
+.rt-body h2 { margin:0; font:500 20px/1.1 var(--font-rt); letter-spacing:-.01em; }
+.rt-muted { margin:4px 0 0; color:var(--d-text-muted); font-size:12px; }
+.rt-panel { margin-top:12px; padding:12px; border:1px solid var(--d-line); background:var(--d-surface); }
+.rt-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.rt-panel h3 { margin:0; font:500 14px var(--font-rt); }
+.rt-devname { margin-left:8px; color:var(--d-text-muted); font-size:12px; }
+.rt-badge { padding:2px 7px; border:1px solid var(--d-ready); color:var(--d-ready); font:10px var(--font-mono); white-space:nowrap; }
+.rt-btn { min-height:28px; padding:0 10px; border:1px solid var(--d-line-strong); border-radius:var(--d-radius); background:transparent; color:var(--d-text); font:600 12px var(--font-rt); cursor:pointer; }
+.rt-btn:hover { border-color:var(--d-text-muted); }
+.rt-btn.primary { border-color:var(--d-accent); background:var(--d-accent); color:var(--d-accent-ink); }
+.rt-btn.stop { border-color:var(--d-danger); background:var(--d-danger); color:#1a0704; }
+.rt-facts { display:grid; grid-template-columns:auto 1fr; gap:3px 12px; margin:10px 0 0; font-size:12px; }
+.rt-facts dt { color:var(--d-text-muted); } .rt-facts dd { margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rt-banner { position:relative; margin-top:12px; padding:12px 12px 12px 15px; border:1px solid var(--d-warning); border-left-width:4px; background:rgba(243,188,75,.09); animation:rt-in .18s ease-out; }
+.rt-banner.live { border-color:var(--d-danger); background:rgba(255,107,95,.12); }
+@keyframes rt-in { from { opacity:0; transform:translateY(-4px); } }
+.rt-banner .t { display:flex; align-items:center; gap:8px; font-weight:700; font-size:13px; }
+.rt-banner .t i { width:8px; height:8px; border-radius:999px; background:var(--d-warning); }
+.rt-banner.live .t i { background:var(--d-danger); animation:blink 1.2s ease-in-out infinite; }
+@keyframes blink { 50% { opacity:.25; } }
+.rt-banner .m { margin:3px 0 0; color:var(--d-text-muted); font:11px var(--font-mono); }
+.rt-banner .d { margin:4px 0 10px; color:var(--d-text-muted); font-size:12px; }
+.rt-banner.locked { border-color:var(--d-line-strong); background:var(--d-surface-raised); }
+.rt-banner.locked .t i { background:var(--d-text-muted); animation:none; }
+.rt-banner.loss { border-color:var(--d-warning); background:rgba(243,188,75,.14); }
+.rt-banner.loss .t i { background:var(--d-warning); animation:blink 1.2s ease-in-out infinite; }
+.tray.loss { color:var(--d-text); border:1px solid var(--d-warning); } .tray.loss i { background:var(--d-warning); animation:blink 1.2s ease-in-out infinite; }
+.rt-plugin { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:10px; font-size:12px; }
+.rt-plugin p { margin:2px 0 0; color:var(--d-text-muted); font-size:11px; }
+.rt-toast { margin-top:8px; padding:8px 10px; border:1px solid var(--d-line); background:var(--d-surface-raised); color:var(--d-text); font-size:12px; }
+.tray { display:flex; align-items:center; gap:8px; margin-top:8px; padding:7px 12px; border-radius:6px; background:var(--d-surface); color:var(--d-text-muted); font:11px var(--font-rt); }
+.tray i { width:7px; height:7px; border-radius:999px; background:var(--d-ready); }
+.tray.live { color:var(--d-text); border:1px solid var(--d-danger); } .tray.live i { background:var(--d-danger); animation:blink 1.2s ease-in-out infinite; }
+
+/* ===== 演示控制台（原型专用） ===== */
+.console { display:flex; flex-direction:column; gap:12px; margin-top:16px; padding:14px; border:1px solid #cfd6dd; border-radius:10px; background:#fff; font-size:13px; }
+.console h4 { margin:0 0 6px; font-size:12px; font-weight:700; color:var(--color-gray-700); letter-spacing:.04em; }
+.sc-list { display:flex; flex-direction:column; gap:2px; }
+.sc { display:flex; align-items:flex-start; gap:8px; width:100%; padding:6px 8px; border:0; border-radius:6px; background:transparent; color:var(--color-gray-700); font-size:13px; text-align:left; cursor:pointer; }
+.sc:hover { background:var(--bg-surface-hover); }
+.sc[aria-pressed="true"] { background:var(--color-primary-50); color:var(--color-primary-700); font-weight:600; }
+.sc i { flex:none; width:14px; height:14px; margin-top:3px; border:2px solid var(--color-gray-300); border-radius:999px; }
+.sc[aria-pressed="true"] i { border-color:var(--color-primary-600); background:radial-gradient(circle,var(--color-primary-600) 0 40%,transparent 46%); }
+.sc-help { margin:6px 0 0; padding:8px 10px; border-radius:6px; background:var(--color-gray-50); color:var(--text-muted); font-size:12px; }
+.opts { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; }
+.opt-check { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
+.live-btns { display:flex; flex-wrap:wrap; gap:6px; }
+.live-btns .btn { height:28px; padding:0 10px; font-size:12px; }
+.log { max-height:190px; margin:0; padding:8px 10px; overflow:auto; border-radius:6px; background:var(--color-gray-950); color:#d1d5db; font:11px/1.6 var(--font-mono); list-style:none; }
+.log time { color:#6b7280; margin-right:6px; }
+.log li.k-warn { color:#fcd34d; } .log li.k-ok { color:#6ee7b7; } .log li.k-sig { color:#93c5fd; }
+.log .empty { color:#6b7280; }
+.rules { font-size:12px; color:var(--text-muted); } .rules ul { margin:6px 0 0; padding-left:18px; } .rules li { margin:2px 0; }
+.rules summary { cursor:pointer; color:var(--color-gray-700); font-weight:600; }
+@media (prefers-reduced-motion:reduce) { *, *::before, *::after { animation-duration:.001s !important; animation-iteration-count:1 !important; transition:none !important; } }
+</style>
+</head>
+<body>
+
+<header class="proto-topbar">
+  <strong>交互原型 · Runtime 桌面实时画面</strong>
+  <span class="tag">PROTOTYPE v0.1</span>
+  <span class="how">怎么试：① 左侧设备行点「实时画面」；② 右侧切换演示场景，可点 Runtime 的「停止查看」或控制台的「服务端失联」；③ 弹出浏览器权限时选允许或阻止。画面为模拟内容，真实实现为 WebRTC 加密视频流。</span>
+</header>
+
+<main class="proto-grid">
+  <!-- ① 网页观看端 -->
+  <section aria-label="网页观看端">
+    <p class="pane-label">① 网页观看端 · 客户电脑上的浏览器</p>
+    <div class="browser">
+      <div class="browser-chrome">
+        <div class="tab">🔒 本地工具 — 企业智能体</div>
+        <div class="addr">🔒 <span>app.example.com/t/deno/local-tools</span></div>
+      </div>
+      <div class="browser-viewport" id="browserViewport">
+
+        <!-- 模拟 Chrome 本地网络访问权限 -->
+        <div class="perm-bubble" id="permBubble" hidden role="dialog" aria-label="浏览器权限请求">
+          <header><svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.7 10.7a4 4 0 015.6 0l-1.4 1.4M5.6 7.6a8.5 8.5 0 0112 0M3 5a12 12 0 0118 0"/></svg>本地网络访问</header>
+          <p><b>app.example.com</b> 想要查找并连接到你本地网络中的设备</p>
+          <div class="perm-actions">
+            <button class="btn btn-ghost" id="permBlock" type="button">阻止</button>
+            <button class="btn btn-primary" id="permAllow" type="button">允许</button>
+          </div>
+          <p class="perm-note">公网页面连接内网地址时，新版浏览器可能这样询问（原型模拟）。允许后才能走局域网直连；不允许时同一网络下通常就连不上。</p>
+        </div>
+
+        <div class="app">
+          <aside class="sidebar" aria-label="菜单（示意）">
+            <div class="brand"><i></i>企业智能体</div>
+            <nav>
+              <div>对话</div>
+              <div>数字员工</div>
+              <div>知识库</div>
+              <div>连接中心 <span>⌄</span></div>
+              <div class="sub">渠道管理</div>
+              <div class="sub on">本地工具</div>
+              <small>管理</small>
+              <div>系统设置</div>
+            </nav>
+          </aside>
+          <div class="app-main">
+            <header class="app-header">
+              <h1>本地工具</h1>
+              <div class="user"><i></i>演示账号</div>
+            </header>
+            <div class="app-content">
+              <div class="wrap">
+                <div class="card"><div class="fold">使用引导 <span>（原型中折叠）</span></div></div>
+                <div class="card"><div class="fold">设备配对 <span>（原型中折叠）</span></div></div>
+
+                <div class="card">
+                  <header>
+                    <h3>我的设备</h3>
+                    <button class="btn btn-ghost btn-xs" type="button" onclick="protoLog('网页：手动刷新设备列表')">刷新</button>
+                  </header>
+                  <div class="table-scroll-wrapper">
+                    <table class="dev">
+                      <thead>
+                        <tr>
+                          <th style="width:56px">序号</th><th>设备名称</th><th style="width:96px">平台</th><th style="width:88px">在线状态</th>
+                          <th style="width:88px">当前设备</th><th>最近在线时间</th><th style="width:84px">版本</th><th style="width:318px">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody id="devBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 实时画面弹框 -->
+        <div class="overlay" id="viewer" hidden>
+          <div class="modal" id="viewerBox" role="dialog" aria-modal="true" aria-label="实时画面">
+            <header class="v-head">
+              <div class="id">
+                <span class="dot" id="vDot" hidden></span>
+                <h3>实时画面</h3>
+                <span class="dev" id="vDevice"></span>
+                <span class="badge" id="vPath" hidden></span>
+                <span class="chip" id="vMode" title="只观看画面，不能操作对方电脑">仅查看</span>
+              </div>
+              <div class="v-tools">
+                <button class="icon-btn" id="vFull" type="button" title="全屏" aria-label="全屏">
+                  <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                </button>
+                <button class="icon-btn" id="vClose" type="button" aria-label="关闭">
+                  <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+              </div>
+            </header>
+
+            <div class="v-body">
+              <!-- 连接进度 -->
+              <div class="progress" id="pProgress">
+                <div class="progress-box">
+                  <ol class="steps" id="steps">
+                    <li class="step" data-n="1"><span class="step-dot"><i>1</i></span><span>唤醒 Runtime</span></li>
+                    <li class="step" data-n="2"><span class="step-dot"><i>2</i></span><span>建立直连</span></li>
+                    <li class="step" data-n="3"><span class="step-dot"><i>3</i></span><span>确认观看设备</span></li>
+                  </ol>
+                  <p class="v-status" id="vStatus" role="status" aria-live="polite">正在唤醒 Runtime…</p>
+                  <p class="v-hint" id="vHint"></p>
+                  <div class="v-progress-actions"><button class="btn btn-secondary" id="vCancel" type="button">取消</button></div>
+                </div>
+              </div>
+
+              <!-- 视频区 -->
+              <div class="video" id="videoBox">
+                <canvas id="stream" width="1280" height="720" aria-label="目标电脑实时画面（模拟内容）"></canvas>
+                <div class="hud" id="hud" aria-hidden="true">
+                  <span id="hDur">00:00</span><span class="opt"><b id="hRes">1280×720</b> · <b id="hFps">15</b> fps</span><span class="opt"><b id="hBr">2.4</b> Mbps</span><span class="opt" id="hRtt">18 ms</span>
+                </div>
+                <div class="video-note" id="ovTask" role="status" hidden>对方电脑正在执行任务，已降低画质</div>
+                <div class="video-cover" id="ovLocked" hidden>
+                  <div class="in">
+                    <svg width="36" height="36" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                    <h4>目标电脑已锁屏</h4>
+                    <p>画面已暂停，解锁后自动恢复。锁屏期间看不到任何画面。</p>
+                    <button class="btn" id="vEndLocked" type="button">结束查看</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 结束态 -->
+              <div class="end" id="pEnd">
+                <div class="in">
+                  <div class="end-icon" id="endIcon"></div>
+                  <h4 id="endTitle"></h4>
+                  <p id="endDesc"></p>
+                  <div class="acts" id="endActs"></div>
+                </div>
+              </div>
+            </div>
+
+            <footer class="v-foot" id="vFoot">
+              <div class="seg" role="group" aria-label="画面缩放">
+                <button type="button" id="zoomFit" aria-pressed="true">适应窗口</button>
+                <button type="button" id="zoomNative" aria-pressed="false">原始大小</button>
+              </div>
+              <div class="v-note">
+                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                <span id="vNote"></span>
+              </div>
+              <button class="btn btn-secondary" id="vEnd" type="button">结束查看</button>
+            </footer>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② Runtime 端 + ③ 控制台 -->
+  <aside aria-label="Runtime 端与演示控制台">
+    <p class="pane-label">② Runtime 端 · 被查看的那台电脑</p>
+    <div class="rt-win" id="rtWin">
+      <div class="rt-titlebar"><span>AID Runtime<span><i></i><i></i><i></i></span></span></div>
+      <div class="rt-body">
+        <p class="rt-kicker">RUNTIME</p>
+        <h2>连接这台电脑</h2>
+        <p class="rt-muted">在网页安排任务，由这台电脑执行。</p>
+
+        <section class="rt-panel" aria-label="连接状态">
+          <div class="rt-row">
+            <div><h3>已连接企业服务<span class="rt-devname">BOSS-专用机-01</span></h3></div>
+            <span class="rt-badge" id="rtBadge">已连接</span>
+          </div>
+          <p class="rt-muted">保持客户端运行，即可从网页使用这台电脑。</p>
+          <dl class="rt-facts">
+            <dt>执行状态</dt><dd id="rtState">运行中</dd>
+            <dt>实时画面</dt><dd id="rtScreenFact">未开启（确认观看设备不是本机后才开始）</dd>
+          </dl>
+
+          <!-- 远程查看横幅：仅查看期间出现 -->
+          <div class="rt-banner" id="rtBanner" hidden role="status">
+            <div class="t"><i></i><span id="rtBannerTitle">正在远程查看本机画面</span></div>
+            <p class="m" id="rtBannerMeta"></p>
+            <p class="d" id="rtBannerDesc"></p>
+            <button class="rt-btn stop" id="rtStop" type="button">停止查看</button>
+          </div>
+        </section>
+
+        <section class="rt-panel" aria-label="插件">
+          <h3>插件</h3>
+          <div class="rt-plugin"><div><b>BOSS 直聘</b><p>0.3.30 · 已启用</p></div><p>最近检查：已就绪</p></div>
+        </section>
+        <p class="rt-toast" id="rtToast" hidden></p>
+      </div>
+    </div>
+    <div class="tray" id="tray"><i></i><span id="trayText">托盘：AID Runtime — 已连接企业服务</span></div>
+
+    <p class="pane-label" style="margin-top:16px">③ 演示控制台 · 原型专用，不属于产品界面</p>
+    <div class="console">
+      <div>
+        <h4>演示场景</h4>
+        <div class="sc-list" id="scList" role="group" aria-label="演示场景"></div>
+        <p class="sc-help" id="scHelp"></p>
+      </div>
+      <div class="opts">
+        <div class="seg" role="group" aria-label="播放速度">
+          <button type="button" data-speed="1" aria-pressed="true">正常速度</button><button type="button" data-speed="2.5" aria-pressed="false">快速</button>
+        </div>
+        <label class="opt-check"><input type="checkbox" id="permToggle" checked>模拟浏览器本地网络权限弹窗</label>
+      </div>
+      <div>
+        <h4>查看进行中可操作</h4>
+        <div class="live-btns">
+          <button class="btn btn-secondary" id="btnLock" type="button" disabled>目标电脑锁屏</button>
+          <button class="btn btn-secondary" id="btnDrop" type="button" disabled>Runtime 掉线</button>
+          <button class="btn btn-secondary" id="btnRtStop" type="button" disabled>Runtime 停止查看</button>
+          <button class="btn btn-secondary" id="btnLoss" type="button" disabled>服务端失联</button>
+        </div>
+      </div>
+      <div>
+        <h4>事件流（模拟）</h4>
+        <ol class="log" id="evLog"><li class="empty">点「实时画面」后在此显示每一步。</li></ol>
+      </div>
+      <details class="rules">
+        <summary>本原型覆盖的交互规则</summary>
+        <ul>
+          <li>只有你在网页点「实时画面」才建立连接；平时 Runtime 不采集、不传画面。</li>
+          <li>先建立不含画面的连接，Runtime 确认观看设备不是本机之后才开始采集。</li>
+          <li>仅查看，不控制对方电脑。</li>
+          <li>同一台电脑不能用：判定为同一台时提示并且不采集；无法确认时同样不采集。</li>
+          <li>同一台 Runtime 同一时间只允许一个查看窗口。</li>
+          <li>只做直连：能局域网直连或点对点直连就观看；都不通就提示「当前网络无法直连」，画面不经过服务器。</li>
+          <li>Runtime 端始终显示「正在远程查看」并可一键停止。</li>
+          <li>目标电脑锁屏时画面暂停，解锁自动恢复。</li>
+          <li>连续 30 秒收不到服务器确认，Runtime 自动停止共享；停的只是画面，不会去动这台电脑上的任务。</li>
+          <li>画面端到端加密，服务器只负责牵线。</li>
+        </ul>
+      </details>
+      <button class="btn btn-ghost" id="btnReset" type="button">重置原型</button>
+    </div>
+  </aside>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+
+  /* ================= 数据 ================= */
+  const DEVICES = {
+    d1: { id: 'd1', name: 'BOSS-专用机-01', selected: true },
+    d2: { id: 'd2', name: '招聘-张三-笔记本', selected: false },
+    d3: { id: 'd3', name: '客服-企微-台式机', selected: false },
+  };
+  // route：lan 局域网直连成功；p2p 点对点直连成功；fail 两样都不通；null 连上了但观看端在本机。
+  const SCENARIOS = {
+    lan:       { name: '局域网直连（同网段两台电脑）', route: 'lan',
+      help: '观看端在另一台电脑、同一个网段。Runtime 先建立不含画面的连接，确认观看端不是本机后才开始采集，画面走内网直连。' },
+    p2p:       { name: '点对点直连（不同网络）', route: 'p2p',
+      help: '两端不在同一个网络：各自通过 STUN 找到公网出口后直接相连，画面不经过服务器。' },
+    nopath:    { name: '无法直连（打洞失败）', route: 'fail',
+      help: '两端网络之间建立不了直接连接：提示「当前网络无法直连」，Runtime 自始至终没有开始采集。' },
+    same:      { name: '同一台电脑', route: null, same: true,
+      help: '网页浏览器与 Runtime 在同一台电脑：连接建立后 Runtime 发现观看端地址就是本机，直接提示，不采集。' },
+    unknown:   { name: '无法确认观看设备（少见）', route: null, unknown: true,
+      help: '连接建立了，但 Runtime 没能确认观看设备是不是本机：按规则不采集，提示换设备再试。' },
+    serverloss: { name: '查看中服务端失联', route: 'p2p', lossAfter: 4000,
+      help: '查看 4 秒后服务器失联。画面不经过服务器所以先继续；Runtime 连续 30 秒收不到服务器确认，自动停止共享。' },
+    busy:      { name: '已有其他查看窗口', route: null, busy: true,
+      help: '同一台 Runtime 同一时间只允许一个查看窗口。' },
+    offline:   { name: 'Runtime 实际离线', route: null, offline: true,
+      help: '列表显示在线但设备已掉线：唤醒超时后提示，可重试。' },
+    locked:    { name: '查看中目标电脑锁屏', route: 'p2p', lockAfter: 4000, unlockAfter: 5000,
+      help: '查看 4 秒后锁屏，画面暂停；再过 5 秒解锁自动恢复。' },
+    rtstop:    { name: 'Runtime 端手动停止', route: 'p2p', stopAfter: 5000,
+      help: '查看 5 秒后模拟 Runtime 电脑上的人点了「停止查看」。' },
+    rtdrop:    { name: '查看中 Runtime 掉线', route: 'p2p', dropAfter: 5000,
+      help: '查看 5 秒后 Runtime 断网或退出。' },
+    taskbusy:  { name: '查看中电脑开始执行任务，资源不足', route: 'p2p', taskAfter: 5000, taskEndAfter: 22000,
+      help: '查看 5 秒后这台电脑开始执行 Agent 任务，CPU 吃紧。任务优先但不停观看：画面先自动降帧；持续受限 10 秒时 Runtime 把画质降到 5 帧、480p，网页有提示；再过 7 秒任务结束，画质恢复。' },
+    taskstop:  { name: '降低画质后仍然资源不足', route: 'p2p', taskAfter: 5000, taskStop: true,
+      help: '和上一个场景一样开始，但这台电脑降低画质后 CPU 仍然吃紧。降低画质后持续受限 10 秒，Runtime 才停止观看，任务本身不受影响。' },
+  };
+  const PATH = {
+    lan: { label: '局域网直连', cls: 'badge-success', rtt: 12, br: 3.0, note: '同一局域网内直接连接，画面加密传输，不经过外网，也不经过服务器。' },
+    p2p: { label: '点对点直连', cls: 'badge-info',    rtt: 46, br: 2.4, note: '两端直接连接，画面端到端加密，服务器看不到内容。' },
+  };
+  const END = {
+    same_machine: { icon: 'monitor', tone: 'warn', title: '同一台电脑无法使用此功能',
+      desc: '你正在这台电脑的浏览器里打开页面，Runtime 就运行在本机，无需远程查看。\n请在另一台电脑或手机上打开本页面查看。',
+      acts: [['知道了', 'close', 'primary']] },
+    machine_check_unknown: { icon: 'monitor', tone: 'info', title: '无法确认是否为同一台电脑',
+      desc: '为了不在同一台电脑上传画面，Runtime 要先确认观看设备不是本机，这次没有确认成功，所以没有开始采集。\n可以换一台设备或换个浏览器再试。',
+      acts: [['重试', 'retry', 'primary'], ['关闭', 'close', 'secondary']] },
+    no_path: { icon: 'unplug', tone: 'warn', title: '当前网络无法直连',
+      desc: '两台电脑所在的网络之间建立不了直接连接。本功能只做点对点直连，画面不经过服务器。\n可以试试让两台电脑处于同一个局域网，或稍后重试。',
+      acts: [['重试', 'retry', 'primary'], ['关闭', 'close', 'secondary']] },
+    perm_fail: { icon: 'unplug', tone: 'warn', title: '当前网络无法直连',
+      desc: '浏览器没有允许访问本地网络，同一局域网内的直连被拦下了，点对点也没能连上。\n可以在地址栏的网站权限里允许「本地网络访问」后重试。',
+      acts: [['重试', 'retry', 'primary'], ['关闭', 'close', 'secondary']] },
+    renewal_timeout: { icon: 'stop', tone: '', title: '画面已自动停止',
+      desc: 'Runtime 连续 30 秒没有收到服务器的确认，按规则自动停止了共享。停的只是画面，不会去动这台电脑上的任务。\n网络恢复后可以重新查看。',
+      acts: [['重新查看', 'retry', 'primary'], ['关闭', 'close', 'secondary']] },
+    offline: { icon: 'wifi', tone: 'warn', title: 'Runtime 电脑不在线',
+      desc: '未能唤醒 {dev}。请确认该电脑已开机、未休眠，并且 Runtime 正在运行，然后重试。',
+      acts: [['重试', 'retry', 'primary'], ['关闭', 'close', 'secondary']] },
+    busy: { icon: 'users', tone: 'warn', title: '已有窗口正在查看这台电脑',
+      desc: '同一台电脑同一时间只支持一个查看窗口。请先结束另一个窗口的查看，或稍后再试。',
+      acts: [['重试', 'retry', 'primary'], ['关闭', 'close', 'secondary']] },
+    rejected: { icon: 'stop', tone: '', title: '对方拒绝了本次查看',
+      desc: 'Runtime 电脑上点击了「拒绝」。需要继续查看时可以重新发起。',
+      acts: [['重新查看', 'retry', 'primary'], ['关闭', 'close', 'secondary']] },
+    stopped_by_runtime: { icon: 'stop', tone: '', title: '对方已停止画面共享',
+      desc: 'Runtime 电脑上点击了「停止查看」。需要继续查看时可以重新发起。',
+      acts: [['重新查看', 'retry', 'primary'], ['关闭', 'close', 'secondary']] },
+    runtime_disconnected: { icon: 'wifi', tone: 'warn', title: 'Runtime 连接已断开',
+      desc: '{dev} 已离线，可能已关机、断网或退出 Runtime。恢复后可重新查看。',
+      acts: [['重新查看', 'retry', 'primary'], ['关闭', 'close', 'secondary']] },
+    resource_busy: { icon: 'stop', tone: '', title: '画面已停止',
+      desc: '对方电脑正在执行任务，资源不足。已经先降低了画质，仍然不够，所以停止了画面共享，优先保证任务，任务本身不受影响。\n任务结束后可以重新查看。',
+      acts: [['重新查看', 'retry', 'primary'], ['关闭', 'close', 'secondary']] },
+  };
+  const ICONS = {
+    monitor: '<svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.9 4.6A2 2 0 0111.6 4h7.4a2 2 0 012 2v7.4a2 2 0 01-.6 1.7M8 8H5a2 2 0 00-2 2v9a2 2 0 002 2h9a2 2 0 002-2v-3M2.5 2.5l19 19"/></svg>',
+    wifi: '<svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 5a12 12 0 0118 0M6 8.5a7.5 7.5 0 018.7-.7M9 12a4 4 0 015.2-.5M2.5 2.5l19 19"/></svg>',
+    users: '<svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.4a2.4 2.4 0 110 4.8 2.4 2.4 0 010-4.8zM4.5 9a2 2 0 114 0 2 2 0 01-4 0zm11 0a2 2 0 114 0 2 2 0 01-4 0zM6 17.2a6 6 0 0112 0M2.5 20.5a4.5 4.5 0 017.6-3.2m11.4 3.2a4.5 4.5 0 00-7.6-3.2"/></svg>',
+    unplug: '<svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 3v5m6-5v5M7 8h10v3a5 5 0 01-5 5 5 5 0 01-5-5V8zm5 8v5M2.5 2.5l19 19"/></svg>',
+    stop: '<svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 4.5a7.5 7.5 0 019.5 9.5M6.2 6.2a7.5 7.5 0 109.6 9.6M12 8v3m0 3h.01M2.5 2.5l19 19"/></svg>',
+  };
+  // 画面租约：Runtime 连续多少秒收不到服务器确认就自己关闭采集。
+  const LEASE_SEC = 30;
+  // 任务优先：有任务在跑时，画面持续受限多少秒就降低画质；降低之后持续受限多少秒才关闭（没有任务在跑时只自动降帧）。
+  const TASK_DEGRADE_SEC = 10, TASK_STOP_SEC = 10;
+  const LOW = { fps: 5, res: '854×480' };
+
+  const S = { scenario: 'lan', speed: 1, web: 'idle', rt: 'idle', path: null, device: DEVICES.d1, frameOn: false, zoom: 'fit', full: false, lossAt: 0, taskAt: 0, degradedAt: 0, lowFps: false };
+  const degraded = () => S.degradedAt > 0;
+  let run = null, clockTimer = 0, hudTimer = 0, permResolve = null, toastTimer = 0, startedAt = 0;
+
+  /* ================= 运行控制（每次查看一个 run，可整体取消） ================= */
+  function newRun() { cancelRun(); run = { dead: false, timers: new Set(), wake: [] }; return run; }
+  function cancelRun() {
+    if (!run) return;
+    run.dead = true;
+    run.timers.forEach(clearTimeout); run.timers.clear();
+    run.wake.splice(0).forEach((fn) => fn());
+  }
+  const ok = () => run && !run.dead;
+  function sleep(ms) {
+    return new Promise((resolve) => {
+      const id = setTimeout(() => { run.timers.delete(id); resolve(ok()); }, ms / S.speed);
+      run.timers.add(id);
+    });
+  }
+  function after(ms, fn) {
+    const mine = run, id = setTimeout(() => { mine.timers.delete(id); if (!mine.dead) fn(); }, ms / S.speed);
+    mine.timers.add(id);
+  }
+  function askPermission() {
+    return new Promise((resolve) => {
+      const mine = run;
+      mine.wake.push(() => { hidePerm(); resolve('cancel'); });
+      permResolve = resolve;
+      $('permBubble').hidden = false;
+      log('浏览器：弹出「本地网络访问」权限请求');
+    });
+  }
+  function answerPerm(v) { hidePerm(); const r = permResolve; permResolve = null; if (r) r(v); }
+  function hidePerm() { $('permBubble').hidden = true; }
+
+  const clock = () => { const d = new Date(), p = (n) => String(n).padStart(2, '0'); return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+  const dur = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)), p = (n) => String(n).padStart(2, '0'); return s >= 3600 ? `${p(Math.floor(s / 3600))}:${p(Math.floor(s / 60) % 60)}:${p(s % 60)}` : `${p(Math.floor(s / 60))}:${p(s % 60)}`; };
+
+  function log(text, kind) {
+    const list = $('evLog');
+    list.querySelector('.empty')?.remove();
+    const li = document.createElement('li');
+    if (kind) li.className = 'k-' + kind;
+    const t = document.createElement('time'); t.textContent = clock();
+    li.appendChild(t); li.appendChild(document.createTextNode(text));
+    list.appendChild(li);
+    while (list.children.length > 80) list.removeChild(list.firstChild);
+    list.scrollTop = list.scrollHeight;
+  }
+  window.protoLog = log;
+
+  /* ================= 设备列表（入口） ================= */
+  function renderTable() {
+    const sc = SCENARIOS[S.scenario];
+    const rows = [
+      { ...DEVICES.d1, online: true, supported: true, version: '0.0.40', seen: '刚刚' }, // 「Runtime 实际离线」场景演示的是列表尚未刷新的情况
+      { ...DEVICES.d2, online: true, supported: false, version: '0.0.38', seen: '1 分钟前' },
+      { ...DEVICES.d3, online: false, supported: true, version: '0.0.40', seen: '今天 18:02' },
+    ];
+    $('devBody').innerHTML = rows.map((r, i) => {
+      const status = r.online ? '<span class="badge badge-success">在线</span>' : '<span class="badge badge-neutral">离线</span>';
+      const selected = r.selected ? '<span class="badge badge-primary">使用中</span>' : '<span style="color:var(--text-muted)">-</span>';
+      let tip = '';
+      if (!r.online) tip = '设备离线，无法查看实时画面';
+      else if (!r.supported) tip = '当前 Runtime 版本不支持实时画面，请升级后再试';
+      const view = tip
+        ? `<span class="tip-wrap" data-tip="${tip}" tabindex="0"><button class="btn btn-secondary btn-xs" type="button" disabled>实时画面</button></span>`
+        : `<button class="btn btn-secondary btn-xs" type="button" data-act="view" data-dev="${r.id}"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.9 4.6A2 2 0 0111.6 4h7.4a2 2 0 012 2v7.4a2 2 0 01-.6 1.7M8 8H5a2 2 0 00-2 2v9a2 2 0 002 2h9a2 2 0 002-2v-3"/></svg>实时画面</button>`;
+      return `<tr>
+        <td>${i + 1}</td><td class="name">${r.name}</td><td>Windows</td><td>${status}</td><td>${selected}</td><td>${r.seen}</td><td>${r.version}</td>
+        <td><div style="display:flex;gap:8px;justify-content:center">
+          <button class="btn btn-ghost btn-xs" type="button" ${r.selected || !r.online ? 'disabled' : ''}>选定</button>
+          <button class="btn btn-secondary btn-xs" type="button">更换此设备</button>${view}
+          <button class="btn btn-danger-ghost btn-xs" type="button">解绑</button>
+        </div></td></tr>`;
+    }).join('');
+  }
+  $('devBody').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-act="view"]');
+    if (b) startView(b.dataset.dev);
+  });
+
+  /* ================= 弹框渲染 ================= */
+  function setWeb(state) {
+    S.web = state;
+    const st = state;
+    const inProgress = st === 'waking' || st === 'connecting' || st === 'verifying';
+    const live = st === 'streaming' || st === 'locked';
+    $('pProgress').hidden = !inProgress;
+    $('videoBox').hidden = !live;
+    $('pEnd').hidden = st !== 'ended';
+    $('vFoot').hidden = !live;
+    $('vDot').hidden = !live;
+    $('vDot').className = 'dot' + (st === 'locked' ? ' warn' : '');
+    $('vPath').hidden = !live;
+    $('vMode').hidden = !live;
+    $('vClose').title = inProgress ? '关闭（取消查看）' : '关闭';
+    $('vFull').disabled = !live;
+    setLiveButtons(live);
+    $('ovTask').hidden = !(live && degraded());
+    $('hRes').textContent = degraded() ? LOW.res : '1280×720';
+    S.frameOn = st === 'streaming';
+    if (st === 'streaming') fitCanvas();
+  }
+  function openViewer() {
+    $('viewer').hidden = false;
+    document.querySelector('.browser').scrollIntoView({ block: 'start', behavior: 'smooth' });
+    $('vDevice').textContent = S.device.name;
+    $('steps').querySelectorAll('.step').forEach((li) => { li.className = 'step'; });
+    $('vHint').className = 'v-hint'; $('vHint').textContent = '';
+    setWeb('waking');
+    $('vCancel').focus();
+  }
+  function closeViewer() { $('viewer').hidden = true; S.web = 'idle'; hidePerm(); $('viewerBox').classList.remove('is-full'); S.full = false; setLiveButtons(false); }
+  function setStep(n, state) { const li = $('steps').querySelector(`.step[data-n="${n}"]`); if (li) li.className = 'step ' + state; }
+  function say(text, hint, warn) { $('vStatus').textContent = text; $('vHint').textContent = hint || ''; $('vHint').className = 'v-hint' + (warn ? ' warn' : ''); }
+
+  function setPath(path) {
+    S.path = path;
+    const p = PATH[path], b = $('vPath');
+    b.className = 'badge ' + p.cls; b.textContent = p.label;
+    $('vNote').textContent = p.note;
+  }
+
+  function renderEnd(reason) {
+    const e = END[reason];
+    const icon = $('endIcon'); icon.className = 'end-icon' + (e.tone ? ' ' + e.tone : ''); icon.innerHTML = ICONS[e.icon];
+    $('endTitle').textContent = e.title;
+    $('endDesc').innerHTML = e.desc.replace('{dev}', S.device.name).split('\n').map((s) => `<span style="display:block;margin-top:4px">${s}</span>`).join('');
+    const acts = $('endActs'); acts.innerHTML = '';
+    e.acts.forEach(([label, action, intent]) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn btn-' + intent; b.textContent = label;
+      b.onclick = () => { if (action === 'retry') startView(S.device.id); else closeViewer(); };
+      acts.appendChild(b);
+    });
+    acts.querySelector('button').focus();
+  }
+
+  /* ================= Runtime 端渲染 ================= */
+  const SCREEN_FACT = {
+    idle: '未开启（确认观看设备不是本机后才开始）', incoming: '收到请求，尚未采集', connecting: '正在建立连接，尚未采集画面',
+    streaming: '共享中（仅画面，不可控制）', locked: '已锁屏，画面暂停', dropped: '已断网', taskbusy: '共享中，任务运行中，画面已自动降帧',
+  };
+  function setRuntime(state) {
+    S.rt = state;
+    const banner = $('rtBanner');
+    const streaming = state === 'streaming' || state === 'locked' || state === 'serverloss' || state === 'taskbusy';
+    banner.hidden = state === 'idle';
+    banner.className = 'rt-banner' + (streaming && state !== 'serverloss' ? ' live' : '') + (state === 'locked' ? ' locked' : '') + (state === 'serverloss' ? ' loss' : '');
+    const started = `开始于 ${new Date(startedAt).toTimeString().slice(0, 8)} · 已持续 ${dur(Date.now() - startedAt)}`;
+    if (state === 'incoming') {
+      $('rtBannerTitle').textContent = '收到远程查看请求';
+      $('rtBannerMeta').textContent = `${clock()} · 网页端发起`;
+      $('rtBannerDesc').textContent = '应答后才开始建立连接；确认观看设备之前不会采集画面。';
+      $('rtStop').textContent = '拒绝';
+    } else if (state === 'connecting') {
+      $('rtBannerTitle').textContent = '正在建立连接';
+      $('rtBannerMeta').textContent = `${clock()} · 网页端发起`;
+      $('rtBannerDesc').textContent = '此时还没有采集画面。';
+      $('rtStop').textContent = '拒绝';
+    } else if (state === 'serverloss') {
+      $('rtBannerTitle').textContent = '正在远程查看本机画面';
+      $('rtBannerMeta').textContent = `${started} · 已 ${renewSec()} 秒没有收到服务器确认`;
+      $('rtBannerDesc').textContent = `超过 ${LEASE_SEC} 秒会自动停止共享；停的只是画面，不会去动这台电脑上的任务。`;
+      $('rtStop').textContent = '停止查看';
+    } else if (state === 'dropped') {
+      $('rtBannerTitle').textContent = 'Runtime 已离线';
+      $('rtBannerMeta').textContent = `${clock()} · 与网页端的连接中断`;
+      $('rtBannerDesc').textContent = '恢复联网后可以重新被查看。';
+      $('rtStop').textContent = '停止查看';
+    } else if (state === 'taskbusy') {
+      if (degraded()) {
+        $('rtBannerTitle').textContent = '正在远程查看本机画面（已降低画质）';
+        $('rtBannerMeta').textContent = `${started} · 本机正在执行任务`;
+        $('rtBannerDesc').textContent = '本机资源不足，已降低画面画质以保证任务，任务不受影响。' + (SCENARIOS[S.scenario].taskStop ? `资源仍然吃紧，再持续 ${TASK_STOP_SEC} 秒会停止共享。` : '');
+      } else {
+        $('rtBannerTitle').textContent = '正在远程查看本机画面（任务运行中）';
+        $('rtBannerMeta').textContent = `${started} · 本机正在执行任务，画面已受限 ${busySec()} 秒`;
+        $('rtBannerDesc').textContent = `任务优先：画面已自动降帧；持续 ${TASK_DEGRADE_SEC} 秒仍受限就降低画质，尽量不停观看。`;
+      }
+      $('rtStop').textContent = '停止查看';
+    } else if (streaming) {
+      $('rtBannerTitle').textContent = state === 'locked' ? '正在远程查看本机画面（本机已锁屏）' : '正在远程查看本机画面';
+      $('rtBannerMeta').textContent = started;
+      $('rtBannerDesc').textContent = state === 'locked' ? '本机已锁屏，对方看不到画面。' : '由本账号从网页发起。查看期间可正常使用这台电脑。';
+      $('rtStop').textContent = '停止查看';
+    }
+    $('tray').className = 'tray' + (streaming && state !== 'serverloss' ? ' live' : '') + (state === 'serverloss' ? ' loss' : '');
+    $('trayText').textContent = '托盘：AID Runtime — ' + (state === 'serverloss' ? '正在被远程查看（服务器确认中断）' : streaming ? '正在被远程查看' : state === 'incoming' || state === 'connecting' ? '收到远程查看请求' : state === 'dropped' ? '离线' : '已连接企业服务');
+    $('rtScreenFact').textContent = state === 'serverloss' ? `共享中，但已 ${renewSec()} 秒没有服务器确认` : state === 'taskbusy' && degraded() ? '共享中，已降低画质以保证任务' : SCREEN_FACT[state] || SCREEN_FACT.idle;
+    $('rtBadge').textContent = state === 'dropped' ? '离线' : '已连接';
+    $('rtBadge').style.borderColor = state === 'dropped' ? 'var(--d-text-muted)' : '';
+    $('rtBadge').style.color = state === 'dropped' ? 'var(--d-text-muted)' : '';
+  }
+  function runtimeToast(text) {
+    clearTimeout(toastTimer);
+    $('rtToast').hidden = false; $('rtToast').textContent = text;
+    toastTimer = setTimeout(() => { $('rtToast').hidden = true; }, 5000);
+  }
+  function setLiveButtons(on) {
+    ['btnLock', 'btnDrop', 'btnRtStop', 'btnLoss'].forEach((id) => { $(id).disabled = !on; });
+    $('btnLoss').textContent = S.rt === 'serverloss' ? '服务端恢复' : '服务端失联';
+  }
+
+  /* ================= 画面租约（服务端失联时 Runtime 自己停） ================= */
+  function startServerLoss() {
+    if (S.rt !== 'streaming') return;
+    S.lossAt = Date.now();
+    setRuntime('serverloss');
+    setLiveButtons(true);
+    log('服务端：失联，Runtime 的心跳得不到应答。画面走点对点，所以暂时还在继续', 'warn');
+  }
+  function endServerLoss() {
+    if (S.rt !== 'serverloss') return;
+    S.lossAt = 0;
+    setRuntime('streaming');
+    setLiveButtons(true);
+    log('服务端：恢复，Runtime 重新收到确认', 'ok');
+  }
+  // 按真实经过的时间计时并跟随播放速度，不依赖定时器被调用的次数（页面在后台时定时器会被浏览器拉长）。
+  const renewSec = () => (S.lossAt ? Math.min(LEASE_SEC, Math.floor((Date.now() - S.lossAt) * S.speed / 1000)) : 0);
+  function tickRenew() {
+    if (S.rt !== 'serverloss') return;
+    if (renewSec() >= LEASE_SEC) { log(`Runtime：连续 ${LEASE_SEC} 秒没有收到服务器确认，自己关闭采集`, 'warn'); endView('renewal_timeout'); }
+  }
+
+  /* ================= 任务优先（资源不足时画面让位，任务不受影响） ================= */
+  // 第一步由编码器自动完成：CPU 跟不上就降帧。第二步：有任务在跑且持续受限，Runtime 降低画质、继续观看。
+  // 第三步：降低画质后仍然持续受限，Runtime 才关闭画面。三步都只动画面，不动任务。
+  function beginTaskBusy() {
+    if (S.rt !== 'streaming') return;
+    S.taskAt = Date.now();
+    S.lowFps = true;
+    log('Runtime：这台电脑开始执行 Agent 任务，CPU 吃紧', 'warn');
+    log('编码器：CPU 跟不上，自动降帧（15 → 约 6 帧），分辨率不变');
+    setRuntime('taskbusy');
+  }
+  function busySec() { return S.taskAt ? Math.min(TASK_DEGRADE_SEC, Math.floor((Date.now() - S.taskAt) * S.speed / 1000)) : 0; }
+  function lowSec() { return S.degradedAt ? Math.floor((Date.now() - S.degradedAt) * S.speed / 1000) : 0; }
+  function tickTask() {
+    if (S.rt !== 'taskbusy') return;
+    if (!degraded()) {
+      if (busySec() < TASK_DEGRADE_SEC) return;
+      S.degradedAt = Date.now();
+      log(`Runtime：任务运行中画面已持续 ${TASK_DEGRADE_SEC} 秒受限 → 降低画质（${LOW.fps} 帧、480p），继续观看`, 'warn');
+      setRuntime('taskbusy'); setWeb('streaming');
+      return;
+    }
+    if (SCENARIOS[S.scenario].taskStop && lowSec() >= TASK_STOP_SEC) {
+      log(`Runtime：降低画质后画面仍持续 ${TASK_STOP_SEC} 秒受限 → 任务优先，关闭画面；任务照常执行`, 'warn');
+      endView('resource_busy');
+    }
+  }
+  function endTaskBusy() {
+    if (S.rt !== 'taskbusy' || !degraded()) return;
+    log('Runtime：任务结束，没有任务在执行 → 恢复 15 帧、720p');
+    S.taskAt = 0; S.lowFps = false; S.degradedAt = 0;
+    setRuntime('streaming'); setWeb('streaming');
+  }
+
+  /* ================= 查看流程 ================= */
+  async function startView(deviceId) {
+    const sc = SCENARIOS[S.scenario];
+    S.device = DEVICES[deviceId];
+    newRun();
+    setRuntime('idle'); $('rtToast').hidden = true;
+    S.path = null; S.lossAt = 0; S.taskAt = 0; S.lowFps = false; S.degradedAt = 0;
+    openViewer();
+    log(`网页 → 服务器：请求查看「${S.device.name}」的实时画面`);
+
+    // ① 唤醒 Runtime（心跳每 5 秒一次）
+    setStep(1, 'active');
+    // 真实实现里 Runtime 靠 5 秒一次的心跳获知请求，等待 2~5 秒是如实模拟
+    if (!await sleep(sc.offline ? 7000 : 2200 + Math.random() * 2800)) return;
+    if (sc.offline) { log('服务器：超过 30 秒未收到该设备心跳，判定离线', 'warn'); return endView('offline'); }
+    if (sc.busy) { log('服务器：该设备已有进行中的查看会话，拒绝新请求', 'warn'); return endView('busy'); }
+    log('服务器 → Runtime：心跳带回查看请求');
+    setRuntime('incoming');
+    if (!await sleep(400)) return;
+    log('Runtime → 服务器：已应答');
+    setStep(1, 'done');
+
+    // ② 建立直连：此时连接里还没有画面
+    setWeb('connecting'); setStep(2, 'active'); setRuntime('connecting');
+    const isLan = sc.route === 'lan';
+    log('Runtime → 网页：连接邀约（不含画面）', 'sig');
+    log('网页 → Runtime：应答', 'sig');
+    say(isLan ? '正在建立局域网直连…' : '正在建立点对点直连…', '这一步建立的连接里还没有画面，Runtime 要到下一步确认之后才开始采集。');
+    let denied = false;
+    if (isLan && $('permToggle').checked) {
+      const a = await askPermission();
+      if (a === 'cancel') return;
+      denied = a === 'deny';
+      if (denied) {
+        log('浏览器：用户阻止了本地网络访问', 'warn');
+        say('局域网直连被浏览器拦下，试试点对点…', '浏览器没有允许访问本地网络。同一网络下点对点通常也连不上。', true);
+      } else log('浏览器：用户允许了本地网络访问');
+    }
+    if (sc.route === 'fail' || denied) {
+      if (!await sleep(denied ? 1500 : 1800)) return;
+      log('ICE：直连失败' + (denied ? '（浏览器未允许本地网络，同一网络下点对点也连不上）' : '（两端网络之间打不通）'), 'warn');
+      setStep(2, 'fail');
+      return endView(denied ? 'perm_fail' : 'no_path');
+    }
+    if (!await sleep(isLan ? 600 : 1300)) return;
+    log(isLan ? 'ICE：内网地址直连成功' : 'STUN：找到双方公网出口，点对点直连成功', 'ok');
+    setStep(2, 'done');
+
+    // ③ 确认观看设备不是本机：只有「确认不是」才采集
+    setWeb('verifying'); setStep(3, 'active');
+    say('Runtime 正在确认观看设备不是本机…', '连接里仍然没有画面。确认之后 Runtime 才开始采集。');
+    if (!await sleep(700)) return;
+    if (sc.same) { log('Runtime：观看端的内网地址解析出来就是本机网卡地址 → 同一台电脑', 'warn'); setStep(3, 'fail'); return endView('same_machine'); }
+    if (sc.unknown) { log('Runtime：观看端的名字解析不出来，两端的公网映射地址又相同，分不出是不是本机 → 无法确认，不采集', 'warn'); setStep(3, 'fail'); return endView('machine_check_unknown'); }
+    log(isLan ? 'Runtime：观看端的内网地址解析出来不是本机 → 同网段的另一台电脑' : 'Runtime：两端的公网映射地址不同 → 另一个网络的电脑', 'ok');
+    log('Runtime：确认观看端不是本机 → 开始采集主屏幕 1280×720 · 15fps · H.264');
+    setStep(3, 'done');
+    beginStream(isLan ? 'lan' : 'p2p', sc);
+  }
+
+  function beginStream(path, sc) {
+    setPath(path);
+    startedAt = Date.now();
+    setWeb('streaming');
+    setRuntime('streaming');
+    log(`媒体：${PATH[path].label} · 端到端加密 · 720p`, 'ok');
+    clearInterval(clockTimer); clearInterval(hudTimer);
+    clockTimer = setInterval(() => {
+      $('hDur').textContent = dur(Date.now() - startedAt);
+      tickRenew();
+      tickTask();
+      if (S.rt !== 'idle') setRuntime(S.rt);
+    }, 1000);
+    hudTimer = setInterval(() => {
+      const p = PATH[path], j = (n) => (Math.random() * 2 - 1) * n;
+      $('hFps').textContent = (degraded() ? LOW.fps : S.lowFps ? 6 : p.fps || 15) + Math.round(j(S.lowFps ? 0.5 : p.fps ? 1 : 0.8));
+      $('hBr').textContent = ((degraded() ? 0.8 : p.br) + j(degraded() ? 0.1 : 0.25)).toFixed(1);
+      $('hRtt').textContent = Math.max(2, Math.round(p.rtt + j(p.rtt * 0.25))) + ' ms';
+    }, 700);
+    if (sc.stopAfter) after(sc.stopAfter, () => { log('Runtime：本机用户点击「停止查看」', 'warn'); endView('stopped_by_runtime'); });
+    if (sc.dropAfter) after(sc.dropAfter, () => { log('Runtime：断网或退出，心跳停止', 'warn'); endView('runtime_disconnected'); });
+    if (sc.lossAfter) after(sc.lossAfter, () => startServerLoss());
+    if (sc.lockAfter) after(sc.lockAfter, () => { lockTarget(true); if (sc.unlockAfter) after(sc.unlockAfter, () => { if (S.rt === 'locked') lockTarget(false); }); });
+    if (sc.taskAfter) after(sc.taskAfter, () => beginTaskBusy());
+    if (sc.taskEndAfter) after(sc.taskEndAfter, () => endTaskBusy());
+  }
+
+  function lockTarget(on) {
+    if (S.web !== 'streaming' && S.web !== 'locked') return;
+    if (on && S.web === 'locked') return;
+    if (on && S.rt !== 'streaming') return;
+    setWeb(on ? 'locked' : 'streaming');
+    $('ovLocked').hidden = !on;
+    setRuntime(on ? 'locked' : 'streaming');
+    $('btnLock').textContent = on ? '目标电脑解锁' : '目标电脑锁屏';
+    log(on ? 'Runtime：本机锁定，画面停止更新' : 'Runtime：本机解锁，画面恢复');
+  }
+
+  function endView(reason) {
+    const wasLive = S.web === 'streaming' || S.web === 'locked';
+    cancelRun();
+    clearInterval(clockTimer); clearInterval(hudTimer);
+    S.frameOn = false;
+    S.lossAt = 0; S.taskAt = 0; S.lowFps = false; S.degradedAt = 0;
+    $('ovLocked').hidden = true; $('btnLock').textContent = '目标电脑锁屏';
+    const drop = reason === 'runtime_disconnected';
+    setRuntime(drop ? 'dropped' : 'idle');
+    if (wasLive) {
+      runtimeToast({
+        stopped_by_runtime: '远程查看已结束 · 本机用户停止', runtime_disconnected: 'Runtime 已离线', viewer_closed: '远程查看已结束 · 网页端主动结束',
+        renewal_timeout: `已自动停止远程查看：${LEASE_SEC} 秒没有收到服务器确认`,
+        resource_busy: '资源不足，已停止远程查看，任务照常执行',
+      }[reason] || '远程查看已结束');
+    } else if (reason === 'rejected') runtimeToast('已拒绝本次远程查看');
+    else if (reason === 'same_machine') runtimeToast('观看端就是本机，没有开始采集');
+    else if (reason === 'machine_check_unknown') runtimeToast('没能确认观看设备，没有开始采集');
+    else if (reason === 'no_path' || reason === 'perm_fail') runtimeToast('连接没有建立，没有开始采集');
+    if (reason === 'viewer_closed') { log('网页 → 服务器：结束查看'); closeViewer(); return; }
+    setWeb('ended');
+    renderEnd(reason);
+  }
+
+  /* ================= 视频区：缩放 / 全屏 ================= */
+  const cv = $('stream'), box = $('videoBox');
+  function fitCanvas() {
+    if (S.zoom === 'native') { cv.style.width = '1280px'; cv.style.height = '720px'; return; }
+    const w = box.clientWidth - 24, h = box.clientHeight - 24, k = Math.max(0.05, Math.min(w / 1280, h / 720));
+    cv.style.width = Math.floor(1280 * k) + 'px'; cv.style.height = Math.floor(720 * k) + 'px';
+  }
+  function setZoom(mode) {
+    S.zoom = mode;
+    box.classList.toggle('native', mode === 'native');
+    $('zoomFit').setAttribute('aria-pressed', String(mode === 'fit'));
+    $('zoomNative').setAttribute('aria-pressed', String(mode === 'native'));
+    fitCanvas();
+  }
+  $('zoomFit').onclick = () => setZoom('fit');
+  $('zoomNative').onclick = () => setZoom('native');
+  $('vFull').onclick = () => { S.full = !S.full; $('viewerBox').classList.toggle('is-full', S.full); $('vFull').title = S.full ? '退出全屏' : '全屏'; fitCanvas(); };
+  new ResizeObserver(() => { if (S.web === 'streaming') fitCanvas(); }).observe(box);
+
+  /* ================= 事件绑定 ================= */
+  const closeFromViewer = () => { if (S.web !== 'idle') endView('viewer_closed'); };
+  $('vClose').onclick = closeFromViewer;
+  $('vCancel').onclick = closeFromViewer;
+  $('vEnd').onclick = closeFromViewer;
+  $('vEndLocked').onclick = closeFromViewer;
+  $('viewer').addEventListener('mousedown', (e) => { if (e.target === e.currentTarget && S.web === 'ended') closeViewer(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (!$('permBubble').hidden) return; closeFromViewer(); } });
+  $('permAllow').onclick = () => answerPerm('allow');
+  $('permBlock').onclick = () => answerPerm('deny');
+  $('rtStop').onclick = () => {
+    if (S.rt === 'incoming' || S.rt === 'connecting') { log('Runtime：本机用户点击「拒绝」', 'warn'); endView('rejected'); }
+    else if (S.rt === 'streaming' || S.rt === 'locked' || S.rt === 'serverloss') { log('Runtime：本机用户点击「停止查看」', 'warn'); endView('stopped_by_runtime'); }
+  };
+  $('btnRtStop').onclick = () => $('rtStop').click();
+  $('btnLock').onclick = () => lockTarget(S.web !== 'locked');
+  $('btnDrop').onclick = () => { log('Runtime：断网或退出，心跳停止', 'warn'); endView('runtime_disconnected'); };
+  $('btnLoss').onclick = () => { if (S.rt === 'serverloss') endServerLoss(); else startServerLoss(); };
+  $('permToggle').onchange = () => { if ($('permToggle').checked) return; if (!$('permBubble').hidden) answerPerm('allow'); };
+
+  function renderScenarios() {
+    $('scList').innerHTML = Object.entries(SCENARIOS).map(([k, v]) => `<button class="sc" type="button" data-k="${k}" aria-pressed="${k === S.scenario}"><i></i>${v.name}</button>`).join('');
+    $('scHelp').textContent = SCENARIOS[S.scenario].help;
+  }
+  $('scList').onclick = (e) => {
+    const b = e.target.closest('.sc'); if (!b) return;
+    closeFromViewer(); cancelRun(); setRuntime('idle'); $('rtToast').hidden = true; S.lossAt = 0; S.taskAt = 0; S.lowFps = false; S.degradedAt = 0;
+    S.scenario = b.dataset.k; renderScenarios(); renderTable();
+    log('切换场景：' + SCENARIOS[S.scenario].name);
+  };
+  document.querySelectorAll('[data-speed]').forEach((b) => b.onclick = () => {
+    S.speed = Number(b.dataset.speed);
+    document.querySelectorAll('[data-speed]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+  });
+  $('btnReset').onclick = () => location.reload();
+
+  renderScenarios(); renderTable(); setRuntime('idle');
+
+  /* ================= 模拟画面：在 1280×720 画布上绘制一个“正在被自动化操作”的 Windows 桌面 ================= */
+  const cx = cv.getContext('2d'), CW = 1280, CH = 720;
+  const UI = '"Segoe UI","Microsoft YaHei UI",sans-serif', MONO = '"Cascadia Mono",Consolas,monospace';
+  const NAMES = ['王女士 · 28岁 · 本科', '李先生 · 32岁 · 硕士', '赵女士 · 26岁 · 本科', '陈先生 · 30岁 · 大专', '周女士 · 35岁 · 硕士', '吴先生 · 27岁 · 本科', '徐女士 · 31岁 · 本科', '孙先生 · 29岁 · 硕士', '马女士 · 24岁 · 本科', '朱先生 · 34岁 · 本科', '胡女士 · 27岁 · 硕士', '郭先生 · 26岁 · 本科'];
+  const JOBS = ['新媒体运营 · 8-12K', '行政专员 · 5-7K', '招聘主管 · 10-15K', '客服主管 · 6-9K'];
+  const cur = { x: 700, y: 300 };
+  function rr(x, y, w, h, r) { cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
+  function blob(x, y, r, color) { const g = cx.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, color); g.addColorStop(1, 'rgba(0,0,0,0)'); cx.fillStyle = g; cx.fillRect(x - r, y - r, r * 2, r * 2); }
+  function windowFrame(x, y, w, h, title, paint, t) {
+    cx.save(); cx.shadowColor = 'rgba(0,0,0,.38)'; cx.shadowBlur = 26; cx.shadowOffsetY = 10; rr(x, y, w, h, 10); cx.fillStyle = '#fff'; cx.fill(); cx.restore();
+    cx.save(); rr(x, y, w, h, 10); cx.clip();
+    cx.fillStyle = '#f1f5f9'; cx.fillRect(x, y, w, 38);
+    cx.fillStyle = '#374151'; cx.font = '600 14px ' + UI; cx.textAlign = 'left'; cx.textBaseline = 'middle'; cx.fillText(title, x + 16, y + 20);
+    cx.strokeStyle = '#6b7280'; cx.lineWidth = 1.5;
+    cx.beginPath(); cx.moveTo(x + w - 118, y + 22); cx.lineTo(x + w - 108, y + 22); cx.stroke();
+    cx.strokeRect(x + w - 72, y + 15, 10, 10);
+    cx.beginPath(); cx.moveTo(x + w - 30, y + 15); cx.lineTo(x + w - 20, y + 25); cx.moveTo(x + w - 20, y + 15); cx.lineTo(x + w - 30, y + 25); cx.stroke();
+    paint(x, y + 38, w, h - 38, t);
+    cx.restore();
+  }
+  function bossPane(x, y, w, h, t) {
+    const chips = ['3-5年', '本科及以上', '25-35岁', '在线']; let px = x + 16;
+    cx.font = '600 13px ' + UI; cx.textAlign = 'left';
+    chips.forEach((c) => { const cw = cx.measureText(c).width + 22; rr(px, y + 12, cw, 28, 14); cx.fillStyle = '#E6F0FF'; cx.fill(); cx.fillStyle = '#003A8C'; cx.fillText(c, px + 11, y + 26); px += cw + 8; });
+    const top = y + 58, rowH = 58, speed = 16, off = (t * speed) % rowH, first = Math.floor((t * speed) / rowH);
+    const hl = 3, phase = (t / 1.5) % 1;
+    for (let i = -1; i < 10; i++) {
+      const idx = first + i, ry = Math.round(top + i * rowH - off), on = i === hl;
+      cx.fillStyle = on ? '#E6F0FF' : (idx % 2 ? '#fafafa' : '#fff'); cx.fillRect(x, ry, w, rowH);
+      cx.fillStyle = '#cbd5e1'; cx.beginPath(); cx.arc(x + 44, ry + rowH / 2, 18, 0, 7); cx.fill();
+      cx.fillStyle = '#64748b'; cx.font = '600 15px ' + UI; cx.fillText(NAMES[((idx % 12) + 12) % 12], x + 78, ry + 21);
+      cx.font = '13px ' + UI; cx.fillText(JOBS[((idx % 4) + 4) % 4] + ' · ' + (3 + ((idx % 5) + 5) % 5) + '年经验', x + 78, ry + 41);
+      const bx = x + w - 132, by = ry + 14;
+      rr(bx, by, 112, 30, 6); cx.fillStyle = on ? '#0066FF' : '#fff'; cx.fill(); cx.strokeStyle = on ? '#0066FF' : '#93c5fd'; cx.lineWidth = 1.5; cx.stroke();
+      cx.fillStyle = on ? '#fff' : '#0066FF'; cx.font = '600 13px ' + UI; cx.textAlign = 'center'; cx.fillText('继续沟通', bx + 56, by + 15); cx.textAlign = 'left';
+      if (on && phase > 0.3) { cx.fillStyle = '#D1FAE5'; rr(x + w - 196, by + 3, 54, 24, 12); cx.fill(); cx.fillStyle = '#047857'; cx.font = '600 12px ' + UI; cx.textAlign = 'center'; cx.fillText('已沟通', x + w - 169, by + 15); cx.textAlign = 'left'; }
+    }
+    const tx = x + w - 76, ty = top + hl * rowH + 29 - off;
+    cur.x += (tx - cur.x) * 0.22; cur.y += (ty - cur.y) * 0.22;
+    if (phase < 0.35) { cx.strokeStyle = 'rgba(0,102,255,' + (1 - phase / 0.35) + ')'; cx.lineWidth = 2.5; cx.beginPath(); cx.arc(tx, ty, 8 + phase * 60, 0, 7); cx.stroke(); }
+  }
+  function logPane(x, y, w, h, t) {
+    cx.fillStyle = '#fff'; cx.fillRect(x, y, w, h);
+    cx.fillStyle = '#111827'; cx.font = '600 14px ' + UI; cx.textAlign = 'left'; cx.fillText('当前任务：BOSS 候选人筛选 · 第 3 轮', x + 16, y + 24);
+    const k = Math.floor(t / 1.6), prog = (t * 0.035) % 1;
+    rr(x + 16, y + 42, w - 32, 6, 3); cx.fillStyle = '#e5e7eb'; cx.fill(); rr(x + 16, y + 42, (w - 32) * prog, 6, 3); cx.fillStyle = '#10b981'; cx.fill();
+    cx.font = '13px ' + MONO;
+    for (let j = 0; j < 11; j++) {
+      const n = k - j; if (n < 0) break;
+      const page = 1 + Math.floor(n / 3), m = n % 3;
+      const txt = m === 0 ? `boss_filter  第 ${page} 页 · 命中 ${(n * 7) % 9 + 3} 人` : m === 1 ? `boss_greet   → ${NAMES[n % 12].slice(0, 3)} · 已发送` : `等待页面加载… ${((n * 13) % 900 + 100)}ms`;
+      cx.fillStyle = m === 0 ? '#0066FF' : m === 1 ? '#047857' : '#9ca3af';
+      cx.fillText(`[${String(9 + Math.floor(n * 1.6 / 60)).padStart(2, '0')}:${String(Math.floor(n * 1.6) % 60).padStart(2, '0')}:${String(Math.floor(n * 96) % 60).padStart(2, '0')}] ${txt}`, x + 16, y + h - 18 - j * 24);
+    }
+  }
+  function taskbar() {
+    cx.fillStyle = 'rgba(15,23,42,.94)'; cx.fillRect(0, CH - 48, CW, 48);
+    cx.fillStyle = '#60a5fa'; [0, 1].forEach((r) => [0, 1].forEach((c) => cx.fillRect(22 + c * 11, CH - 35 + r * 11, 8, 8)));
+    for (let i = 0; i < 5; i++) { rr(CW / 2 - 130 + i * 54, CH - 36, 24, 24, 6); cx.fillStyle = i === 1 ? '#3b82f6' : i === 2 ? '#10b981' : i === 3 ? '#b9f13d' : '#94a3b8'; cx.fill(); if (i === 1) { cx.fillStyle = 'rgba(255,255,255,.85)'; cx.fillRect(CW / 2 - 130 + i * 54, CH - 9, 24, 3); } }
+    const d = new Date(), p = (n) => String(n).padStart(2, '0');
+    cx.fillStyle = '#e5e7eb'; cx.font = '600 13px ' + UI; cx.textAlign = 'right'; cx.textBaseline = 'middle';
+    cx.fillText(`${p(d.getHours())}:${p(d.getMinutes())}`, CW - 20, CH - 30); cx.font = '12px ' + UI; cx.fillText(`${d.getMonth() + 1}/${d.getDate()}`, CW - 20, CH - 14);
+    cx.textAlign = 'left';
+  }
+  function cursor() {
+    cx.save(); cx.translate(cur.x, cur.y); cx.beginPath(); cx.moveTo(0, 0); cx.lineTo(0, 20); cx.lineTo(5, 15); cx.lineTo(9, 23); cx.lineTo(13, 21); cx.lineTo(9, 13); cx.lineTo(16, 13); cx.closePath();
+    cx.fillStyle = '#fff'; cx.strokeStyle = '#111827'; cx.lineWidth = 1.4; cx.fill(); cx.stroke(); cx.restore();
+  }
+  function drawDesktop(t) {
+    const g = cx.createLinearGradient(0, 0, CW, CH); g.addColorStop(0, '#1d3d63'); g.addColorStop(1, '#0d1f33'); cx.fillStyle = g; cx.fillRect(0, 0, CW, CH);
+    blob(280, 130, 520, 'rgba(96,165,250,.38)'); blob(1130, 680, 480, 'rgba(185,241,61,.16)');
+    windowFrame(800, 64, 444, 440, 'Runtime · 任务进度', logPane, t);
+    windowFrame(36, 36, 752, 600, 'BOSS直聘 — 候选人沟通', bossPane, t);
+    taskbar(); cursor();
+  }
+  function drawLock() {
+    const g = cx.createLinearGradient(0, 0, CW, CH); g.addColorStop(0, '#1e3a5f'); g.addColorStop(1, '#0b1a2e'); cx.fillStyle = g; cx.fillRect(0, 0, CW, CH);
+    blob(400, 240, 520, 'rgba(96,165,250,.30)'); blob(980, 520, 560, 'rgba(185,241,61,.10)');
+    cx.textAlign = 'center'; cx.textBaseline = 'middle';
+    cx.font = '15px ' + UI; cx.fillStyle = 'rgba(255,255,255,.55)'; cx.fillText('BOSS-专用机-01 · Windows 已锁定', CW / 2, CH - 70);
+    cx.textAlign = 'left';
+  }
+  let lastDraw = 0;
+  function frame(now) {
+    requestAnimationFrame(frame);
+    if (S.web === 'locked') { if (lastDraw !== -1) { drawLock(); lastDraw = -1; } return; }
+    if (!S.frameOn || now - lastDraw < 1000 / 15) return;
+    lastDraw = now; drawDesktop(now / 1000);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
