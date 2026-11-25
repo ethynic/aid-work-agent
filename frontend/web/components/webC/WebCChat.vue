@@ -767,6 +767,14 @@ async function observeRunner(runnerId: string) {
     font-size: 14px;
   }
 }
+.markdown-body :deep(a) {
+  color: var(--color-primary-600);
+  text-decoration: underline;
+  word-break: break-all;
+}
+.markdown-body :deep(a:hover) {
+  color: var(--color-primary-700);
+}
 .markdown-body :deep(p) {
   margin: 0.25rem 0;
 }
