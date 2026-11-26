@@ -50,30 +50,48 @@ async def list_subagents(request: Request):
 
         items = registry.get_all_subagents_with_type()
 
-        # 租户模式下按权限过滤
+        # 租户模式下按权限过滤（fail-closed：租户上下文或用户身份解析失败时
+        # 拒绝返回，绝不退化为全量内置列表——否则 token 校验偶发失败时租户
+        # 用户会看到全部内置数字员工）
         tenant_id = get_current_tenant_id()
+        from src.api.auth import get_current_user
+        user = get_current_user(request)
 
-        if tenant_id is not None:
-            from src.api.auth import get_current_user
-            user = get_current_user(request)
-            if user:
-                # 传递 tenant_id 作为 target_tenant_id，确保平台管理员代管租户时
-                # 按目标租户的订阅过滤，而不是 fallback 到 user["tenant_id"]（平台管理员为 NULL）
-                # allowed_ids 已由 checker 展开附加本租户副本实例（订阅继承）
-                allowed_ids = set(get_allowed_agent_ids_for_user(user, target_tenant_id=tenant_id))
-                items = [item for item in items if item["agent_id"] in allowed_ids]
-                items.extend(build_tenant_instance_items(tenant_id, allowed_ids))
-                items = apply_direct_customization_overrides(tenant_id, items)
-                # 如果主智能体在允许列表中，添加到结果中
-                if "main" in allowed_ids:
-                    items.append({
-                        "agent_id": "main",
-                        "name": "CEO智能体",
-                        "description": "系统主智能体，具备通用能力和工具",
-                        "type": "builtin",
-                        "business_pages": []
-                    })
-            # user 为 None 时（token 无效），不添加 main，保持只有内置 subagent
+        if tenant_id is None:
+            # 无租户上下文：仅平台管理员全局视图（/portal 非租户路由）允许全量，
+            # 其余（未认证 / token 失效 / 中间件解析失败）一律拒绝
+            if user and user.get("role") == "platform_admin":
+                return {"success": True, "data": items}
+            return {
+                "success": False,
+                "error": "无法确认租户身份，请重新登录",
+                "debug": "tenant context unresolved and user not platform_admin",
+            }
+
+        if not user:
+            # 有租户上下文但用户身份失效：fail-closed
+            return {
+                "success": False,
+                "error": "登录状态已失效，请重新登录",
+                "debug": "tenant context present but user unresolved",
+            }
+
+        # 传递 tenant_id 作为 target_tenant_id，确保平台管理员代管租户时
+        # 按目标租户的订阅过滤，而不是 fallback 到 user["tenant_id"]（平台管理员为 NULL）
+        # allowed_ids 已由 checker 展开附加本租户副本实例（订阅继承）
+        allowed_ids = set(get_allowed_agent_ids_for_user(user, target_tenant_id=tenant_id))
+        items = [item for item in items if item["agent_id"] in allowed_ids]
+        items.extend(build_tenant_instance_items(tenant_id, allowed_ids))
+        items = apply_direct_customization_overrides(tenant_id, items)
+        # 如果主智能体在允许列表中，添加到结果中
+        if "main" in allowed_ids:
+            items.append({
+                "agent_id": "main",
+                "name": "CEO智能体",
+                "description": "系统主智能体，具备通用能力和工具",
+                "type": "builtin",
+                "business_pages": []
+            })
 
         return {"success": True, "data": items}
 

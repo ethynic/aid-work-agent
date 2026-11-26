@@ -42,8 +42,8 @@
         >
           <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />
         </svg>
-        <p class="text-base">暂无可用的数字员工</p>
-        <p class="text-sm mt-1">请联系管理员开通权限</p>
+        <p class="text-base">{{ loadError || '暂无可用的数字员工' }}</p>
+        <p class="text-sm mt-1">{{ loadError ? '请刷新重试或重新登录' : '请联系管理员开通权限' }}</p>
       </div>
 
       <!-- 卡片网格 -->
@@ -203,15 +203,23 @@ function sortAgents(list: SubagentListItem[]): SubagentListItem[] {
 }
 
 // 加载数字员工列表，过滤 main CEO 智能体
+const loadError = ref('')
+
 async function loadAgents() {
   loading.value = true
+  loadError.value = ''
   try {
     const res = await listSubagents()
     const list = res.data || []
     // 过滤掉 main（CEO 智能体不展示给用户）
     agents.value = sortAgents(list.filter(a => a.agent_id !== 'main'))
-  } catch (e) {
+    // 接口拒绝（如租户身份确认失败）时展示错误而非静默空列表
+    if (!res.success) {
+      loadError.value = res.error || '数字员工列表加载失败'
+    }
+  } catch (e: any) {
     console.error('加载数字员工列表失败:', e)
+    loadError.value = e?.message || '数字员工列表加载失败'
     agents.value = []
   } finally {
     loading.value = false
