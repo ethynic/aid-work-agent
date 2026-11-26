@@ -604,7 +604,11 @@ def get_db_connection() -> Generator[Any, None, None]:
 
     # 从连接池获取连接（画面作用域里是画面连接池）
     pool = _connection_pool_for_scope()
-    conn = get_pooled_connection(pool=pool)
+    if pool is None:
+        conn = get_pooled_connection()
+    else:
+        # 池内旧连接全失效时，逐条丢弃后还要有一次新建连接的机会。
+        conn = get_pooled_connection(max_retries=pool.maxconn + 1, pool=pool)
 
     # 使用 DictCursor 使 psycopg2 返回字典-like 对象
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)

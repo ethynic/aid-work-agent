@@ -1672,30 +1672,34 @@ class TestScreenConnectionsAreReused:
         assert after_rounds == after_first
         assert after_all == after_first
 
-    def test_peer_reads_committed_signal_after_an_idle_screen_connection_dies(self, client, users):
-        """空闲连接断开后，画面请求借出时丢弃坏连接，对端仍能读到已确认的信令。"""
+    def test_first_viewer_poll_reads_committed_signal_after_all_idle_screen_connections_die(self, client, users):
+        """数据库已恢复时，首次网页轮询能清空失效画面连接并读到此前已确认的信令。"""
+        from src.db import database
+
         user = users[0]
         device_id, token = _online_device(client, user, "画面连接断开")
         session_id = _new_session(client, user, device_id)
         _reach(client, user, device_id, token, session_id, "connecting")
         payload = {"candidate": "candidate:1 1 udp 1 192.0.2.1 50000 typ host"}
 
-        with _screen_borrows() as borrowed:
-            ack = _ok_runtime(client, token, session_id, "candidate", payload)
-        backend = borrowed[-1]
-        # 只终止当前隔离库中刚由该测试使用、现已归还的画面连接。
+        ack = _ok_runtime(client, token, session_id, "candidate", payload)
+        pool = database.get_screen_pool()
+        with pool._lock:
+            backends = {conn.info.backend_pid for conn in pool._pool}
+        assert len(backends) == pool.maxconn
+        # 只终止当前隔离库中由该测试进程的画面池持有的空闲连接。
         stopped = _sql(
-            "SELECT pg_terminate_backend(pid, 2000) AS stopped FROM pg_stat_activity "
-            "WHERE pid = %s AND datname = current_database() AND application_name = %s",
-            (backend, SCREEN_APPLICATION_NAME),
+            "SELECT pid, pg_terminate_backend(pid, 2000) AS stopped FROM pg_stat_activity "
+            "WHERE pid = ANY(%s) AND datname = current_database() AND application_name = %s AND state = 'idle'",
+            (list(backends), SCREEN_APPLICATION_NAME),
         )
-        assert stopped == [{"stopped": True}]
+        assert {row["pid"] for row in stopped if row["stopped"]} == backends
 
         with _screen_borrows() as borrowed:
             read = _read(client, user, device_id, session_id, after_seq=ack["seq"] - 1)
         assert read.status_code == 200, read.text
         assert read.json()["signals"] == [{"seq": ack["seq"], "type": "candidate", "payload": payload}]
-        assert borrowed and backend not in borrowed
+        assert borrowed and backends.isdisjoint(borrowed)
 
 
 # ---------------------------------------------------------------------------
