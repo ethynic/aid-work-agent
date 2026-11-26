@@ -91,6 +91,11 @@ fi
 #         渲染器源码（src/tools/ppt/renderer-node/src/*.ts 或 package-lock.json）
 #         变更时需手工重建，命令见 git 历史中本步骤原实现（npm ci + npm run build）
 #      c) 新增分段计时：每步结束打印「本段/累计」耗时，定位发布慢的环节
+#  12. 2026-11-26 两项调整：
+#      a) compose up 加 --progress quiet（版本探测兼容旧引擎）：TTY 进度帧重绘
+#         重定向时会灌出数千行发布日志
+#      b) pip 依赖安装转后台（[7.5]）与前端编译等待并行：两段互不依赖，
+#         总时长取 max(前端等待, pip) 而非相加；失败仍汇总告警
 # ==============================================================================
 
 set -e
@@ -106,6 +111,13 @@ step_done() {
     [ -n "$LBL" ] && TIMING_LIST="${TIMING_LIST:+$TIMING_LIST + }${LBL}$(( NOW - LAST_TS ))s"
     LAST_TS=$NOW
 }
+
+# compose 支持 --progress 时静默进度输出（TTY 进度帧重绘会灌出数千行发布日志）
+if docker compose up --help 2>&1 | grep -q -- '--progress'; then
+    COMPOSE_QUIET=(--progress quiet)
+else
+    COMPOSE_QUIET=()
+fi
 
 echo "=========================================="
 echo "  AI 数字员工系统（测试） - 快速更新"
@@ -275,7 +287,7 @@ fi
 # --wait 只等主 API/background（2026-11-26 对齐生产 agent_update.sh 语义）：
 # runner 服务（runner-api/runner-worker/runner-monitor/heavy-tools）的
 # healthcheck（monitor start_period 4m、heavy-tools 60s）不再串进发布总时长
-docker compose "${COMPOSE_FILES[@]}" up -d --force-recreate --remove-orphans --wait \
+docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_QUIET[@]}" up -d --force-recreate --remove-orphans --wait \
     aid-agent-api aid-agent-background
 
 # runner 服务重建使新代码生效；不带 --wait（与生产对齐，就绪靠下方 /health 探测告警）
@@ -283,7 +295,7 @@ RUNNER_SERVICES=$(docker compose "${COMPOSE_FILES[@]}" config --services 2>/dev/
     | grep -E '^runner|^heavy-tools' || true)
 if [ -n "$RUNNER_SERVICES" ]; then
     # shellcheck disable=SC2086
-    docker compose "${COMPOSE_FILES[@]}" up -d --force-recreate $RUNNER_SERVICES
+    docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_QUIET[@]}" up -d --force-recreate $RUNNER_SERVICES
     echo "    runner 服务已重建（不等待健康）: $(echo $RUNNER_SERVICES | tr '\n' ' ')"
 fi
 # runner-api 可达性探测（失败仅告警不阻断，重建后异步就绪）
@@ -333,7 +345,42 @@ done
 docker exec -u root aid-agent-api2 ls -ld /tmp || true
 step_done "权限修复"
 
-# 9. 等待前端编译完成
+# 7.5 增量依赖安装转后台（2026-11-26）：与前端编译等待并行，两段互不依赖。
+#     整个安装循环放进子壳——wait -n 在子壳内只可见 pip 任务，不会误等前台
+#     FRONTEND_PID。注意：必须对本 compose project 全部同镜像容器逐个安装，
+#     docker exec 的安装只落在单容器可写层，其它容器不会继承；而 [5] 的
+#     --force-recreate 又会丢弃容器内既有安装（2026-11-20 rfc8785 事故）。
+#     彻底解法仍是定期重建镜像，使依赖固化进镜像层。
+echo "[7.5] 启动增量依赖安装（后台，与前端编译等待并行）..."
+PIP_PROJECT=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' aid-agent-api2 2>/dev/null || true)
+[ -z "$PIP_PROJECT" ] && PIP_PROJECT="${PWD##*/}"
+PIP_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=$PIP_PROJECT" \
+    --format '{{.Image}} {{.Names}}' | awk '$1 == "aid-agent-api:latest" {print $2}')
+if [ -z "$PIP_CONTAINERS" ]; then
+    echo "  警告：未匹配到同镜像容器，退回仅安装 aid-agent-api2"
+    PIP_CONTAINERS="aid-agent-api2"
+fi
+PIP_TMPDIR=$(mktemp -d)
+(
+    PIP_RUNNING=0
+    for c in $PIP_CONTAINERS; do
+        echo "    -> $c"
+        ( docker exec -u root "$c" \
+              pip install --no-cache-dir -r /app/requirements.txt \
+              -i https://mirrors.cloud.tencent.com/pypi/simple \
+              --quiet || echo "$c" >> "$PIP_TMPDIR/failed" ) &
+        PIP_RUNNING=$((PIP_RUNNING + 1))
+        # 限制并发 4 个：9 个容器同时跑 pip 的内存峰值对测试机偏高
+        if [ "$PIP_RUNNING" -ge 4 ]; then
+            wait -n || true
+            PIP_RUNNING=$((PIP_RUNNING - 1))
+        fi
+    done
+    wait || true
+) &
+PIP_PID=$!
+step_done "pip后台启动"
+
 echo "[8] 等待前端编译完成..."
 if ! wait "$FRONTEND_PID"; then
   echo "  错误：前端编译失败，详见 $BUILD_LOG"
@@ -357,46 +404,18 @@ sudo chown -R ubuntu:ubuntu "$DIST_DIR"
 sudo chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
 step_done "dist切换"
 
-# 11. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
-#     新依赖不会自动安装；下次重建镜像后可移除此步骤）
-#     注意：api/background/runner-api/runner-worker/heavy-tools/runner-monitor 共用
-#     同一镜像，docker exec 的安装只落在单个容器的可写层，其它容器不会继承；而
-#     [5] 的 --force-recreate 又会丢弃容器内既有安装。因此必须对本 compose project
-#     内所有同镜像容器逐个安装，否则 Runner 侧运行时 import 新依赖直接失败
-#     （2026-11-20 事故：仅主 API 装了 rfc8785，4 个 Runner worker 全部缺包）。
-#     彻底解法仍是定期重建镜像，使依赖固化进镜像层。
-echo "[10] 增量安装新增依赖（本项目全部同镜像容器）..."
-PIP_PROJECT=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' aid-agent-api2 2>/dev/null || true)
-[ -z "$PIP_PROJECT" ] && PIP_PROJECT="${PWD##*/}"
-PIP_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=$PIP_PROJECT" \
-    --format '{{.Image}} {{.Names}}' | awk '$1 == "aid-agent-api:latest" {print $2}')
-if [ -z "$PIP_CONTAINERS" ]; then
-    echo "  警告：未匹配到同镜像容器，退回仅安装 aid-agent-api2"
-    PIP_CONTAINERS="aid-agent-api2"
+# 10. 等待增量依赖安装完成（[7.5] 后台启动，已与前端编译等待并行）
+echo "[10] 等待依赖安装完成..."
+if ! wait "$PIP_PID"; then
+    echo "  警告：pip 后台任务异常退出，见上方输出"
 fi
-PIP_TMPDIR=$(mktemp -d)
-PIP_RUNNING=0
-for c in $PIP_CONTAINERS; do
-    echo "    -> $c"
-    ( docker exec -u root "$c" \
-          pip install --no-cache-dir -r /app/requirements.txt \
-          -i https://mirrors.cloud.tencent.com/pypi/simple \
-          --quiet || echo "$c" >> "$PIP_TMPDIR/failed" ) &
-    PIP_RUNNING=$((PIP_RUNNING + 1))
-    # 限制并发 4 个：9 个容器同时跑 pip 的内存峰值对测试机偏高
-    if [ "$PIP_RUNNING" -ge 4 ]; then
-        wait -n || true
-        PIP_RUNNING=$((PIP_RUNNING - 1))
-    fi
-done
-wait || true
 if [ -s "$PIP_TMPDIR/failed" ]; then
     echo "  警告：以下容器依赖安装失败，对应功能可能不可用：$(tr '\n' ' ' < "$PIP_TMPDIR/failed")"
 else
     echo "    全部容器依赖安装完成"
 fi
 rm -rf "$PIP_TMPDIR"
-step_done "pip安装"
+step_done "pip收尾"
 
 echo ""
 echo "更新完成！"

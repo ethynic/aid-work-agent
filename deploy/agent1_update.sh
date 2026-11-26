@@ -48,6 +48,13 @@ step_done() {
     LAST_TS=$NOW
 }
 
+# compose 支持 --progress 时静默进度输出（TTY 进度帧重绘会灌出数千行发布日志）
+if docker compose up --help 2>&1 | grep -q -- '--progress'; then
+    COMPOSE_QUIET=(--progress quiet)
+else
+    COMPOSE_QUIET=()
+fi
+
 echo "=========================================="
 echo "  仿真环境（agent1）- 验证模式更新"
 echo "=========================================="
@@ -165,7 +172,7 @@ echo "[5] 重启仿真后端 aid-agent-api1（及已启用的 runner 容器）..
 # --wait 只等主 api（2026-11-26 对齐生产语义）：runner-sim 服务的 healthcheck
 # （monitor-sim start_period 4m）不再串进发布总时长
 # --remove-orphans：overlay 服务名变更后，旧容器占用同名 container_name 会导致建容器冲突
-docker compose "${COMPOSE_ARGS[@]}" up -d --remove-orphans --force-recreate --wait api
+docker compose "${COMPOSE_ARGS[@]}" "${COMPOSE_QUIET[@]}" up -d --remove-orphans --force-recreate --wait api
 
 # runner-sim 服务重建使新代码生效（代码经 .:/app 挂载，重建保证进程加载新代码）；
 # 不带 --wait（与生产对齐，就绪靠下方 /health 探测告警）
@@ -173,7 +180,7 @@ RUNNER_SERVICES=$(docker compose "${COMPOSE_ARGS[@]}" config --services 2>/dev/n
     | grep -E '^runner' || true)
 if [ -n "$RUNNER_SERVICES" ]; then
     # shellcheck disable=SC2086
-    docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate $RUNNER_SERVICES
+    docker compose "${COMPOSE_ARGS[@]}" "${COMPOSE_QUIET[@]}" up -d --force-recreate $RUNNER_SERVICES
     echo "    runner 服务已重建（不等待健康）: $(echo $RUNNER_SERVICES | tr '\n' ' ')"
     # runner-api-sim 可达性探测（失败仅告警不阻断，重建后异步就绪）
     if docker exec aid-agent-api1 python -c \

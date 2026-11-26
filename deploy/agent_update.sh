@@ -68,6 +68,13 @@ step_done() {
     LAST_TS=$NOW
 }
 
+# compose 支持 --progress 时静默进度输出（TTY 进度帧重绘会灌出数千行发布日志）
+if docker compose up --help 2>&1 | grep -q -- '--progress'; then
+    COMPOSE_QUIET=(--progress quiet)
+else
+    COMPOSE_QUIET=()
+fi
+
 echo "=========================================="
 echo "  AI 数字员工系统 - 快速更新"
 echo "=========================================="
@@ -238,7 +245,7 @@ if [ -f docker-compose.agent-runner.yml ]; then
     COMPOSE_ARGS+=(-f docker-compose.agent-runner.yml)
     echo "    检测到 runner overlay，已叠加 docker-compose.agent-runner.yml"
 fi
-docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans --wait \
+docker compose "${COMPOSE_ARGS[@]}" "${COMPOSE_QUIET[@]}" up -d --force-recreate --remove-orphans --wait \
     aid-agent-api aid-agent-background
 
 # runner 服务重建使新代码生效；服务名以 overlay 实际定义为准，仅重建存在的服务
@@ -247,7 +254,7 @@ if [ -f docker-compose.agent-runner.yml ]; then
         | grep -E '^runner' || true)
     if [ -n "$RUNNER_SERVICES" ]; then
         # shellcheck disable=SC2086
-        docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate $RUNNER_SERVICES
+        docker compose "${COMPOSE_ARGS[@]}" "${COMPOSE_QUIET[@]}" up -d --force-recreate $RUNNER_SERVICES
         echo "    runner 服务已重建: $(echo $RUNNER_SERVICES | tr '\n' ' ')"
     else
         echo "  警告：overlay 中未找到 runner-* 服务定义，未重建 runner"

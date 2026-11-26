@@ -81,6 +81,13 @@ step_done() {
     LAST_TS=$NOW
 }
 
+# compose 支持 --progress 时静默进度输出（TTY 进度帧重绘会灌出数千行发布日志）
+if docker compose up --help 2>&1 | grep -q -- '--progress'; then
+    COMPOSE_QUIET=(--progress quiet)
+else
+    COMPOSE_QUIET=()
+fi
+
 echo "=========================================="
 echo "  AI 数字员工系统（在线开发） - 快速更新"
 echo "=========================================="
@@ -282,7 +289,7 @@ fi
 # --wait 只等主 API/background（2026-11-26 对齐生产 agent_update.sh 语义）：
 # runner 服务（runner-api/runner-worker/runner-monitor/heavy-tools）的
 # healthcheck（monitor start_period 4m、heavy-tools 60s）不再串进发布总时长
-docker compose "${COMPOSE_FILES[@]}" up -d --force-recreate --remove-orphans --wait \
+docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_QUIET[@]}" up -d --force-recreate --remove-orphans --wait \
     aid-agent-api aid-agent-background
 
 # runner 服务重建使新代码生效；不带 --wait（与生产对齐，就绪靠下方 /health 探测告警）
@@ -291,7 +298,7 @@ if [ -f docker-compose.agent-runner.yml ]; then
         | grep -E '^runner|^heavy-tools' || true)
     if [ -n "$RUNNER_SERVICES" ]; then
         # shellcheck disable=SC2086
-        docker compose "${COMPOSE_FILES[@]}" up -d --force-recreate $RUNNER_SERVICES
+        docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_QUIET[@]}" up -d --force-recreate $RUNNER_SERVICES
         echo "    runner 服务已重建（不等待健康）: $(echo $RUNNER_SERVICES | tr '\n' ' ')"
     fi
     # runner-api 可达性探测（失败仅告警不阻断，重建后异步就绪）
