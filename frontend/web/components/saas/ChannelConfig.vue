@@ -263,6 +263,28 @@
             </div>
           </div>
 
+          <!-- 聊天页 Logo（2026-11-26）：data URL 直存 config、随聊天页 bootstrap 下发；
+               空串 = 系统默认图标 -->
+          <div>
+            <label class="text-sm text-muted mb-1 block">聊天页 Logo</label>
+            <div class="flex items-center gap-3">
+              <img v-if="form.config.logo" :src="form.config.logo" alt="Logo 预览" class="w-9 h-9 rounded-full object-cover shrink-0 border border-default" />
+              <div v-else class="w-9 h-9 rounded-full bg-primary-50 text-primary-600 flex items-center justify-center shrink-0">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="w-5 h-5">
+                  <path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                @change="onWebCLogoChange"
+                class="block text-sm text-default file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100 cursor-pointer"
+              />
+              <BaseButton v-if="form.config.logo" size="sm" intent="danger-ghost" @click="form.config.logo = ''">恢复默认</BaseButton>
+            </div>
+            <p class="mt-1 text-xs text-muted">显示在聊天页标题左侧，默认为系统图标；支持 png/jpg/webp/svg，100KB 以内</p>
+          </div>
+
           <!-- 留资归属员工（2026-11-20 方案 2）：留资线索 assigned_to + 留资通知
                「线索归属员工」接收人来源；官网客服无客服账号体系，按渠道配置 -->
           <div>
@@ -1350,6 +1372,7 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
   web_c: [
     { key: 'greeting', label: '开场白', placeholder: '您好，我是本公司的智能助手，有什么可以帮您？', hint: '访客打开聊天页时展示的开场欢迎语', location: '' },
     { key: 'title', label: '页面标题', placeholder: 'AID Work Agent（系统默认）', hint: '嵌入微信小程序 web-view 等容器时顶部导航栏显示的标题；留空使用系统默认', location: '' },
+    { key: 'subtitle', label: '副标题', placeholder: '智能助手（系统默认）', hint: '聊天页标题下方的说明小字；留空使用默认「智能助手」', location: '' },
   ],
 }
 
@@ -1396,6 +1419,13 @@ function applyMediaSwitchDefaults() {
   if (form.value.channel_type === 'web_c' && form.value.config.title === undefined) {
     form.value.config.title = ''
   }
+  // web_c 副标题/Logo（2026-11-26）：存量配置不含键时补空串初值（空串=系统默认）
+  if (form.value.channel_type === 'web_c' && form.value.config.subtitle === undefined) {
+    form.value.config.subtitle = ''
+  }
+  if (form.value.channel_type === 'web_c' && form.value.config.logo === undefined) {
+    form.value.config.logo = ''
+  }
 }
 
 // 钉钉「仅通知」用途补填字段：工作通知发送需应用 AgentId（2026-11-16 钉钉通知接入；
@@ -1440,6 +1470,9 @@ function selectChannelType(type: string) {
     if (form.value.config.show_history === undefined) form.value.config.show_history = false
     // 页面标题：缺省空串（空串=系统默认标题）
     if (form.value.config.title === undefined) form.value.config.title = ''
+    // 副标题：缺省空串（空串=默认「智能助手」）；Logo：空串=系统默认图标
+    if (form.value.config.subtitle === undefined) form.value.config.subtitle = ''
+    if (form.value.config.logo === undefined) form.value.config.logo = ''
   }
   // WP13：切到公众号类型时加载清单源绑定状态（v1 每租户仅一个扫码绑定，
   // 新建弹窗同样展示既有绑定）
@@ -2026,6 +2059,32 @@ function copyWebCSecret() {
     return
   }
   copyText(secret, '签名密钥')
+}
+
+// ==================== web_c 聊天页自定义 Logo（2026-11-26） ====================
+// 读为 data URL 直存 config（后端 _validate_web_c_logo 同口径校验：png/jpg/webp/svg、
+// 100KB 以内）；空串 = 系统默认图标
+const WEB_C_LOGO_MAX_BYTES = 100 * 1024
+const WEB_C_LOGO_ACCEPT_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml']
+
+function onWebCLogoChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = '' // 允许重复选择同一文件：先清空 value 再校验
+  if (!file) return
+  if (!WEB_C_LOGO_ACCEPT_TYPES.includes(file.type)) {
+    alert('Logo 仅支持 png/jpg/webp/svg 格式的图片')
+    return
+  }
+  if (file.size > WEB_C_LOGO_MAX_BYTES) {
+    alert('Logo 图片过大，请上传 100KB 以内的图片')
+    return
+  }
+  const reader = new FileReader()
+  reader.onload = () => {
+    form.value.config.logo = String(reader.result || '')
+  }
+  reader.readAsDataURL(file)
 }
 
 // 官网客服 demo 页面下载（anon/uid 模式可用；ext 模式链接由官网服务端签名生成，不提供 demo）

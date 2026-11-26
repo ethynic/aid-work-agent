@@ -151,6 +151,10 @@ export interface BootstrapResponse {
   show_history?: boolean
   /** 页面标题（渠道 config，缺省空串：保持系统默认标题不覆盖） */
   title?: string
+  /** 副标题（渠道 config，缺省空串：C 端兜底显示「智能助手」） */
+  subtitle?: string
+  /** 自定义 Logo（渠道 config，data URL；空串：系统默认图标） */
+  logo?: string
   identity: { mode: string; channel_user_id: string; display_name?: string | null }
   subagent: { agent_id: string; name: string } | null
   sessions: { session_id: string; subagent_id: string; updated_at: string; last_message_at: string }[]

@@ -527,6 +527,10 @@ async def bootstrap(tenant_id: str, config_id: str, request: Request):
         "show_history": show_history,
         # 页面标题（渠道 config，缺省空串：C 端保持系统默认标题不覆盖）
         "title": str(conf.get("title") or "").strip(),
+        # 副标题（渠道 config，缺省空串：C 端兜底显示「智能助手」）
+        "subtitle": str(conf.get("subtitle") or "").strip(),
+        # 自定义 Logo（渠道 config，data URL；空串：C 端使用系统默认图标）
+        "logo": str(conf.get("logo") or "").strip(),
         "identity": {
             "mode": identity.mode,
             "channel_user_id": identity.channel_user_id,

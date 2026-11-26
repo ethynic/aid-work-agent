@@ -1037,6 +1037,73 @@ class TestWebCConfigTitle:
         assert config["title"] == ""
 
 
+class TestWebCConfigSubtitleLogo:
+    """副标题与自定义 Logo 规整：2026-11-26 渠道配置新增，C 端聊天页头部展示。"""
+
+    def test_subtitle_stripped_and_kept(self):
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"subtitle": " 在线客服 ", "channel_secret": SECRET}
+        _normalize_web_c_config(config)
+        assert config["subtitle"] == "在线客服"
+
+    def test_subtitle_missing_defaults_empty(self):
+        """缺省/空白 = 未配置（C 端兜底显示「智能助手」）。"""
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"channel_secret": SECRET}
+        _normalize_web_c_config(config)
+        assert config["subtitle"] == ""
+
+        config2 = {"subtitle": "  ", "channel_secret": SECRET}
+        _normalize_web_c_config(config2)
+        assert config2["subtitle"] == ""
+
+    def test_logo_missing_defaults_empty(self):
+        """缺省/空串 = 未配置（C 端使用系统默认图标）。"""
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"channel_secret": SECRET}
+        _normalize_web_c_config(config)
+        assert config["logo"] == ""
+
+    def test_logo_valid_data_url_kept(self):
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        png_b64 = "iVBORw0KGgoAAAANSUhEUg=="
+        config = {"logo": f"data:image/png;base64,{png_b64}", "channel_secret": SECRET}
+        _normalize_web_c_config(config)
+        assert config["logo"] == f"data:image/png;base64,{png_b64}"
+
+    def test_logo_unsupported_type_rejected(self):
+        """非 data:image 前缀（如外链 URL / data:text）与不支持的图片格式均 400。"""
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        with pytest.raises(HTTPException) as exc:
+            _normalize_web_c_config({"logo": "https://example.com/logo.png", "channel_secret": SECRET})
+        assert exc.value.status_code == 400
+
+        with pytest.raises(HTTPException):
+            _normalize_web_c_config({"logo": "data:text/html;base64,PHN2Zz48L3N2Zz4=", "channel_secret": SECRET})
+
+    def test_logo_oversize_rejected(self):
+        """base64 串超 140_000 字符（约 100KB 原图）时 400。"""
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        big_b64 = "A" * 140_001
+        with pytest.raises(HTTPException) as exc:
+            _normalize_web_c_config({"logo": f"data:image/png;base64,{big_b64}", "channel_secret": SECRET})
+        assert exc.value.status_code == 400
+
+    def test_logo_whitespace_treated_as_unset(self):
+        """空白覆盖旧值视为清空 Logo（恢复默认图标）。"""
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"logo": "  ", "channel_secret": SECRET}
+        _normalize_web_c_config(config, existing={"logo": "data:image/png;base64,AAAA", "channel_secret": SECRET})
+        assert config["logo"] == ""
+
+
 class TestRunnerEventsFinalize:
     """SSE 收尾终态落库回归（agent2 2026-11-25 tr_runner_bc18 事故）。
 

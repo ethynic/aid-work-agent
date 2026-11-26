@@ -5,6 +5,7 @@ SaaS 渠道配置管理 API
 """
 
 import asyncio
+import re
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -169,6 +170,26 @@ _WEB_C_IDENTITY_MODES = ("ext", "anon", "uid")
 # web_c config 缺省值（create 时补齐；identity_mode 非法值 400）
 _WEB_C_DEFAULT_GREETING = "您好，我是本公司的智能助手，有什么可以帮您？"
 
+# web_c 自定义 Logo 校验（2026-11-26）：仅 data:image base64（png/jpg/webp/svg），
+# base64 串 ≤140_000 字符（约 100KB 原图）。Logo 为小图标直存 config JSON、
+# 随 bootstrap 下发，不走文件存储/独立下载端点（C 端为免登录页面，避免新增匿名
+# 文件通道）；非法值 400（表单来源，出现非法值即为异常调用，不静默纠正）
+_WEB_C_LOGO_PATTERN = re.compile(
+    r"^data:image/(png|jpe?g|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$")
+_WEB_C_LOGO_MAX_BASE64_LEN = 140_000
+
+
+def _validate_web_c_logo(value) -> str:
+    """校验 web_c 自定义 Logo：合法返回原值，空串/None = 未配置（系统默认图标）。"""
+    logo = str(value or "").strip()
+    if not logo:
+        return ""
+    if len(logo) > _WEB_C_LOGO_MAX_BASE64_LEN:
+        raise HTTPException(status_code=400, detail="Logo 图片过大，请上传 100KB 以内的图片")
+    if not _WEB_C_LOGO_PATTERN.match(logo):
+        raise HTTPException(status_code=400, detail="Logo 仅支持 png/jpg/webp/svg 格式的图片")
+    return logo
+
 
 def _normalize_web_c_config(config: dict, existing: Optional[dict] = None) -> None:
     """原地规整 web_c config（create/update 共用）。
@@ -183,11 +204,18 @@ def _normalize_web_c_config(config: dict, existing: Optional[dict] = None) -> No
       非法值 400（表单单选来源，出现非法值即为异常调用，不静默纠正）。
     - title：聊天页 document.title（嵌入小程序 web-view 等容器时导航栏标题）；
       缺省空串 = 未配置，C 端保持系统默认标题（index.html 的「AID Work Agent」）。
+    - subtitle：聊天页标题下方副标题小字；空串 = C 端兜底显示「智能助手」。
+    - logo：聊天页自定义 Logo（data URL base64，校验见 _validate_web_c_logo）；
+      空串 = 系统默认图标。
     """
     config["enabled"] = bool(config.get("enabled", True))
     config["greeting"] = str(config.get("greeting") or "").strip() or _WEB_C_DEFAULT_GREETING
     # 页面标题（2026-11-25）：空串 = 未配置，C 端不覆盖默认标题
     config["title"] = str(config.get("title") or "").strip()
+    # 副标题（2026-11-26）：聊天页标题下方小字；空串 = C 端兜底显示「智能助手」
+    config["subtitle"] = str(config.get("subtitle") or "").strip()
+    # 自定义 Logo（2026-11-26）：data URL base64 直存 config；空串 = 系统默认图标
+    config["logo"] = _validate_web_c_logo(config.get("logo"))
     # 附件上传开关：默认关闭（纯文字聊天）；开启后 C 端显示附件按钮并放行上传
     config["allow_attachment"] = bool(config.get("allow_attachment", False))
     # 历史会话入口开关：默认关闭（聊天页右上角不显示「历史会话」按钮）

@@ -2,14 +2,15 @@
   <div ref="rootEl" class="h-screen chat-root flex flex-col bg-canvas touch-manipulation" :class="{ 'embed-mode': isEmbed }">
     <!-- 页头（iframe embed 模式隐藏，设计 §4.5） -->
     <header v-if="!isEmbed" class="flex items-center gap-3 px-4 py-3 bg-surface border-b border-default">
-      <div class="w-9 h-9 rounded-full bg-primary-50 text-primary-600 flex items-center justify-center shrink-0">
+      <img v-if="logoUrl" :src="logoUrl" alt="Logo" class="w-9 h-9 rounded-full object-cover shrink-0 border border-default" />
+      <div v-else class="w-9 h-9 rounded-full bg-primary-50 text-primary-600 flex items-center justify-center shrink-0">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="w-5 h-5">
           <path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
       <div class="min-w-0 flex-1">
         <div class="text-sm font-semibold text-default truncate">{{ headerTitle }}</div>
-        <div class="text-xs text-muted">智能助手 · 官网客服</div>
+        <div class="text-xs text-muted">{{ subtitle }}</div>
       </div>
       <button
         v-if="isUidMode"
@@ -224,6 +225,9 @@ const identityMode = ref('')
 const identityName = ref('')
 const greeting = ref('')
 const headerTitle = ref('官网客服')
+// 副标题（渠道 config，空串兜底「智能助手」）与自定义 Logo（data URL，空串=系统默认图标）
+const subtitle = ref('智能助手')
+const logoUrl = ref('')
 const subagentName = ref('')
 const allowAttachment = ref(false)
 const showHistoryEnabled = ref(false)
@@ -369,6 +373,9 @@ onMounted(async () => {
     allowAttachment.value = data.allow_attachment === true
     showHistoryEnabled.value = data.show_history === true
     headerTitle.value = subagentName.value ? `${subagentName.value}` : '官网客服'
+    // 渠道配置的副标题与 Logo：空值兜底系统默认
+    subtitle.value = (data.subtitle || '').trim() || '智能助手'
+    logoUrl.value = data.logo || ''
     // 渠道配置的页面标题：覆盖 document.title（小程序 web-view 等容器导航栏读取它）
     if (data.title) document.title = data.title
     sessions.value = data.sessions || []
