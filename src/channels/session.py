@@ -113,6 +113,50 @@ def _invoke_pre_send(pre_send: Callable[..., Any], delivery_id: str) -> None:
         pre_send()
 
 
+def has_successful_transfer_to_human(tool_messages: Optional[List[Dict[str, Any]]]) -> bool:
+    """检查本轮 tool 消息序列中是否包含成功的 transfer_to_human 调用。
+
+    转人工成功后微信客服会话切到人工状态，任何后续机器人消息会被
+    微信客服接口拒绝（errcode=95018）。此判定有两个消费方：
+    - 渠道层（channel_routes）：拦截 LLM 在 transfer_to_human 之后
+      追加的多余文字回复；
+    - process_and_persist：response_text 为空时区分「转人工成功后的
+      设计性抑制」（降级 info、不 mark_error）与「agent 内部异常
+      吞错返回空串」（保持 WARNING + mark_error）。
+    """
+    if not tool_messages:
+        return False
+    transfer_call_ids = set()
+    for tm in tool_messages:
+        if tm.get("role") == "assistant" and tm.get("tool_calls"):
+            for tc in tm["tool_calls"]:
+                fn = tc.get("function") or {}
+                if fn.get("name") == "transfer_to_human":
+                    call_id = tc.get("id")
+                    if call_id:
+                        transfer_call_ids.add(call_id)
+    if not transfer_call_ids:
+        return False
+    for tm in tool_messages:
+        if tm.get("role") != "tool":
+            continue
+        if tm.get("tool_call_id") not in transfer_call_ids:
+            continue
+        content = tm.get("content")
+        if isinstance(content, str):
+            try:
+                data = json.loads(content)
+            except Exception:
+                continue
+        elif isinstance(content, dict):
+            data = content
+        else:
+            continue
+        if data.get("success") is True:
+            return True
+    return False
+
+
 class ChannelSessionManager:
     """
     渠道会话管理器
@@ -1628,18 +1672,28 @@ class ChannelSessionManager:
                     f"后端日志：trace user_message_id 回填失败 session={session_id}: {e}"
                 )
 
-            # response_text 为空（agent 内部异常被吞掉返回空字符串）→ 标记错误状态
+            # response_text 为空：区分两种来源——
+            # 1) 本轮已成功转人工：回复按设计抑制为空（微信客服接口拒收
+            #    后续机器人消息），属预期行为，降级 info 且不 mark_error
+            #    （2026-11-26 巡检：该 WARNING 曾把正常转人工轮误报为
+            #    「agent 返回空响应」并污染错误记录，见 weekly-2026-11-26）；
+            # 2) agent 内部异常被吞掉返回空字符串 → 标记错误状态
             if not response_text:
-                logger.warning(
-                    f"后端日志：agent 返回空响应 session={session_id}，可能内部异常"
-                )
-                if record_service is not None:
-                    try:
-                        record_service.mark_error("agent 返回空响应")
-                    except Exception as mark_err:
-                        logger.warning(
-                            f"后端日志：空响应后 record_service.mark_error 异常: {mark_err}"
-                        )
+                if has_successful_transfer_to_human(tool_messages_collected):
+                    logger.info(
+                        f"后端日志：本轮已成功转人工，回复按设计抑制 session={session_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"后端日志：agent 返回空响应 session={session_id}，可能内部异常"
+                    )
+                    if record_service is not None:
+                        try:
+                            record_service.mark_error("agent 返回空响应")
+                        except Exception as mark_err:
+                            logger.warning(
+                                f"后端日志：空响应后 record_service.mark_error 异常: {mark_err}"
+                            )
 
             # 批量写入成功 → 记录完成
             if record_service is not None:

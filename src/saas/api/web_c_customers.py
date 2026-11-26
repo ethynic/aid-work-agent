@@ -343,6 +343,18 @@ async def list_leads(request: Request, start_date: Optional[str] = None,
     return {"success": True, **result}
 
 
+@router.get("/leads/{lead_id}")
+async def get_lead_detail(request: Request, lead_id: str):
+    """web_c 线索详情。"""
+    tenant_id = _require_tenant(request)
+    from src.saas.db.lead_capture_db import LeadCaptureDB
+
+    lead = LeadCaptureDB.get_by_id(lead_id, tenant_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="线索不存在")
+    return {"success": True, "lead": lead}
+
+
 class LeadStageUpdate(BaseModel):
     stage: str = Field(..., description="目标阶段：new/contacting/converted/abandoned")
 
