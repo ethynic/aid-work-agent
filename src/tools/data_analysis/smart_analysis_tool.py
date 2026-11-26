@@ -235,10 +235,15 @@ class SmartDataAnalysisTool(BaseTool):
                         identity_notice,
                     )
                 enriched_tables.append(full_meta)
-            # 全部回查通过后才开始物理加载（不做部分加载）
+            # 全部回查通过后才开始物理加载（不做部分加载）；Excel/文件源读取为阻塞
+            # IO，必须走 _load_one_table 的线程池隔离——此前直接 await 在 Runner 事件
+            # 循环里同步跑 pandas.read_excel + 清洗 + 状态落盘，3 万行表阻塞心跳
+            # 超过看门狗 15 秒阈值被误判 interrupted（2026-11-26 agent2 四次中断事故，
+            # tr_runner_55a9601f…）。自动选表分支（_batch_select_and_load）早已隔离，
+            # 显式指定表分支此前漏用。任一表加载失败仍整体显式失败，语义不变。
             for meta in enriched_tables:
                 try:
-                    await analyzer.load_table(meta)
+                    await _load_one_table(analyzer, meta)
                 except Exception as e:
                     logger.opt(exception=True).error(f"[SmartDataAnalysisTool] 加载表失败: {e}")
                     return self._with_identity_notice(

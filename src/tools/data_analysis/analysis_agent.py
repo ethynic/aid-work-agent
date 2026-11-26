@@ -1445,8 +1445,12 @@ class AnalysisAgent:
                 }
 
         try:
-            # 加载到 DataAnalyzer
-            loaded_id = await self.analyzer.load_table(table_meta)
+            # 加载到 DataAnalyzer。Excel/文件源读取为阻塞 IO，复用 _load_one_table
+            # 的线程池隔离（与外层 smart_analysis_tool 预加载路径同一防线），避免在
+            # Runner 事件循环里同步跑 pandas.read_excel 阻塞心跳（2026-11-26
+            # agent2 看门狗中断事故同型隐患）；数据库源仍走原生协程。异常语义不变。
+            from src.tools.data_analysis.smart_analysis_tool import _load_one_table
+            loaded_id = await _load_one_table(self.analyzer, table_meta)
 
             self._loaded_table_ids.add(table_id)
             self._var_sources[table_id] = {table_id}

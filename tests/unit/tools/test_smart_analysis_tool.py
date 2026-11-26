@@ -173,6 +173,51 @@ class TestExecuteWithMock:
             mock_analyzer_instance.load_table.assert_awaited_once_with(server_meta)
 
     @pytest.mark.asyncio
+    async def test_execute_explicit_excel_load_off_event_loop(self):
+        """显式 tables_metadata 的 Excel/文件源加载必须走线程池隔离（2026-11-26
+        agent2 看门狗中断事故回归测试）：此前直接 await 在事件循环里同步跑
+        pandas.read_excel，3 万行表阻塞心跳超 15 秒被误判 interrupted。
+        数据库源分支仍走原生协程，不在本测试覆盖范围。"""
+        import threading
+
+        server_meta = {
+            "table_id": "t1", "table_name": "销售",
+            "columns": [{"name": "region", "data_type": "text"}],
+            "source": {"type": "excel", "file_path": "/srv/real.xlsx"},
+        }
+        load_thread_idents = []
+
+        async def fake_load_table(meta):
+            load_thread_idents.append(threading.get_ident())
+            return meta["table_id"]
+
+        with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
+             patch("src.tools.data_analysis.analysis_agent.AnalysisAgent") as MockAgent, \
+             patch("src.tools.data_analysis.analysis_agent.fetch_table_metadata_from_db") as mock_fetch:
+            mock_fetch.return_value = server_meta
+            mock_analyzer_instance = MockAnalyzer.return_value
+            mock_analyzer_instance.load_table = AsyncMock(side_effect=fake_load_table)
+            mock_agent_instance = MockAgent.return_value
+            mock_agent_instance.run = AsyncMock(return_value={
+                "success": True, "conclusion": "ok", "artifacts": [],
+                "analysis_meta": {"iterations": 1, "duration_ms": 10, "tokens_used": 10,
+                                  "tables_used": ["t1"], "trace_id": "t"},
+            })
+
+            tool = SmartDataAnalysisTool()
+            result = await tool.execute(
+                requirement="按区域统计销售额",
+                tables_metadata=[{"table_id": "t1"}],
+                session_id="test_session",
+            )
+
+            assert result["success"] is True
+            assert mock_analyzer_instance.load_table.await_count == 1
+            # 加载发生在工作线程，不是主事件循环线程
+            main_loop_ident = threading.get_ident()
+            assert load_thread_idents and load_thread_idents[0] != main_loop_ident
+
+    @pytest.mark.asyncio
     async def test_execute_load_table_failure(self):
         """加载数据表失败时返回错误"""
         with patch("src.tools.data_analysis.data_analyzer.DataAnalyzer") as MockAnalyzer, \
