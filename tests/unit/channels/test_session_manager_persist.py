@@ -859,6 +859,92 @@ class TestProcessAndPersist:
         # 不写任何消息
         assert len(memory_store["messages"]) == 0
 
+    @pytest.mark.asyncio
+    async def test_transfer_success_empty_response_no_mark_error(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        """转人工成功后的空回复 -> 降级 info，不 mark_error（2026-11-26 巡检误报修复）。
+
+        为什么重要：wecom_kf 转人工成功后回复按设计抑制为空（微信客服接口拒收
+        后续机器人消息）。此前该分支一律记 WARNING「agent 返回空响应」并
+        mark_error，把正常转人工轮误标为失败并污染错误统计。
+        """
+        memory_store, _conn, _spy = mock_db_ctx
+        patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+            status="success",
+            response_text="",
+            merged_input="找人工",
+            was_merged=False,
+            lease_token="lease-1",
+        )
+
+        # 构造成功转人工的 tool 消息对（与渠道层 progress_callback 收集形态一致）
+        tool_messages_collected = [
+            {"role": "assistant", "tool_calls": [{
+                "id": "call_transfer_1",
+                "function": {"name": "transfer_to_human", "arguments": "{}"},
+            }]},
+            {"role": "tool", "tool_call_id": "call_transfer_1",
+             "content": json.dumps({"success": True})},
+        ]
+
+        record_service = MagicMock()
+        record_service.complete = MagicMock()
+        record_service.mark_error = MagicMock()
+
+        send_response = AsyncMock(return_value=True)
+
+        result = await manager.process_and_persist(
+            session_id="sid_test",
+            tenant_id="t1",
+            user_content="找人工",
+            agent=stub_agent,
+            send_response=send_response,
+            record_service=record_service,
+            tool_messages_collected=tool_messages_collected,
+        )
+
+        assert result["status"] == "success"
+        # 关键断言：转人工抑制轮不标错
+        record_service.mark_error.assert_not_called(), (
+            "转人工成功的空回复是设计语义，不应 mark_error"
+        )
+        record_service.complete.assert_called_once_with("")
+
+    @pytest.mark.asyncio
+    async def test_empty_response_without_transfer_marks_error(
+        self, manager, mock_db_ctx, patched_session_queue, stub_agent
+    ):
+        """无转人工的空回复 -> 保持 WARNING + mark_error（真异常路径不回归）。"""
+        memory_store, _conn, _spy = mock_db_ctx
+        patched_session_queue.enqueue_and_process.return_value = EnqueueResult(
+            status="success",
+            response_text="",
+            merged_input="你好",
+            was_merged=False,
+            lease_token="lease-1",
+        )
+
+        record_service = MagicMock()
+        record_service.complete = MagicMock()
+        record_service.mark_error = MagicMock()
+
+        send_response = AsyncMock(return_value=True)
+
+        result = await manager.process_and_persist(
+            session_id="sid_test",
+            tenant_id="t1",
+            user_content="你好",
+            agent=stub_agent,
+            send_response=send_response,
+            record_service=record_service,
+        )
+
+        assert result["status"] == "success"
+        record_service.mark_error.assert_called_once_with("agent 返回空响应"), (
+            "无转人工的空响应仍是内部异常信号，必须 mark_error"
+        )
+
 
 # ============================================================
 # recap 轮后任务触发（docs/subagent/recap-mechanism-design.md §4.3）
