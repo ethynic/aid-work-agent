@@ -9,30 +9,37 @@
 - 数据访问层（mock 连接）：创建会话的拒绝顺序、读取只刷新访问方、end 幂等不写库、心跳查询的语句数
 - 数据库层的等待上限：四个数据库函数的第一条语句是 SET LOCAL；会话路径上等锁超时转成 SCREEN_STREAM_BUSY；
   心跳路径上数据库取消语句（55P03、57014）按超时告警，其他异常仍按失败告警
-- 占用闸：画面请求借连接之前先过一道进程内的信号量，容量是连接池上限的一半；拿不到名额立即让出
-  （三条会话路径抛 SCREEN_STREAM_BUSY；心跳这次不带会话通知，只告警），名额在所有路径上都归还
+- 占用闸：一个 ASGI 中间件，挂在最外层（租户中间件之前），名额数等于画面连接池的连接数上限。闸满时画面
+  请求立即得到 503：不调用下游、不碰数据库、不进入画面作用域；放行时请求在画面作用域里处理，名额恰好归还一次。
+  不经过中间件的调用（设备心跳里的画面查询、直接调用）自己拿名额、自己进入画面作用域，拿不到立即让出
+  （抛 SCREEN_STREAM_BUSY）
+- 占用闸的路径匹配：套到本地工具路由的全部路由上，匹配到的恰好是六个画面接口
 - STUN 配置：只保留 stun: / stuns: 地址，其余丢弃并告警（告警里不写地址）；这一节里留空的值按缺省处理
-- 心跳响应：画面通知字段，功能未启用时不带，查询报错或超时不影响心跳
+- 心跳响应：画面通知字段，功能未启用时不带，查询报错或超时不影响心跳；不支持画面的设备不查画面会话
+  （不拿名额、不借连接），查不查按这次心跳生效的能力体判断
 - 设备列表：screen_stream 投影
 - 六个接口：功能未启用 503、非法路径 404、鉴权范围参数、类型化错误转换
 """
 
 import asyncio
 import copy
+import inspect
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
-from functools import partial
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import psycopg2
 import pytest
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from loguru import logger
 from psycopg2 import errors as pg_errors
 from pydantic import TypeAdapter, ValidationError
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.cors import CORSMiddleware
+from starlette.routing import get_route_path
 
 from src.config.settings import ScreenStreamConfig, Settings, create_settings, settings
 from src.db import database
@@ -69,6 +76,13 @@ DEVICE_KEYS = {"device_id", "name", "platform", "runtime_version", "selected", "
 SESSION_PATH = f"/api/local-tools/devices/{DEVICE}/screen-sessions/{SESSION}"
 RUNTIME_SESSION_BODY = {"session_id": SESSION, "after_seq": 0}
 RUNTIME_SIGNAL_BODY = {"session_id": SESSION, "type": "prepared", "payload": {}}
+# 设备的能力体，以及鉴权给出的设备行（_require_device 的返回值里带着设备已保存的 capabilities_json）。
+# 支持画面与不支持画面（旧 Runtime）的各一份
+SCREEN_CAPABILITIES = {"provider_id": "ai.aidwork.boss-recruiting",
+                       "capabilities": ["local_v2", screen_stream.SCREEN_STREAM_CAPABILITY]}
+LEGACY_CAPABILITIES = {"provider_id": "ai.aidwork.boss-recruiting"}
+SCREEN_DEVICE = {"id": DEVICE, "tenant_id": TENANT, "capabilities_json": SCREEN_CAPABILITIES}
+LEGACY_DEVICE = {"id": DEVICE, "tenant_id": TENANT, "capabilities_json": LEGACY_CAPABILITIES}
 # Python 的 JSON 解析接受、PostgreSQL 的 json 不接受的三种写法
 NON_FINITE = [
     pytest.param(float("nan"), id="NaN"),
@@ -1050,10 +1064,10 @@ def _permits_available(semaphore):
     return taken
 
 
-def _fresh_gate(monkeypatch, pool_max=10):
-    """让闸按给定的连接池上限重新创建（单元测试进程里没有连接池，所以用桩代替）"""
+def _fresh_gate(monkeypatch, pool_max=5):
+    """让闸按给定的画面连接数上限（database.SCREEN_DB_POOL_MAX）重新创建"""
     monkeypatch.setattr(screen_stream, "_gate", None)
-    monkeypatch.setattr(database, "get_postgres_pool", lambda: SimpleNamespace(maxconn=pool_max))
+    monkeypatch.setattr(database, "SCREEN_DB_POOL_MAX", pool_max)
     return screen_stream._connection_gate()
 
 
@@ -1111,40 +1125,39 @@ SESSION_CASE_IDS = [case[0] for case in SESSION_CASES]
 
 
 class TestConnectionGate:
-    """画面请求借数据库连接之前先过一道占用闸（进程内的信号量）。
+    """画面请求进入下游之前先过一道占用闸（进程内的信号量），名额数等于画面连接池的连接数上限。
 
-    多人同时查看时，网页和 Runtime 两端的轮询会同步成批，一批借走的连接比连接池还多，
-    另一台设备的心跳、接单、回执直接报 connection pool exhausted。数据库层的等待上限只管
-    「一个连接被占多久」，管不住「同时借多少个」，所以在它外面再加这道闸：拿不到名额立即让出，
-    至少一半连接留给核心请求。连接池是每个进程一个，闸也按进程算。
+    画面请求只用画面专用连接池，这个池很小（缺省 3 个连接）：同时放行的画面请求一多就会把它借空。
+    所以拿不到名额的请求立即让出。画面请求不占业务连接池，这道闸只决定画面请求之间谁先谁后，
+    不影响核心请求。连接池是每个进程一个，闸也按进程算。
+    这里的数据库函数都是直接调用（不在画面作用域里）：它们自己拿名额、自己进入画面作用域；
+    经占用闸中间件进来的请求已经在作用域里，见 test_functions_inside_the_scope_do_not_touch_the_gate
     """
 
-    @pytest.mark.parametrize(("pool_max", "expected"), [(10, 5), (15, 7), (16, 8), (3, 1), (2, 1), (1, 1)])
-    def test_capacity_is_half_the_pool_limit_and_at_least_one(self, monkeypatch, pool_max, expected):
-        gate = _fresh_gate(monkeypatch, pool_max)
+    @pytest.mark.parametrize(("screen_db_pool_max", "expected"), [(3, 3), (5, 5), (1, 1)])
+    def test_capacity_is_the_screen_pool_limit_and_at_least_one(self, monkeypatch, screen_db_pool_max, expected):
+        """容量就是画面连接池的连接数上限 database.SCREEN_DB_POOL_MAX，至少 1 个。
+        只读配置、不读连接池对象：画面连接池到第一次用到画面才创建，读它不能触发创建"""
+
+        def reading_the_pool_is_not_allowed():
+            raise AssertionError("容量不该去读连接池对象")
+
+        monkeypatch.setattr(database, "get_screen_pool", reading_the_pool_is_not_allowed)
+        gate = _fresh_gate(monkeypatch, screen_db_pool_max)
         assert screen_stream.gate_capacity() == expected
         assert _permits_available(gate) == expected
 
-    @pytest.mark.parametrize(("db_pool_max", "expected"), [(15, 7), (10, 5), (1, 1)])
-    def test_capacity_falls_back_to_db_pool_max_while_the_pool_is_not_initialized(self, monkeypatch, db_pool_max, expected):
-        """连接池还没初始化时读不到 maxconn：按 database.DB_POOL_MAX 的一半取"""
-        monkeypatch.setattr(screen_stream, "_gate", None)
-        monkeypatch.setattr(database, "get_postgres_pool", lambda: None)
-        monkeypatch.setattr(database, "DB_POOL_MAX", db_pool_max)
-        assert screen_stream.gate_capacity() == expected
-        assert _permits_available(screen_stream._connection_gate()) == expected
-
     def test_gate_is_created_on_first_use_and_then_reused(self, monkeypatch):
-        """按第一次使用时的连接池上限创建；之后连接池上限变了，闸也不重建"""
-        gate = _fresh_gate(monkeypatch, pool_max=10)
-        monkeypatch.setattr(database, "get_postgres_pool", lambda: SimpleNamespace(maxconn=15))
+        """按第一次使用时的画面连接数上限创建；之后配置变了，闸也不重建"""
+        gate = _fresh_gate(monkeypatch, pool_max=5)
+        monkeypatch.setattr(database, "SCREEN_DB_POOL_MAX", 15)
         assert screen_stream._connection_gate() is gate
         assert _permits_available(gate) == 5
 
     @pytest.mark.parametrize(("label", "call", "_", "__"), SESSION_CASES, ids=SESSION_CASE_IDS)
     def test_session_paths_yield_at_a_full_gate_without_borrowing(self, monkeypatch, label, call, _, __):
         """闸满：立即抛 SCREEN_STREAM_BUSY（和等锁超时是同一个错误码），不排队、不借连接，也不动名额"""
-        gate = _fresh_gate(monkeypatch, pool_max=10)
+        gate = _fresh_gate(monkeypatch)
         assert _take_all(gate) == 5
         borrowed = []
         started = time.perf_counter()
@@ -1158,7 +1171,7 @@ class TestConnectionGate:
 
     def test_heartbeat_notice_yields_at_a_full_gate_without_borrowing(self, monkeypatch):
         """闸满：心跳里的画面查询向路由层报「画面繁忙」（同一个类型化错误），由路由层告警、不带会话通知"""
-        gate = _fresh_gate(monkeypatch, pool_max=10)
+        gate = _fresh_gate(monkeypatch)
         assert _take_all(gate) == 5
         borrowed = []
         result, executed, commits = None, [], []
@@ -1170,12 +1183,12 @@ class TestConnectionGate:
 
     @pytest.mark.parametrize(("label", "call", "normal_results", "_"), GATE_CASES, ids=GATE_CASE_IDS)
     def test_permit_is_returned_after_a_normal_return(self, monkeypatch, label, call, normal_results, _):
-        gate = _fresh_gate(monkeypatch, pool_max=10)
+        gate = _fresh_gate(monkeypatch)
         _run(call, normal_results)
         assert _permits_available(gate) == 5
 
     def test_permit_is_returned_on_early_exit_and_typed_errors(self, monkeypatch):
-        gate = _fresh_gate(monkeypatch, pool_max=10)
+        gate = _fresh_gate(monkeypatch)
         device = TestCreateSessionWithMockedConnection._device()
         ended = _row(state="ended", end_reason="viewer_closed", ended_at=NOW)
 
@@ -1205,7 +1218,7 @@ class TestConnectionGate:
     @pytest.mark.parametrize(("label", "call", "locking_statement"), [(c[0], c[1], c[3]) for c in GATE_CASES],
                          ids=GATE_CASE_IDS)
     def test_permit_is_returned_when_waiting_for_the_lock_times_out(self, monkeypatch, label, call, locking_statement):
-        gate = _fresh_gate(monkeypatch, pool_max=10)
+        gate = _fresh_gate(monkeypatch)
         streaming = [[_row(state="streaming", started_at=NOW, viewer_seen_at=NOW)]]
         results = streaming if label == "heartbeat_notice" else [[]]
         with pytest.raises(screen_stream.ScreenStreamError if label != "heartbeat_notice" else LockTimeout):
@@ -1220,7 +1233,7 @@ class TestConnectionGate:
         pytest.param(StatementTimeout("canceling statement due to statement timeout"), id="statement-timeout"),
     ])
     def test_permit_is_returned_when_the_database_fails(self, monkeypatch, label, call, locking_statement, error):
-        gate = _fresh_gate(monkeypatch, pool_max=10)
+        gate = _fresh_gate(monkeypatch)
         streaming = [[_row(state="streaming", started_at=NOW, viewer_seen_at=NOW)]]
         results = streaming if label == "heartbeat_notice" else [[]]
         with pytest.raises(type(error)) as caught:
@@ -1229,7 +1242,7 @@ class TestConnectionGate:
         assert _permits_available(gate) == 5
 
     def test_next_request_gets_a_permit_once_one_is_given_back(self, monkeypatch):
-        gate = _fresh_gate(monkeypatch, pool_max=10)
+        gate = _fresh_gate(monkeypatch)
         assert _take_all(gate) == 5
         with pytest.raises(screen_stream.ScreenStreamError) as caught:
             _run(_load_session, [[]])
@@ -1242,7 +1255,7 @@ class TestConnectionGate:
     @pytest.mark.parametrize(("label", "call", "normal_results", "_"), GATE_CASES, ids=GATE_CASE_IDS)
     def test_gate_comes_before_borrowing_and_set_local_is_still_first(self, monkeypatch, label, call, normal_results, _):
         """闸加在数据库层等待上限的外面：先过闸，再借连接；借到连接后的第一条语句仍是 SET LOCAL"""
-        gate = _fresh_gate(monkeypatch, pool_max=10)
+        gate = _fresh_gate(monkeypatch)
         events = []
         monkeypatch.setattr(screen_stream, "_gate", _SpySemaphore(gate, events))
         _run(call, normal_results, on_borrow=lambda: events.append("connection"))
@@ -1256,26 +1269,31 @@ class TestConnectionGate:
         assert caught.value.code == "SCREEN_STREAM_BUSY"
         assert events == ["gate"]
 
-    @pytest.mark.parametrize(("label", "call", "normal_results", "_"), SESSION_CASES, ids=SESSION_CASE_IDS)
-    def test_session_functions_do_not_touch_the_gate_when_the_request_holds_the_permit(
-            self, monkeypatch, label, call, normal_results, _):
-        """画面接口在入口已经拿了名额，再调用这三个函数时带 permit_held=True：它们不再拿、不再还，
-        只借连接、执行 SET LOCAL。直接调用（上一条用例）时仍然自己拿、自己还"""
-        gate = _fresh_gate(monkeypatch, pool_max=10)
+    @pytest.mark.parametrize(("label", "call", "normal_results", "_"), GATE_CASES, ids=GATE_CASE_IDS)
+    def test_a_direct_call_runs_inside_the_screen_scope_only_while_it_runs(self, monkeypatch, label, call,
+                                                                           normal_results, _):
+        """直接调用不在画面作用域里：这里自己进入作用域，借连接的时候就在作用域里（也就是从画面连接池借）；
+        调用结束后作用域随之退出"""
+        assert database.in_screen_scope() is False
+        seen = []
+        _run(call, normal_results, on_borrow=lambda: seen.append(database.in_screen_scope()))
+        assert seen == [True]
+        assert database.in_screen_scope() is False
+
+    @pytest.mark.parametrize(("label", "call", "normal_results", "_"), GATE_CASES, ids=GATE_CASE_IDS)
+    def test_functions_inside_the_scope_do_not_touch_the_gate(self, monkeypatch, label, call, normal_results, _):
+        """请求经占用闸中间件进来时已经在画面作用域里（名额由中间件管）：这些函数直接放行，
+        不拿名额、不归还，只借连接、执行 SET LOCAL。闸已经满了也不要紧。
+        不在作用域里的直接调用（上面的用例）仍然自己拿、自己还"""
+        gate = _fresh_gate(monkeypatch)
         events = []
         monkeypatch.setattr(screen_stream, "_gate", _SpySemaphore(gate, events))
-        held = partial(call, permit_held=True)
-
-        _, executed, _ = _run(held, normal_results, on_borrow=lambda: events.append("connection"))
-        assert events == ["connection"]
-        assert executed[0] == ("SET LOCAL lock_timeout = 1000", None)
-        assert _permits_available(gate) == 5
-
-        # 闸已经满了也不要紧：这次请求的名额在接口入口就拿到了
         assert _take_all(gate) == 5
-        events.clear()
-        _run(held, normal_results, on_borrow=lambda: events.append("connection"))
+
+        with database.screen_connection_scope():
+            _, executed, _ = _run(call, normal_results, on_borrow=lambda: events.append("connection"))
         assert events == ["connection"]
+        assert executed[0][0].startswith("SET LOCAL")
         assert _permits_available(gate) == 0
 
 
@@ -1417,11 +1435,14 @@ class TestScreenStreamConfigBlanks:
 # ---------------------------------------------------------------------------
 
 
-def _client(device=None, raise_server_exceptions=True, device_dependency=None, real_device_auth=False):
+def _client(device=None, raise_server_exceptions=True, device_dependency=None, real_device_auth=False, gated=False):
     """只挂本地工具路由的最小应用：登录态与设备鉴权换成固定身份，不导入 src.main。
 
+    device：代替鉴权给出的设备行，缺省是一台支持画面的设备（SCREEN_DEVICE）；
     device_dependency：用给定的函数代替设备鉴权依赖（放探针，断言它有没有被调用）；
-    real_device_auth：不替换设备鉴权，走真实的 _require_device
+    real_device_auth：不替换设备鉴权，走真实的 _require_device；
+    gated：最外面再挂上占用闸（ScreenStreamGateMiddleware）。它排在下面那个中间件的外面，
+        和真实应用里「占用闸 → 租户中间件 → 路由」的层次一样
     """
     app = FastAPI()
     app.include_router(local_tools_api.router)
@@ -1431,9 +1452,12 @@ def _client(device=None, raise_server_exceptions=True, device_dependency=None, r
         request.state.tenant_id = TENANT
         return await call_next(request)
 
+    if gated:
+        app.add_middleware(screen_stream.ScreenStreamGateMiddleware)
+
     if not real_device_auth:
         app.dependency_overrides[local_tools_api._require_device] = device_dependency or (
-            lambda: device or {"id": DEVICE, "tenant_id": TENANT})
+            lambda: device or SCREEN_DEVICE)
     return TestClient(app, raise_server_exceptions=raise_server_exceptions)
 
 
@@ -1570,7 +1594,7 @@ class TestHeartbeatScreenNotice:
     def test_full_gate_only_warns_and_heartbeat_succeeds(self, monkeypatch):
         """画面请求同时借走的连接到了上限（占用闸已满）：这次心跳不带会话通知，只记一条不带堆栈的告警，
         不算失败；心跳里的画面查询过不了闸，也就没有去借连接"""
-        assert _take_all(_fresh_gate(monkeypatch, pool_max=10)) == 5
+        assert _take_all(_fresh_gate(monkeypatch)) == 5
         borrowed = []
         records, handler = self._capture_warnings()
         try:
@@ -1593,7 +1617,7 @@ class TestHeartbeatScreenNotice:
 
     def test_heartbeat_carries_the_notice_when_the_gate_has_room(self, monkeypatch):
         """闸有名额时照常：借连接、查出会话、带回通知，做完归还名额"""
-        gate = _fresh_gate(monkeypatch, pool_max=10)
+        gate = _fresh_gate(monkeypatch)
         streaming = _row(state="streaming", started_at=NOW, viewer_seen_at=NOW)
         with patch.object(local_tools_api.repository, "touch_device_seen", lambda *a, **k: {"selected": True}), \
              _patch_conn([[streaming]])[2]:
@@ -1612,7 +1636,7 @@ class TestHeartbeatScreenNotice:
             # 生产环境（uvicorn）的请求在 0.5 秒超时后就返回
             started = time.perf_counter()
             result = await local_tools_api.runtime_heartbeat(
-                local_tools_api.HeartbeatRequest(), device={"id": DEVICE, "tenant_id": TENANT})
+                local_tools_api.HeartbeatRequest(), device=SCREEN_DEVICE)
             return result, time.perf_counter() - started
 
         records, handler = self._capture_warnings()
@@ -1661,6 +1685,82 @@ class TestHeartbeatScreenNotice:
         assert response.status_code == 500
         assert response.json() == {"detail": {"error": "心跳失败，请稍后重试", "debug": "device update failed"}}
         query.assert_not_called()
+
+    # ---- 设备支不支持画面，决定心跳查不查画面会话 ----
+
+    def test_legacy_device_carries_the_marker_without_querying(self):
+        """不支持画面的设备不可能有画面会话（创建会话时就被拒绝）：心跳不为它查会话；
+        响应里仍然带 screen_stream 标记（旧设备对照要求除新增字段外不变）"""
+        with patch.object(local_tools_api.repository, "touch_device_seen", lambda *a, **k: {"selected": True}), \
+             patch.object(screen_stream, "heartbeat_notice",
+                          side_effect=AssertionError("不支持画面的设备不该查画面会话")) as query:
+            body = _heartbeat(_client(LEGACY_DEVICE)).json()
+        assert body == {"success": True, "selected": True, "server_time": body["server_time"],
+                        "parallel_claim": True, "screen_stream": {"version": 1}}
+        query.assert_not_called()
+
+    def test_legacy_device_passes_a_full_gate_without_a_warning(self, monkeypatch):
+        """不支持画面的设备不去过闸：闸被画面请求占满时，它的心跳照常成功，不借画面连接，也不记「画面繁忙」告警"""
+        assert _take_all(_fresh_gate(monkeypatch)) == 5
+        records, handler = self._capture_warnings()
+        borrowed = []
+        try:
+            with patch.object(local_tools_api.repository, "touch_device_seen", lambda *a, **k: {"selected": True}), \
+                 _patch_conn([[]], on_borrow=lambda: borrowed.append(1))[2]:
+                response = _heartbeat(_client(LEGACY_DEVICE))
+        finally:
+            logger.remove(handler)
+        assert response.status_code == 200, response.text
+        assert set(response.json()) == {"success", "selected", "server_time", "parallel_claim", "screen_stream"}
+        assert response.json()["success"] is True and response.json()["screen_stream"] == {"version": 1}
+        assert borrowed == []
+        assert not [r for r in records if "画面繁忙" in r["message"] or "画面会话" in r["message"]]
+
+    @pytest.mark.parametrize(("reported", "saved", "queries"), [
+        # (这次心跳上报的能力体, 设备已保存的能力, 查几次画面会话)
+        pytest.param(SCREEN_CAPABILITIES, LEGACY_CAPABILITIES, 1, id="reported-with-screen"),
+        pytest.param(None, SCREEN_CAPABILITIES, 1, id="saved-with-screen-and-nothing-reported"),
+        pytest.param(LEGACY_CAPABILITIES, SCREEN_CAPABILITIES, 0, id="reported-without-screen"),
+        pytest.param(LEGACY_CAPABILITIES, LEGACY_CAPABILITIES, 0, id="neither-has-screen"),
+    ])
+    def test_screen_query_follows_the_capabilities_effective_for_this_heartbeat(self, monkeypatch, reported, saved,
+                                                                               queries):
+        """查不查取决于这次心跳生效的能力体，取法与 touch_device_seen 存库时相同：这次上报的能力体非空就用它
+        （哪怕和已保存的不同），否则用设备已保存的。不查的时候不拿名额、不借连接"""
+        gate = _fresh_gate(monkeypatch)
+        events = []
+        monkeypatch.setattr(screen_stream, "_gate", _SpySemaphore(gate, events))
+        device = {"id": DEVICE, "tenant_id": TENANT, "capabilities_json": saved}
+        with patch.object(local_tools_api.repository, "touch_device_seen", lambda *a, **k: {"selected": True}), \
+             _patch_conn([[]], on_borrow=lambda: events.append("connection"))[2]:
+            response = _client(device).post("/api/local-tools/runtime/heartbeat",
+                                            json={} if reported is None else {"capabilities": reported})
+        assert response.status_code == 200, response.text
+        assert set(response.json()) == {"success", "selected", "server_time", "parallel_claim", "screen_stream"}
+        assert events == ["gate", "connection", "release"] * queries
+        assert _permits_available(gate) == 5
+
+    @pytest.mark.parametrize(("normalized", "saved", "queries"), [
+        # (上报的能力体归一化之后的结果, 设备已保存的能力, 查几次画面会话)
+        pytest.param(SCREEN_CAPABILITIES, LEGACY_CAPABILITIES, 1, id="normalized-wins-over-saved"),
+        pytest.param(None, SCREEN_CAPABILITIES, 1, id="empty-falls-back-to-saved"),
+        pytest.param({}, SCREEN_CAPABILITIES, 1, id="empty-dict-falls-back-to-saved"),
+    ])
+    def test_decision_uses_the_reported_capabilities_after_normalization(self, monkeypatch, normalized, saved,
+                                                                         queries):
+        """与 touch_device_seen 存库时的取法一致：上报的能力体先经 client_capabilities 归一化，结果非空就用它，
+        是空的就用设备已保存的"""
+        reported = {"provider_id": "ai.aidwork.boss-recruiting", "capabilities": ["local_v2"]}
+        seen = []
+        monkeypatch.setattr(local_tools_api, "client_capabilities",
+                            lambda capabilities: seen.append(capabilities) or normalized)
+        with patch.object(local_tools_api.repository, "touch_device_seen", lambda *a, **k: {"selected": True}), \
+             patch.object(screen_stream, "heartbeat_notice", return_value=None) as query:
+            response = _client({"id": DEVICE, "tenant_id": TENANT, "capabilities_json": saved}).post(
+                "/api/local-tools/runtime/heartbeat", json={"capabilities": reported})
+        assert response.status_code == 200, response.text
+        assert seen == [reported]
+        assert query.call_count == queries
 
 
 class TestListDevicesProjection:
@@ -1757,8 +1857,7 @@ class TestViewerRoutes:
         assert response.json() == {"success": True, "session": {
             "id": SESSION, "state": "pending", "stun_urls": ["stun:example.test:3478"]}}
         stubs["create_session"].assert_called_once_with(
-            TENANT, USER, DEVICE, device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS,
-            permit_held=True)
+            TENANT, USER, DEVICE, device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS)
 
     @pytest.mark.parametrize("bad_device_id", ["not-a-uuid", "0", f"{DEVICE}-extra"])
     def test_create_session_with_malformed_device_id_is_404(self, bad_device_id):
@@ -1777,8 +1876,7 @@ class TestViewerRoutes:
         assert response.json() == {"success": True, "session": {"id": SESSION, "state": "prepared", "end_reason": None},
                                    "signals": [{"seq": 1, "type": "prepared", "payload": {}}]}
         stubs["load_session"].assert_called_once_with(VIEWER_SCOPE, SESSION, viewer=True, after_seq=7,
-                                                      device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS,
-                                                      permit_held=True)
+                                                      device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS)
 
     def test_get_session_after_seq_defaults_to_zero(self):
         stubs, stub_patch = _patched_stubs()
@@ -1786,8 +1884,7 @@ class TestViewerRoutes:
             response = _client().get(SESSION_PATH)
         assert response.status_code == 200
         stubs["load_session"].assert_called_once_with(VIEWER_SCOPE, SESSION, viewer=True, after_seq=0,
-                                                      device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS,
-                                                      permit_held=True)
+                                                      device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS)
 
     @pytest.mark.parametrize("after_seq", ["-1", "abc", "1.5"])
     def test_get_session_rejects_invalid_after_seq(self, after_seq):
@@ -1821,8 +1918,7 @@ class TestViewerRoutes:
         assert response.status_code == 200, response.text
         assert response.json() == {"success": True, "seq": 2}
         stubs["append_signal"].assert_called_once_with(VIEWER_SCOPE, SESSION, "web", "answer", payload,
-                                                      device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS,
-                                                      permit_held=True)
+                                                      device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS)
 
     @pytest.mark.parametrize("json_body", [
         {"type": "offer", "payload": {}},                       # Runtime 方向的信令
@@ -1851,7 +1947,7 @@ class TestViewerRoutes:
         assert with_reason.json() == without_body.json() == expected
         assert stubs["append_signal"].call_args_list == [
             ((VIEWER_SCOPE, SESSION, "web", "end", {}),
-             {"device_offline_seconds": local_tools_api.ONLINE_THRESHOLD_SECONDS, "permit_held": True}),
+             {"device_offline_seconds": local_tools_api.ONLINE_THRESHOLD_SECONDS}),
         ] * 2
 
     @pytest.mark.parametrize(("method", "path", "json_body", "stub_name"), [
@@ -1887,9 +1983,7 @@ class TestViewerRoutes:
     def test_ended_session_rejects_signals_but_accepts_end(self):
         stubs, stub_patch = _patched_stubs()
 
-        # 接口在入口已经持有占用闸的名额：调用时带 permit_held，这个桩不收这个参数就会报错
-        def _append(scope, session_id, direction, signal_type, payload, *, device_offline_seconds, permit_held):
-            assert permit_held is True
+        def _append(scope, session_id, direction, signal_type, payload, *, device_offline_seconds):
             if signal_type != "end":
                 raise screen_stream.ScreenStreamError("SCREEN_SESSION_ENDED")
             return {"seq": None, "session": {"id": SESSION, "state": "ended", "end_reason": "viewer_closed"}}
@@ -1939,8 +2033,7 @@ class TestRuntimeRoutes:
         assert read.status_code == 200, read.text
         stubs["load_session"].assert_called_once_with(
             ("tenant_id = %s AND device_id = %s", ("tenant_other", SESSION)), SESSION,
-            viewer=False, after_seq=0, device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS,
-            permit_held=True)
+            viewer=False, after_seq=0, device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS)
 
     def test_get_session_returns_viewer_signals_and_stun_urls(self):
         stubs, stub_patch = _patched_stubs()
@@ -1952,8 +2045,7 @@ class TestRuntimeRoutes:
                                    "session": {"id": SESSION, "state": "prepared", "end_reason": None,
                                                "stun_urls": ["stun:example.test:3478"]}}
         stubs["load_session"].assert_called_once_with(RUNTIME_SCOPE, SESSION, viewer=False, after_seq=3,
-                                                      device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS,
-                                                      permit_held=True)
+                                                      device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS)
 
     def test_append_signal_passes_type_and_payload(self):
         stubs, stub_patch = _patched_stubs()
@@ -1964,8 +2056,7 @@ class TestRuntimeRoutes:
         assert response.status_code == 200, response.text
         assert response.json() == {"success": True, "seq": 2}
         stubs["append_signal"].assert_called_once_with(RUNTIME_SCOPE, SESSION, "rt", "status", payload,
-                                                       device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS,
-                                                       permit_held=True)
+                                                       device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS)
 
     @pytest.mark.parametrize("json_body", [
         {"session_id": SESSION, "type": "start", "payload": {}},                     # 网页方向的信令
@@ -2065,70 +2156,94 @@ def _stub_raises(error):
     return lambda stub: setattr(stub, "side_effect", error)
 
 
-class TestScreenRoutePermit:
-    """六个画面接口的入口先过占用闸，名额覆盖整个请求（占用闸 → 鉴权 → 功能开关 → 业务）。
+def _send(client, method, path, json_body):
+    kwargs = {"json": json_body} if json_body is not None else {}
+    return getattr(client, method)(path, **kwargs)
 
-    只把闸放在数据库函数里挡不住成批的同时请求：每个 Runtime 请求的鉴权在进入数据库函数之前就已经借了连接。
-    所以名额在接口入口就拿，鉴权那一次借用也算在名额里。闸满时立即 503 SCREEN_STREAM_BUSY：不做鉴权、
-    画面接口自己不借连接、不记日志（这里的最小应用没有挂全局的租户中间件；真实应用里那个中间件在路由之前
-    照常查一次库，串行执行，同一时刻最多占一个连接），所以未登录或没有设备令牌的调用方在闸满时得到的也是 503 而不是 401。
+
+def _stub_sees_scope(events, value):
+    """数据库函数的桩：被调用时记下这一刻是否在画面作用域里，然后返回 value"""
+    def call(*args, **kwargs):
+        events.append(("db", database.in_screen_scope()))
+        return value
+    return call
+
+
+async def _never_called(scope, receive, send):
+    raise AssertionError("闸满时不应该调用下游")
+
+
+async def _asgi_noop(scope, receive, send):
+    pass
+
+
+class TestScreenGateMiddleware:
+    """画面请求的占用闸是一个 ASGI 中间件，挂在本应用的最外面（真实应用里排在租户中间件之前）：
+    占用闸 → 租户中间件 → 鉴权 → 功能开关 → 业务。
+
+    画面请求只用画面专用连接池，名额数等于这个池的连接数上限。闸满时立即 503 SCREEN_STREAM_BUSY：
+    不调用下游，所以不做鉴权、不碰数据库、不进入画面作用域，也不记日志。未登录或没有设备令牌的调用方
+    在闸满时得到的也是 503 而不是 401，这是有意的：只暴露「画面繁忙」。
+    这里的应用没有真实应用里的租户中间件和 CORS；中间件的层次（占用闸 → BaseHTTPMiddleware → 路由）
+    与真实应用一致，真实应用整体在集成测试里通过 src.main.app 验证。
     """
 
     @staticmethod
     def _auth_spies(events=None):
-        """网页鉴权和设备鉴权各放一个探针；被调用时在 events 里记一笔"""
+        """网页鉴权和设备鉴权各放一个探针；被调用时在 events 里记下 (鉴权, 这一刻是否在画面作用域里)。
+        两个探针都是同步函数：网页鉴权经 asyncio.to_thread 执行，设备鉴权是同步依赖、由 FastAPI 放在线程池里执行"""
         def viewer_auth(_request):
             if events is not None:
-                events.append("auth")
+                events.append(("auth", database.in_screen_scope()))
             return {"user_id": USER}
 
         def device_auth():
             if events is not None:
-                events.append("auth")
+                events.append(("auth", database.in_screen_scope()))
             return {"id": DEVICE, "tenant_id": TENANT}
 
         return viewer_auth, device_auth
 
-    @staticmethod
-    def _send(client, method, path, json_body):
-        kwargs = {"json": json_body} if json_body is not None else {}
-        return getattr(client, method)(path, **kwargs)
-
     def _send_under_spy(self, monkeypatch, endpoint, stub_setup=None, anonymous=False, json_body=None,
                         **client_options):
         """把闸换成带记录的探针后发一个画面请求，返回 (响应, 探针记下的事件, 闸, 数据库函数的桩)。
-        anonymous=True 时不给登录态、也不替换设备鉴权：请求走到鉴权就会被拒"""
+        anonymous=True 时不给登录态、也不替换设备鉴权：请求走到鉴权就会被拒；
+        stub_setup 为空时数据库函数的桩记下它被调用那一刻是否在画面作用域里"""
         method, path, default_body, stub_name, _ = endpoint
-        gate = _fresh_gate(monkeypatch, pool_max=10)
+        gate = _fresh_gate(monkeypatch)
         events = []
         monkeypatch.setattr(screen_stream, "_gate", _SpySemaphore(gate, events))
         viewer_auth, device_auth = self._auth_spies(events)
         stubs, stub_patch = _patched_stubs()
         if stub_setup is not None:
             stub_setup(stubs[stub_name])
+        else:
+            stubs[stub_name].side_effect = _stub_sees_scope(events, stubs[stub_name].return_value)
         body = default_body if json_body is None else json_body
         if anonymous:
             with stub_patch:
-                client = _client(real_device_auth=True, **client_options)
-                response = self._send(client, method, path, body)
+                response = _send(_client(real_device_auth=True, gated=True, **client_options), method, path, body)
         else:
             with stub_patch, patch.object(local_tools_api, "get_current_user", viewer_auth):
-                client = _client(device_dependency=device_auth, **client_options)
-                response = self._send(client, method, path, body)
+                response = _send(_client(device_dependency=device_auth, gated=True, **client_options), method, path, body)
         return response, events, gate, stubs
 
     @pytest.mark.parametrize(("method", "path", "json_body", "_", "__"), SCREEN_ENDPOINTS, ids=SCREEN_ENDPOINT_IDS)
-    def test_full_gate_answers_503_before_authentication(self, monkeypatch, method, path, json_body, _, __):
-        """闸满：立即 503 SCREEN_STREAM_BUSY。不做鉴权、不调数据库函数、不记日志，也不动名额"""
-        gate = _fresh_gate(monkeypatch, pool_max=10)
+    def test_full_gate_answers_503_before_anything_else(self, monkeypatch, method, path, json_body, _, __):
+        """闸满：立即 503 SCREEN_STREAM_BUSY。不调用下游：不做鉴权、不借数据库连接、不进入画面作用域、
+        不记日志，也不动名额"""
+        gate = _fresh_gate(monkeypatch)
         assert _take_all(gate) == 5
         viewer_auth, device_auth = self._auth_spies()
         viewer_auth, device_auth = MagicMock(side_effect=viewer_auth), MagicMock(side_effect=device_auth)
         stubs, stub_patch = _patched_stubs()
         records, handler = _capture_logs()
         try:
-            with stub_patch, patch.object(local_tools_api, "get_current_user", viewer_auth):
-                response = self._send(_client(device_dependency=device_auth), method, path, json_body)
+            with stub_patch, patch.object(local_tools_api, "get_current_user", viewer_auth), \
+                 patch.object(database, "screen_connection_scope") as enter_scope, \
+                 patch.object(database, "get_pooled_connection",
+                              side_effect=AssertionError("闸满时不该借数据库连接")) as borrow:
+                response = _send(_client(device_dependency=device_auth, gated=True), method, path, json_body)
         finally:
             logger.remove(handler)
         assert response.status_code == 503
@@ -2137,49 +2252,50 @@ class TestScreenRoutePermit:
         device_auth.assert_not_called()
         for stub in stubs.values():
             stub.assert_not_called()
+        enter_scope.assert_not_called()
+        assert borrow.call_count == 0
         assert not [record for record in records if record["name"].startswith("src.local_tools")]
         assert _permits_available(gate) == 0
 
     @pytest.mark.parametrize(("method", "path", "json_body", "_", "__"), SCREEN_ENDPOINTS, ids=SCREEN_ENDPOINT_IDS)
     def test_full_gate_comes_before_the_feature_switch_and_authentication(self, monkeypatch, method, path,
                                                                         json_body, _, __):
-        """闸排在功能开关和鉴权之前（功能已关闭时发请求）：
-        闸满时，没有登录态也没有设备令牌的调用方得到的仍是「画面繁忙」（503），不是 401，也不是「功能未启用」；
-        闸有名额时过了闸才轮到鉴权，这样的请求在这里被拒（401），还没到功能开关"""
-        gate = _fresh_gate(monkeypatch, pool_max=10)
+        """闸排在功能开关和鉴权之前（功能已关闭、没有登录态也没有设备令牌时发请求）：
+        闸满时得到的是「画面繁忙」（503），不是 401，也不是「功能未启用」；闸有名额时过了闸才轮到鉴权，
+        在这里被拒（401），还没到功能开关"""
+        gate = _fresh_gate(monkeypatch)
         stubs, stub_patch = _patched_stubs()
         with stub_patch, patch.object(settings.screen_stream, "enabled", False):
             assert _take_all(gate) == 5
-            turned_away = self._send(_client(real_device_auth=True), method, path, json_body)
+            turned_away = _send(_client(real_device_auth=True, gated=True), method, path, json_body)
             gate.release()
-            past_the_gate = self._send(_client(real_device_auth=True), method, path, json_body)
+            past_the_gate = _send(_client(real_device_auth=True, gated=True), method, path, json_body)
         assert turned_away.status_code == 503 and turned_away.json() == BUSY_DETAIL
         assert past_the_gate.status_code == 401
         for stub in stubs.values():
             stub.assert_not_called()
 
     @pytest.mark.parametrize("endpoint", SCREEN_ENDPOINTS, ids=SCREEN_ENDPOINT_IDS)
-    def test_permit_is_taken_before_authentication_and_released_once(self, monkeypatch, endpoint):
-        """正常请求的先后：拿名额 → 鉴权 → 调数据库函数；处理函数结束后归还一次。
-        数据库函数被告知名额已由接口持有（permit_held=True），不再自己拿、自己还：事件里只有一组 gate / release"""
-        response, events, gate, stubs = self._send_under_spy(monkeypatch, endpoint)
+    def test_passed_request_runs_inside_the_screen_scope(self, monkeypatch, endpoint):
+        """放行的请求在画面作用域里处理：中间件拿到名额之后，鉴权和数据库函数（各自在别的线程里执行）
+        看到的都是「在画面作用域里」；请求结束后归还一次名额"""
+        response, events, gate, _ = self._send_under_spy(monkeypatch, endpoint)
         assert response.status_code == 200, response.text
-        assert events == ["gate", "auth", "release"]
+        assert events == ["gate", ("auth", True), ("db", True), "release"]
         assert _permits_available(gate) == 5
-        stubs[endpoint[3]].assert_called_once()
-        assert stubs[endpoint[3]].call_args.kwargs["permit_held"] is True
 
     @pytest.mark.parametrize("endpoint", SCREEN_ENDPOINTS, ids=SCREEN_ENDPOINT_IDS)
-    @pytest.mark.parametrize(("label", "stub_setup", "expected_status"), [
-        ("正常返回", None, 200),
-        ("类型化错误", _stub_raises(screen_stream.ScreenStreamError("SCREEN_SESSION_ENDED")), 409),
-        ("其他异常", _stub_raises(RuntimeError("boom")), 500),
+    @pytest.mark.parametrize(("label", "stub_setup", "expected_status", "expected_events"), [
+        ("正常返回", None, 200, ["gate", ("auth", True), ("db", True), "release"]),
+        ("类型化错误", _stub_raises(screen_stream.ScreenStreamError("SCREEN_SESSION_ENDED")), 409,
+         ["gate", ("auth", True), "release"]),
+        ("其他异常", _stub_raises(RuntimeError("boom")), 500, ["gate", ("auth", True), "release"]),
     ], ids=["normal-return", "screen-stream-error", "other-exception"])
-    def test_permit_is_released_once_however_the_handler_ends(self, monkeypatch, endpoint, label, stub_setup,
-                                                             expected_status):
+    def test_permit_is_released_once_however_the_request_ends(self, monkeypatch, endpoint, label, stub_setup,
+                                                             expected_status, expected_events):
         response, events, gate, _ = self._send_under_spy(monkeypatch, endpoint, stub_setup, raise_server_exceptions=False)
         assert response.status_code == expected_status, response.text
-        assert events == ["gate", "auth", "release"]
+        assert events == expected_events
         assert _permits_available(gate) == 5
 
     @pytest.mark.parametrize("endpoint", SCREEN_ENDPOINTS[1:], ids=SCREEN_ENDPOINT_IDS[1:])
@@ -2188,7 +2304,7 @@ class TestScreenRoutePermit:
         response, events, gate, _ = self._send_under_spy(monkeypatch, endpoint, _stub_returns(None))
         assert response.status_code == 404
         assert response.json() == _screen_error("SCREEN_SESSION_NOT_FOUND")
-        assert events == ["gate", "auth", "release"]
+        assert events == ["gate", ("auth", True), "release"]
         assert _permits_available(gate) == 5
 
     def test_permit_is_released_when_create_exits_before_touching_the_database(self, monkeypatch):
@@ -2196,7 +2312,7 @@ class TestScreenRoutePermit:
         response, events, gate, _ = self._send_under_spy(monkeypatch, create)
         assert response.status_code == 404
         assert response.json() == _screen_error("DEVICE_NOT_FOUND")
-        assert events == ["gate", "auth", "release"]
+        assert events == ["gate", ("auth", True), "release"]
         assert _permits_available(gate) == 5
 
     @pytest.mark.parametrize("endpoint", SCREEN_ENDPOINTS, ids=SCREEN_ENDPOINT_IDS)
@@ -2214,37 +2330,231 @@ class TestScreenRoutePermit:
             response, events, gate, _ = self._send_under_spy(monkeypatch, endpoint)
         assert response.status_code == 503
         assert response.json() == _screen_error("SCREEN_STREAM_DISABLED")
-        assert events == ["gate", "auth", "release"]
+        assert events == ["gate", ("auth", True), "release"]
         assert _permits_available(gate) == 5
 
     @pytest.mark.parametrize(("endpoint", "json_body", "expected_events"), [
         # 网页接口的鉴权在函数体里：请求体校验失败时还没走到鉴权
         (SCREEN_ENDPOINTS[2], {"type": "bogus", "payload": {}}, ["gate", "release"]),
         # 设备接口的鉴权是依赖：先鉴权，然后才校验请求体
-        (SCREEN_ENDPOINTS[4], {"session_id": "not-a-uuid", "after_seq": 0}, ["gate", "auth", "release"]),
-        (SCREEN_ENDPOINTS[5], {"session_id": SESSION, "type": "start", "payload": {}}, ["gate", "auth", "release"]),
+        (SCREEN_ENDPOINTS[4], {"session_id": "not-a-uuid", "after_seq": 0}, ["gate", ("auth", True), "release"]),
+        (SCREEN_ENDPOINTS[5], {"session_id": SESSION, "type": "start", "payload": {}}, ["gate", ("auth", True), "release"]),
     ], ids=["viewer-signal", "runtime-read", "runtime-signal"])
     def test_permit_is_released_when_the_body_is_rejected(self, monkeypatch, endpoint, json_body, expected_events):
-        """请求体不合法（422）：名额在依赖解析时已经拿到，校验失败后照样归还"""
+        """请求体不合法（422）：名额在中间件里已经拿到，校验失败后照样归还"""
         response, events, gate, _ = self._send_under_spy(monkeypatch, endpoint, json_body=json_body)
         assert response.status_code == 422
         assert events == expected_events
         assert _permits_available(gate) == 5
 
+    def test_permit_is_released_once_when_the_request_is_cancelled(self, monkeypatch):
+        """处理函数还没返回时请求被取消（比如服务关闭）：名额照样归还一次"""
+        import threading
+
+        import anyio
+        import httpx
+
+        gate = _fresh_gate(monkeypatch)
+        events = []
+        monkeypatch.setattr(screen_stream, "_gate", _SpySemaphore(gate, events))
+        stubs, stub_patch = _patched_stubs()
+        entered, let_go = threading.Event(), threading.Event()
+
+        def hang(*args, **kwargs):
+            entered.set()
+            let_go.wait(timeout=10)
+
+        stubs["load_session"].side_effect = hang
+
+        async def start_then_cancel():
+            transport = httpx.ASGITransport(app=_client(gated=True).app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as live:
+                async def request():
+                    await live.get(SESSION_PATH)
+
+                async with anyio.create_task_group() as group:
+                    group.start_soon(request)
+                    # 等请求进了数据库函数再取消
+                    assert await asyncio.get_running_loop().run_in_executor(None, entered.wait, 10)
+                    group.cancel_scope.cancel()
+            let_go.set()  # 让卡在数据库函数里的线程结束
+
+        with stub_patch, patch.object(local_tools_api, "get_current_user", _as_user):
+            asyncio.run(start_then_cancel())
+        assert events == ["gate", "release"]
+        assert _permits_available(gate) == 5
+
     def test_next_request_gets_the_permit_once_one_is_given_back(self, monkeypatch):
-        gate = _fresh_gate(monkeypatch, pool_max=10)
+        gate = _fresh_gate(monkeypatch)
         assert _take_all(gate) == 5
         _, device_auth = self._auth_spies()
         stubs, stub_patch = _patched_stubs()
         with stub_patch, patch.object(local_tools_api, "get_current_user", _as_user), \
-             _client(device_dependency=device_auth) as client:
-            refused = self._send(client, "get", SESSION_PATH, None)
+             _client(device_dependency=device_auth, gated=True) as client:
+            refused = _send(client, "get", SESSION_PATH, None)
             gate.release()  # 另一个画面请求做完，归还了一个名额
-            served = self._send(client, "get", SESSION_PATH, None)
+            served = _send(client, "get", SESSION_PATH, None)
         assert refused.status_code == 503 and refused.json() == BUSY_DETAIL
         assert served.status_code == 200
         stubs["load_session"].assert_called_once()
         assert _permits_available(gate) == 1  # 其余 4 个名额仍然被这个测试占着
+
+    def test_requests_that_are_not_screen_requests_pass_through(self, monkeypatch):
+        """不是画面接口的请求原样交给下游：不拿名额、不进入画面作用域，闸满了也一样。
+        不是 HTTP 的 scope（启动、关闭、WebSocket）同样原样透传"""
+        gate = _fresh_gate(monkeypatch)
+        assert _take_all(gate) == 5
+        seen = []
+
+        async def downstream(scope, receive, send):
+            path = get_route_path(scope) if scope["type"] == "http" else None
+            seen.append((scope["type"], path, database.in_screen_scope()))
+
+        middleware = screen_stream.ScreenStreamGateMiddleware(downstream)
+        paths = ("/", "/api/local-tools/runtime/heartbeat", "/api/local-tools/devices", "/api/saas/tenants")
+
+        async def run():
+            await middleware({"type": "lifespan"}, None, None)
+            await middleware({"type": "websocket", "path": "/ws"}, None, None)
+            for path in paths:
+                await middleware({"type": "http", "method": "POST", "path": path, "root_path": "", "headers": []},
+                                 None, None)
+
+        asyncio.run(run())
+        assert seen == [("lifespan", None, False), ("websocket", None, False)] + [("http", path, False) for path in paths]
+        assert _permits_available(gate) == 0
+
+    def test_screen_path_is_recognized_without_the_root_path_and_refused_by_the_busy_app(self, monkeypatch):
+        """请求路径带着反向代理的前缀（root_path）时，按去掉前缀后的路由路径判断是画面接口；
+        闸满时响应由构造时传入的 busy_app 产生，下游不被调用"""
+        gate = _fresh_gate(monkeypatch)
+        assert _take_all(gate) == 5
+        downstream, busy = MagicMock(side_effect=_never_called), MagicMock(side_effect=_asgi_noop)
+        middleware = screen_stream.ScreenStreamGateMiddleware(downstream, busy_app=busy)
+        scope = {"type": "http", "method": "POST", "path": "/prefix/api/local-tools/runtime/screen/session",
+                 "root_path": "/prefix", "headers": []}
+        asyncio.run(middleware(scope, None, None))
+        downstream.assert_not_called()
+        busy.assert_called_once_with(scope, None, None)
+        assert _permits_available(gate) == 0
+
+    def test_busy_app_wrapped_in_cors_adds_the_allow_origin_header_only_for_an_allowed_origin(self, monkeypatch):
+        """main.py 给拒绝响应包的那层 CORS：带允许的 Origin 时带 access-control-allow-origin，不带（或不被允许）时不加"""
+        gate = _fresh_gate(monkeypatch)
+        assert _take_all(gate) == 5
+        busy_app = CORSMiddleware(screen_stream.busy_response, allow_origins=["http://viewer.test"],
+                                  allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+        client = TestClient(screen_stream.ScreenStreamGateMiddleware(_never_called, busy_app=busy_app))
+        path = "/api/local-tools/runtime/screen/session"
+        allowed = client.post(path, headers={"Origin": "http://viewer.test"})
+        other = client.post(path, headers={"Origin": "http://other.test"})
+        bare = client.post(path)
+        for response in (allowed, other, bare):
+            assert response.status_code == 503 and response.json() == BUSY_DETAIL
+        assert allowed.headers["access-control-allow-origin"] == "http://viewer.test"
+        assert "access-control-allow-origin" not in other.headers
+        assert "access-control-allow-origin" not in bare.headers
+
+    def test_busy_response_is_identical_to_the_503_raised_by_a_screen_endpoint(self, monkeypatch):
+        """中间件回的 503 与画面接口自己抛出 SCREEN_STREAM_BUSY（等锁超时）时路由层的响应逐字节相同"""
+        gate = _fresh_gate(monkeypatch)
+        stubs, stub_patch = _patched_stubs()
+        stubs["load_session"].side_effect = screen_stream.ScreenStreamError("SCREEN_STREAM_BUSY")
+        with stub_patch, patch.object(local_tools_api, "get_current_user", _as_user):
+            client = _client(gated=True)
+            raised_by_route = client.get(SESSION_PATH)
+            assert _take_all(gate) == 5
+            refused_by_gate = client.get(SESSION_PATH)
+        assert refused_by_gate.status_code == raised_by_route.status_code == 503
+        assert refused_by_gate.content == raised_by_route.content
+        assert refused_by_gate.headers["content-type"] == raised_by_route.headers["content-type"]
+        assert refused_by_gate.json() == BUSY_DETAIL
+
+
+class TestScopeInheritance:
+    def test_scope_reaches_every_thread_that_runs_a_screen_request(self):
+        """画面作用域靠 ContextVar 传递，值随上下文复制。中间件放行后：路由所在的协程、线程池里执行的同步依赖、
+        asyncio.to_thread 启动的线程，看到的都是「在画面作用域里」；中间件和路由之间隔着一层
+        BaseHTTPMiddleware（真实应用里是租户中间件）。不是画面接口的请求，三处都不在"""
+        class InBetween(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                return await call_next(request)
+
+        def sync_dependency():
+            return database.in_screen_scope()
+
+        app = FastAPI()
+
+        @app.get(f"/api/local-tools/devices/{DEVICE}/screen-sessions/{SESSION}")
+        @app.post("/api/local-tools/runtime/heartbeat")
+        async def report(in_dependency: bool = Depends(sync_dependency)):
+            return {"handler": database.in_screen_scope(), "dependency": in_dependency,
+                    "to_thread": await asyncio.to_thread(database.in_screen_scope)}
+
+        app.add_middleware(InBetween)
+        app.add_middleware(screen_stream.ScreenStreamGateMiddleware)
+        client = TestClient(app)
+        assert client.get(f"/api/local-tools/devices/{DEVICE}/screen-sessions/{SESSION}").json() == {
+            "handler": True, "dependency": True, "to_thread": True}
+        assert client.post("/api/local-tools/runtime/heartbeat").json() == {
+            "handler": False, "dependency": False, "to_thread": False}
+
+
+class TestScreenPathMatching:
+    """占用闸只认六个画面接口的路径。匹配规则是独立写的，所以拿本地工具路由的全部路由来核对"""
+
+    def test_exactly_the_six_screen_endpoints_match(self):
+        """套到本地工具路由的全部路由上，匹配到的恰好是六个画面接口（按路由表里的写法逐一列出）：
+        以后新增画面接口而忘了改匹配规则时，这里会失败"""
+        all_routes = {(method, route.path) for route in local_tools_api.router.routes for method in route.methods}
+        assert {(method, path) for method, path in all_routes if screen_stream.is_screen_path(path)} == {
+            ("POST", "/api/local-tools/devices/{device_id}/screen-sessions"),
+            ("GET", "/api/local-tools/devices/{device_id}/screen-sessions/{session_id}"),
+            ("POST", "/api/local-tools/devices/{device_id}/screen-sessions/{session_id}/signals"),
+            ("POST", "/api/local-tools/devices/{device_id}/screen-sessions/{session_id}/end"),
+            ("POST", "/api/local-tools/runtime/screen/session"),
+            ("POST", "/api/local-tools/runtime/screen/signal"),
+        }
+
+    @pytest.mark.parametrize(("path", "expected"), [
+        (f"/api/local-tools/devices/{DEVICE}/screen-sessions", True),
+        (SESSION_PATH, True),
+        (f"{SESSION_PATH}/signals", True),
+        (f"{SESSION_PATH}/end", True),
+        ("/api/local-tools/runtime/screen/session", True),
+        ("/api/local-tools/runtime/screen/signal", True),
+        # 编号不限形态（合不合法由接口自己判断），但不能是空的
+        ("/api/local-tools/devices/any-id/screen-sessions/any-session/end", True),
+        ("/api/local-tools/devices//screen-sessions", False),
+        # 不能多出一段，也不能是别的后缀
+        (f"{SESSION_PATH}/", False),
+        (f"{SESSION_PATH}/signals/extra", False),
+        (f"{SESSION_PATH}/bogus", False),
+        # 本地工具的其他接口不是画面接口
+        ("/api/local-tools/devices", False),
+        (f"/api/local-tools/devices/{DEVICE}", False),
+        ("/api/local-tools/runtime/heartbeat", False),
+        ("/api/local-tools/runtime/screen", False),
+        ("/api/local-tools/runtime/screen/sessionx", False),
+        # 别的模块下的同名路径不是画面接口
+        ("/api/other/runtime/screen/session", False),
+    ])
+    def test_path_shapes(self, path, expected):
+        assert screen_stream.is_screen_path(path) is expected
+
+
+class TestScreenRoutesCarryNoGateDependency:
+    def test_screen_endpoints_carry_only_their_authentication_dependency(self):
+        """占用闸不再是路由依赖：四个网页接口没有依赖（登录态在函数体里），两个设备接口只有 _require_device；
+        三个会话函数也不再带 permit_held 参数"""
+        assert not hasattr(local_tools_api, "_screen_permit")
+        routes = [route for route in local_tools_api.router.routes if screen_stream.is_screen_path(route.path)]
+        assert len(routes) == 6
+        for route in routes:
+            names = [dependency.call.__name__ for dependency in route.dependant.dependencies]
+            assert names == (["_require_device"] if route.path.startswith("/api/local-tools/runtime/") else []), route.path
+        for name in ("create_session", "load_session", "append_signal"):
+            assert "permit_held" not in inspect.signature(getattr(screen_stream, name)).parameters
 
 
 class TestAuthentication:

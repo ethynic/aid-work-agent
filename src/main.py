@@ -464,18 +464,29 @@ cors_origins = settings.cors.allowed_origins
 _env_origins = os.getenv("CORS_ORIGINS")
 if _env_origins:
     cors_origins = [o.strip() for o in _env_origins.split(",") if o.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 两处 CORS 注册共用这一份参数：下面的全局 CORS 中间件，和实时画面占用闸的拒绝响应上包的那一层
+_cors_middleware_options = {
+    "allow_origins": cors_origins,
+    "allow_credentials": True,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+app.add_middleware(CORSMiddleware, **_cors_middleware_options)
 
 # Add SaaS tenant context middleware
 from src.saas.middleware import TenantContextMiddleware
 app.add_middleware(TenantContextMiddleware)
 logger.info("SaaS tenant context middleware enabled")
+
+# Runtime 桌面实时画面的占用闸。后 add_middleware 的排在外面，所以它在最外层、租户中间件之前：
+# 画面请求被拒（503 SCREEN_STREAM_BUSY）时不做鉴权、不碰数据库，也不让租户中间件白查一次库；
+# 放行的请求连同租户中间件的查库都走画面专用连接池。全局 CORS 中间件在它里面，拒绝响应不经过那一层，
+# 所以给拒绝响应单独包一层参数相同的 CORS，跨域部署（设置了 CORS_ORIGINS）时网页才读得到这个 503
+from src.local_tools.screen_stream import ScreenStreamGateMiddleware, busy_response
+app.add_middleware(
+    ScreenStreamGateMiddleware,
+    busy_app=CORSMiddleware(busy_response, **_cors_middleware_options),
+)
 
 
 # ==================== 全局兜底异常处理 ====================

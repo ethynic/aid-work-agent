@@ -10,13 +10,25 @@
 - 归属与隔离：另一租户、另一用户、另一设备的令牌访问 → 404
 - 旧设备对照：心跳响应与设备列表除新增字段外逐字段不变
 - 入参校验：信令方向、state、reason、payload 形态与大小、信令条数上限
+- 占用闸与连接池：画面请求只用画面专用连接池，不占业务连接池；闸满时立即 503；
+  画面这一路被行锁挡住时不占住连接；占用闸的 503 跨域时可读
+- 画面连接的复用：第一次用到画面才创建画面连接池并一次建满，之后心跳和两端轮询复用这几条连接；
+  不支持画面的旧 Runtime 心跳不查画面会话，也就不拿名额、不建连接
 
 时间戳一律在库里改早、用库里的 NOW() 比较，不靠 sleep，不用 Python 时间减库时间。
 """
 
+import asyncio
+import contextvars
+import json
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 import uuid
+from collections import Counter
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -27,6 +39,9 @@ pytestmark = pytest.mark.integration
 PROVIDER_ID = "ai.aidwork.boss-recruiting"
 SCREEN_CAPABILITY = "screen_stream_v1"
 STUN = ["stun:stun.example.test:3478"]
+BUSY = {"error": "实时画面暂时繁忙，请稍后重试", "code": "SCREEN_STREAM_BUSY", "debug": ""}
+# 画面连接池建连时用的 application_name：在 pg_stat_activity 里按它认出画面连接
+SCREEN_APPLICATION_NAME = "aid-work-agent-screen"
 SESSION_COLUMNS = [
     "id", "tenant_id", "user_id", "device_id", "state", "end_reason", "verdict", "path", "signals",
     "created_at", "connected_at", "started_at", "ended_at", "viewer_seen_at", "runtime_seen_at",
@@ -245,21 +260,31 @@ def _is_fresh(session_id, column):
                 f"FROM local_tool_screen_sessions WHERE id = %s", (session_id,))[0]["fresh"]
 
 
-def _connections_checked_out():
-    """连接池里正被借用的连接数。请求都串行发出时，这个数在请求之间应当回到基线。
-    读的是 psycopg2 连接池的私有属性 _used，只在测试里用来观察占用"""
+def _business_pool():
+    """业务连接池（psycopg2 连接池对象）"""
     from src.db import database
 
-    pool = database.get_postgres_pool()
+    return database.get_postgres_pool()
+
+
+def _screen_pool():
+    """画面专用连接池（psycopg2 连接池对象）"""
+    from src.db import database
+
+    return database.get_screen_pool()
+
+
+def _checked_out(pool):
+    """连接池里正被借用的连接数。读的是 psycopg2 连接池的私有属性 _used，只在测试里用来观察占用"""
     with pool._lock:
         return len(pool._used)
 
 
-def _pool_max():
-    """连接池上限（psycopg2 连接池的 maxconn）"""
+def _in_screen_scope():
+    """借连接的那一刻是否处于画面作用域"""
     from src.db import database
 
-    return database.get_postgres_pool().maxconn
+    return database.in_screen_scope()
 
 
 def _stun_urls():
@@ -298,6 +323,253 @@ def _run_together(workers):
 
 def _detail(resp):
     return resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# 占用闸与连接池：观察用的探针、风暴
+# ---------------------------------------------------------------------------
+
+# 风暴的规模：CORE_DEVICES 台不支持画面的旧 Runtime 照常工作，SCREEN_SESSIONS 场画面建连在轮询，
+# 每 500 毫秒一轮，共 STORM_ROUNDS 轮
+CORE_DEVICES = 8
+SCREEN_SESSIONS = 10
+STORM_ROUNDS = 12
+
+_request_kind = contextvars.ContextVar("screen_stream_test_request_kind", default="直接调用")
+
+
+@contextmanager
+def _as(kind):
+    """这一段里发出的请求是画面请求（"screen"）还是核心请求（"core"），借连接的记录据此区分。
+    ContextVar 的值随上下文复制到处理这个请求的线程里"""
+    token = _request_kind.set(kind)
+    try:
+        yield
+    finally:
+        _request_kind.reset(token)
+
+
+class _BorrowLog:
+    """记下测试期间每一次借连接，只观察、不改变行为。
+
+    borrows 每一项是 (请求类型, 连接池, 借的时候是否在画面作用域里, 调用方函数名, 是否在主线程上)。
+    peak 是各连接池「同时借出的连接数」的峰值：连接数只在借出时增加，所以每次借出后看一眼不会漏掉峰值
+    """
+
+    def __init__(self):
+        from src.db import database
+
+        self._database = database
+        self._original = database.get_pooled_connection
+        self.borrows = []
+        self.peak = {}
+
+    def __enter__(self):
+        self._database.get_pooled_connection = self._spy
+        return self
+
+    def __exit__(self, *_):
+        self._database.get_pooled_connection = self._original
+
+    def _spy(self, max_retries=2, pool=None):
+        conn = self._original(max_retries=max_retries, pool=pool)
+        used = self._database._pg_connection_pool if pool is None else pool
+        if used is not None:
+            self.borrows.append((_request_kind.get(), used, _in_screen_scope(), _borrower(),
+                                 threading.current_thread() is threading.main_thread()))
+            self.peak[used] = max(self.peak.get(used, 0), _checked_out(used))
+        return conn
+
+
+# 借连接这一路上的包装函数：不把它们记成调用方
+_BORROW_WRAPPERS = ("_spy", "get_db_connection", "_session_transaction", "_connection_permit")
+
+
+def _borrower():
+    """借连接的调用方函数名：从 _spy 往上找，跳过包装函数（get_db_connection、画面事务那两层上下文管理器，
+    以及 contextlib 自己的几层），停在业务代码里"""
+    frame = sys._getframe(1)
+    while frame.f_globals.get("__name__") == "contextlib" or frame.f_code.co_name in _BORROW_WRAPPERS:
+        frame = frame.f_back
+    return frame.f_code.co_name
+
+
+def _peak(log, pool):
+    return log.peak.get(pool, 0)
+
+
+def _step(step, resp, ok):
+    """核心请求一步的结果：(步骤名, 是否成功, 失败时的状态码和响应)"""
+    return step, ok, "" if ok else f"{resp.status_code} {resp.text[:160]}"
+
+
+async def _heartbeat_step(live, token):
+    """一次设备心跳，返回这一步的结果"""
+    with _as("core"):
+        resp = await live.post("/api/local-tools/runtime/heartbeat", json={}, headers=_auth(token))
+    return [_step("心跳", resp, resp.status_code == 200 and resp.json().get("success") is True)]
+
+
+async def _invocation_steps(live, user, device_id, token):
+    """一台设备顺序走完一次完整调用：创建、领取、started、回执，同一时刻只发一个请求，返回各步的结果"""
+    from src.local_tools import repository
+
+    with _as("core"):
+        try:
+            invocation_id = await asyncio.to_thread(
+                repository.create_invocation, user["tenant_id"], user["user_id"], device_id,
+                "boss_goto", {"url": "https://example.com"})
+        except Exception as error:  # 例如创建调用时连接池已耗尽（PoolError）
+            return [("创建调用", False, f"{type(error).__name__}: {error}")]
+        claim = await live.post("/api/local-tools/runtime/claim?wait=2", headers=_auth(token))
+        steps = [_step("接单", claim, claim.status_code == 200 and claim.json().get("invocation_id") == invocation_id)]
+        if not steps[0][1]:
+            return steps
+        claim_token = claim.json()["claim_token"]
+        invocation = f"/api/local-tools/runtime/invocations/{invocation_id}"
+        started = await live.post(f"{invocation}/started", json={"claim_token": claim_token}, headers=_auth(token))
+        steps.append(_step("started", started, started.status_code == 200 and started.json().get("state") == "running"))
+        result = await live.post(
+            f"{invocation}/result",
+            json={"claim_token": claim_token, "success": True, "effect": "applied", "data": {"ok": True}},
+            headers=_auth(token))
+        steps.append(_step("回执", result, result.status_code == 200 and result.json().get("state") == "succeeded"))
+        return steps
+
+
+async def _screen_poll(live, method, url, headers, **kwargs):
+    """一次画面轮询，返回 (状态码, 被拒时的 detail)"""
+    with _as("screen"):
+        resp = await live.request(method, url, headers=headers, **kwargs)
+    return resp.status_code, (None if resp.status_code == 200 else resp.json().get("detail"))
+
+
+async def _storm(live, sessions, user_headers, core_round):
+    """每 500 毫秒一轮、共 STORM_ROUNDS 轮。每一轮：core_round() 给出的核心请求协程，加上每场会话的
+    网页轮询和 Runtime 轮询，全部同时发出。返回 (核心请求各步的结果, 画面各状态码的次数, 画面被拒的原因)。
+
+    请求用挂在同一个事件循环上的异步客户端，原因见 TestBlockedSessionRow
+    """
+    core_results, statuses, errors = [], Counter(), []
+    for _ in range(STORM_ROUNDS):
+        started = time.perf_counter()
+        polls = [poll for device_id, token, session_id in sessions for poll in (
+            _screen_poll(live, "GET", _path(device_id, session_id), user_headers),
+            _screen_poll(live, "POST", "/api/local-tools/runtime/screen/session", _auth(token),
+                          json={"session_id": session_id, "after_seq": 0}))]
+        results = await asyncio.gather(*core_round(), *polls)
+        core = results[:len(results) - len(polls)]
+        core_results.extend(step for device in core for step in device)
+        for status, error in results[len(results) - len(polls):]:
+            statuses[status] += 1
+            if error is not None:
+                errors.append(error)
+        await asyncio.sleep(max(0.0, 0.5 - (time.perf_counter() - started)))
+    return core_results, statuses, errors
+
+
+def _storm_once(client, sessions, user_headers, make_core_round):
+    """跑一遍风暴。make_core_round(live) 给出「每一轮的核心请求协程」的函数"""
+
+    async def run():
+        import httpx
+
+        transport = httpx.ASGITransport(app=client.app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as live:
+            return await _storm(live, sessions, user_headers, make_core_round(live))
+
+    return asyncio.run(run())
+
+
+def _legacy_runtimes(client, user, count=CORE_DEVICES):
+    """不支持画面的旧版本 Runtime，都在线"""
+    return [_online_device(client, user, f"不支持画面的旧 Runtime {index}", screen=False) for index in range(count)]
+
+
+def _connecting_sessions(client, user, count=SCREEN_SESSIONS):
+    """count 台支持画面的设备各有一场会话处于 connecting：网页和 Runtime 两端都在轮询"""
+    sessions = []
+    for index in range(count):
+        device_id, token = _online_device(client, user, f"同时建连 {index}")
+        sessions.append((device_id, token, _new_session(client, user, device_id)))
+    for device_id, token, session_id in sessions:
+        _ok_runtime(client, token, session_id, "prepared")
+    for device_id, token, session_id in sessions:
+        _ok_web(client, user, device_id, session_id, "start")
+    return sessions
+
+
+def _take_gate():
+    """把占用闸的名额全部借出来（借了不还），返回借到的个数"""
+    from src.local_tools import screen_stream
+
+    taken = 0
+    while screen_stream.acquire_permit():
+        taken += 1
+    return taken
+
+
+def _give_back(count):
+    from src.local_tools import screen_stream
+
+    for _ in range(count):
+        screen_stream.release_permit()
+
+
+class _GateSpy:
+    """包住真的占用闸，数一数有多少次尝试拿名额、其中多少次没拿到"""
+
+    def __init__(self, real):
+        self._real = real
+        self.attempts = 0
+        self.refused = 0
+
+    def acquire(self, blocking=True):
+        self.attempts += 1
+        acquired = self._real.acquire(blocking=blocking)
+        self.refused += not acquired
+        return acquired
+
+    def release(self):
+        self._real.release()
+
+
+def _screen_backends():
+    """画面连接池在 PostgreSQL 那一侧的连接：backend 进程号列表"""
+    rows = _sql("SELECT pid FROM pg_stat_activity "
+                "WHERE datname = current_database() AND application_name = %s ORDER BY pid",
+                (SCREEN_APPLICATION_NAME,))
+    return [row["pid"] for row in rows]
+
+
+@contextmanager
+def _screen_borrows():
+    """记下测试期间每一次借画面连接池的连接，用的是哪一条数据库连接（backend 进程号）"""
+    from src.db import database
+
+    borrowed, original = [], database.get_pooled_connection
+
+    def spy(max_retries=2, pool=None):
+        conn = original(max_retries=max_retries, pool=pool)
+        if pool is not None:  # 指定池来借的只有画面连接池（get_db_connection 在画面作用域里才指定池）
+            borrowed.append(conn.info.backend_pid)
+        return conn
+
+    database.get_pooled_connection = spy
+    try:
+        yield borrowed
+    finally:
+        database.get_pooled_connection = original
+
+
+def _run_in_fresh_process(code):
+    """在一个新的 Python 进程里跑一段代码（pytest 进程里连接池早就建好了，查不了「刚启动」的状态），
+    返回它用 print("PROBE ...") 打印出来的 JSON"""
+    result = subprocess.run([sys.executable, "-c", textwrap.dedent(code)], cwd=ROOT, capture_output=True,
+                            text=True, encoding="utf-8", timeout=120)
+    assert result.returncode == 0, result.stderr[-3000:]
+    return json.loads(next(line[len("PROBE "):] for line in result.stdout.splitlines()
+                           if line.startswith("PROBE ")))
 
 
 # ---------------------------------------------------------------------------
@@ -407,9 +679,9 @@ class TestCreateSession:
         过了占用闸的请求照常查库，除了成功的那个都得到 409 SCREEN_SESSION_ACTIVE；闸满时让出的请求
         不查库，得到 503 SCREEN_STREAM_BUSY（下一次重试）。除此之外不能有别的结果。
 
-        409 和 503 各有几个不确定，只能给上下界。闸从空开始，先到的 5 个请求一定过得去（名额是连接池
-        上限的一半），所以 409 不少于 4 个、503 不多于 3 个；其余请求如果赶在某个名额归还之后才到达闸，
-        也能过去并得到 409，所以 503 也可能少于 3 个"""
+        409 和 503 各有几个不确定，只能给上下界。闸从空开始，先到的请求只要不超过名额数（缺省 3 个，
+        等于画面连接池的上限）就一定过得去，所以 409 不少于「名额数减 1」、503 不多于「8 减名额数」；
+        其余请求如果赶在某个名额归还之后才到达闸，也能过去并得到 409，所以 503 也可能更少"""
         from collections import Counter
 
         from src.local_tools import screen_stream
@@ -785,7 +1057,9 @@ class TestHeartbeatNotice:
             # 不用 TestClient 的请求耗时：它在请求结束后关闭事件循环时，会等默认线程池里
             # 仍在睡眠的那条线程（实测约 2 秒），那是测试客户端的收尾行为，不是服务端的返回时间。
             screen_stream.heartbeat_notice = _slow
-            device = {"id": uuid.UUID(device_id), "tenant_id": user["tenant_id"], "user_id": user["user_id"]}
+            # 与真实鉴权给出的一样，带着设备已保存的能力：这台设备支持画面，所以心跳会去查画面会话
+            device = {"id": uuid.UUID(device_id), "tenant_id": user["tenant_id"], "user_id": user["user_id"],
+                      "capabilities_json": {"capabilities": [SCREEN_CAPABILITY]}}
 
             async def call_heartbeat():
                 started = time.perf_counter()
@@ -814,17 +1088,18 @@ class TestHeartbeatNotice:
 
 
 # ---------------------------------------------------------------------------
-# 画面这一路被行锁挡住时，不占住数据库连接
+# 画面这一路被行锁挡住时，不占住连接
 # ---------------------------------------------------------------------------
 
 
 class TestBlockedSessionRow:
-    """画面这一路被行锁挡住时，不能占住数据库连接、拖累别的设备（设计 4.4）。
+    """画面这一路被行锁挡住时，不能占住连接、拖累别的设备（设计 4.4）。
 
     另一条连接把一条 streaming 会话行锁住、不提交。心跳里的续期 UPDATE 要等这把锁：应用层 0.5 秒后
-    放弃等待时，线程里的 SQL 还在等，连接也不归还，连续心跳几次就把连接池占满，别的设备心跳、领取任务
-    都会报 connection pool exhausted。所以画面这一路的 SQL 在数据库层有自己的等待上限，到点由 PostgreSQL
-    取消语句、归还连接；网页和 Runtime 的轮询等锁超时得到 503，下一次轮询再试。
+    放弃等待时，线程里的 SQL 还在等，连接也不归还，连续心跳几次就把画面连接池占满，画面请求和心跳里的
+    画面查询都会报 connection pool exhausted。所以画面这一路的 SQL 在数据库层有自己的等待上限，到点由
+    PostgreSQL 取消语句、归还连接；网页和 Runtime 的轮询等锁超时得到 503，下一次轮询再试。
+    画面这一路只用画面专用连接池，业务连接池始终不受影响。
     """
 
     def test_wait_limits_apply_only_inside_the_transaction(self):
@@ -882,9 +1157,8 @@ class TestBlockedSessionRow:
         # 锁释放之后「续期照常落库」才看得出
         assert _read(client, user, device_a, session_id).status_code == 200
         _age(session_id, "runtime_seen_at", 20)
-        busy = {"error": "实时画面暂时繁忙，请稍后重试", "code": "SCREEN_STREAM_BUSY", "debug": ""}
 
-        # 这条连接不走连接池：锁本身不占池里的连接，池里可用的连接数正好是连接池上限
+        # 这条连接不走连接池：锁本身不占池里的连接
         blocker = psycopg2.connect(dsn, connect_timeout=10)
         try:
             blocker_cursor = blocker.cursor()
@@ -905,84 +1179,106 @@ class TestBlockedSessionRow:
                 try:
                     transport = httpx.ASGITransport(app=client.app, raise_app_exceptions=False)
                     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as live:
+                        business_pool, screen_pool = _business_pool(), _screen_pool()
                         heartbeat = "/api/local-tools/runtime/heartbeat"
-                        baseline = _connections_checked_out()
-                        # 这台设备连续心跳「连接池上限 + 2」次，每一轮另一台设备也心跳一次
-                        checked_out_after_heartbeat = []
-                        for attempt in range(database.DB_POOL_MAX + 2):
-                            started_at = time.perf_counter()
-                            screen = await live.post(heartbeat, json={}, headers=_auth(token_a))
-                            screen_elapsed = time.perf_counter() - started_at
-                            checked_out_after_heartbeat.append(_connections_checked_out())
-                            other = await live.post(heartbeat, json={}, headers=_auth(token_b))
-                            assert other.status_code == 200, f"第 {attempt + 1} 轮：另一台设备的心跳被拖垮 {other.text}"
-                            assert other.json()["success"] is True
-                            assert screen.status_code == 200, f"第 {attempt + 1} 轮：这台设备的心跳失败 {screen.text}"
-                            assert screen.json()["success"] is True and "screen_session" not in screen.json()
-                            assert screen_elapsed < 2.0, f"第 {attempt + 1} 轮：这台设备的心跳 {screen_elapsed:.2f} 秒才返回"
-                        # 每次心跳返回的那一刻，被挡住的画面查询占着的连接已经归还。如果是应用层 0.5 秒放弃等待、
-                        # 线程还在等锁，连接就不会回来，这个数会一轮比一轮多
-                        assert checked_out_after_heartbeat == [baseline] * (database.DB_POOL_MAX + 2)
-                        # 数据库取消语句按「查询超时」告警，不算失败；另一台设备没有画面查询的告警
-                        screen_warnings = [record for record in records if "画面会话查询" in record["message"]]
-                        assert all("画面会话查询超时" in record["message"] for record in screen_warnings)
-                        assert len([record for record in screen_warnings
-                                    if f"device={device_a}" in record["message"]]) == database.DB_POOL_MAX + 2
-                        assert not [record for record in screen_warnings if f"device={device_b}" in record["message"]]
 
-                        # 取消语句的是 PostgreSQL：锁还占着时直接查，抛的是数据库到点取消的异常。
-                        # 两个上限都是 400 毫秒，谁先到点由数据库决定：等锁超时是 55P03，语句超时是 57014
-                        with pytest.raises((psycopg2.errors.LockNotAvailable, psycopg2.errors.QueryCanceled)) as caught:
-                            await asyncio.to_thread(screen_stream.heartbeat_notice, device_a,
-                                                    device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS)
-                        assert caught.value.pgcode in ("55P03", "57014")
-                        assert _connections_checked_out() == baseline
+                        def checked_out():
+                            """两个连接池里正被借用的连接数：(业务连接池, 画面连接池)"""
+                            return _checked_out(business_pool), _checked_out(screen_pool)
 
-                        # 另一台设备照常走完一次完整调用：创建、领取、started、提交结果
-                        invocation_id = repository.create_invocation(
-                            user["tenant_id"], user["user_id"], device_b, "boss_goto", {"url": "https://example.com"})
-                        claim = await live.post("/api/local-tools/runtime/claim?wait=2", headers=_auth(token_b))
-                        assert claim.status_code == 200, claim.text
-                        assert claim.json()["invocation_id"] == invocation_id
-                        claim_token = claim.json()["claim_token"]
-                        invocation = f"/api/local-tools/runtime/invocations/{invocation_id}"
-                        started = await live.post(f"{invocation}/started", json={"claim_token": claim_token},
-                                                  headers=_auth(token_b))
-                        assert started.status_code == 200 and started.json()["state"] == "running", started.text
-                        result = await live.post(
-                            f"{invocation}/result",
-                            json={"claim_token": claim_token, "success": True, "effect": "applied",
-                                  "data": {"ok": True}}, headers=_auth(token_b))
-                        assert result.status_code == 200 and result.json()["state"] == "succeeded", result.text
+                        with _BorrowLog() as log:
+                            # 请求都串行发出时，这两个数在请求之间应当回到基线
+                            baseline = checked_out()
+                            # 这台设备连续心跳「连接池上限 + 2」次，每一轮另一台设备也心跳一次
+                            checked_out_after_heartbeat = []
+                            for attempt in range(database.DB_POOL_MAX + 2):
+                                started_at = time.perf_counter()
+                                with _as("core"):
+                                    screen = await live.post(heartbeat, json={}, headers=_auth(token_a))
+                                    screen_elapsed = time.perf_counter() - started_at
+                                    checked_out_after_heartbeat.append(checked_out())
+                                    other = await live.post(heartbeat, json={}, headers=_auth(token_b))
+                                assert other.status_code == 200, f"第 {attempt + 1} 轮：另一台设备的心跳被拖垮 {other.text}"
+                                assert other.json()["success"] is True
+                                assert screen.status_code == 200, f"第 {attempt + 1} 轮：这台设备的心跳失败 {screen.text}"
+                                assert screen.json()["success"] is True and "screen_session" not in screen.json()
+                                assert screen_elapsed < 2.0, f"第 {attempt + 1} 轮：这台设备的心跳 {screen_elapsed:.2f} 秒才返回"
+                            # 每次心跳返回的那一刻，被挡住的画面查询占着的连接（在画面连接池里）已经归还，业务连接池也没被占。
+                            # 如果是应用层 0.5 秒放弃等待、线程还在等锁，连接就不会回来，这个数会一轮比一轮大
+                            assert checked_out_after_heartbeat == [baseline] * (database.DB_POOL_MAX + 2)
+                            # 数据库取消语句按「查询超时」告警，不算失败；另一台设备没有画面查询的告警
+                            screen_warnings = [record for record in records if "画面会话查询" in record["message"]]
+                            assert all("画面会话查询超时" in record["message"] for record in screen_warnings)
+                            assert len([record for record in screen_warnings
+                                        if f"device={device_a}" in record["message"]]) == database.DB_POOL_MAX + 2
+                            assert not [record for record in screen_warnings if f"device={device_b}" in record["message"]]
 
-                        # 被锁住的这条会话：读写都及时返回 503 SCREEN_STREAM_BUSY，而不是挂着等锁
-                        session_path = _path(device_a, session_id)
-                        candidate = {"candidate": "candidate:1 1 udp 1 192.0.2.1 50000 typ host"}
-                        blocked_requests = [
-                            ("网页读取", lambda: live.get(session_path, headers=user_headers)),
-                            ("Runtime 读取", lambda: live.post("/api/local-tools/runtime/screen/session",
-                                                                json={"session_id": session_id, "after_seq": 0},
-                                                                headers=_auth(token_a))),
-                            ("网页追加信令", lambda: live.post(f"{session_path}/signals",
-                                                                json={"type": "candidate", "payload": candidate},
-                                                                headers=user_headers)),
-                            ("Runtime 追加信令", lambda: live.post(
-                                "/api/local-tools/runtime/screen/signal",
-                                json={"session_id": session_id, "type": "candidate", "payload": candidate},
-                                headers=_auth(token_a))),
-                            ("网页创建会话", lambda: live.post(
-                                f"/api/local-tools/devices/{device_a}/screen-sessions", headers=user_headers)),
-                        ]
-                        for label, send in blocked_requests:
-                            started_at = time.perf_counter()
-                            resp = await send()
-                            elapsed = time.perf_counter() - started_at
-                            assert resp.status_code == 503, f"{label}：{resp.status_code} {resp.text[:200]}"
-                            assert _detail(resp) == busy, f"{label}：{resp.text[:200]}"
-                            assert elapsed < 3.0, f"{label}：{elapsed:.2f} 秒才返回"
-                        # 被挡住的这段时间里续期没有落库，会话也没有被改动
-                        assert _is_fresh(session_id, "runtime_seen_at") is False
-                        assert _db_session(session_id)["state"] == "streaming"
+                            # 取消语句的是 PostgreSQL：锁还占着时直接查，抛的是数据库到点取消的异常。
+                            # 两个上限都是 400 毫秒，谁先到点由数据库决定：等锁超时是 55P03，语句超时是 57014
+                            with pytest.raises((psycopg2.errors.LockNotAvailable, psycopg2.errors.QueryCanceled)) as caught:
+                                await asyncio.to_thread(screen_stream.heartbeat_notice, device_a,
+                                                        device_offline_seconds=local_tools_api.ONLINE_THRESHOLD_SECONDS)
+                            assert caught.value.pgcode in ("55P03", "57014")
+                            assert checked_out() == baseline
+
+                            # 另一台设备照常走完一次完整调用：创建、领取、started、提交结果
+                            with _as("core"):
+                                invocation_id = repository.create_invocation(
+                                    user["tenant_id"], user["user_id"], device_b, "boss_goto", {"url": "https://example.com"})
+                                claim = await live.post("/api/local-tools/runtime/claim?wait=2", headers=_auth(token_b))
+                                assert claim.status_code == 200, claim.text
+                                assert claim.json()["invocation_id"] == invocation_id
+                                claim_token = claim.json()["claim_token"]
+                                invocation = f"/api/local-tools/runtime/invocations/{invocation_id}"
+                                started = await live.post(f"{invocation}/started", json={"claim_token": claim_token},
+                                                          headers=_auth(token_b))
+                                assert started.status_code == 200 and started.json()["state"] == "running", started.text
+                                result = await live.post(
+                                    f"{invocation}/result",
+                                    json={"claim_token": claim_token, "success": True, "effect": "applied",
+                                          "data": {"ok": True}}, headers=_auth(token_b))
+                                assert result.status_code == 200 and result.json()["state"] == "succeeded", result.text
+                            assert checked_out() == baseline
+
+                            # 被锁住的这条会话：读写都及时返回 503 SCREEN_STREAM_BUSY，而不是挂着等锁
+                            session_path = _path(device_a, session_id)
+                            candidate = {"candidate": "candidate:1 1 udp 1 192.0.2.1 50000 typ host"}
+                            blocked_requests = [
+                                ("网页读取", lambda: live.get(session_path, headers=user_headers)),
+                                ("Runtime 读取", lambda: live.post("/api/local-tools/runtime/screen/session",
+                                                                    json={"session_id": session_id, "after_seq": 0},
+                                                                    headers=_auth(token_a))),
+                                ("网页追加信令", lambda: live.post(f"{session_path}/signals",
+                                                                    json={"type": "candidate", "payload": candidate},
+                                                                    headers=user_headers)),
+                                ("Runtime 追加信令", lambda: live.post(
+                                    "/api/local-tools/runtime/screen/signal",
+                                    json={"session_id": session_id, "type": "candidate", "payload": candidate},
+                                    headers=_auth(token_a))),
+                                ("网页创建会话", lambda: live.post(
+                                    f"/api/local-tools/devices/{device_a}/screen-sessions", headers=user_headers)),
+                            ]
+                            for label, send in blocked_requests:
+                                started_at = time.perf_counter()
+                                with _as("screen"):
+                                    resp = await send()
+                                elapsed = time.perf_counter() - started_at
+                                assert resp.status_code == 503, f"{label}：{resp.status_code} {resp.text[:200]}"
+                                assert _detail(resp) == BUSY, f"{label}：{resp.text[:200]}"
+                                assert elapsed < 3.0, f"{label}：{elapsed:.2f} 秒才返回"
+                                assert checked_out() == baseline, f"{label}：请求返回时还有连接被占着"
+                            # 被挡住的这段时间里续期没有落库，会话也没有被改动
+                            assert _is_fresh(session_id, "runtime_seen_at") is False
+                            assert _db_session(session_id)["state"] == "streaming"
+
+                        # 业务连接池始终不受影响：这一路被挡住的查询（包括心跳里的）全部借自画面连接池，
+                        # 也就是画面作用域里的每一次借出都来自画面连接池。期间核心请求一次只来一个，
+                        # 业务连接池同时借出的连接最多 1 个
+                        in_scope = [borrow for borrow in log.borrows if borrow[2]]
+                        assert in_scope, "被挡住的画面查询没有借过连接，用例没有测到"
+                        assert all(borrow[1] is screen_pool for borrow in in_scope), \
+                            f"画面作用域里有 {sum(borrow[1] is business_pool for borrow in in_scope)} 次借的是业务连接池"
+                        assert _peak(log, business_pool) <= baseline[0] + 1
                 finally:
                     logger.remove(handler)
                     blocker.rollback()  # 释放行锁
@@ -998,145 +1294,68 @@ class TestBlockedSessionRow:
 
 
 # ---------------------------------------------------------------------------
-# 画面请求同时借走的连接有上限：画面繁忙时由画面请求退让
+# 占用闸：画面请求只用画面专用连接池，画面繁忙时立即 503
 # ---------------------------------------------------------------------------
 
 
 class TestScreenRequestGate:
-    """画面请求同时借走的数据库连接有上限，画面繁忙时由画面请求退让，不拖累核心请求。
+    """画面请求同时处理的数量有上限（等于画面连接池的连接数上限），画面繁忙时由画面请求让出，不拖累核心请求。
 
-    10 场建连同时开始，网页和 Runtime 两端每 500 毫秒同时轮询一次，一批就是 20 个请求同时借连接，
-    比测试进程的整个连接池（10 个）还多。上一条用例的等待上限只管「一个连接被占多久」，管不住这种
-    成批的借用：另一台设备的心跳、领取任务会直接报 connection pool exhausted。所以画面这一路借连接
-    之前先过一道占用闸，拿不到名额的请求立即让出（网页和 Runtime 得到 503，下一次轮询重试；心跳这次
-    不带会话通知），连接池至少留一半给心跳、接单、续租、回执这些核心请求。
+    10 场建连同时开始，网页和 Runtime 两端每 500 毫秒同时轮询一次，一批就是 20 个请求同时到，
+    比测试进程的画面连接池（缺省 3 个连接）多得多。所以画面请求在进入租户中间件之前先过一道占用闸，
+    拿不到名额的请求立即得到 503（下一次轮询重试；心跳这次不带会话通知）。过了闸的请求连同租户
+    中间件的查库只用画面连接池，业务连接池留给心跳、接单、续租、回执这些核心请求。
     """
 
     @pytest.mark.slow
     def test_core_requests_survive_a_screen_polling_storm(self, client, users):
-        import asyncio
-        from collections import Counter
-
-        import httpx
-
-        from src.local_tools import repository, screen_stream
+        from src.db import database
+        from src.local_tools import screen_stream
 
         user = users[0]
         user_headers = _auth(user["token"])
-        # 10 场会话同时处于 connecting：创建、Runtime 已应答、网页已准备好
-        sessions = []
-        for index in range(10):
-            device_id, token = _online_device(client, user, f"同时建连 {index}")
-            sessions.append((device_id, token, _new_session(client, user, device_id)))
-        for device_id, token, session_id in sessions:
-            _ok_runtime(client, token, session_id, "prepared")
-        for device_id, token, session_id in sessions:
-            _ok_web(client, user, device_id, session_id, "start")
+        sessions = _connecting_sessions(client, user)
         assert all(_db_session(session_id)["state"] == "connecting" for _, _, session_id in sessions)
 
         # 另一台设备：不支持画面的旧 Runtime，同一时间里照常心跳、接单、回执
         core_device, core_token = _online_device(client, user, "不支持画面的旧 Runtime", screen=False)
-        core_headers = _auth(core_token)
         listed = client.get("/api/local-tools/devices", headers=user_headers).json()["devices"]
         assert next(item for item in listed if item["device_id"] == core_device)["screen_stream"] is False
-        rounds = 12
-        busy = {"error": "实时画面暂时繁忙，请稍后重试", "code": "SCREEN_STREAM_BUSY", "debug": ""}
 
-        async def storm():
-            """每 500 毫秒一轮，共 rounds 轮：两端同时各轮询 10 场会话，另一台设备心跳一次、走完一次完整调用。
-            请求用挂在同一个事件循环上的异步客户端，原因同上一条用例。"""
-            transport = httpx.ASGITransport(app=client.app, raise_app_exceptions=False)
-            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as live:
-                core_in_flight = 0
-                screen_statuses = Counter()
-                screen_errors = []
-                core_heartbeats = []
-                invocations = []
-                # 画面轮询返回那一刻的 (连接池里借出的连接数, 当时在途的核心请求数)
-                checked_out_samples = []
+        def make_core_round(live):
+            return lambda: [_heartbeat_step(live, core_token), _invocation_steps(live, user, core_device, core_token)]
 
-                async def poll_screen(method, url, headers, **kwargs):
-                    nonlocal core_in_flight
-                    resp = await live.request(method, url, headers=headers, **kwargs)
-                    # 每个在途的核心请求内部的借连接是顺序进行的，最多占 1 个连接
-                    checked_out_samples.append((_connections_checked_out(), core_in_flight))
-                    screen_statuses[resp.status_code] += 1
-                    if resp.status_code != 200:
-                        screen_errors.append(resp.json().get("detail"))
-                    return resp.status_code
-
-                async def core_heartbeat():
-                    nonlocal core_in_flight
-                    core_in_flight += 1
-                    try:
-                        resp = await live.post("/api/local-tools/runtime/heartbeat", json={}, headers=core_headers)
-                    finally:
-                        core_in_flight -= 1
-                    core_heartbeats.append((resp.status_code, "" if resp.status_code == 200 else resp.text))
-
-                async def full_invocation():
-                    nonlocal core_in_flight
-                    core_in_flight += 1
-                    steps = []
-                    try:
-                        invocation_id = await asyncio.to_thread(
-                            repository.create_invocation, user["tenant_id"], user["user_id"], core_device,
-                            "boss_goto", {"url": "https://example.com"})
-                        invocation = f"/api/local-tools/runtime/invocations/{invocation_id}"
-                        claim = await live.post("/api/local-tools/runtime/claim?wait=2", headers=core_headers)
-                        steps.append(claim)
-                        if claim.status_code == 200:
-                            claim_token = claim.json()["claim_token"]
-                            steps.append(await live.post(f"{invocation}/started", json={"claim_token": claim_token},
-                                                         headers=core_headers))
-                            steps.append(await live.post(
-                                f"{invocation}/result",
-                                json={"claim_token": claim_token, "success": True, "effect": "applied",
-                                      "data": {"ok": True}}, headers=core_headers))
-                        succeeded = (len(steps) == 3 and claim.json()["invocation_id"] == invocation_id
-                                     and steps[1].status_code == 200 and steps[1].json()["state"] == "running"
-                                     and steps[2].status_code == 200 and steps[2].json()["state"] == "succeeded")
-                        if not succeeded:
-                            invocations.append("failed: " + " | ".join(f"{s.status_code} {s.text[:120]}" for s in steps))
-                        else:
-                            invocations.append("succeeded")
-                    except Exception as error:  # 例如创建调用时连接池已耗尽（PoolError）
-                        invocations.append(f"failed: {type(error).__name__}: {error}")
-                    finally:
-                        core_in_flight -= 1
-
-                for _ in range(rounds):
-                    round_started = time.perf_counter()
-                    tasks = [core_heartbeat(), full_invocation()]
-                    for device_id, token, session_id in sessions:
-                        tasks.append(poll_screen("GET", _path(device_id, session_id), user_headers))
-                        tasks.append(poll_screen("POST", "/api/local-tools/runtime/screen/session", _auth(token),
-                                                 json={"session_id": session_id, "after_seq": 0}))
-                    await asyncio.gather(*tasks)
-                    await asyncio.sleep(max(0.0, 0.5 - (time.perf_counter() - round_started)))
-                return core_heartbeats, invocations, screen_statuses, screen_errors, checked_out_samples
-
-        core_heartbeats, invocations, screen_statuses, screen_errors, checked_out_samples = asyncio.run(storm())
+        with _BorrowLog() as log:
+            core, screen_statuses, screen_errors = _storm_once(client, sessions, user_headers, make_core_round)
+        business_pool, screen_pool = _business_pool(), _screen_pool()
 
         # 1. 另一台设备的心跳和完整调用不受画面请求影响
-        assert [status for status, _ in core_heartbeats] == [200] * rounds, \
-            f"另一台设备的心跳被画面请求拖垮：{core_heartbeats}"
-        assert len(invocations) == rounds and all(result == "succeeded" for result in invocations), \
-            f"另一台设备的完整调用被画面请求拖垮：{invocations}"
+        beats = [(ok, detail) for step, ok, detail in core if step == "心跳"]
+        assert len(beats) == STORM_ROUNDS and all(ok for ok, _ in beats), \
+            f"另一台设备的心跳被画面请求拖垮：{[detail for ok, detail in beats if not ok]}"
+        calls = [(ok, detail) for step, ok, detail in core if step != "心跳"]
+        assert [step for step, _, _ in core if step != "心跳"] == ["接单", "started", "回执"] * STORM_ROUNDS \
+            and all(ok for ok, _ in calls), \
+            f"另一台设备的完整调用被画面请求拖垮：{[detail for ok, detail in calls if not ok]}"
         # 2. 画面轮询只可能是成功或「画面繁忙」，不会是 500；并且确实繁忙过
         assert set(screen_statuses) <= {200, 503}, f"画面轮询出现了 200 和 503 以外的状态码：{dict(screen_statuses)}"
-        assert all(detail == busy for detail in screen_errors), f"画面轮询被拒的原因不对：{screen_errors[:3]}"
+        assert all(detail == BUSY for detail in screen_errors), f"画面轮询被拒的原因不对：{screen_errors[:3]}"
         assert set(screen_statuses) == {200, 503}, f"这轮风暴没有造成画面繁忙，用例没有测到闸：{dict(screen_statuses)}"
-        # 3. 画面请求同时借走的连接不超过「连接池上限减去闸的容量」。
-        #    每个画面轮询返回的那一刻记下连接池里借出的连接数，减去当时在途的核心请求数（每个最多占 1 个连接），
-        #    余下的就是画面请求占着的连接。这个请求自己的连接在响应之前已经归还
-        pool_max = _pool_max()
+        assert sum(screen_statuses.values()) == STORM_ROUNDS * 2 * len(sessions)
+        # 3. 画面轮询没有从业务连接池借过连接：画面请求的每一次借出都在画面作用域里、都来自画面连接池；
+        #    业务连接池的每一次借出都不在画面请求里。闸的容量等于画面连接池的上限，画面连接池不会被借空
+        screen_borrows = [borrow for borrow in log.borrows if borrow[0] == "screen"]
+        assert screen_borrows
+        assert all(borrow[1] is screen_pool and borrow[2] for borrow in screen_borrows), \
+            f"画面请求从业务连接池借了 {sum(borrow[1] is business_pool for borrow in screen_borrows)} 次连接"
+        assert all(borrow[0] != "screen" and not borrow[2] for borrow in log.borrows if borrow[1] is business_pool)
         gate = screen_stream.gate_capacity()
-        assert gate == max(1, pool_max // 2)
-        assert len(checked_out_samples) == rounds * 2 * len(sessions)
-        borrowed_by_screen = [checked_out - core for checked_out, core in checked_out_samples]
-        assert max(borrowed_by_screen) <= pool_max - gate, \
-            f"画面请求同时借走了 {max(borrowed_by_screen)} 个连接（连接池 {pool_max}，闸 {gate}）"
+        assert gate == max(1, database.SCREEN_DB_POOL_MAX)
+        assert _peak(log, screen_pool) <= gate
+
+        print(f"\n[风暴] 另一台设备：心跳 {sum(ok for ok, _ in beats)}/{STORM_ROUNDS}，完整调用 {sum(ok for ok, _ in calls)}/{STORM_ROUNDS * 3} 步；"
+              f"画面 {dict(screen_statuses)}；业务连接池借出峰值 {_peak(log, business_pool)}，"
+              f"画面连接池借出峰值 {_peak(log, screen_pool)}/{screen_pool.maxconn}")
 
         # 轮询停下来之后：随便挑一场会话把建连走完，心跳续期正常
         device_id, token, session_id = sessions[0]
@@ -1147,6 +1366,421 @@ class TestScreenRequestGate:
         assert body["screen_session"] == {"id": session_id, "state": "streaming"}
         assert _is_fresh(session_id, "runtime_seen_at") is True
         assert _db_session(session_id)["state"] == "streaming"
+
+
+# ---------------------------------------------------------------------------
+# 对照回归：画面限流不挤占核心请求原有的连接容量
+# ---------------------------------------------------------------------------
+
+
+class TestBusinessPoolStaysWithCoreRequests:
+    """画面限流不能挤占核心请求原有的连接容量。
+
+    只让画面请求「少占」业务连接池不够：只要它还能从业务连接池借连接，核心请求可用的容量就一定变少。
+    所以画面请求（连同路由之前租户中间件的那次查库）只用画面专用连接池，占用闸的名额数等于这个池的
+    上限，业务连接池的容量全部留给核心请求。对照组是 CORE_DEVICES 台不支持画面的旧 Runtime：有画面轮询
+    和没有画面轮询各跑一遍，两遍里核心请求都必须全部成功。业务连接池上限是 10（tests/integration/conftest.py）。
+    """
+
+    @staticmethod
+    def _assert_all_succeeded(label, core):
+        failures = [f"{step}：{detail}" for step, ok, detail in core if not ok]
+        assert failures == [], f"{label}：{len(failures)} 步核心请求失败：{failures[:3]}"
+
+    @pytest.mark.slow
+    def test_heartbeats_only(self, client, users):
+        """只心跳：8 台设备每轮同时各心跳一次，共 96 次。有画面轮询和没有画面轮询各跑一遍，两遍都全部成功"""
+        user = users[0]
+        devices = _legacy_runtimes(client, user)
+        sessions = _connecting_sessions(client, user)
+        expected = STORM_ROUNDS * CORE_DEVICES
+        business_pool, screen_pool = _business_pool(), _screen_pool()
+
+        def make_core_round(live):
+            return lambda: [_heartbeat_step(live, token) for _, token in devices]
+
+        with _BorrowLog() as quiet_log:
+            quiet, _, _ = _storm_once(client, (), _auth(user["token"]), make_core_round)
+        with _BorrowLog() as busy_log:
+            busy, screen_statuses, screen_errors = _storm_once(client, sessions, _auth(user["token"]), make_core_round)
+
+        quiet_ok = sum(ok for _, ok, _ in quiet)
+        busy_ok = sum(ok for _, ok, _ in busy)
+        print(f"\n[对照回归 1a] 没有画面轮询：心跳 {quiet_ok}/{expected}，业务连接池借出峰值 {_peak(quiet_log, business_pool)}；"
+              f"有画面轮询：心跳 {busy_ok}/{expected}，画面 {dict(screen_statuses)}，"
+              f"业务连接池峰值 {_peak(busy_log, business_pool)}，画面连接池峰值 {_peak(busy_log, screen_pool)}")
+        for label, core in (("没有画面轮询", quiet), ("有画面轮询", busy)):
+            assert [step for step, _, _ in core] == ["心跳"] * expected
+            self._assert_all_succeeded(label, core)
+        # 有画面轮询时画面确实繁忙过
+        assert set(screen_statuses) == {200, 503} and screen_errors == [BUSY] * len(screen_errors)
+        # 业务连接池里只有核心心跳在借：同时借出的连接数不超过同时在线的核心设备数。
+        # 画面请求都在画面连接池里，同时借出的连接数不超过画面连接池的上限
+        assert _peak(quiet_log, business_pool) <= CORE_DEVICES
+        assert _peak(busy_log, business_pool) <= CORE_DEVICES
+        assert _peak(busy_log, screen_pool) <= screen_pool.maxconn
+
+    @pytest.mark.slow
+    def test_heartbeat_claim_started_and_result_in_sequence(self, client, users):
+        """心跳、接单、started、回执：每台设备在一轮里顺序走完这一条链（同一时刻只发一个请求），8 台之间同时。
+        有画面轮询和没有画面轮询各跑一遍，两遍全部成功，结果一致"""
+        user = users[0]
+        devices = _legacy_runtimes(client, user)
+        sessions = _connecting_sessions(client, user)
+        expected = STORM_ROUNDS * CORE_DEVICES
+        business_pool, screen_pool = _business_pool(), _screen_pool()
+
+        def make_core_round(live):
+            async def chain(device_id, token):
+                return await _heartbeat_step(live, token) + await _invocation_steps(live, user, device_id, token)
+
+            return lambda: [chain(device_id, token) for device_id, token in devices]
+
+        with _BorrowLog() as quiet_log:
+            quiet, _, _ = _storm_once(client, (), _auth(user["token"]), make_core_round)
+        with _BorrowLog() as busy_log:
+            busy, screen_statuses, screen_errors = _storm_once(client, sessions, _auth(user["token"]), make_core_round)
+
+        def summary(core):
+            counts = Counter({step: 0 for step in ("心跳", "接单", "started", "回执")})
+            counts.update(step for step, ok, _ in core if ok)
+            return dict(counts)
+
+        print(f"\n[对照回归 1b] 没有画面轮询：{summary(quiet)}，业务连接池借出峰值 {_peak(quiet_log, business_pool)}；"
+              f"有画面轮询：{summary(busy)}，画面 {dict(screen_statuses)}，"
+              f"业务连接池峰值 {_peak(busy_log, business_pool)}，画面连接池峰值 {_peak(busy_log, screen_pool)}")
+        for label, core in (("没有画面轮询", quiet), ("有画面轮询", busy)):
+            self._assert_all_succeeded(label, core)
+            assert summary(core) == {"心跳": expected, "接单": expected, "started": expected, "回执": expected}, \
+                f"{label}：核心请求没有全部走完：{summary(core)}"
+        assert set(screen_statuses) == {200, 503} and screen_errors == [BUSY] * len(screen_errors)
+        assert _peak(quiet_log, business_pool) <= CORE_DEVICES
+        assert _peak(busy_log, business_pool) <= CORE_DEVICES
+        assert _peak(busy_log, screen_pool) <= screen_pool.maxconn
+
+    @pytest.mark.slow
+    def test_screen_requests_only_use_the_screen_pool(self, client, users):
+        """确定性证据：轮询期间业务连接池的每一次借出都不在画面请求里，画面请求只使用画面连接池；
+        画面请求的状态只能是 200 或 503"""
+        user = users[0]
+        devices = _legacy_runtimes(client, user)
+        sessions = _connecting_sessions(client, user)
+        business_pool, screen_pool = _business_pool(), _screen_pool()
+
+        def make_core_round(live):
+            return lambda: [_heartbeat_step(live, token) for _, token in devices]
+
+        with _BorrowLog() as log:
+            core, screen_statuses, screen_errors = _storm_once(client, sessions, _auth(user["token"]), make_core_round)
+        screen_borrows = [borrow for borrow in log.borrows if borrow[0] == "screen"]
+        business_borrows = [borrow for borrow in log.borrows if borrow[1] is business_pool]
+        from_business = [borrow for borrow in screen_borrows if borrow[1] is business_pool]
+        print(f"\n[对照回归 1c] 核心心跳 {sum(ok for _, ok, _ in core)}/{STORM_ROUNDS * CORE_DEVICES}；"
+              f"画面请求借连接 {len(screen_borrows)} 次，其中借业务连接池 {len(from_business)} 次；"
+              f"画面 {dict(screen_statuses)}；业务连接池借出峰值 {_peak(log, business_pool)}，"
+              f"画面连接池借出峰值 {_peak(log, screen_pool)}")
+        # 1. 画面请求的状态只能是 200 或 503
+        assert set(screen_statuses) <= {200, 503}, f"画面请求出现了 200 和 503 以外的状态码：{dict(screen_statuses)}"
+        assert screen_errors == [BUSY] * len(screen_errors)
+        # 2. 画面请求只使用画面连接池：画面请求确实处理过，并且每一次都借自画面连接池、借的时候都在画面作用域里
+        assert screen_borrows
+        assert from_business == [], f"画面请求从业务连接池借了 {len(from_business)} 次连接"
+        assert all(borrow[1] is screen_pool and borrow[2] for borrow in screen_borrows)
+        # 3. 业务连接池的每一次借出都不在画面请求里：借的时候不在画面作用域里，请求类型也不是画面请求
+        assert business_borrows
+        assert all(borrow[0] != "screen" and not borrow[2] for borrow in business_borrows)
+        # 4. 核心请求全部成功
+        self._assert_all_succeeded("有画面轮询", core)
+
+    def test_scope_reaches_every_thread_that_borrows_for_a_screen_request(self, client, users):
+        """画面作用域跟着请求进了线程。一次画面请求里有三处借连接：路由之前租户中间件的查库在事件循环线程上，
+        设备鉴权是同步依赖（FastAPI 放在线程池里执行），画面函数经 asyncio.to_thread 执行；
+        三处借连接时都还在画面作用域里，都借自画面连接池。对照：心跳里的画面查询也走画面连接池，
+        心跳自己的设备更新走业务连接池"""
+        user = users[0]
+        device_id, token = _online_device(client, user, "作用域继承机")
+        session_id = _new_session(client, user, device_id)
+
+        async def read():
+            import httpx
+
+            transport = httpx.ASGITransport(app=client.app, raise_app_exceptions=False)
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as live:
+                with _as("screen"):
+                    runtime = await live.post("/api/local-tools/runtime/screen/session",
+                                              json={"session_id": session_id, "after_seq": 0}, headers=_auth(token))
+                    web = await live.get(_path(device_id, session_id), headers=_auth(user["token"]))
+                with _as("core"):
+                    heartbeat = await live.post("/api/local-tools/runtime/heartbeat", json={}, headers=_auth(token))
+                return runtime, web, heartbeat
+
+        with _BorrowLog() as log:
+            runtime, web, heartbeat = asyncio.run(read())
+        assert (runtime.status_code, web.status_code, heartbeat.status_code) == (200, 200, 200), \
+            (runtime.text, web.text, heartbeat.text)
+        screen_pool = _screen_pool()
+        screen = [borrow for borrow in log.borrows if borrow[0] == "screen"]
+        core = [borrow for borrow in log.borrows if borrow[0] == "core"]
+        assert all(borrow[1] is screen_pool and borrow[2] for borrow in screen)
+        # 设备鉴权（Runtime 取会话那一次）：在线程池里执行，调用方是 get_device_by_token_hash
+        device_auth = [borrow for borrow in screen if borrow[3] == "get_device_by_token_hash"]
+        assert len(device_auth) == 1 and device_auth[0][4] is False
+        # 画面函数（两次读取）：经 asyncio.to_thread 执行
+        loads = [borrow for borrow in screen if borrow[3] == "load_session"]
+        assert len(loads) == 2 and all(borrow[4] is False for borrow in loads)
+        # 租户中间件的查库：在事件循环线程（主线程）上
+        on_main = [borrow for borrow in screen if borrow[4]]
+        assert on_main and all(borrow[3] in ("verify_token", "_authenticate_user") for borrow in on_main)
+        # 对照：心跳里的画面查询自己进画面作用域、走画面连接池；心跳的设备更新走业务连接池、不在画面作用域里
+        assert any(borrow[3] == "heartbeat_notice" and borrow[1] is screen_pool and borrow[2] for borrow in core)
+        device_updates = [borrow for borrow in core if borrow[3] != "heartbeat_notice"]
+        assert device_updates and all(borrow[1] is not screen_pool and not borrow[2] for borrow in device_updates)
+
+
+# ---------------------------------------------------------------------------
+# 占用闸的 503 跨域时可读
+# ---------------------------------------------------------------------------
+
+
+class TestBusyResponseCors:
+    def test_busy_response_carries_cors_headers_only_for_requests_with_an_allowed_origin(self, client):
+        """占用闸挂在全局 CORS 中间件外面，它回的 503 不经过那一层；main.py 给拒绝响应单独包了一层
+        CORS，参数与全局那一层相同。所以跨域部署时网页读得到这个 503：带允许的 Origin 时带
+        access-control-allow-origin，不带 Origin 时不加"""
+        from starlette.middleware.cors import CORSMiddleware
+
+        from src.local_tools import screen_stream
+        from src.main import app
+
+        # 只断言相对顺序：占用闸在租户中间件外面，全局 CORS 在里面（以后别的中间件加进来不影响这条用例）
+        names = [middleware.cls.__name__ for middleware in app.user_middleware]
+        assert names.count("ScreenStreamGateMiddleware") == names.count("TenantContextMiddleware") == names.count("CORSMiddleware") == 1
+        assert (names.index("ScreenStreamGateMiddleware") < names.index("TenantContextMiddleware")
+                < names.index("CORSMiddleware")), names
+        gate = app.user_middleware[names.index("ScreenStreamGateMiddleware")]
+        cors = app.user_middleware[names.index("CORSMiddleware")]
+        assert gate.cls is screen_stream.ScreenStreamGateMiddleware and cors.cls is CORSMiddleware
+        origins = cors.kwargs["allow_origins"]
+        # 全局那一层是请求到来时才按 kwargs 构造的，这里按同样的 kwargs 造一个出来比较构造后的参数
+        reference = CORSMiddleware(None, **cors.kwargs)
+        busy_cors = gate.kwargs["busy_app"]
+        assert (busy_cors.allow_origins, busy_cors.allow_credentials, busy_cors.allow_methods,
+                busy_cors.allow_headers) == (reference.allow_origins, reference.allow_credentials,
+                                             reference.allow_methods, reference.allow_headers)
+
+        taken = _take_gate()
+        try:
+            path = "/api/local-tools/runtime/screen/session"
+            with_origin = client.post(path, json={"session_id": str(uuid.uuid4()), "after_seq": 0},
+                                      headers={"Origin": origins[0]})
+            without_origin = client.post(path, json={"session_id": str(uuid.uuid4()), "after_seq": 0})
+            disallowed = client.post(path, json={"session_id": str(uuid.uuid4()), "after_seq": 0},
+                                     headers={"Origin": "http://not-allowed.example"})
+        finally:
+            _give_back(taken)
+        for resp in (with_origin, without_origin, disallowed):
+            assert resp.status_code == 503 and resp.json() == {"detail": BUSY}, resp.text
+        assert with_origin.headers["access-control-allow-origin"] == origins[0]
+        assert "access-control-allow-origin" not in without_origin.headers
+        assert "access-control-allow-origin" not in disallowed.headers
+
+
+# ---------------------------------------------------------------------------
+# 画面连接的复用
+# ---------------------------------------------------------------------------
+
+
+class TestScreenConnectionsAreReused:
+    """画面连接池里的连接要复用：第一次用到画面时才创建、一次建满，之后心跳和两端轮询用的都是这几条，不会关了再建。
+
+    psycopg2 2.9 的连接池只在「空闲连接数小于 minconn」时才保留归还的连接，否则直接关闭；所以画面连接池的
+    minconn 必须等于 maxconn。minconn 取 0 的话每用完一次就关一条，下一次又要重新做数据库连接握手。
+    连接数和 backend 进程号直接查 PostgreSQL 的 pg_stat_activity。
+    """
+
+    def test_a_fresh_process_holds_no_screen_connection_until_screen_is_used(self):
+        """新进程：初始化连接池不创建画面连接池，数据库里没有画面连接；第一次在画面作用域里借连接时才创建，
+        并一次建满 SCREEN_DB_POOL_MAX 条"""
+        from src.db import database
+
+        seen = _run_in_fresh_process(f"""
+            import json
+            from src.db import database
+
+            def backends():
+                with database.get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT pid FROM pg_stat_activity WHERE datname = current_database() "
+                                   "AND application_name = %s ORDER BY pid", ("{SCREEN_APPLICATION_NAME}",))
+                    return [row["pid"] for row in cursor.fetchall()]
+
+            database.init_postgres_pool()
+            # 这个数据库里别的进程（比如正在跑的 pytest 进程）已经建好的画面连接不算在新进程头上
+            others = set(backends())
+            seen = {{"pool_created_by_init": database.get_screen_pool() is not None,
+                     "after_init": [pid for pid in backends() if pid not in others]}}
+            with database.screen_connection_scope():
+                with database.get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT pg_backend_pid() AS pid")
+                    seen["first_borrow"] = cursor.fetchone()["pid"]
+            seen["after_first_use"] = [pid for pid in backends() if pid not in others]
+            print("PROBE", json.dumps(seen))
+            database.close_postgres_pool()
+        """)
+        print(f"\n[连接复用·新进程] {seen}")
+        assert seen["pool_created_by_init"] is False
+        assert seen["after_init"] == []
+        assert len(seen["after_first_use"]) == database.SCREEN_DB_POOL_MAX
+        assert seen["first_borrow"] in seen["after_first_use"]
+
+    def test_screen_connections_are_reused_not_reopened(self, client, users):
+        """第一次用到画面后，画面连接池在数据库一侧始终是 SCREEN_DB_POOL_MAX 条连接；之后连续的心跳、网页轮询、
+        Runtime 轮询借到的都是这几条（backend 进程号不变）"""
+        from contextlib import ExitStack
+
+        from src.db import database
+
+        user = users[0]
+        device_id, token = _online_device(client, user, "连接复用机")
+        session_id = _new_session(client, user, device_id)  # pending：每次心跳都查画面会话通知
+        rounds = 12
+        with _screen_borrows() as borrowed:
+            assert _heartbeat(client, token)["screen_session"] == {"id": session_id, "state": "pending"}
+            after_first = _screen_backends()
+            for _ in range(rounds):
+                assert _heartbeat(client, token)["screen_session"] == {"id": session_id, "state": "pending"}
+                assert _read(client, user, device_id, session_id).status_code == 200
+                assert _runtime_read(client, token, session_id).status_code == 200
+            after_rounds = _screen_backends()
+            # 同时借出上限这么多条：池里的每一条连接都用上一遍，记下它们的 backend 进程号
+            held = []
+            with database.screen_connection_scope(), ExitStack() as stack:
+                for _ in range(database.SCREEN_DB_POOL_MAX):
+                    conn = stack.enter_context(database.get_db_connection())
+                    conn.execute("SELECT pg_backend_pid() AS pid")
+                    held.append(conn.fetchone()["pid"])
+        after_all = _screen_backends()
+        print(f"\n[连接复用] 第一次心跳后 {len(after_first)} 条 {after_first}；之后 {rounds} 轮（每轮心跳、网页轮询、"
+              f"Runtime 轮询各一次）借画面连接 {len(borrowed)} 次，用到 {len(set(borrowed))} 个不同的 backend 进程号；"
+              f"同时借出 {len(held)} 条时用的是 {sorted(held)}；结束时 {len(after_all)} 条 {after_all}")
+        assert len(after_first) == database.SCREEN_DB_POOL_MAX, (
+            f"第一次用到画面后，画面连接池在数据库一侧应当有 {database.SCREEN_DB_POOL_MAX} 条连接，"
+            f"实际 {len(after_first)} 条")
+        assert sorted(held) == after_first
+        assert borrowed and set(borrowed) <= set(after_first), "借到的连接里有不在画面连接池里的：有连接被关掉后重新建了"
+        assert after_rounds == after_first
+        assert after_all == after_first
+
+
+# ---------------------------------------------------------------------------
+# 不支持画面的旧 Runtime：心跳不查画面会话
+# ---------------------------------------------------------------------------
+
+
+class TestLegacyRuntimeSkipsScreenQuery:
+    """不支持画面的旧 Runtime 不可能有画面会话（创建会话时就被拒绝）：心跳不为它查会话，也就不拿名额、不建连接。
+    响应里仍然带 screen_stream 标记（旧设备对照要求除新增字段外不变）。"""
+
+    def test_heartbeats_take_no_permit_and_borrow_no_screen_connection(self, client, users, monkeypatch):
+        from src.local_tools import screen_stream
+
+        user = users[0]
+        _, token = _online_device(client, user, "旧 Runtime 不查画面", screen=False)
+        gate = _GateSpy(screen_stream._connection_gate())
+        monkeypatch.setattr(screen_stream, "_gate", gate)
+        with _screen_borrows() as borrowed:
+            for _ in range(12):
+                body = _heartbeat(client, token)
+                assert "screen_stream" in body and "screen_session" not in body
+        print(f"\n[旧 Runtime 跳过] 12 次心跳：尝试拿名额 {gate.attempts} 次，借画面连接 {len(borrowed)} 次"
+              f"（{len(set(borrowed))} 个不同的数据库连接）")
+        assert (gate.attempts, borrowed) == (0, [])
+
+    def test_heartbeats_do_not_create_the_screen_pool(self, client, users):
+        """还没用到画面（画面连接池没创建）时来心跳：旧设备的心跳不会让它被创建，数据库里也没有画面连接"""
+        from src.db import database
+
+        user = users[0]
+        _, token = _online_device(client, user, "旧 Runtime 不建连接", screen=False)
+        database.close_screen_pool()  # 回到「还没用到画面」的状态；之后第一次用到画面时会重新创建
+        for _ in range(12):
+            _heartbeat(client, token)
+        assert database.get_screen_pool() is None
+        assert _screen_backends() == []
+
+    def test_heartbeat_passes_a_full_gate_without_a_warning(self, client, users):
+        """占用闸被画面请求占满时，旧设备的心跳照常立即 200：它不去过闸，也就不记「画面繁忙」告警"""
+        from loguru import logger
+
+        user = users[0]
+        _, token = _online_device(client, user, "旧 Runtime 过满闸", screen=False)
+        records = []
+        handler = logger.add(lambda message: records.append(message.record), level="WARNING")
+        try:
+            taken = _take_gate()
+            try:
+                started = time.perf_counter()
+                resp = client.post("/api/local-tools/runtime/heartbeat", json={}, headers=_auth(token))
+                elapsed = time.perf_counter() - started
+            finally:
+                _give_back(taken)
+        finally:
+            logger.remove(handler)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["success"] is True and "screen_session" not in resp.json()
+        assert "screen_stream" in resp.json()
+        busy = [record for record in records if "画面繁忙" in record["message"]]
+        print(f"\n[旧 Runtime 过满闸] {resp.status_code}，用时 {elapsed:.3f} 秒，「画面繁忙」告警 {len(busy)} 条")
+        assert busy == [], f"旧设备的心跳不该去过占用闸：{[record['message'] for record in busy]}"
+        assert elapsed < 1.0
+
+    def test_screen_query_follows_the_capabilities_effective_for_this_heartbeat(self, client, users, monkeypatch):
+        """查不查取决于这次心跳生效的能力体，取法与 touch_device_seen 存库时相同：这次上报的能力体非空就用它
+        （哪怕和已保存的不同），否则用设备已保存的"""
+        from src.local_tools import screen_stream
+
+        user = users[0]
+        with_screen = {"provider_id": PROVIDER_ID, "capabilities": ["local_v2", SCREEN_CAPABILITY]}
+        without_screen = {"provider_id": PROVIDER_ID}
+        # 配对成旧设备：已保存的能力不含画面
+        device_id, token = _pair_device(client, user, "能力判定机", screen=False)
+        gate = _GateSpy(screen_stream._connection_gate())
+        monkeypatch.setattr(screen_stream, "_gate", gate)
+        heartbeat = "/api/local-tools/runtime/heartbeat"
+
+        def beat(body):
+            before = gate.attempts
+            resp = client.post(heartbeat, json=body, headers=_auth(token))
+            assert resp.status_code == 200, resp.text
+            return gate.attempts - before
+
+        assert beat({"capabilities": with_screen}) == 1  # 这次上报了含画面的能力体：查
+        assert beat({}) == 1  # 已保存的能力含画面、这次没上报能力体：查
+        assert beat({"capabilities": without_screen}) == 0  # 这次上报的能力体不含画面：不查
+        listed = client.get("/api/local-tools/devices", headers=_auth(user["token"])).json()["devices"]
+        assert next(item for item in listed if item["device_id"] == device_id)["screen_stream"] is False
+
+    @pytest.mark.slow
+    def test_eight_legacy_runtimes_heartbeat_without_touching_the_gate(self, client, users, monkeypatch):
+        """8 台旧 Runtime 每 500 毫秒同时各心跳一次，共 12 轮：全部成功，没有一次去拿过名额"""
+        from src.local_tools import screen_stream
+
+        user = users[0]
+        devices = _legacy_runtimes(client, user)
+        gate = _GateSpy(screen_stream._connection_gate())
+        monkeypatch.setattr(screen_stream, "_gate", gate)
+
+        def make_core_round(live):
+            return lambda: [_heartbeat_step(live, token) for _, token in devices]
+
+        core, _, _ = _storm_once(client, (), _auth(user["token"]), make_core_round)
+        succeeded = sum(ok for _, ok, _ in core)
+        print(f"\n[8 台旧 Runtime 同步心跳] 心跳 {succeeded}/{len(core)}；尝试拿名额 {gate.attempts} 次，"
+              f"其中拿不到 {gate.refused} 次")
+        assert len(core) == STORM_ROUNDS * CORE_DEVICES
+        assert [detail for _, ok, detail in core if not ok] == []
+        assert gate.attempts == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1264,22 +1898,43 @@ class TestEnding:
                                "session": {"id": session_id, "state": "ended", "end_reason": "resource_busy"}}
 
     def test_concurrent_end_from_both_sides(self, client, users):
-        """两端同时结束：会话只结束一次，end_reason 是先到的那一方，另一方幂等成功"""
+        """两端同时结束：会话只结束一次，end_reason 是先到的那一方。
+        名额够两个请求同时处理时（缺省）两端都成功。名额只有 1 个时（SCREEN_DB_POOL_MAX=1），后到的一端会在
+        占用闸上被拒（503 SCREEN_STREAM_BUSY）；被拒的一端再发一次是幂等成功"""
         user = users[0]
         device_id, token = _online_device(client, user, "两端同时结束机")
         session_id = _new_session(client, user, device_id)
         _reach(client, user, device_id, token, session_id, "streaming")
         from src.main import app
 
-        results = _run_together([
-            lambda: _web_end(TestClient(app), user, device_id, session_id).status_code,
-            lambda: _runtime_signal(TestClient(app), token, session_id, "end", {"reason": "runtime_stopped"}).status_code,
-        ])
-        assert sorted(results) == [200, 200]
+        def ends():
+            return {
+                "web": lambda: _web_end(TestClient(app), user, device_id, session_id),
+                "runtime": lambda: _runtime_signal(TestClient(app), token, session_id, "end",
+                                                   {"reason": "runtime_stopped"}),
+            }
+
+        results = dict(_run_together([lambda label=label: (label, end()) for label, end in ends().items()]))
+        statuses = sorted(resp.status_code for resp in results.values())
+        from src.local_tools import screen_stream
+        if screen_stream.gate_capacity() >= 2:
+            # 名额够两个请求同时处理：两端都成功
+            assert statuses == [200, 200], results
+        else:
+            # 名额只有 1 个：后到的一端在占用闸上被拒
+            assert statuses == [200, 503], results
+        for label, resp in results.items():
+            if resp.status_code == 503:
+                assert _detail(resp) == BUSY
         row = _db_session(session_id)
         assert row["state"] == "ended"
         assert row["end_reason"] in {"viewer_closed", "runtime_stopped"}
         assert row["signals"] == []
+        # 被占用闸拒掉的那一端再发一次：幂等成功，会话不再改动
+        for label, end in ends().items():
+            if results[label].status_code == 503:
+                assert end().status_code == 200, label
+                assert _db_session(session_id) == row
 
 
 # ---------------------------------------------------------------------------

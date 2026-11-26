@@ -39,7 +39,7 @@ from src.local_tools.models import (
     StartedRequest,
     WriteAuthorizeRequest,
 )
-from src.local_tools.plugin_manifests import PLUGIN_PHASE
+from src.local_tools.plugin_manifests import PLUGIN_PHASE, client_capabilities
 from src.local_tools.pricing import RESUME_RECOGNITION_TOOL_NAME, resume_recognition_price
 from src.services import recruiting_match_service, resume_vl_service
 from src.services.boss_visual_service import BossVisualRequestBody, RuntimeVisualCaller, diagnose_visual
@@ -444,31 +444,8 @@ async def _screen_stream_call(operation, *args, **kwargs):
         raise _screen_stream_http_error(error) from None
 
 
-async def _screen_permit():
-    """画面接口的占用闸，排在每个画面接口的最前面：占用闸 → 鉴权 → 功能开关 → 业务。
-
-    只把闸放在数据库函数里挡不住成批的同时请求：Runtime 请求的鉴权（_require_device）在进入数据库函数
-    之前就已经借了连接。所以名额在接口入口就拿，覆盖整个请求，鉴权那一次借用也算在名额里。
-    拿不到名额立即返回 503 SCREEN_STREAM_BUSY：这时不做鉴权、画面接口自己不借数据库连接、不记日志。
-    （路由之前的租户中间件照常查一次库，所有带凭据的接口都有这一步；它在事件循环线程上串行执行，
-    同一时刻最多占一个连接，不会成批占用。）
-    所以未登录或没有设备令牌的调用方在闸满时得到的也是 503 而不是 401，这是有意的：只暴露「画面繁忙」。
-    名额在这个依赖的 finally 里归还，处理函数正常返回、抛异常、提前返回都算，只归还一次；
-    请求里调用的画面会话函数带 permit_held=True，不再拿、不再还。
-    这里用 async 生成器：拿名额和归还都是不等待的操作，直接在事件循环线程里做。写成同步生成器的话，
-    这两步都要先排进线程池，线程池紧张时「立即返回 503」和归还名额都会被拖住。
-    设备心跳不走这里：它的画面查询由 heartbeat_notice 自己过闸。
-    """
-    if not screen_stream.acquire_permit():
-        raise _screen_stream_http_error(screen_stream.ScreenStreamError("SCREEN_STREAM_BUSY"))
-    try:
-        yield
-    finally:
-        screen_stream.release_permit()
-
-
 async def _screen_stream_viewer(request: Request) -> tuple:
-    """网页侧画面接口的公共入口：先登录态，再看功能开关（占用闸在它之前的 _screen_permit 里）"""
+    """网页侧画面接口的公共入口：先登录态，再看功能开关（占用闸在它之前的中间件 ScreenStreamGateMiddleware 里）"""
     user, tenant_id = await _current_user_and_tenant(request)
     _require_screen_stream()
     return user, tenant_id
@@ -481,11 +458,10 @@ def _check_screen_session_path(device_id: str, session_id: str) -> None:
 
 
 async def _load_screen_session(scope, session_id, *, viewer, after_seq):
-    """读取会话：不存在或无权访问一律 404，不区分是哪一种。名额已由接口入口持有（_screen_permit）"""
+    """读取会话：不存在或无权访问一律 404，不区分是哪一种"""
     result = await _screen_stream_call(
         screen_stream.load_session, scope, session_id,
         viewer=viewer, after_seq=after_seq, device_offline_seconds=ONLINE_THRESHOLD_SECONDS,
-        permit_held=True,
     )
     if result is None:
         raise _screen_stream_http_error(screen_stream.ScreenStreamError("SCREEN_SESSION_NOT_FOUND"))
@@ -493,36 +469,32 @@ async def _load_screen_session(scope, session_id, *, viewer, after_seq):
 
 
 async def _append_screen_signal(scope, session_id, direction, signal_type, payload):
-    """追加一条信令：不存在或无权访问一律 404。名额已由接口入口持有（_screen_permit）"""
+    """追加一条信令：不存在或无权访问一律 404"""
     result = await _screen_stream_call(
         screen_stream.append_signal, scope, session_id, direction, signal_type, payload,
-        device_offline_seconds=ONLINE_THRESHOLD_SECONDS, permit_held=True,
+        device_offline_seconds=ONLINE_THRESHOLD_SECONDS,
     )
     if result is None:
         raise _screen_stream_http_error(screen_stream.ScreenStreamError("SCREEN_SESSION_NOT_FOUND"))
     return result
 
 
-# 占用闸的依赖放在每个画面接口的签名里：FastAPI 按签名顺序解析依赖，它必须排在 _require_device 之前；
-# 网页接口的鉴权在函数体里，天然在所有依赖之后
 @router.post("/devices/{device_id}/screen-sessions")
-async def create_device_screen_session(device_id: str, request: Request,
-                                      _permit: None = Depends(_screen_permit)):
+async def create_device_screen_session(device_id: str, request: Request):
     """创建实时画面会话：同一设备同一时间只允许一个未结束会话"""
     user, tenant_id = await _screen_stream_viewer(request)
     if not _valid_uuid(device_id):
         raise _screen_stream_http_error(screen_stream.ScreenStreamError("DEVICE_NOT_FOUND"))
     session = await _screen_stream_call(
         screen_stream.create_session, tenant_id, user["user_id"], device_id,
-        device_offline_seconds=ONLINE_THRESHOLD_SECONDS, permit_held=True,
+        device_offline_seconds=ONLINE_THRESHOLD_SECONDS,
     )
     return {"success": True, "session": {**session, "stun_urls": list(settings.screen_stream.stun_urls)}}
 
 
 @router.get("/devices/{device_id}/screen-sessions/{session_id}")
 async def get_device_screen_session(request: Request, device_id: str, session_id: str,
-                                   after_seq: int = Query(0, ge=0),
-                                   _permit: None = Depends(_screen_permit)):
+                                    after_seq: int = Query(0, ge=0)):
     """网页轮询：会话状态和 Runtime 发来的、序号大于 after_seq 的信令"""
     user, tenant_id = await _screen_stream_viewer(request)
     _check_screen_session_path(device_id, session_id)
@@ -534,8 +506,7 @@ async def get_device_screen_session(request: Request, device_id: str, session_id
 
 @router.post("/devices/{device_id}/screen-sessions/{session_id}/signals")
 async def append_device_screen_session_signal(request: Request, device_id: str, session_id: str,
-                                             body: screen_stream.ViewerSignalRequest,
-                                             _permit: None = Depends(_screen_permit)):
+                                              body: screen_stream.ViewerSignalRequest):
     """追加一条网页信令（start / answer / candidate / end）"""
     user, tenant_id = await _screen_stream_viewer(request)
     _check_screen_session_path(device_id, session_id)
@@ -548,8 +519,7 @@ async def append_device_screen_session_signal(request: Request, device_id: str, 
 
 @router.post("/devices/{device_id}/screen-sessions/{session_id}/end")
 async def end_device_screen_session(request: Request, device_id: str, session_id: str,
-                                   body: screen_stream.ViewerEndRequest = Body(default=screen_stream.ViewerEndRequest()),
-                                   _permit: None = Depends(_screen_permit)):
+                                    body: screen_stream.ViewerEndRequest = Body(default=screen_stream.ViewerEndRequest())):
     """网页结束会话（幂等），结束原因固定记 viewer_closed；请求体里的 reason 原样忽略"""
     user, tenant_id = await _screen_stream_viewer(request)
     _check_screen_session_path(device_id, session_id)
@@ -665,20 +635,27 @@ async def runtime_heartbeat(body: HeartbeatRequest, device: Dict = Depends(_requ
         logger.opt(exception=True).error(f"后端日志：设备心跳失败 device={device['id']}: {e}")
         raise _http_error(500, "心跳失败，请稍后重试", e)
     # 画面会话通知放在上面的 try/except 之外：设备更新成功就一定返回成功，
-    # 画面查询自己出错或超时只告警，不会被外层 except 变成 500（设计 4.4）
-    await _attach_screen_session_notice(response, str(device["id"]))
+    # 画面查询自己出错或超时只告警，不会被外层 except 变成 500（设计 4.4）。
+    # 查不查会话按这次心跳生效的能力体判断，取法与上面 touch_device_seen 存库时相同：
+    # 上报的能力体归一化后非空就用它，否则用设备已保存的
+    await _attach_screen_session_notice(
+        response, str(device["id"]), client_capabilities(body.capabilities) or device.get("capabilities_json"))
     return response
 
 
-async def _attach_screen_session_notice(response: Dict[str, Any], device_id: str) -> None:
+async def _attach_screen_session_notice(response: Dict[str, Any], device_id: str, capabilities: Any) -> None:
     """设备更新成功后单独查画面会话通知（契约 2.25），写进心跳响应。
 
+    capabilities 是这次心跳生效的能力体。不支持画面的设备不可能有画面会话（创建会话时就被拒绝）：
+    不为它查会话，也就不拿占用闸的名额、不建画面连接；响应里照常带 screen_stream 标记。
     传画面期间每次心跳都带当前会话，这就是 Runtime 的续期；查询拿不到结果时响应里不带
     screen_session，只表示这一次不续期。日志里只出现设备编号，不出现信令内容。
     """
     if not settings.screen_stream.enabled:
         return
     response["screen_stream"] = {"version": screen_stream.PROTOCOL_VERSION}
+    if not screen_stream.supports_screen_stream(capabilities):
+        return
     try:
         notice = await asyncio.wait_for(
             asyncio.to_thread(screen_stream.heartbeat_notice, device_id,
@@ -703,7 +680,6 @@ async def _attach_screen_session_notice(response: Dict[str, Any], device_id: str
 
 @router.post("/runtime/screen/session")
 async def get_runtime_screen_session(body: screen_stream.RuntimeSessionRequest,
-                                      _permit: None = Depends(_screen_permit),
                                       device: Dict = Depends(_require_device)):
     """Runtime 取会话：状态和网页发来的、序号大于 after_seq 的信令"""
     _require_screen_stream()
@@ -717,7 +693,6 @@ async def get_runtime_screen_session(body: screen_stream.RuntimeSessionRequest,
 
 @router.post("/runtime/screen/signal")
 async def append_runtime_screen_signal(body: screen_stream.RuntimeSignalRequest,
-                                        _permit: None = Depends(_screen_permit),
                                         device: Dict = Depends(_require_device)):
     """Runtime 追加一条信令（prepared / offer / candidate / status / end）"""
     _require_screen_stream()

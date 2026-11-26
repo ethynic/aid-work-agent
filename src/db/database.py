@@ -4,8 +4,10 @@
 """
 
 import os
+import threading
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Generator, Optional, Any
 from urllib.parse import urlparse
@@ -31,6 +33,12 @@ DATABASE_ECHO = os.getenv("DATABASE_ECHO", "false").lower() == "true"
 DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "2"))
 DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "15"))
 
+# 画面专用连接池（Runtime 桌面实时画面）：每个 API 进程一个，缺省 3 个连接。
+# 画面请求的鉴权、画面事务和心跳里的画面查询只用它，不从业务连接池借任何连接，业务连接池的容量全部留给核心请求。
+# 第一次用到画面时才创建，创建时一次建满；之后这些连接一直保持着、反复复用（见 init_screen_pool）。
+# 部署时 PostgreSQL 的连接数预算要加上「API 进程数 × SCREEN_DB_POOL_MAX」。
+SCREEN_DB_POOL_MAX = int(os.getenv("SCREEN_DB_POOL_MAX", "3"))
+
 # 追踪库配置（可观测性数据，独立数据库）
 LOGS_DATABASE_URL = os.getenv("LOGS_DATABASE_URL", "")
 LOGS_DB_POOL_MIN = int(os.getenv("LOGS_DB_POOL_MIN", "1"))
@@ -38,7 +46,10 @@ LOGS_DB_POOL_MAX = int(os.getenv("LOGS_DB_POOL_MAX", "3"))
 
 # 模块级连接池
 _pg_connection_pool = None
+_screen_connection_pool = None
 _logs_connection_pool = None
+# 创建、关闭画面连接池时用：第一次用到画面的可能是好几个线程同时到（包括事件循环线程上租户中间件的查库）
+_screen_pool_lock = threading.Lock()
 
 # 连接池后台健康检查线程
 _pool_health_check_thread = None
@@ -78,8 +89,37 @@ DB_CONFIG = get_database_config()
 
 # 连接池
 
+def _connection_pool_options(application_name: str) -> dict:
+    """建连接池时传给 PostgreSQL 的参数。业务连接池和画面连接池连同一个库，参数相同，
+    只有 application_name 不同（方便在 pg_stat_activity 里区分）"""
+    return {
+        "host": DB_CONFIG["host"],
+        "port": DB_CONFIG["port"],
+        "database": DB_CONFIG["database"],
+        "user": DB_CONFIG["user"],
+        "password": DB_CONFIG["password"],
+        # TCP keepalive：防止空闲连接被防火墙/服务器断开
+        "keepalives": 1,
+        "keepalives_idle": 30,      # 空闲30秒后开始发送keepalive（降低到60→30）
+        "keepalives_interval": 5,   # 每5秒重试（降低到10→5）
+        "keepalives_count": 3,      # 3次无响应则断开（降低到6→3）
+        # 连接超时（降低到5秒，避免长时间阻塞）
+        "connect_timeout": 5,
+        # 语句超时（30秒保护，防止慢查询堆积）
+        "options": "-c statement_timeout=30000",
+        # TCP 层兜底：本环境 keepalives 对在用连接不生效（见下方健康检查注释），
+        # 半开 socket 上的查询会无限阻塞；tcp_user_timeout 让内核在 60s 无 ACK
+        # 后强制断开，使在用连接也能走异常路径而非永挂（Linux libpq 支持）。
+        "tcp_user_timeout": 60000,
+        "application_name": application_name,
+    }
+
+
 def init_postgres_pool(minconn: int = None, maxconn: int = None):
-    """初始化 PostgreSQL 连接池"""
+    """初始化 PostgreSQL 业务连接池。
+
+    画面专用连接池不在这里创建：它到第一次用到画面时才创建（见 init_screen_pool），不用画面的进程不占连接。
+    """
     global _pg_connection_pool
 
     if DB_TYPE != "postgresql":
@@ -95,26 +135,7 @@ def init_postgres_pool(minconn: int = None, maxconn: int = None):
     _pg_connection_pool = pg_pool.ThreadedConnectionPool(
         minconn=minconn,
         maxconn=maxconn,
-        host=DB_CONFIG["host"],
-        port=DB_CONFIG["port"],
-        database=DB_CONFIG["database"],
-        user=DB_CONFIG["user"],
-        password=DB_CONFIG["password"],
-        # TCP keepalive：防止空闲连接被防火墙/服务器断开
-        keepalives=1,
-        keepalives_idle=30,      # 空闲30秒后开始发送keepalive（降低到60→30）
-        keepalives_interval=5,   # 每5秒重试（降低到10→5）
-        keepalives_count=3,      # 3次无响应则断开（降低到6→3）
-        # 连接超时（降低到5秒，避免长时间阻塞）
-        connect_timeout=5,
-        # 语句超时（30秒保护，防止慢查询堆积）
-        options="-c statement_timeout=30000",
-        # TCP 层兜底：本环境 keepalives 对在用连接不生效（见下方健康检查注释），
-        # 半开 socket 上的查询会无限阻塞；tcp_user_timeout 让内核在 60s 无 ACK
-        # 后强制断开，使在用连接也能走异常路径而非永挂（Linux libpq 支持）。
-        tcp_user_timeout=60000,
-        # 应用名称（方便在 pg_stat_activity 中识别）
-        application_name="aid-work-agent"
+        **_connection_pool_options("aid-work-agent"),
     )
     logger.info(f"PostgreSQL 连接池初始化完成: min={minconn}, max={maxconn}")
 
@@ -141,14 +162,12 @@ def _start_pool_health_check_thread():
         while True:
             try:
                 time.sleep(interval)
-                if _pg_connection_pool is not None:
-                    health_check_pool()
+                _health_check_all_pools()
             except Exception as e:
                 # 线程内异常不能让线程退出，记日志后继续
                 logger.warning(f"PostgreSQL 连接池健康检查线程异常（已忽略，继续运行）: {e}")
                 time.sleep(interval)
 
-    import threading
     _pool_health_check_thread = threading.Thread(
         target=_loop, name="pg-pool-health-check", daemon=True
     )
@@ -156,29 +175,115 @@ def _start_pool_health_check_thread():
     logger.info(f"PostgreSQL 连接池健康检查线程已启动，检查间隔: {interval}s")
 
 
+def _health_check_all_pools():
+    """后台健康检查线程每一轮做的事：业务连接池和（已经创建的）画面连接池各查一遍"""
+    if _pg_connection_pool is not None:
+        health_check_pool()
+    if _screen_connection_pool is not None:
+        health_check_pool(_screen_connection_pool)
+
+
 def get_postgres_pool():
     """获取 PostgreSQL 连接池"""
     return _pg_connection_pool
 
 
-def get_pooled_connection(max_retries: int = 2) -> psycopg2.extensions.connection:
+def init_screen_pool():
+    """创建画面专用连接池；已经创建过时什么都不做。
+
+    由 _connection_pool_for_scope 调用：第一次在画面作用域里借连接时才创建，所以不用画面的进程不占连接。
+    可能同时有多个线程（包括事件循环线程上租户中间件的查库）第一次走到这里：用锁加二次检查保证只创建一次。
+
+    创建时一次建满，minconn 与 maxconn 都等于 SCREEN_DB_POOL_MAX。psycopg2 2.9 的连接池只在「空闲连接数小于
+    minconn」时才保留归还的连接，否则直接关闭：minconn 必须等于想要保留的连接数，否则每用完一次就关一条，
+    下一次又要重新做数据库连接握手。创建要连数据库，所以放在锁里做：后来的线程等它建完，拿到的是同一个池。
+    返回这个池：调用方要用它去借连接，不要回过头再读模块变量（中间可能刚好被 close_screen_pool 关掉）。
+    """
+    global _screen_connection_pool
+    if _screen_connection_pool is not None:
+        return _screen_connection_pool
+    with _screen_pool_lock:
+        if _screen_connection_pool is None:
+            _screen_connection_pool = pg_pool.ThreadedConnectionPool(
+                minconn=SCREEN_DB_POOL_MAX,
+                maxconn=SCREEN_DB_POOL_MAX,
+                **_connection_pool_options("aid-work-agent-screen"),
+            )
+            logger.info(f"PostgreSQL 画面连接池创建完成（第一次用到画面）: min={SCREEN_DB_POOL_MAX}, "
+                        f"max={SCREEN_DB_POOL_MAX}")
+    return _screen_connection_pool
+
+
+def get_screen_pool():
+    """获取画面专用连接池；还没用到画面、所以还没创建时是 None。只读，不会触发创建"""
+    return _screen_connection_pool
+
+
+def close_screen_pool():
+    """关闭画面专用连接池（由 close_postgres_pool 调用）；没创建过时什么都不做。
+    关闭后下次用到画面会重新创建"""
+    global _screen_connection_pool
+    with _screen_pool_lock:
+        if _screen_connection_pool is not None:
+            _screen_connection_pool.closeall()
+            _screen_connection_pool = None
+            logger.info("PostgreSQL 画面连接池已关闭")
+
+
+# 画面作用域：一个画面请求的处理期间为真。占用闸中间件放行画面请求时进入作用域（screen_stream.py），
+# 作用域里经 get_db_connection() 借的连接都来自画面专用连接池。ContextVar 的值随上下文复制，
+# 所以请求里经 asyncio.to_thread 和线程池里的同步依赖执行的代码也在作用域里
+_in_screen_scope = ContextVar("aid_work_agent_screen_scope", default=False)
+
+
+def in_screen_scope() -> bool:
+    """当前代码是否运行在画面作用域里（也就是一个画面请求的处理过程中）"""
+    return _in_screen_scope.get()
+
+
+@contextmanager
+def screen_connection_scope() -> Generator[None, None, None]:
+    """进入画面作用域：这一段里经 get_db_connection() 借的连接都来自画面专用连接池。
+
+    调用方必须已经拿到占用闸的名额：名额数等于画面连接池的连接数上限，过了闸就有连接可用。
+    """
+    token = _in_screen_scope.set(True)
+    try:
+        yield
+    finally:
+        _in_screen_scope.reset(token)
+
+
+def _connection_pool_for_scope():
+    """get_db_connection() 这次该用的连接池：画面作用域里是画面连接池（第一次用到时创建），
+    其余情况返回 None（业务连接池）"""
+    if not _in_screen_scope.get():
+        return None
+    return init_screen_pool()
+
+
+def get_pooled_connection(max_retries: int = 2, pool=None) -> psycopg2.extensions.connection:
     """从连接池获取连接，并检查连接有效性
 
     Args:
         max_retries: 最大重试次数，默认 2 次（减少阻塞时间）
+        pool: 从哪个连接池借，缺省是业务连接池。画面连接池由 get_db_connection 按画面作用域选，
+            借的时候指定了池的，归还时要把同一个池传给 return_pooled_connection
     """
-    if _pg_connection_pool is None:
+    if pool is None:
+        pool = _pg_connection_pool
+    if pool is None:
         raise RuntimeError("PostgreSQL 连接池未初始化，请先调用 init_postgres_pool()")
 
     last_error = None
     for attempt in range(max_retries):
-        conn = _pg_connection_pool.getconn()
+        conn = pool.getconn()
 
         # 检查连接是否有效
         try:
             if conn.closed:
                 logger.warning("PostgreSQL 连接已关闭，重新获取 (attempt {}/{}): {}", attempt + 1, max_retries, conn)
-                _pg_connection_pool.putconn(conn, close=True)
+                pool.putconn(conn, close=True)
                 continue
             # 用轻量查询检测连接是否真的活着
             cursor = conn.cursor()
@@ -187,7 +292,7 @@ def get_pooled_connection(max_retries: int = 2) -> psycopg2.extensions.connectio
         except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
             logger.warning("PostgreSQL 连接失效，重新获取 (attempt {}/{}): {}", attempt + 1, max_retries, e)
             try:
-                _pg_connection_pool.putconn(conn, close=True)
+                pool.putconn(conn, close=True)
             except Exception:
                 pass
             last_error = e
@@ -195,7 +300,7 @@ def get_pooled_connection(max_retries: int = 2) -> psycopg2.extensions.connectio
         except Exception as e:
             logger.warning("PostgreSQL 连接检查异常: {}，重新获取 (attempt {}/{})", e, attempt + 1, max_retries)
             try:
-                _pg_connection_pool.putconn(conn, close=True)
+                pool.putconn(conn, close=True)
             except Exception:
                 pass
             last_error = e
@@ -207,24 +312,28 @@ def get_pooled_connection(max_retries: int = 2) -> psycopg2.extensions.connectio
     raise RuntimeError(f"获取数据库连接失败：连续 {max_retries} 次获取到无效连接") from (last_error or Exception("unknown"))
 
 
-def return_pooled_connection(conn, close: bool = False):
+def return_pooled_connection(conn, close: bool = False, pool=None):
     """归还连接到连接池
 
     Args:
         conn: 要归还的连接
         close: 是否关闭并丢弃该连接（用于坏连接）
+        pool: 还到哪个连接池，缺省是业务连接池；必须是借来的那个池
     """
-    if _pg_connection_pool and conn:
-        _pg_connection_pool.putconn(conn, close=close)
+    if pool is None:
+        pool = _pg_connection_pool
+    if pool and conn:
+        pool.putconn(conn, close=close)
 
 
 def close_postgres_pool():
-    """关闭连接池"""
+    """关闭连接池（业务连接池和画面连接池）"""
     global _pg_connection_pool
     if _pg_connection_pool:
         _pg_connection_pool.closeall()
         _pg_connection_pool = None
         logger.info("PostgreSQL 连接池已关闭")
+    close_screen_pool()
 
 
 def _get_logs_db_config() -> dict:
@@ -352,23 +461,27 @@ def get_logs_connection() -> Generator[Any, None, None]:
         _logs_connection_pool.putconn(conn)
 
 
-def _replenish_pool_to_min():
+def _replenish_pool_to_min(pool=None):
     """补充连接池到 minconn 水位（健康检查清理坏连接后调用）
 
     ThreadedConnectionPool 不会主动维持 minconn，清理坏连接后需要手动补齐，
     否则池水位会逐渐下降。在锁内创建连接以避免与 getconn 竞争。
+    pool 缺省是业务连接池；画面连接池由 health_check_pool 传进来。
     """
-    if _pg_connection_pool is None:
+    if pool is None:
+        pool = _pg_connection_pool
+    # 池刚被 close_postgres_pool 关闭（健康检查线程查到一半时碰上关闭）：不再往里补，补了的连接没人关
+    if pool is None or pool.closed:
         return
     try:
-        with _pg_connection_pool._lock:
-            needed = _pg_connection_pool.minconn - len(_pg_connection_pool._pool) - len(_pg_connection_pool._used)
+        with pool._lock:
+            needed = pool.minconn - len(pool._pool) - len(pool._used)
         # 在锁外创建连接（connect 可能阻塞），逐个补齐
         for _ in range(max(0, needed)):
             try:
-                new_conn = _pg_connection_pool._connect()
-                with _pg_connection_pool._lock:
-                    _pg_connection_pool._pool.append(new_conn)
+                # 连接池的 _connect() 不带 key 时自己就把新连接放进了空闲列表，这里不能再加一次：
+                # 加两次的话，同一条连接会被两个线程同时借走
+                pool._connect()
             except Exception as e:
                 logger.warning(f"PostgreSQL 补充连接池失败: {e}")
                 break
@@ -376,13 +489,17 @@ def _replenish_pool_to_min():
         logger.warning(f"PostgreSQL 补充连接池异常: {e}")
 
 
-def health_check_pool() -> dict:
+def health_check_pool(pool=None) -> dict:
     """连接池健康检查：检测并清理坏连接
+
+    pool 缺省是业务连接池；画面连接池由后台健康检查线程传进来。
 
     Returns:
         dict: 包含 healthy/bad 连接数和详细信息
     """
-    if _pg_connection_pool is None:
+    if pool is None:
+        pool = _pg_connection_pool
+    if pool is None:
         return {"initialized": False, "healthy": 0, "bad": 0}
 
     healthy = 0
@@ -393,17 +510,17 @@ def health_check_pool() -> dict:
     # 注意：直接操作 _pool 内部列表。坏连接不能用 putconn(conn, close=True) 回收，
     # 因为 putconn 期望 conn 来自 _used，对 _pool 中的连接会抛 PoolError。
     # 这里直接从 _pool 移除并 close，避免坏连接残留导致下次重复失败。
-    if hasattr(_pg_connection_pool, '_pool') and _pg_connection_pool._pool is not None:
-        with _pg_connection_pool._lock:
-            connections_to_check = list(_pg_connection_pool._pool)
+    if hasattr(pool, '_pool') and pool._pool is not None:
+        with pool._lock:
+            connections_to_check = list(pool._pool)
         for conn in connections_to_check:
             try:
                 if conn.closed:
                     bad += 1
                     bad_details.append("连接已关闭")
-                    with _pg_connection_pool._lock:
-                        if conn in _pg_connection_pool._pool:
-                            _pg_connection_pool._pool.remove(conn)
+                    with pool._lock:
+                        if conn in pool._pool:
+                            pool._pool.remove(conn)
                     try:
                         conn.close()
                     except Exception:
@@ -418,15 +535,15 @@ def health_check_pool() -> dict:
                 bad += 1
                 bad_details.append(str(e)[:100])
                 # 从池中移除坏连接并关闭
-                with _pg_connection_pool._lock:
-                    if conn in _pg_connection_pool._pool:
-                        _pg_connection_pool._pool.remove(conn)
+                with pool._lock:
+                    if conn in pool._pool:
+                        pool._pool.remove(conn)
                 try:
                     conn.close()
                 except Exception:
                     pass
-                # 低于 minconn 时，让池自动补充新连接
-                _replenish_pool_to_min()
+                # 低于 minconn 时补回
+                _replenish_pool_to_min(pool)
 
     result = {
         "initialized": True,
@@ -487,12 +604,16 @@ def get_date_offset(days: int) -> str:
 
 @contextmanager
 def get_db_connection() -> Generator[Any, None, None]:
-    """获取 PostgreSQL 数据库连接的上下文管理器"""
+    """获取 PostgreSQL 数据库连接的上下文管理器。
+
+    画面作用域里从画面专用连接池借，其余情况从业务连接池借；归还到借来的那个池
+    """
     if psycopg2 is None or pg_pool is None:
         raise ImportError("psycopg2 is required. Install with: pip install psycopg2-binary")
 
-    # 从连接池获取连接
-    conn = get_pooled_connection()
+    # 从连接池获取连接（画面作用域里是画面连接池）
+    pool = _connection_pool_for_scope()
+    conn = get_pooled_connection(pool=pool)
 
     # 使用 DictCursor 使 psycopg2 返回字典-like 对象
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -542,7 +663,7 @@ def get_db_connection() -> Generator[Any, None, None]:
         except Exception as rollback_err:
             logger.error(f"后端日志：rollback 失败，连接将被丢弃: {rollback_err}")
             # rollback 失败说明连接已坏，直接关闭丢弃
-            return_pooled_connection(conn, close=True)
+            return_pooled_connection(conn, pool=pool, close=True)
             conn_handled = True
         raise
     finally:
@@ -553,10 +674,10 @@ def get_db_connection() -> Generator[Any, None, None]:
                 conn.rollback()
             except Exception:
                 # rollback 失败则关闭丢弃该连接
-                return_pooled_connection(conn, close=True)
+                return_pooled_connection(conn, pool=pool, close=True)
                 return
             # 归还连接到池而非关闭
-            return_pooled_connection(conn)
+            return_pooled_connection(conn, pool=pool)
 
 
 def _seed_reply_styles():

@@ -1,7 +1,7 @@
 """Runtime 桌面实时画面：会话、信令转交与超时收敛（设计 runtime-screen-stream-design.md 第 3、5 节）
 
 服务器只做三件事：鉴权、记录会话、在两端之间转交建连信令，并通过设备心跳给画面续期；
-画面不经过服务器。本模块放常量、请求模型、纯规则函数和数据库访问，路由在 api.py 里做薄封装。
+画面不经过服务器。本模块放常量、请求模型、纯规则函数、数据库访问和占用闸中间件，路由在 api.py 里做薄封装。
 
 约定：
 - 超时判定全部用数据库时钟：时间戳写 NOW()，比较用同一条 SELECT 带回的 NOW()::timestamp。
@@ -9,23 +9,30 @@
 - 读取会话时顺带收敛超时（SELECT ... FOR UPDATE 后判定并写回），不设后台任务。
 - 每条画面事务的第一条语句是 SET LOCAL，给等锁设上限（见 HEARTBEAT_TIMEOUT_MS、SESSION_LOCK_TIMEOUT_MS）：
   应用层放弃等待并不会停掉线程里的 SQL，只有数据库到点取消语句，连接才会归还（设计 4.4）。
-- 借连接之前先过一道占用闸（见 gate_capacity）：等待上限只管「一个连接被占多久」，管不住
-  「画面请求同时借多少个」；拿不到名额的请求立即让出。画面接口在入口（鉴权之前）就拿名额，
-  名额覆盖整个请求（见 acquire_permit）；设备心跳里的画面查询由 heartbeat_notice 自己过闸。
+- 画面请求只用画面专用连接池（database.get_screen_pool），不从业务连接池借任何连接，业务连接池的容量
+  全部留给核心请求。画面连接池很小，所以画面请求先过一道占用闸，名额数等于画面连接池的连接数上限：
+  ScreenStreamGateMiddleware 挂在最外层（租户中间件之前），拿不到名额的请求立即得到 503；拿到名额的
+  请求在画面作用域里处理，处理期间经 get_db_connection() 借的连接都来自画面连接池。设备心跳里的画面查询
+  不经过中间件，由 heartbeat_notice 自己过闸、自己进入作用域（见 _connection_permit）；不支持画面的设备
+  心跳时不查（见 api._attach_screen_session_notice）。
 - 信令内容只转交和保存，不解析、不写日志；会话结束时清空。
 
 调用方（FastAPI async endpoint）必须用 asyncio.to_thread 包裹，禁止在事件循环内直接调用。
 """
 
 import json
+import re
 import threading
 import uuid
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Annotated, Any, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from psycopg2.extras import Json
+from starlette.responses import JSONResponse
+from starlette.routing import get_route_path
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from src.db import database
 from src.db.database import get_db_connection
@@ -372,28 +379,27 @@ def is_database_timeout(error: BaseException) -> bool:
     return getattr(error, "pgcode", None) in (PG_LOCK_NOT_AVAILABLE, PG_QUERY_CANCELED)
 
 
-# 占用闸：画面请求借数据库连接之前先过的一道进程内信号量。
-# 为什么要有：多人同时查看时，网页和 Runtime 两端的轮询会同步成批，一批借走的连接比连接池还多，
-#   心跳、接单、续租、回执会直接报 connection pool exhausted。上面的等待上限只管「一个连接被占多久」，
-#   管不住「同时借多少个」，所以在它外面再加这道闸：拿不到名额的请求立即让出。
-# 为什么是一半：连接池是每个进程一个，画面再繁忙也最多借走一半，至少给核心请求留下一半。
-# 它不是跨请求的业务状态，只是本进程里「此刻有多少个画面请求正占着连接」的计数。
+# 占用闸：画面请求进入下游（租户中间件、鉴权、画面事务）之前先过的一道进程内信号量。
+# 为什么要有：多人同时查看时，网页和 Runtime 两端的轮询会同步成批；画面连接池很小（缺省 3 个连接），
+#   同时放行的画面请求一多就会把它借空、报 connection pool exhausted。所以名额数等于画面连接池的
+#   连接数上限，过了闸的请求一定有连接可用；拿不到名额的请求立即得到 503，不排队。
+#   画面请求不占业务连接池，所以这道闸只决定画面请求之间谁先谁后，不影响核心请求。
+# 它不是跨请求的业务状态，只是本进程里「此刻有多少个画面请求正占着画面连接池的连接名额」的计数。
 _gate: Optional[threading.Semaphore] = None
 _gate_lock = threading.Lock()
 
 
 def gate_capacity() -> int:
-    """占用闸的容量：连接池上限的一半，向下取整，至少 1 个。
+    """占用闸的容量：画面连接池的连接数上限（database.SCREEN_DB_POOL_MAX），至少 1 个。
 
-    连接池上限从连接池本身读（maxconn）；连接池还没初始化时退到 database.DB_POOL_MAX。
+    只读配置，不读连接池对象：画面连接池到第一次用到画面才创建，读它不能触发创建；
+    它的连接数上限本来也恒等于这个配置。
     """
-    pool = database.get_postgres_pool()
-    pool_max = pool.maxconn if pool is not None else database.DB_POOL_MAX
-    return max(1, pool_max // 2)
+    return max(1, database.SCREEN_DB_POOL_MAX)
 
 
 def _connection_gate() -> threading.Semaphore:
-    """第一次使用时按当时的连接池上限创建，之后复用"""
+    """第一次使用时按当时的画面连接池上限创建，之后复用"""
     global _gate
     with _gate_lock:
         if _gate is None:
@@ -404,8 +410,8 @@ def _connection_gate() -> threading.Semaphore:
 def acquire_permit() -> bool:
     """非阻塞地拿一个占用闸名额：拿到返回 True；拿不到立即返回 False，不排队、不等待、不借连接。
 
-    画面接口在入口（鉴权之前）调用它，名额覆盖整个请求，请求处理结束时用 release_permit 归还。
-    只把闸放在数据库函数里挡不住成批的同时请求：Runtime 请求的鉴权在进入数据库函数之前就已经借了连接。
+    ScreenStreamGateMiddleware 在画面请求入口调用它，名额覆盖整个请求，请求结束时用 release_permit 归还；
+    不经过中间件的调用方（设备心跳里的画面查询）由 _connection_permit 自己拿、自己还。
     """
     return _connection_gate().acquire(blocking=False)
 
@@ -415,31 +421,92 @@ def release_permit() -> None:
     _connection_gate().release()
 
 
+# 六个画面接口的路由路径，路径里的编号用通配。占用闸中间件按它判断一个请求是不是画面请求；
+# 单元测试把它套到本地工具路由的全部路由上，确认匹配到的恰好是这六个接口
+_SCREEN_PATH = re.compile(
+    r"^/api/local-tools/(?:"
+    r"devices/[^/]+/screen-sessions(?:/[^/]+(?:/signals|/end)?)?"  # 创建；读取；追加信令；结束
+    r"|runtime/screen/(?:session|signal)"                         # Runtime 取会话；Runtime 追加信令
+    r")$"
+)
+
+
+def is_screen_path(path: str) -> bool:
+    """这个路由路径是不是六个画面接口之一"""
+    return _SCREEN_PATH.match(path) is not None
+
+
+async def busy_response(scope: Scope, receive: Receive, send: Send) -> None:
+    """占用闸拒绝请求时发出的响应：一个最小的 ASGI 应用，回 503 SCREEN_STREAM_BUSY。
+    响应体与画面接口自己抛出这个错误时（路由层的 HTTPException）完全一致"""
+    error = ScreenStreamError("SCREEN_STREAM_BUSY")
+    response = JSONResponse(
+        status_code=error.status,
+        content={"detail": {"error": error.message, "code": error.code, "debug": ""}},
+    )
+    await response(scope, receive, send)
+
+
+class ScreenStreamGateMiddleware:
+    """实时画面请求的占用闸（纯 ASGI 中间件），挂在最外层、租户中间件之前。
+
+    - 不是画面接口的请求：原样交给下游，不拿名额。
+    - 是画面接口：非阻塞地拿名额。拿不到：立即回 503 SCREEN_STREAM_BUSY，不调用下游、不碰数据库、
+      不进入画面作用域。所以未登录或没有设备令牌的调用方在闸满时得到的也是 503 而不是 401，
+      这是有意的：只暴露「画面繁忙」。被拒的请求也不让租户中间件白查一次库。
+    - 拿到：进入画面作用域后调用下游，请求结束（正常返回、抛异常、任务被取消都算）时归还名额，恰好一次。
+      下游里所有经 get_db_connection() 的数据库访问（包括租户中间件查租户那一次）都走画面专用连接池。
+
+    busy_app 用来产生被拒时的响应，缺省是 busy_response；main.py 给它包一层 CORS，跨域部署时网页才读得到这个 503。
+    """
+
+    def __init__(self, app: ASGIApp, *, busy_app: Optional[ASGIApp] = None) -> None:
+        self.app = app
+        self.busy_app = busy_app if busy_app is not None else busy_response
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        # 用路由路径判断：它去掉了 root_path（反向代理的前缀），和路由表里的路径一致
+        if scope["type"] != "http" or not is_screen_path(get_route_path(scope)):
+            await self.app(scope, receive, send)
+            return
+        if not acquire_permit():
+            await self.busy_app(scope, receive, send)
+            return
+        try:
+            with database.screen_connection_scope():
+                await self.app(scope, receive, send)
+        finally:
+            release_permit()
+
+
 @contextmanager
 def _connection_permit() -> Iterator[None]:
-    """占用闸的名额：非阻塞地拿，拿不到立即让出（抛 SCREEN_STREAM_BUSY）。
+    """画面数据库函数的入口：占着一个占用闸名额，在画面作用域里执行（也就是从画面连接池借连接）。
 
-    无论正常返回、提前返回还是抛异常，名额都会归还。
+    请求经占用闸中间件进来时（画面接口），名额和作用域都由中间件管：这里直接放行。
+    其余调用方（设备心跳里的画面查询，或者直接调用）不在画面作用域里：这里自己拿名额，拿不到立即让出
+    （抛 SCREEN_STREAM_BUSY）；拿到后进入画面作用域，结束时归还名额。
     """
+    if database.in_screen_scope():
+        yield
+        return
     if not acquire_permit():
         raise ScreenStreamError("SCREEN_STREAM_BUSY")
     try:
-        yield
+        with database.screen_connection_scope():
+            yield
     finally:
         release_permit()
 
 
 @contextmanager
-def _session_transaction(*, permit_held: bool = False) -> Iterator[Tuple[Any, Any]]:
-    """网页和 Runtime 的画面会话事务，产出 (conn, cursor)。
+def _session_transaction() -> Iterator[Tuple[Any, Any]]:
+    """网页和 Runtime 的画面会话事务，产出 (conn, cursor)。先过占用闸（_connection_permit），再借连接。
 
-    permit_held=False（直接调用，比如单元测试）：这里自己过占用闸、自己归还。
-    permit_held=True（画面接口调用）：请求在接口入口已经拿了名额，这里不再拿、不再还，
-    否则一次请求要占两个名额。
     借到连接后的第一条语句给等锁设上限：会话行被长期占住时，两端每 500 毫秒一次的轮询会各占一个
-    连接等锁，同样能把连接池占满。等锁超时（55P03）转成 SCREEN_STREAM_BUSY；其他异常原样抛出。
+    连接等锁，同样能把画面连接池占满。等锁超时（55P03）转成 SCREEN_STREAM_BUSY；其他异常原样抛出。
     """
-    with nullcontext() if permit_held else _connection_permit():
+    with _connection_permit():
         try:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -491,14 +558,9 @@ def _visible_signals(row: Dict[str, Any], direction: str, after_seq: int) -> Lis
     ]
 
 
-def create_session(
-    tenant_id: str, user_id: str, device_id: str, *, device_offline_seconds: int, permit_held: bool = False,
-) -> Dict[str, Any]:
-    """网页创建会话：锁住设备行后依次校验归属、在线、能力、没有未结束会话，再插入 pending 会话。
-
-    permit_held：请求是否已经在接口入口拿了占用闸的名额，含义见 _session_transaction。
-    """
-    with _session_transaction(permit_held=permit_held) as (conn, cursor):
+def create_session(tenant_id: str, user_id: str, device_id: str, *, device_offline_seconds: int) -> Dict[str, Any]:
+    """网页创建会话：锁住设备行后依次校验归属、在线、能力、没有未结束会话，再插入 pending 会话"""
+    with _session_transaction() as (conn, cursor):
         cursor.execute(
             """SELECT last_seen_at, capabilities_json, NOW()::timestamp AS db_now
                FROM local_tool_devices
@@ -539,14 +601,10 @@ def load_session(
     viewer: bool,
     after_seq: int = 0,
     device_offline_seconds: int,
-    permit_held: bool = False,
 ) -> Optional[Dict[str, Any]]:
-    """读取会话（网页轮询或 Runtime 取信令）：收敛超时、刷新访问方的时间，返回会话和对方发来的新信令。
-
-    permit_held：请求是否已经在接口入口拿了占用闸的名额，含义见 _session_transaction。
-    """
+    """读取会话（网页轮询或 Runtime 取信令）：收敛超时、刷新访问方的时间，返回会话和对方发来的新信令"""
     caller, peer = (DIR_WEB, DIR_RT) if viewer else (DIR_RT, DIR_WEB)
-    with _session_transaction(permit_held=permit_held) as (conn, cursor):
+    with _session_transaction() as (conn, cursor):
         row = _lock_session(cursor, scope, session_id, device_offline_seconds)
         if row is None:
             return None
@@ -564,15 +622,13 @@ def append_signal(
     payload: Dict[str, Any],
     *,
     device_offline_seconds: int,
-    permit_held: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """追加一条信令并应用状态流转。
 
     返回 {"seq": 新信令的序号, "session": 会话}。end 不占信令存储（会话结束时信令清空），
     seq 为 None；对已结束的会话再发 end 幂等成功，不改任何数据。
-    permit_held：请求是否已经在接口入口拿了占用闸的名额，含义见 _session_transaction。
     """
-    with _session_transaction(permit_held=permit_held) as (conn, cursor):
+    with _session_transaction() as (conn, cursor):
         row = _lock_session(cursor, scope, session_id, device_offline_seconds)
         if row is None:
             return None
@@ -613,9 +669,9 @@ _NOTICE_RENEW_SQL = """
 
 
 def heartbeat_notice(device_id: str, *, device_offline_seconds: int) -> Optional[Dict[str, Any]]:
-    """心跳里的画面会话通知（设计 5.1）：先过占用闸，再设等待上限，然后执行一到两条按索引的语句。
+    """心跳里的画面会话通知（设计 5.1）：先过占用闸、进入画面作用域，再设等待上限，然后执行一到两条按索引的语句。
 
-    占用闸已满（画面请求同时借走的连接到了上限）时不去借连接，抛 ScreenStreamError("SCREEN_STREAM_BUSY")：
+    占用闸已满（画面请求正占着画面连接池的全部名额）时不去借连接，抛 ScreenStreamError("SCREEN_STREAM_BUSY")：
     路由层据此只记一条告警，这次心跳不带会话通知，不算失败。
     续期和收敛要更新会话行，可能等行锁。等锁超过 HEARTBEAT_TIMEOUT_MS 毫秒由数据库取消语句（55P03，
     语句超时是 57014），异常照常抛出、连接随之归还，路由层按「查询超时」处理。不设这个上限的话，
