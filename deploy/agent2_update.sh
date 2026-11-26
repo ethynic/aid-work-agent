@@ -96,6 +96,11 @@ fi
 #         重定向时会灌出数千行发布日志
 #      b) pip 依赖安装转后台（[7.5]）与前端编译等待并行：两段互不依赖，
 #         总时长取 max(前端等待, pip) 而非相加；失败仍汇总告警
+#      c) 前端校验链拆双通道并行：typecheck/边界检查（门禁）与 vite build/
+#         产物校验（产出 dist.new）互不依赖，墙钟时间取 max(两通道)，
+#         两通道都通过才切换 dist，门禁不放松
+#      d) 脚本自更新重入：检出后脚本内容变化即 exec 重启自身执行新版
+#         （AID_DEPLOY_RERUN=1 守卫防死循环），发布不再需要手动跑两遍
 # ==============================================================================
 
 set -e
@@ -122,6 +127,12 @@ fi
 echo "=========================================="
 echo "  AI 数字员工系统（测试） - 快速更新"
 echo "=========================================="
+
+# 发布脚本自更新机制（2026-11-26）：检出目标版本后若脚本自身内容已变化，
+# exec 重启自身执行新版——避免整轮发布跑在旧解析代码上、需要手动跑两遍。
+# AID_DEPLOY_RERUN=1 守卫只允许重入一次，杜绝死循环；脚本未变化不重入。
+SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+SCRIPT_SELF_HASH=$(sha256sum "$SCRIPT_PATH" 2>/dev/null | cut -d' ' -f1 || true)
 
 FRONTEND_DIR="/var/www/agent2/frontend"
 DIST_DIR="$FRONTEND_DIR/dist"
@@ -193,6 +204,14 @@ if ! git checkout --detach --no-overwrite-ignore "$TARGET_SHA"; then
 fi
 echo "更新后版本: $(git log -1 --format='%cd %s' --date='format:%Y-%m-%d %H:%M:%S')"
 NEW_HEAD=$(git rev-parse HEAD)
+# 自更新重入：脚本文件随本次检出变化 -> exec 新版（重入后再比较必然相同，
+# 且 AID_DEPLOY_RERUN 守卫兜底，不会死循环）
+NEW_SELF_HASH=$(sha256sum "$SCRIPT_PATH" 2>/dev/null | cut -d' ' -f1 || true)
+if [ "${AID_DEPLOY_RERUN:-0}" != "1" ] && [ -n "$SCRIPT_SELF_HASH" ] \
+   && [ "$NEW_SELF_HASH" != "$SCRIPT_SELF_HASH" ]; then
+    echo "[1.2] 发布脚本已随本次更新变化，exec 重启以执行新版脚本（仅重入一次）..."
+    AID_DEPLOY_RERUN=1 exec bash "$SCRIPT_PATH" "$@"
+fi
 find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 
 # 1.1 清除 Python 字节码缓存（避免旧代码运行）
@@ -220,19 +239,26 @@ step_done "npm"
 #    代价：类型/边界错误时后端已重启（多一次服务重启），属可接受取舍。
 #    build 用 npx vite build --outDir（npm run build 是复合命令，追加 --outDir
 #    会透传给最后的 verify 脚本导致误解析）
-echo "[3] 前端校验 + 编译 dist.new（后台，与后端重启并行）..."
+# 双通道并行（2026-11-26）：串行链 ~83s 是发布最大单项。typecheck/边界检查是
+# 门禁（不产出 dist），vite build/产物校验产出 dist.new——两通道互不依赖，
+# 拆分后墙钟时间 = max(两通道)。两通道都必须通过才允许切换 dist（门禁不放松）；
+# 代价：typecheck 失败时 build 已跑完（白编译一次），属可接受取舍。
+echo "[3] 前端校验 + 编译 dist.new（双通道后台，与后端重启并行）..."
 sudo rm -rf "$DIST_DIR.new"
 mkdir -p "$(dirname "$BUILD_LOG")"
 (
   docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm run typecheck \
   && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
-      node scripts/check-dependency-boundaries.mjs --scope=web \
-  && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+      node scripts/check-dependency-boundaries.mjs --scope=web
+) > "$BUILD_LOG.a" 2>&1 &
+LANE_A_PID=$!
+(
+  docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
       npx vite build --outDir dist.new \
   && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
       node scripts/verify-web-build.mjs /app/dist.new
-) > "$BUILD_LOG" 2>&1 &
-FRONTEND_PID=$!
+) > "$BUILD_LOG.b" 2>&1 &
+LANE_B_PID=$!
 step_done "前端后台"
 
 # 5. 后端重启（与前端编译并行）。
@@ -381,9 +407,13 @@ PIP_TMPDIR=$(mktemp -d)
 PIP_PID=$!
 step_done "pip后台启动"
 
-echo "[8] 等待前端编译完成..."
-if ! wait "$FRONTEND_PID"; then
-  echo "  错误：前端编译失败，详见 $BUILD_LOG"
+echo "[8] 等待前端校验与编译完成..."
+# 两个通道都要等（避免遗留孤儿进程），任一失败即中止且不切换 dist
+LANE_FAIL=""
+if ! wait "$LANE_A_PID"; then LANE_FAIL="typecheck/边界检查"; fi
+if ! wait "$LANE_B_PID"; then LANE_FAIL="${LANE_FAIL:+$LANE_FAIL }vite构建/产物校验"; fi
+if [ -n "$LANE_FAIL" ]; then
+  echo "  错误：前端失败环节 [$LANE_FAIL]，详见 $BUILD_LOG.a / $BUILD_LOG.b"
   echo "  后端已更新但前端仍为旧版本，请检查后重跑本脚本"
   exit 1
 fi
