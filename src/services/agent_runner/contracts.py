@@ -67,6 +67,14 @@ class SessionQuery(BaseModel):
         extra = "forbid"
 
 
+class RunnerCancelRequest(BaseModel):
+    """取消请求（可选 body）：reason 记录取消来源供观测投影（如渠道侧新消息
+    取代在途执行 -> superseded_by_new_message）；用户主动停止不传，投影不变。"""
+    reason: Optional[str] = Field(default=None, max_length=64)
+    class Config:
+        extra = "forbid"
+
+
 class RunnerSubmit(SessionQuery):
     client_request_id: str = Field(min_length=1, max_length=128)
     text: str = Field(max_length=1_000_000)

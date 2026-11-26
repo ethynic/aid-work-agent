@@ -184,3 +184,151 @@ def test_finalize_retry_legacy_cancelled_without_marker_keeps_cancelled():
         worker._persist_trace(collector, "runner-1", _control(), finalization_retry=True)
 
     assert mock_update.call_args.kwargs["status"] == "cancelled"
+
+
+# ============================================================
+# superseded 投影（2026-11-26，web_c trace 2f41da/356b58 调查）：
+# 渠道新消息取代在途执行（runner_agent.submit supersede）-> repository.cancel
+# 写 checkpoint.cancel_reason -> _persist_trace 投影 'superseded'。
+# ============================================================
+
+
+def test_persist_trace_superseded_projects_superseded():
+    """渠道取代收尾（cancel_only claim 路径）：cancelled + cancel_reason -> 投影 superseded。"""
+    runner = {
+        "status": "cancelled",
+        "result": {"status": "cancelled", "output": ""},
+        "checkpoint": {"finalization_intent": "cancel_only",
+                       "cancel_only_from_status": "running",
+                       "cancel_reason": "superseded_by_new_message"},
+        "record_id": "record-1",
+    }
+    worker = _worker(runner)
+    collector = _collector()
+    with patch("src.core.trace_persist.update_completion") as mock_update:
+        worker._persist_trace(collector, "runner-1", _control(), finalization_retry=True)
+
+    assert mock_update.call_args.kwargs["status"] == "superseded"
+
+
+def test_persist_trace_superseded_engine_path_sets_collector_status():
+    """engine 优雅取消路径（非 finalization_retry）：collector.trace.status 投影 superseded。"""
+    runner = {
+        "status": "cancelled",
+        "result": {"status": "cancelled", "output": ""},
+        "checkpoint": {"execution": {}, "cancel_reason": "superseded_by_new_message"},
+        "record_id": "record-1",
+        "attempt": 2,
+    }
+    worker = _worker(runner)
+    collector = _collector()
+    with patch("src.db.models.ChatRecordDB") as mock_db:
+        mock_db.get_by_id.return_value = None
+        worker._persist_trace(collector, "runner-1", _control(), finalization_retry=False)
+
+    assert collector.trace.status == "superseded"
+    collector.on_complete.assert_called_once()
+
+
+def test_persist_trace_user_stop_without_reason_keeps_cancelled():
+    """用户主动停止（无 cancel_reason）：不误伤，保持 cancelled。"""
+    runner = {
+        "status": "cancelled",
+        "result": {"status": "cancelled", "output": ""},
+        "checkpoint": {"execution": {}},
+        "record_id": "record-1",
+    }
+    worker = _worker(runner)
+    collector = _collector()
+    with patch("src.core.trace_persist.update_completion") as mock_update:
+        worker._persist_trace(collector, "runner-1", _control(), finalization_retry=True)
+
+    assert mock_update.call_args.kwargs["status"] == "cancelled"
+
+
+def test_preserve_server_checkpoint_keeps_cancel_reason():
+    """engine 保存 checkpoint 跨写保留 cancel_reason（repository.cancel 写入不被覆盖）。"""
+    from src.services.agent_runner.execution_repository import _preserve_server_checkpoint
+
+    row = {"checkpoint": {"cancel_reason": "superseded_by_new_message",
+                          "automatic_local_cancel": True}}
+    saved = _preserve_server_checkpoint(row, {"execution": {"iteration": 3}})
+    assert saved["cancel_reason"] == "superseded_by_new_message"
+    assert saved["automatic_local_cancel"] is True
+    assert saved["execution"] == {"iteration": 3}
+
+    # 无标记的普通保存不注入
+    assert "cancel_reason" not in _preserve_server_checkpoint({"checkpoint": {}}, {})
+
+
+def _run_cancel(row, reason):
+    """驱动 RunnerRepository.cancel，捕获 UPDATE checkpoint 片段与参数。"""
+    from src.services.agent_runner.repository import RunnerRepository
+
+    repo = object.__new__(RunnerRepository)
+    repo.assert_owner = lambda *args, **kwargs: None
+    captured = []
+    updates = {"checkpoint_update": None}
+    # fetchone 序列：SELECT FOR UPDATE -> UPDATE RETURNING -> resume UPDATE RETURNING
+    responses = iter([dict(row),
+                      dict(row, status="cancelled", cancel_requested=True),
+                      dict(row, status="cancelled", cancel_requested=True)])
+
+    class Cursor:
+        def execute(self, sql, params=()):
+            captured.append((sql, params))
+            if "UPDATE agent_runners SET cancel_requested=TRUE" in sql or (
+                    "SET status='cancelled'" in sql and "checkpoint" in sql):
+                updates["checkpoint_update"] = (sql, params)
+
+        def fetchone(self):
+            return next(responses, None)
+
+    conn = MagicMock()
+    conn.cursor.return_value = Cursor()
+
+    @contextmanager
+    def factory():
+        yield conn
+
+    repo.connection_factory = factory
+    with patch("src.services.agent_runner.repository.EventRepository") as mock_events, \
+            patch("src.services.agent_runner.control_repository.close_pending_controls"):
+        mock_events.notify_in_tx.side_effect = lambda cursor, before, after=None: after
+        repo.cancel({"principal": True}, "runner-1", reason=reason)
+    return updates["checkpoint_update"]
+
+
+def test_repository_cancel_running_writes_reason_checkpoint():
+    """running 取消带 reason：checkpoint 写入 cancel_reason（与 automatic 标记合成单表达式）。"""
+    row = {"runner_id": "runner-1", "status": "running", "cancel_requested": False,
+           "checkpoint": {}, "session_kind": "channel", "source": "web_c",
+           "worker_id": "w", "lease_until": None}
+    sql, params = _run_cancel(row, reason="superseded_by_new_message")
+    assert "ARRAY['cancel_reason']" in sql
+    # 占位符顺序：automatic -> CANCEL_CHECKPOINT_KEY -> reason -> runner_id
+    from src.services.agent_runner.auto_local_recovery import CANCEL_CHECKPOINT_KEY
+    assert params[0] is False and params[1] == CANCEL_CHECKPOINT_KEY
+    assert params[-2] == "superseded_by_new_message"
+    assert params[-1] == "runner-1"
+
+
+def test_repository_cancel_running_without_reason_keeps_original_sql():
+    """无 reason（用户停止）：SQL 不引入 cancel_reason，既有参数序不变。"""
+    row = {"runner_id": "runner-1", "status": "running", "cancel_requested": False,
+           "checkpoint": {}, "session_kind": "channel", "source": "web_c",
+           "worker_id": "w", "lease_until": None}
+    sql, params = _run_cancel(row, reason=None)
+    assert "cancel_reason" not in sql
+    assert params[-1] == "runner-1"
+    assert len(params) == 3
+
+
+def test_repository_cancel_queued_writes_reason_checkpoint():
+    """queued 直接取消带 reason：checkpoint 写入 cancel_reason（NULL 兜底 COALESCE）。"""
+    row = {"runner_id": "runner-1", "status": "queued", "cancel_requested": False,
+           "checkpoint": None, "session_kind": "channel", "source": "web_c"}
+    sql, params = _run_cancel(row, reason="superseded_by_new_message")
+    assert "ARRAY['cancel_reason']" in sql
+    assert params[-2] == "superseded_by_new_message"
+    assert "COALESCE" in sql

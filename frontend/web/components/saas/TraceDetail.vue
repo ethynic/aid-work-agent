@@ -392,13 +392,13 @@ function spanIconClass(span: SpanDetail): string {
 function statusClass(status: string): string {
   if (status === 'completed') return 'bg-success-100 text-success-700'
   if (status === 'failed') return 'bg-danger-100 text-danger-700'
-  if (['cancelled', 'interrupted', 'waiting', 'paused'].includes(status)) return 'bg-warning-100 text-warning-700'
+  if (['cancelled', 'interrupted', 'superseded', 'waiting', 'paused'].includes(status)) return 'bg-warning-100 text-warning-700'
   return 'bg-info-100 text-info-700'
 }
 
 function statusLabel(status: string): string {
   const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '已取消', running: '运行中',
-    interrupted: '已中断', waiting: '等待用户回复', paused: '已暂停' }
+    interrupted: '已中断', superseded: '被新消息取代', waiting: '等待用户回复', paused: '已暂停' }
   return map[status] || status
 }
 

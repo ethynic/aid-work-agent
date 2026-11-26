@@ -162,6 +162,28 @@ def _automatic_cancel_output(checkpoint):
     return None
 
 
+SUPERSEDED_CANCEL_REASON = 'superseded_by_new_message'
+
+
+def _project_trace_status(runner):
+    """obs_traces 状态还原（2026-11-25/26，设计 runner-interrupt-observability-design.md §2）：
+
+    agent_runners 终态机保持 cancelled 不动，仅观测投影还原执行事实：
+    - cancel_only 收尾来源 interrupted -> 'interrupted'（系统中断，非用户取消）；
+    - cancel_reason=superseded_by_new_message（渠道新消息取代在途执行）-> 'superseded'。
+    用户主动停止（无 reason）与 waiting/paused 取消保持 cancelled 不变。
+    """
+    status = runner['status']
+    if status != 'cancelled':
+        return status
+    checkpoint = runner.get('checkpoint') or {}
+    if checkpoint.get('cancel_reason') == SUPERSEDED_CANCEL_REASON:
+        return 'superseded'
+    if checkpoint.get('cancel_only_from_status') == 'interrupted':
+        return 'interrupted'
+    return status
+
+
 def execution_result(state, status=None, error_code=None):
     if state is None:
         return {'status':status or 'failed','output':'','images':[], 'messages':[], 'error_code':error_code}
@@ -773,7 +795,7 @@ class RunnerWorker:
                 # has a distinct ID; the old finally must also avoid projecting
                 # that newer attempt's totals into its stale collector.
                 return
-            collector.trace.status = runner['status']
+            collector.trace.status = _project_trace_status(runner)
             result = runner.get('result') or {}
             collector.trace.output = result.get('output') or control.snapshot.get('output') or ''
             # 失败终态把 runner result.error_code（如 ITERATION_LIMIT）投影进
@@ -803,20 +825,15 @@ class RunnerWorker:
                 return
             if finalization_retry:
                 from src.core.trace_persist import update_completion
-                # 中断投影（2026-11-25，设计 runner-interrupt-observability-design.md §2）：
-                # interrupted 行经 cancel_only finalization 落终态 cancelled（渠道
-                # _cancel_and_wait 收尾/中断清理），obs_traces 若照抄会被标成
-                # 「用户取消」——wecom_kf 等渠道根本没有用户取消入口，排查误导
-                # （聊易 trace 1c300ad9 事故）。claim 已记录 cancel_only_from_status，
-                # 此处把系统中断还原为 interrupted；用户取消 waiting/paused 不受影响。
-                # 投影 interrupted 后 update_completion 的 error_message CASE 走
-                # ELSE 保留分支，中断当轮写入的 EXECUTION_INTERRUPTED 不再被清空。
-                _trace_status = runner['status']
-                _final_checkpoint = runner.get('checkpoint') or {}
-                if (_trace_status == 'cancelled'
-                        and _final_checkpoint.get('cancel_only_from_status') == 'interrupted'):
-                    _trace_status = 'interrupted'
-                update_completion(collector.trace.trace_id,status=_trace_status,output=collector.trace.output,
+                # 中断/取代投影（2026-11-25 设计 runner-interrupt-observability-design.md §2
+                # + 2026-11-26 superseded 扩展）：obs_traces 照抄 agent_runners 终态会被
+                # 标成「用户取消」误导排查。两类还原（_project_trace_status 统一口径，
+                # 非 finalization_retry 分支的 collector.on_complete 同样受益）：
+                # ① interrupted 行经 cancel_only finalization（渠道收尾）还原为 interrupted，
+                #   error_message CASE 走 ELSE 保留 EXECUTION_INTERRUPTED；
+                # ② 渠道新消息取代在途执行（cancel_reason=superseded_by_new_message）
+                #   还原为 superseded（被新消息取代），用户主动停止（无 reason）不变。
+                update_completion(collector.trace.trace_id,status=collector.trace.status,output=collector.trace.output,
                     duration_ms=((runner.get('checkpoint') or {}).get('pending_finalization') or {}).get('duration_ms',0),
                     error_message=error_code)
                 return

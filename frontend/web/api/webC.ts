@@ -235,6 +235,14 @@ export function getRunner(
   return request(identityPath(tenantId, configId, identity, `/runners/${encodeURIComponent(runnerId)}`))
 }
 
+/** 会话活跃执行查询：刷新/重进后恢复观察用（无活跃执行时 runner_id 为 null） */
+export function getActiveRunner(
+  tenantId: string, configId: string, identity: IdentityQuery, sessionId: string
+): Promise<{ success: boolean; runner_id: string | null; status: string | null }> {
+  return request(identityPath(tenantId, configId, identity,
+    `/sessions/${encodeURIComponent(sessionId)}/active-runner`))
+}
+
 export interface SessionSummary {
   session_id: string
   subagent_id: string

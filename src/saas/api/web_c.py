@@ -675,6 +675,29 @@ async def get_runner(tenant_id: str, config_id: str, runner_id: str, request: Re
     return {"success": True, "runner": row}
 
 
+@router.get("/{tenant_id}/{config_id}/sessions/{session_id}/active-runner")
+@_guard
+async def get_session_active_runner(tenant_id: str, config_id: str, session_id: str, request: Request):
+    """会话当前活跃执行查询（刷新/重进后前端恢复观察用）。
+
+    场景：页面刷新/微信切后台回收后重进，前端丢失在途执行感知（submitting 复位、
+    输入框可用、看不到进度），用户误以为卡住再发新消息会触发渠道侧 supersede
+    取消在途执行。本端点返回可接管的活跃 runner；waiting 不返回——反问已落
+    历史消息，回复走新消息 reply 通道，接管反而会挡住输入框。
+    归属校验：本端 DB 会话归属 + Runner 侧渠道身份过滤双重约束。
+    """
+    identity = _resolve_identity(request, tenant_id, config_id)
+    _assert_session_owned(identity, session_id)
+    page = await _runner_client().request(
+        "GET", "/v1/sessions/channel/" + quote(session_id, safe=""), authorization=None,
+        channel_source="web_c", channel_user=identity.channel_user_id,
+        params={"source": "web_c"})
+    for row in page.get("active_runners") or []:
+        if row.get("status") in ("running", "finalizing", "queued"):
+            return {"success": True, "runner_id": row.get("runner_id"), "status": row.get("status")}
+    return {"success": True, "runner_id": None, "status": None}
+
+
 @router.get("/{tenant_id}/{config_id}/runners/{runner_id}/events")
 @_guard
 async def runner_events(tenant_id: str, config_id: str, runner_id: str, request: Request,

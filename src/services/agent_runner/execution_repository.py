@@ -19,6 +19,11 @@ def _preserve_server_checkpoint(row, checkpoint):
     # The user can stop an automatic recovery while its Worker is saving progress.
     if (row.get('checkpoint') or {}).get(CANCEL_CHECKPOINT_KEY) is True:
         checkpoint = {**checkpoint, CANCEL_CHECKPOINT_KEY: True}
+    # 取消来源标记（repository.cancel 写入）：跨 engine 保存保留，供
+    # worker._persist_trace 观测投影（superseded）读取。
+    cancel_reason = (row.get('checkpoint') or {}).get('cancel_reason')
+    if cancel_reason:
+        checkpoint = {**checkpoint, 'cancel_reason': cancel_reason}
     return checkpoint
 
 

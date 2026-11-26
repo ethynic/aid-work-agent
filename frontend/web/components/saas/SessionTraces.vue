@@ -108,13 +108,13 @@ function goToDetail(traceId: string) {
 function statusClass(status: string): string {
   if (status === 'completed') return 'bg-success-100 text-success-700'
   if (status === 'failed') return 'bg-danger-100 text-danger-700'
-  if (status === 'cancelled' || status === 'interrupted') return 'bg-warning-100 text-warning-700'
+  if (status === 'cancelled' || status === 'interrupted' || status === 'superseded') return 'bg-warning-100 text-warning-700'
   return 'bg-info-100 text-info-700'
 }
 
 function statusLabel(status: string): string {
   const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '用户取消', interrupted: '执行中断',
-    running: '运行中', waiting: '等待用户回复' }
+    superseded: '被新消息取代', running: '运行中', waiting: '等待用户回复' }
   return map[status] || status
 }
 

@@ -125,3 +125,40 @@ error 结果不区分「受理前拒绝」与「受理后失败」——前者�
 - 前端：vue-tsc typecheck 通过（SessionTraces / TraceBrowser 标签）。
 - 既有失败（与本改动无关，2026-11-24 已登记为未改动模块既有问题）：test_durable_sleep_boundaries 版本门 6 例 + test_phase8 combo2 1 例（测试桩缺 envelope 属性）+ test_kf_account_referral 2 例（容器无 PG 连接池，环境性）。
 - 真机：聊易下次部署后，构造 skill 超时场景核对 obs_traces.status='interrupted' 且 error_message=EXECUTION_INTERRUPTED，接待页历史含失败轮用户消息与失败占位。
+
+## 6. superseded 投影：渠道新消息取代在途执行（2026-11-26 扩展）
+
+### 6.1 背景（聊易 web_c trace tr_runner_2f41da / tr_runner_356b58 调查）
+
+两条 trace 均显示「用户取消」但并非用户点停止：用户在执行中途又发了新消息（「？」/「咋么不回复我了」），web_c 渠道 `ChannelRunnerAgent.submit` 按设计取消在途 runner 后受理新消息（`runner_agent.py`，设计 §4.3「普通新消息取消旧 runner 后受理」）。取消走 `repository.cancel`（cancel_requested=TRUE -> engine 优雅收尾或 cancel_only claim），obs_traces 照抄终态 cancelled，被前端标成「用户取消」——排查误导。
+
+根因放大器：页面刷新/微信切后台回收重进后，前端丢失执行中感知（`submitting` 复位、输入框可用、不接管在途 runner），用户误以为卡住再发新消息触发 supersede。取消轮的用户消息在 web_c 已于 submit 前落库（`web_c.py chat` -> `_add_user_message`，先于 `agent.submit`），历史无缺口；其他渠道（deferred persist）的取消轮用户消息缺口另议，不在本扩展范围。
+
+### 6.2 实现
+
+1. 取消来源标记：`POST /v1/runners/{id}/cancel` 接受可选 body `{reason}`（`RunnerCancelRequest`，contracts.py）；`manager.cancel` / `repository.cancel(reason)` 写入 `checkpoint.cancel_reason`（queued 直取与 running 分支，jsonb_set + COALESCE 兜底 NULL checkpoint，与 automatic 标记合成单表达式避免 PG 多重赋值覆盖）。
+2. 跨保存保留：`execution_repository._preserve_server_checkpoint` 保留 `cancel_reason`（engine 周期性 save_checkpoint 整体覆盖 checkpoint，不保留则标记丢失）。
+3. 观测投影：`worker._project_trace_status`（新模块级函数）统一口径——cancelled + cancel_reason=superseded_by_new_message -> `superseded`；cancelled + cancel_only_from_status=interrupted -> `interrupted`（§2 逻辑收编同函数）；用户停止（无 reason）保持 cancelled。`_persist_trace` 两个分支（finalization_retry 的 update_completion 与非 retry 的 collector.on_complete）均消费投影后状态。
+4. 展示语义：`trace_semantics.is_interrupted_trace` 状态集补 superseded（与 cancelled 同类，渠道轮次展示归类不变）；前端 SessionTraces/TraceDetail 标签「被新消息取代」、TraceBrowser 筛选项。
+5. 渠道标记：`runner_agent._cancel_and_wait(runner_id, reason=None)`；submit 两条 supersede 路径（waiting 非 clarification 取消 + active 循环取消）传 `superseded_by_new_message`。用户停止（cancel_check）、中断收尾、WAIT_UNSUPPORTED 等不传。
+
+### 6.3 web_c 刷新接管（配套前端修复）
+
+- 后端：`web_c.py` 新增 `GET /{tenant}/{config}/sessions/{session_id}/active-runner`（归属校验 + Runner `GET /v1/sessions/channel/{sid}/runners` 透传），返回 running/finalizing/queued 的活跃 runner；waiting 不返回（反问已落历史，回复走新消息 reply 通道，接管会挡输入框）。
+- 前端：`WebCChat.vue` 新增 `adoptActiveRunner`——`openSession`（含 onMounted ext 首会话与 switchSession）与 uid 模式 `restoreStoredSession` 恢复会话后查询活跃 runner 并恢复观察态（submitting/streamingActive 置位、observeRunner 接管、停止按钮可用）。查询失败静默跳过，行为不回归。
+
+### 6.4 语义边界
+
+| 场景 | 标记 | obs_traces 投影 |
+|------|------|----------------|
+| 渠道新消息取代在途执行（supersede） | cancel_reason=superseded_by_new_message | **superseded** |
+| 用户主动停止（web_c 停止按钮 / 渠道 cancel_check） | 无 reason | cancelled（不变） |
+| 系统中断收尾（§2） | cancel_only_from_status=interrupted | interrupted（不变） |
+| 用户取消 waiting/paused | 无 reason | cancelled（不变） |
+
+### 6.5 验证
+
+- 单测：`tests/unit/services/agent_runner/test_interrupt_trace_projection.py` 扩展（superseded 投影双分支 / 用户停止不误伤 / _preserve_server_checkpoint 保留 / repository.cancel 三形态 SQL 与参数序），`tests/unit/test_web_c_channel.py` 扩展（supersede cancel 带 reason / waiting 分支 / 无活跃不取消 / active-runner 端点 4 例），合计 100 例绿。
+- 回归：wiring / runner_agent_profile / worker_trace_error_code / trace_merge_semantics 31 例绿。
+- 前端：vue-tsc + build 通过；webCIdentity 测试 12 例绿。
+- 真机（部署后）：web_c 会话执行中刷新页面 -> 输入框禁用并恢复观察；执行中发新消息 -> obs_traces.status=superseded、TraceBrowser 筛选可见。

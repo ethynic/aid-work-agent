@@ -240,6 +240,38 @@ class TestSubmitSplit:
         assert outcome.row is accepted_row
         cancel_call = client.calls[1]
         assert cancel_call["path"].endswith("/runners/run_old/cancel")
+        # supersede 取消带观测标记：obs_traces 投影为 superseded（非用户取消）
+        assert cancel_call["body"] == {"reason": "superseded_by_new_message"}
+
+    @pytest.mark.asyncio
+    async def test_submit_waiting_cancel_also_marks_superseded(self):
+        waiting = _valid_runner_row(runner_id="run_wait", status="waiting")
+        accepted_row = _valid_runner_row(runner_id="run_new", status="queued")
+        # 非 clarification 的 waiting：waiting else 分支取消一次 + active 循环幂等取消一次
+        cancelled = _valid_runner_row(runner_id="run_wait", status="cancelled")
+        client = StubRunnerClient([
+            {"success": True, "runners": [], "active_runners": [waiting], "has_more": False, "next_cursor": None},
+            {"success": True, "runner": cancelled},
+            {"success": True, "runner": cancelled},
+            {"success": True, "runner": accepted_row},
+        ])
+        agent = self._make_agent(client)
+        outcome = await agent.submit(user_input="第二条")
+        assert outcome.row is accepted_row
+        cancel_calls = [call for call in client.calls if call["path"].endswith("/cancel")]
+        assert cancel_calls and all(
+            call["body"] == {"reason": "superseded_by_new_message"} for call in cancel_calls)
+
+    @pytest.mark.asyncio
+    async def test_submit_no_active_runner_sends_cancel_without_body(self):
+        client = StubRunnerClient([
+            {"success": True, "runners": [], "active_runners": [], "has_more": False, "next_cursor": None},
+            {"success": True, "runner": _valid_runner_row()},
+        ])
+        agent = self._make_agent(client)
+        await agent.submit(user_input="hi")
+        assert all(call["method"] != "POST" or not call["path"].endswith("/cancel")
+                   for call in client.calls), "无活跃执行不应发起取消"
 
     @pytest.mark.asyncio
     async def test_submit_generates_request_id_when_absent(self):
@@ -748,6 +780,78 @@ class TestChatStaleWaitingGuard:
             # 新受理（reply_wait_id 为空）：等待正常返回
             assert response["waiting_text"] == "请补充出行人数？"
             web_c_mod._persist_clarification_message.assert_called_once()
+
+
+class TestSessionActiveRunner:
+    """会话活跃执行查询（刷新/重进后前端恢复观察，2026-11-26 supersede 事故回归）。
+
+    场景：页面刷新后前端丢失执行中感知，用户误以为卡住再发新消息触发渠道侧
+    supersede 取消在途执行。端点返回可接管的 running/finalizing/queued runner；
+    waiting 不返回（反问已落历史，回复走新消息 reply 通道）。"""
+
+    @staticmethod
+    def _patch_endpoint(active_runners):
+        identity = SimpleNamespace(tenant_id="t1", config_id="cfg1", channel_user_id="u0011",
+                                   mode="uid", subagent_type="x", display_name="")
+        client = StubRunnerClient([
+            {"success": True, "runners": [], "active_runners": active_runners,
+             "has_more": False, "next_cursor": None}])
+        return patch("src.saas.api.web_c._resolve_identity", return_value=identity), \
+            patch("src.saas.api.web_c._assert_session_owned",
+                  return_value={"session_id": "t1_web_c_uid_0011_x_sab"}), \
+            patch("src.saas.api.web_c._runner_client", return_value=client)
+
+    @pytest.mark.asyncio
+    async def test_running_runner_returned_for_adoption(self):
+        from src.saas.api import web_c as web_c_mod
+
+        row = {"runner_id": "run_live", "status": "running"}
+        patches = self._patch_endpoint([row])
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await web_c_mod.get_session_active_runner(
+                "t1", "cfg1", "t1_web_c_uid_0011_x_sab", request=SimpleNamespace(headers={}))
+        assert response["runner_id"] == "run_live" and response["status"] == "running"
+
+    @pytest.mark.asyncio
+    async def test_waiting_runner_not_returned(self):
+        from src.saas.api import web_c as web_c_mod
+
+        row = {"runner_id": "run_wait", "status": "waiting"}
+        patches = self._patch_endpoint([row])
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await web_c_mod.get_session_active_runner(
+                "t1", "cfg1", "t1_web_c_uid_0011_x_sab", request=SimpleNamespace(headers={}))
+        assert response["runner_id"] is None, "waiting 接管会挡住输入框，反问回复须走新消息通道"
+
+    @pytest.mark.asyncio
+    async def test_finalizing_and_queued_returned(self):
+        from src.saas.api import web_c as web_c_mod
+
+        rows = [{"runner_id": "run_fin", "status": "finalizing"},
+                {"runner_id": "run_q", "status": "queued"}]
+        patches = self._patch_endpoint(rows)
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await web_c_mod.get_session_active_runner(
+                "t1", "cfg1", "t1_web_c_uid_0011_x_sab", request=SimpleNamespace(headers={}))
+        assert response["runner_id"] in {"run_fin", "run_q"}
+
+    @pytest.mark.asyncio
+    async def test_no_active_runner_returns_null(self):
+        from src.saas.api import web_c as web_c_mod
+
+        patches = self._patch_endpoint([])
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await web_c_mod.get_session_active_runner(
+                "t1", "cfg1", "t1_web_c_uid_0011_x_sab", request=SimpleNamespace(headers={}))
+        assert response["runner_id"] is None and response["status"] is None
 
 
 class TestBackfillSessionRunners:

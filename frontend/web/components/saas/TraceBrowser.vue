@@ -28,6 +28,7 @@
           <option value="failed">失败</option>
           <option value="cancelled">用户取消</option>
           <option value="interrupted">执行中断</option>
+          <option value="superseded">被新消息取代</option>
         </select>
         <select v-model="filterSourceType" @change="loadData"
           class="px-3 py-1.5 border border-default rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">

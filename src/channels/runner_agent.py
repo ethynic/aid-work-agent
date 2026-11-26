@@ -189,12 +189,14 @@ class ChannelRunnerAgent:
                     # 登记在途受理（仅事实，不承诺应用）：重发边界依赖该记录。
                     ask_delivery.record_submission(self.session_id, reply_wait_id, reply_control_id)
             else:
-                await self._cancel_and_wait(waiting['runner_id'])
+                await self._cancel_and_wait(waiting['runner_id'],
+                                            reason='superseded_by_new_message')
                 waiting = None
         if not waiting:
             for previous in active:
                 if previous['status'] not in {'completed','failed','cancelled'}:
-                    await self._cancel_and_wait(previous['runner_id'])
+                    await self._cancel_and_wait(previous['runner_id'],
+                                                reason='superseded_by_new_message')
             body = {'source':self.source, 'session':{'kind':'channel','session_id':session_id},
                 'channel_user_id':self.channel_user_id, 'channel_chat_id':self.channel_chat_id,
                 'profile_id':self.profile_id, 'client_request_id':request_id, 'text':user_input,
@@ -407,8 +409,12 @@ class ChannelRunnerAgent:
             'form': form, 'limit_bytes': limit,
             'segments': [{'index': index, 'text': text} for index, text in enumerate(segments)]})
 
-    async def _cancel_and_wait(self, runner_id):
-        row = (await self._request('POST', f'/v1/runners/{runner_id}/cancel'))['runner']
+    async def _cancel_and_wait(self, runner_id, reason=None):
+        # reason（观测投影用）：supersede（新消息取代在途执行）传
+        # 'superseded_by_new_message'，worker._persist_trace 据此把 obs_traces
+        # 投影为 superseded；用户停止/中断收尾不传，保持既有投影语义。
+        body = {'reason': reason} if reason else None
+        row = (await self._request('POST', f'/v1/runners/{runner_id}/cancel', body=body))['runner']
         for _ in range(120):
             if row['status'] in {'completed','failed','cancelled'}:
                 return

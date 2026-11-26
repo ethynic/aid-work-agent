@@ -190,7 +190,7 @@ import { computed, onMounted, onBeforeUnmount, ref, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   buildIdentityQuery, getBootstrap, postChat, uploadFile, cancelRunner,
-  getRunner, getSessionMessages, listSessions, webCFileUrl, runnerEventsUrl,
+  getRunner, getActiveRunner, getSessionMessages, listSessions, webCFileUrl, runnerEventsUrl,
   readStoredSessionId, writeStoredSessionId, clearStoredSessionId,
   type IdentityQuery, type UploadRef, type RunnerSnapshot, type SessionSummary,
   type ChannelMessage
@@ -414,8 +414,11 @@ async function restoreStoredSession() {
     clearStoredSessionId(configId.value)
     currentSessionId.value = ''
     messages.value = []
+    isLoading.value = false
+    return
   }
   isLoading.value = false
+  await adoptActiveRunner(stored)
 }
 
 function sessionTitle(s: SessionSummary): string {
@@ -454,6 +457,28 @@ function nowIso(): string {
 async function openSession(sessionId: string) {
   currentSessionId.value = sessionId
   await reloadMessages()
+  await adoptActiveRunner(sessionId)
+}
+
+/** 刷新/重进后接管在途执行：查询会话活跃 runner（running/finalizing/queued）并恢复
+ * 观察态（输入框禁用、停止按钮可见）。背景：页面刷新/微信切后台回收重进后 submitting
+ * 复位，前端丢失执行中感知，用户误以为卡住再发新消息会触发渠道侧取消在途执行
+ * （supersede，2026-11-26 聊易 trace tr_runner_2f41da/356b58 事故）。waiting 不接管：
+ * 反问已落历史消息，回复走新消息通道。查询失败静默跳过（输入可用，由下次提交兜底）。 */
+async function adoptActiveRunner(sessionId: string): Promise<void> {
+  if (submitting.value || streamingActive.value) return
+  try {
+    const data = await getActiveRunner(tenantId.value, configId.value, identity.value, sessionId)
+    if (!data.runner_id) return
+    activeRunnerId.value = data.runner_id
+    submitting.value = true
+    streamingActive.value = true
+    isTerminal.value = false
+    streamFailed.value = false
+    void observeRunner(data.runner_id)
+  } catch {
+    /* 查询失败保持现状：输入可用，提交后走既有受理/取消链路 */
+  }
 }
 
 async function switchSession(sessionId: string) {
