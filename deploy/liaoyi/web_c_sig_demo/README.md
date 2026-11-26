@@ -2,6 +2,27 @@
 
 模拟租户官网自有登录体系，用于端到端测试 web_c 渠道签名链接模式。部署在聊易私有云（agent.0635easy.com）。
 
+## demo2：聊易托管页 -> agent2 测试环境（2026-11-26 新增）
+
+与 demo1 并存，文件带 `2` 后缀，登录后生成**跳转 agent2**（agent2.aidingyi.cn）的签名链接：
+
+| 文件 | 与 demo1 差异 |
+|------|--------------|
+| `web_c_sig_demo2.html` | API 前缀 `/web_c_sig_demo2/api/login`，页头标注「agent2 环境」 |
+| `web_c_sig_demo2_server.py` | 连接 `tenant_e9b2fab93a2f` / `chan_2ebdcec0cba2`，监听 `127.0.0.1:8791` |
+| `web-c-sig-demo2.service` | 单元名 `web-c-sig-demo2` |
+| `patch_nginx2.py` | 只补 `location /web_c_sig_demo2/api/ -> 8791`（静态页被 demo1 的 `web_c_*_demo.html` 正则天然覆盖，无需新 location） |
+
+部署命令与 demo1 相同（文件名、单元名、脚本换成 2 后缀版本）。2026-11-26 已部署并端到端验证：静态页 200，bootstrap 返回 `mode: ext, channel_user_id: ext_lisi, display_name: 李四`（agent2 侧 sales-assistant 小腾老师）。
+
+入口：`https://agent.0635easy.com/web_c_sig_demo2.html`；验证：
+```bash
+curl -s https://agent.0635easy.com/web_c_sig_demo2/api/health
+curl -s -X POST https://agent.0635easy.com/web_c_sig_demo2/api/login \
+  -H 'Content-Type: application/json' -d '{"username":"李四","password":"123"}'
+```
+
+
 ## 文件
 
 | 文件 | 用途 | 服务器位置 |
