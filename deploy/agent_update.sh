@@ -50,11 +50,20 @@ fi
 #      并移出标准模式专属段（recreate 模式同样需要）：docker exec 的 pip 安装只
 #      落在单容器可写层，Runner 不继承主 API 的安装，导致 rfc8785 仅主 API 有、
 #      runner 容器全缺
+#  10. 2026-11-26 新增分段计时（与 agent2_update.sh 同款 step_done）：每步结束
+#      打印「本段/累计」耗时，用于对齐两环境发布耗时段分布
 # ==============================================================================
 
 set -e
 
 START_TS=$(date +%s)
+LAST_TS=$START_TS
+step_done() {
+    local NOW
+    NOW=$(date +%s)
+    echo "  [计时] 本段 $(( NOW - LAST_TS ))s / 累计 $(( NOW - START_TS ))s"
+    LAST_TS=$NOW
+}
 
 echo "=========================================="
 echo "  AI 数字员工系统 - 快速更新"
@@ -147,6 +156,7 @@ find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 echo "[1.1] 清除 Python .pyc 缓存..."
 find . -type f -name "*.pyc" -delete 2>/dev/null || true
 find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+step_done
 
 # 2. 前端依赖安装（node_modules 已持久化在宿主机，增量安装，通常很快）
 #    npm 缓存用命名卷持久化（容器内 /root/.npm 每次销毁，
@@ -158,7 +168,7 @@ docker run --rm \
     -v agent2_npm_cache:/root/.npm \
     -w /app node:22-alpine \
     npm install --no-audit --no-fund --prefer-offline
-
+step_done
 
 # 3. 前端校验 + 编译到 dist.new（后台执行，与后端重启并行，2026-11-24 优化）。
 #    typecheck/边界检查不产出 dist、不影响 nginx，只需在 dist 原子切换前通过；
@@ -181,6 +191,7 @@ mkdir -p "$(dirname "$BUILD_LOG")"
       node scripts/verify-web-build.mjs /app/dist.new
 ) > "$BUILD_LOG" 2>&1 &
 FRONTEND_PID=$!
+step_done
 
 fi  # 结束：标准更新模式专属段（凭据自愈/快照/拉代码/前端编译）
 
@@ -248,12 +259,15 @@ if [ -f docker-compose.agent-runner.yml ]; then
     fi
 fi
 
+step_done
+
 # 6. 施加 CPU 限制（docker compose 非 swarm 会忽略 deploy.resources；
 #    内存上限已在 docker-compose.prod.yml 用 mem_limit 声明（api 8G/background 4G/redis 1G），
 #    此处不再用 docker update 覆盖内存，避免与 compose 打架）
 echo "[6] 施加容器 CPU 限制..."
 docker update --cpus 2 aid-agent-api
 docker update --cpus 1 aid-agent-background
+step_done
 
 # 7. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
 #    Dockerfile 的 chmod 不生效，entrypoint 已处理；此处作为运行时兜底）
@@ -264,6 +278,7 @@ if ! docker exec -u root aid-agent-api chmod 1777 /tmp 2>/dev/null; then
       echo "  警告：两种方式均失败，appuser 可能无法写入 /tmp"
 fi
 docker exec -u root aid-agent-api ls -ld /tmp || true
+step_done
 
 # ── 以下前端切换段仅在标准更新模式执行 ──
 if [ "$RECREATE_ONLY" -eq 0 ]; then
@@ -275,6 +290,7 @@ if ! wait "$FRONTEND_PID"; then
   echo "  后端已更新但前端仍为旧版本，请检查后重跑本脚本"
   exit 1
 fi
+step_done
 
 # 9. 原子切换 dist（同一文件系统内两步 mv，切换瞬间旧→新；nginx 走 /index.html 兜底）
 echo "[9] 原子切换前端 dist..."
@@ -289,6 +305,7 @@ sudo rm -rf "$DIST_DIR.old"
 # 在后续 git 更新/排查时造成 Permission denied 干扰（2026-09-20 事故）
 sudo chown -R ubuntu:ubuntu "$DIST_DIR"
 sudo chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
+step_done
 
 fi  # 结束：标准更新模式专属段（前端切换）
 
@@ -332,6 +349,7 @@ else
     echo "    全部容器依赖安装完成"
 fi
 rm -rf "$PIP_TMPDIR"
+step_done
 
 echo ""
 echo "=========================================="
