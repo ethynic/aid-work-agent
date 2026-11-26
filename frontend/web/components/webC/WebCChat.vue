@@ -551,6 +551,15 @@ function scrollToBottom() {
   if (el) el.scrollTop = el.scrollHeight
 }
 
+/** 等本轮 Vue 渲染完成后再滚到底部：push 消息后同步调用会在 DOM 更新前滚动，
+ * 滚到的还是旧底部，新消息（用户问题/状态行）留在视口下方不可见
+ * （2026-11-26 测试反馈：发送后看不到自己刚发的问题，只有停止按钮可感知）。
+ * 此后 applySnapshot 的 isNearBottom 跟随守卫基于真实底部，流式帧可正常跟随。 */
+async function scrollToBottomAfterRender() {
+  await nextTick()
+  scrollToBottom()
+}
+
 function onScroll() {
   /* 消息量按需分页：当前一次拉取 200 条，预留滚动加载扩展点 */
 }
@@ -611,7 +620,7 @@ async function submit() {
     images: [],
     files: []
   })
-  scrollToBottom()
+  await scrollToBottomAfterRender()
   submitting.value = true
   streamingActive.value = true
   isTerminal.value = false
@@ -635,6 +644,7 @@ async function submit() {
     })
     if (reply.direct_reply) {
       messages.value.push({ role: 'assistant', content: reply.direct_reply, created_at: nowIso(), attachments: [], images: [], files: [] })
+      void scrollToBottomAfterRender()
       submitting.value = false
       streamingActive.value = false
       isTerminal.value = true
