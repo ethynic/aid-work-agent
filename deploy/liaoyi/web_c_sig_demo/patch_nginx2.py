@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 """聊易服务器 nginx conf 定向插入 demo2（连接 agent2）API location（sudo python3 执行，幂等）
 
-静态登录页 web_c_sig_demo2.html 无需新 location：已有正则
-^/web_c_[A-Za-z0-9_-]+_demo\.html$ 天然匹配带 2 后缀的文件名。
-本脚本只补 API 代理：/web_c_sig_demo2/api/ -> 127.0.0.1:8791。
+静态登录页 web_c_sig_demo2.html 由演示页正则 ^/web_c_[A-Za-z0-9_-]+_demo[0-9]*\.html$
+命中（2026-11-26 已把原 _demo\.html 结尾的正则放开序号——旧正则不匹配 demo2，
+会静默落 SPA fallback 返回 index.html）。本脚本只补 API 代理：
+/web_c_sig_demo2/api/ -> 127.0.0.1:8791。
 """
 import sys
 

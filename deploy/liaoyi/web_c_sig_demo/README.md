@@ -11,7 +11,7 @@
 | `web_c_sig_demo2.html` | API 前缀 `/web_c_sig_demo2/api/login`，页头标注「agent2 环境」 |
 | `web_c_sig_demo2_server.py` | 连接 `tenant_e9b2fab93a2f` / `chan_2ebdcec0cba2`，监听 `127.0.0.1:8791` |
 | `web-c-sig-demo2.service` | 单元名 `web-c-sig-demo2` |
-| `patch_nginx2.py` | 只补 `location /web_c_sig_demo2/api/ -> 8791`（静态页被 demo1 的 `web_c_*_demo.html` 正则天然覆盖，无需新 location） |
+| `patch_nginx2.py` | 只补 `location /web_c_sig_demo2/api/ -> 8791`（静态页由 conf 演示页正则命中；该正则 2026-11-26 已从 `_demo\.html` 放开为 `_demo[0-9]*\.html`，旧正则不匹配带序号文件名、会静默落 SPA fallback 返回 index.html） |
 
 部署命令与 demo1 相同（文件名、单元名、脚本换成 2 后缀版本）。2026-11-26 已部署并端到端验证：静态页 200，bootstrap 返回 `mode: ext, channel_user_id: ext_lisi, display_name: 李四`（agent2 侧 sales-assistant 小腾老师）。
 
