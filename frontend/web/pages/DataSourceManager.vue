@@ -1193,6 +1193,7 @@ function resetUploadState() {
   validationSheets.value = []
   validationSelection.value = {}
   pendingConfirmFileId.value = ''
+  pendingConfirmFilename.value = ''
 }
 
 function cancelUpload() {
@@ -1208,6 +1209,7 @@ const showValidationModal = ref(false)
 const validationSheets = ref<SheetValidation[]>([])
 const validationSelection = ref<Record<string, boolean>>({})
 const pendingConfirmFileId = ref('')
+const pendingConfirmFilename = ref('')  // 用户原始文件名（确认导入时回传后端，避免来源列显示 uuid 文件名）
 
 const allSheetsError = computed(() =>
   validationSheets.value.length > 0 && validationSheets.value.every(s => s.verdict === 'error')
@@ -1216,9 +1218,10 @@ const selectedSheetCount = computed(() =>
   validationSheets.value.filter(s => s.verdict !== 'error' && validationSelection.value[s.sheet_name]).length
 )
 
-function openValidationModal(sheets: SheetValidation[], fileId: string) {
+function openValidationModal(sheets: SheetValidation[], fileId: string, filename: string = '') {
   validationSheets.value = sheets
   pendingConfirmFileId.value = fileId
+  pendingConfirmFilename.value = filename
   const selection: Record<string, boolean> = {}
   for (const s of sheets) {
     selection[s.sheet_name] = s.verdict !== 'error'
@@ -1261,7 +1264,11 @@ async function confirmImport() {
   uploadStage.value = '正在按确认结果整理表格...'
   uploadCompletedSheets.value = []
 
-  const payload = { file_id: pendingConfirmFileId.value, sheets: [...sheets, ...unselected] }
+  const payload = {
+    file_id: pendingConfirmFileId.value,
+    sheets: [...sheets, ...unselected],
+    filename: pendingConfirmFilename.value || undefined,
+  }
   uploadAbortHandle = confirmUploadStream(payload, uploadStreamCallbacks())
 }
 
@@ -1285,11 +1292,11 @@ function uploadStreamCallbacks(): UploadStreamCallbacks {
       uploadSheetInfo.value = { current, total, sheetName }
       uploadCompletedSheets.value.push({ current, sheetName, tableName })
     },
-    onNeedsConfirmation: (fileId: string, _filename: string) => {
+    onNeedsConfirmation: (fileId: string, filename: string) => {
       uploading.value = false
       uploadAbortHandle = null
       uploadFilename.value = ''
-      openValidationModal(validationSheets.value, fileId)
+      openValidationModal(validationSheets.value, fileId, filename)
     },
     onComplete: (schemas) => {
       uploading.value = false
