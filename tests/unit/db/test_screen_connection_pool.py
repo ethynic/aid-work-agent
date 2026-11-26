@@ -8,14 +8,15 @@
 - get_db_connection：画面作用域里从画面连接池借，作用域外从业务连接池借；正常路径、异常路径都归还到借来的那个池；
   回滚不了的连接、借出来已经失效的连接，都在借来的那个池里丢弃；业务连接池这一路的行为不变
 - 画面作用域：默认不在；进入后可见，退出（包括异常退出）后恢复；随上下文复制到别的线程
-- 健康检查：health_check_pool / _replenish_pool_to_min 缺省仍然是业务连接池，传入画面连接池时查它；
-  后台线程每一轮两个池都查
+- 健康检查：后台线程每轮只查业务连接池；画面连接仅在借出后检查
 """
 
 import threading
 import time
 from contextlib import nullcontext
 from contextvars import copy_context
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import psycopg2
 import psycopg2.pool
@@ -442,15 +443,11 @@ class TestHealthCheck:
     def _kill_one_idle_connection(self, pool):
         pool._pool[-1].dead_on_check = True
 
-    @pytest.mark.parametrize("which", ["business", "screen"], ids=["business-pool", "screen-pool"])
-    def test_a_bad_idle_connection_is_replaced_and_the_pool_stays_full(self, pools, which):
-        """清掉一条坏连接后补回一条：池里仍然是 minconn 条活的、各不相同的连接。
-        两个池走的是同一段代码，业务连接池用缺省参数，画面连接池由参数传入"""
-        business, screen = pools
-        pool = business if which == "business" else screen
-        other = screen if which == "business" else business
+    def test_a_bad_idle_connection_is_replaced_and_the_business_pool_stays_full(self, pools):
+        """清掉一条坏连接后补回一条，池里仍然是 minconn 条活的、各不相同的连接。"""
+        pool, screen = pools
         self._kill_one_idle_connection(pool)
-        result = database.health_check_pool() if which == "business" else database.health_check_pool(pool)
+        result = database.health_check_pool()
         assert (result["initialized"], result["healthy"], result["bad"]) == (True, pool.minconn - 1, 1)
         assert pool.created == pool.minconn + 1
         idle = _idle(pool)
@@ -460,15 +457,13 @@ class TestHealthCheck:
         assert first is not second and not first.closed and not second.closed
         pool.putconn(first)
         pool.putconn(second)
-        assert other.created == other.minconn
+        assert screen.created == screen.minconn
 
-    def test_screen_pool_is_checked_only_when_it_is_passed_in(self, pools):
-        business, screen = pools
+    def test_business_health_check_leaves_bad_screen_connections_for_checkout(self, pools):
+        _, screen = pools
         self._kill_one_idle_connection(screen)
-        assert database.health_check_pool()["bad"] == 0  # 缺省只查业务连接池
-        assert len(_idle(screen)) == screen.minconn and screen.created == screen.minconn
-        assert database.health_check_pool(screen)["bad"] == 1
-        assert business.created == business.minconn
+        assert database.health_check_pool()["bad"] == 0
+        assert screen._pool[-1].dead_on_check and screen._pool[-1].rollbacks == 0
 
     def test_without_pools_it_reports_not_initialized(self, monkeypatch):
         monkeypatch.setattr(database, "_pg_connection_pool", None)
@@ -476,20 +471,27 @@ class TestHealthCheck:
         assert database.health_check_pool() == {"initialized": False, "healthy": 0, "bad": 0}
         database._replenish_pool_to_min()  # 没有池时什么都不做
 
-    def test_background_round_checks_the_business_pool_and_the_screen_pool_if_created(self, pools, monkeypatch):
-        _, screen = pools
-        checked = []
-        monkeypatch.setattr(database, "health_check_pool", lambda pool=None: checked.append(pool))
-        database._health_check_all_pools()
-        assert checked == [None, screen]  # 业务连接池走缺省；画面连接池已创建，也查
-        monkeypatch.setattr(database, "_screen_connection_pool", None)
-        checked.clear()
-        database._health_check_all_pools()
-        assert checked == [None]  # 画面连接池还没创建：只查业务连接池
+    def test_background_round_does_not_touch_screen_connections(self, pools, monkeypatch):
+        """后台检查若在画面空闲连接上回滚，可能撤销已经借走这条连接的信令写入。"""
+        business, screen = pools
+
+        class EndHealthCheck(BaseException):
+            pass
+
+        monkeypatch.setattr(database, "_pool_health_check_thread", None)
+        monkeypatch.setattr(database, "time", SimpleNamespace(sleep=Mock(side_effect=[None, EndHealthCheck])))
+        monkeypatch.setattr(database, "threading", SimpleNamespace(
+            Thread=lambda *, target, **_: SimpleNamespace(start=target),
+        ))
+        with pytest.raises(EndHealthCheck):
+            database._start_pool_health_check_thread()
+
+        assert all(conn.rollbacks == 1 for conn in business._pool)
+        assert all(conn.rollbacks == 0 for conn in screen._pool)
 
     def test_nothing_is_added_to_a_pool_that_was_just_closed(self, pools):
         """健康检查查到一半时池被 close_postgres_pool 关掉：不往已经关闭的池里补连接（补了的连接没人关）"""
-        _, screen = pools
-        screen.closeall()
-        database._replenish_pool_to_min(screen)
-        assert screen.created == screen.minconn
+        business, _ = pools
+        business.closeall()
+        database._replenish_pool_to_min(business)
+        assert business.created == business.minconn

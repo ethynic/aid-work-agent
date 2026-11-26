@@ -162,7 +162,8 @@ def _start_pool_health_check_thread():
         while True:
             try:
                 time.sleep(interval)
-                _health_check_all_pools()
+                if _pg_connection_pool is not None:
+                    health_check_pool()
             except Exception as e:
                 # 线程内异常不能让线程退出，记日志后继续
                 logger.warning(f"PostgreSQL 连接池健康检查线程异常（已忽略，继续运行）: {e}")
@@ -173,14 +174,6 @@ def _start_pool_health_check_thread():
     )
     _pool_health_check_thread.start()
     logger.info(f"PostgreSQL 连接池健康检查线程已启动，检查间隔: {interval}s")
-
-
-def _health_check_all_pools():
-    """后台健康检查线程每一轮做的事：业务连接池和（已经创建的）画面连接池各查一遍"""
-    if _pg_connection_pool is not None:
-        health_check_pool()
-    if _screen_connection_pool is not None:
-        health_check_pool(_screen_connection_pool)
 
 
 def get_postgres_pool():
@@ -198,6 +191,7 @@ def init_screen_pool():
     minconn」时才保留归还的连接，否则直接关闭：minconn 必须等于想要保留的连接数，否则每用完一次就关一条，
     下一次又要重新做数据库连接握手。创建要连数据库，所以放在锁里做：后来的线程等它建完，拿到的是同一个池。
     返回这个池：调用方要用它去借连接，不要回过头再读模块变量（中间可能刚好被 close_screen_pool 关掉）。
+    画面连接在借出后用 SELECT 1 检查，后台检查会与信令事务共享连接并可能把未提交的写入回滚。
     """
     global _screen_connection_pool
     if _screen_connection_pool is not None:
@@ -466,7 +460,7 @@ def _replenish_pool_to_min(pool=None):
 
     ThreadedConnectionPool 不会主动维持 minconn，清理坏连接后需要手动补齐，
     否则池水位会逐渐下降。在锁内创建连接以避免与 getconn 竞争。
-    pool 缺省是业务连接池；画面连接池由 health_check_pool 传进来。
+    pool 缺省是业务连接池，也可传入健康检查时使用的连接池。
     """
     if pool is None:
         pool = _pg_connection_pool
@@ -489,16 +483,13 @@ def _replenish_pool_to_min(pool=None):
         logger.warning(f"PostgreSQL 补充连接池异常: {e}")
 
 
-def health_check_pool(pool=None) -> dict:
-    """连接池健康检查：检测并清理坏连接
-
-    pool 缺省是业务连接池；画面连接池由后台健康检查线程传进来。
+def health_check_pool() -> dict:
+    """业务连接池健康检查：检测并清理坏连接。
 
     Returns:
         dict: 包含 healthy/bad 连接数和详细信息
     """
-    if pool is None:
-        pool = _pg_connection_pool
+    pool = _pg_connection_pool
     if pool is None:
         return {"initialized": False, "healthy": 0, "bad": 0}
 
