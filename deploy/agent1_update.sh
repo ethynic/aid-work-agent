@@ -25,6 +25,9 @@ fi
 #     docker compose v2 直接生效，非 deploy.resources 段）
 #   - 无 /tmp 权限修复步骤（compose tmpfs 已带 mode=1777）
 #   - npm 缓存命名卷独立为 agent1_npm_cache
+#   - 等待语义与生产对齐（2026-11-26）：up --wait 只等主 api；runner-sim 服务
+#     （runner-api-sim/runner-worker-sim/runner-monitor-sim）单独 up --force-recreate
+#     不阻塞等待健康，发布后仅对 runner-api-sim 做 /health 探测告警
 #   - 与 sim.sh（复现模式，纯 rsync 生产代码整体替换）互为整体替换，
 #     仿真侧不保留任何自有代码改动
 # ⚠️ 本脚本 git reset --hard 会丢弃工作区本地修改（含复现模式同步来的生产代码）；
@@ -34,6 +37,16 @@ fi
 set -e
 
 START_TS=$(date +%s)
+LAST_TS=$START_TS
+TIMING_LIST=""
+step_done() {
+    local NOW LBL="${1:-}"
+    NOW=$(date +%s)
+    echo "  [计时] 本段 $(( NOW - LAST_TS ))s / 累计 $(( NOW - START_TS ))s"
+    # 无标签调用（理论不存在，兜底）只计时不进汇总
+    [ -n "$LBL" ] && TIMING_LIST="${TIMING_LIST:+$TIMING_LIST + }${LBL}$(( NOW - LAST_TS ))s"
+    LAST_TS=$NOW
+}
 
 echo "=========================================="
 echo "  仿真环境（agent1）- 验证模式更新"
@@ -106,6 +119,7 @@ echo "更新后版本: $(git log -1 --format='%cd %s' --date=format:'%Y-%m-%d %H
 echo "[1.1] 清除 Python .pyc 缓存..."
 sudo find "$SIM_DIR" -name .git -prune -o -type f -name '*.pyc' -delete 2>/dev/null || true
 sudo find "$SIM_DIR" -name .git -prune -o -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+step_done "拉取+清缓存"
 
 # 2. 前端依赖安装（node_modules 持久化在宿主机，增量安装；npm 缓存用命名卷持久化）
 echo "[2] 安装前端依赖..."
@@ -114,6 +128,7 @@ docker run --rm \
     -v agent1_npm_cache:/root/.npm \
     -w /app node:22-alpine \
     npm install --no-audit --no-fund --prefer-offline
+step_done "npm"
 
 # 3. 前端校验 + 编译到 dist.new（后台执行，与后端重启并行，2026-11-24 优化）。
 #    typecheck/边界检查不产出 dist、不影响 nginx，只需在 dist 原子切换前通过；
@@ -134,6 +149,7 @@ mkdir -p "$(dirname "$BUILD_LOG")"
       node scripts/verify-web-build.mjs /app/dist.new
 ) > "$BUILD_LOG" 2>&1 &
 FRONTEND_PID=$!
+step_done "前端后台"
 
 # 5. 重启仿真后端（up 会拉起未运行的容器；--force-recreate 保证 .env 最新）
 # compose 文件以仓库 deploy/ 版本为准（env_file: .env 相对路径要求部署在仿真根目录）
@@ -146,8 +162,29 @@ if [[ -f "$SIM_DIR/deploy/docker-compose.agent-runner.sim.yml" ]]; then
   COMPOSE_ARGS+=(-f "$SIM_DIR/docker-compose.agent-runner.sim.yml")
 fi
 echo "[5] 重启仿真后端 aid-agent-api1（及已启用的 runner 容器）..."
+# --wait 只等主 api（2026-11-26 对齐生产语义）：runner-sim 服务的 healthcheck
+# （monitor-sim start_period 4m）不再串进发布总时长
 # --remove-orphans：overlay 服务名变更后，旧容器占用同名 container_name 会导致建容器冲突
-docker compose "${COMPOSE_ARGS[@]}" up -d --remove-orphans --force-recreate --wait
+docker compose "${COMPOSE_ARGS[@]}" up -d --remove-orphans --force-recreate --wait api
+
+# runner-sim 服务重建使新代码生效（代码经 .:/app 挂载，重建保证进程加载新代码）；
+# 不带 --wait（与生产对齐，就绪靠下方 /health 探测告警）
+RUNNER_SERVICES=$(docker compose "${COMPOSE_ARGS[@]}" config --services 2>/dev/null \
+    | grep -E '^runner' || true)
+if [ -n "$RUNNER_SERVICES" ]; then
+    # shellcheck disable=SC2086
+    docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate $RUNNER_SERVICES
+    echo "    runner 服务已重建（不等待健康）: $(echo $RUNNER_SERVICES | tr '\n' ' ')"
+    # runner-api-sim 可达性探测（失败仅告警不阻断，重建后异步就绪）
+    if docker exec aid-agent-api1 python -c \
+        "import urllib.request; urllib.request.urlopen('http://runner-api-sim:8091/health', timeout=5)" \
+        2>/dev/null; then
+        echo "    runner-api-sim 健康检查通过"
+    else
+        echo "  警告：runner-api-sim /health 暂不可达（重建后异步就绪，稍后 docker ps 核对）"
+    fi
+fi
+step_done "重启后端"
 
 # 6. 等待前端编译完成
 echo "[6] 等待前端编译完成..."
@@ -156,6 +193,7 @@ if ! wait "$FRONTEND_PID"; then
   echo "  后端已更新但前端仍为旧版本，请检查后重跑本脚本"
   exit 1
 fi
+step_done "等待前端"
 
 # 7. 原子切换 dist（同一文件系统内两步 mv；nginx 走 /index.html 兜底）
 echo "[7] 原子切换前端 dist..."
@@ -169,6 +207,7 @@ sudo rm -rf "$DIST_DIR.old"
 # dist 由 docker root 创建，chown/chmod 归位到 ubuntu（下次 git/rm 不再被 root 属主阻断）
 sudo chown -R ubuntu:ubuntu "$DIST_DIR"
 sudo chmod 777 "$DIST_DIR"
+step_done "dist切换"
 
 # 8. 增量安装 requirements.txt 中新增的依赖（不重建镜像，新依赖需补装）
 #    注意：api/runner-api/runner-worker 共用同一镜像，docker exec 的安装只落在
@@ -205,6 +244,7 @@ else
     echo "    全部容器依赖安装完成"
 fi
 rm -rf "$PIP_TMPDIR"
+step_done "pip安装"
 
 # 9. 健康检查（确认启动横幅「⚠️ 仿真环境（SIMULATION_MODE=1）」门控生效）
 echo "[9] 健康检查..."
@@ -220,6 +260,7 @@ else
     echo "  错误：健康检查超时（120s），请查看 docker logs aid-agent-api1"
     exit 1
 fi
+step_done "健康检查"
 
 echo ""
 echo "=========================================="
@@ -227,3 +268,4 @@ echo "  仿真环境更新完成！"
 echo "=========================================="
 ELAPSED=$(( $(date +%s) - START_TS ))
 echo "总耗时: $(( ELAPSED / 60 )) 分 $(( ELAPSED % 60 )) 秒"
+echo "分段耗时: $TIMING_LIST | 总计 ${ELAPSED}s"

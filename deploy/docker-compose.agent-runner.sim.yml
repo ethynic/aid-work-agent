@@ -89,7 +89,9 @@ services:
     # /health 仅报告进程与 enabled 状态，不代表 DB/lease 健康（清单 §4）
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8091/health"]
-      interval: 30s
+      # 10s 而非 30s：runner-worker-sim depends_on 本服务 service_healthy，
+      # 发布重建 runner 时整条链的等待由本 interval 对齐决定（2026-11-26 发布提速）
+      interval: 10s
       timeout: 10s
       retries: 3
       start_period: 30s

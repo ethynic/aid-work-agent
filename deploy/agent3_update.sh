@@ -42,6 +42,12 @@ fi
 #  11. 2026-11-20 [7] 步增量依赖安装由「仅主 API 容器」改为「本 compose project
 #      内全部同镜像容器」：docker exec 的 pip 安装只落在单容器可写层，Runner
 #      不继承主 API 的安装，导致 rfc8785 仅主 API 有、worker 全缺
+#  12. 2026-11-26 两项调整（对齐 agent2_update.sh）：
+#      a) 等待语义对齐生产：up --wait 只等主 API/background，runner 服务
+#         （runner-api/worker/monitor/heavy-tools）单独 up --force-recreate 不阻塞
+#         等待健康，发布后仅对 runner-api 做 /health 探测告警——此前 --wait 全量
+#         等待把 runner-monitor（start_period 4m）等 healthcheck 串进发布总时长
+#      b) 新增分段计时：每步结束打印「本段/累计」耗时
 # ==============================================================================
 
 set -e
@@ -64,6 +70,16 @@ if [ -n "$TARGET_BRANCH" ] && { [[ ! "$TARGET_BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9.
 fi
 
 START_TS=$(date +%s)
+LAST_TS=$START_TS
+TIMING_LIST=""
+step_done() {
+    local NOW LBL="${1:-}"
+    NOW=$(date +%s)
+    echo "  [计时] 本段 $(( NOW - LAST_TS ))s / 累计 $(( NOW - START_TS ))s"
+    # 无标签调用（理论不存在，兜底）只计时不进汇总
+    [ -n "$LBL" ] && TIMING_LIST="${TIMING_LIST:+$TIMING_LIST + }${LBL}$(( NOW - LAST_TS ))s"
+    LAST_TS=$NOW
+}
 
 echo "=========================================="
 echo "  AI 数字员工系统（在线开发） - 快速更新"
@@ -202,6 +218,7 @@ find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 echo "[1.1] 清除 Python .pyc 缓存..."
 find . -type f -name "*.pyc" -delete 2>/dev/null || true
 find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+step_done "拉取+清缓存"
 
 # 2. 判断前端是否需要编译；需要时编译到 dist.new（后台，与后端重启并行）
 FRONTEND_PID=""
@@ -242,6 +259,7 @@ if [ "$FRONTEND_CHANGED" -gt 0 ] || [ ! -d "$DIST_DIR" ]; then
 else
     echo "[2] 前端代码无变更，跳过编译。"
 fi
+step_done "前端准备"
 
 # 3. 后端重启（与前端编译并行；前端无变更时直接重启）
 #    不先 down：up --force-recreate 会自动 stop→remove→create，避免全停窗口
@@ -261,7 +279,31 @@ if [ -f docker-compose.agent-runner.yml ]; then
 else
     echo "    未发现 AgentRunner overlay，仅主 compose"
 fi
-docker compose "${COMPOSE_FILES[@]}" up -d --force-recreate --remove-orphans --wait
+# --wait 只等主 API/background（2026-11-26 对齐生产 agent_update.sh 语义）：
+# runner 服务（runner-api/runner-worker/runner-monitor/heavy-tools）的
+# healthcheck（monitor start_period 4m、heavy-tools 60s）不再串进发布总时长
+docker compose "${COMPOSE_FILES[@]}" up -d --force-recreate --remove-orphans --wait \
+    aid-agent-api aid-agent-background
+
+# runner 服务重建使新代码生效；不带 --wait（与生产对齐，就绪靠下方 /health 探测告警）
+if [ -f docker-compose.agent-runner.yml ]; then
+    RUNNER_SERVICES=$(docker compose "${COMPOSE_FILES[@]}" config --services 2>/dev/null \
+        | grep -E '^runner|^heavy-tools' || true)
+    if [ -n "$RUNNER_SERVICES" ]; then
+        # shellcheck disable=SC2086
+        docker compose "${COMPOSE_FILES[@]}" up -d --force-recreate $RUNNER_SERVICES
+        echo "    runner 服务已重建（不等待健康）: $(echo $RUNNER_SERVICES | tr '\n' ' ')"
+    fi
+    # runner-api 可达性探测（失败仅告警不阻断，重建后异步就绪）
+    if docker exec aid-agent-api3 python -c \
+        "import urllib.request; urllib.request.urlopen('http://runner-api:8091/health', timeout=5)" \
+        2>/dev/null; then
+        echo "    runner-api 健康检查通过"
+    else
+        echo "  警告：runner-api /health 暂不可达（重建后异步就绪，稍后 docker ps 核对），渠道对话可能短暂 RUNNER_SERVICE_UNAVAILABLE"
+    fi
+fi
+step_done "重启后端"
 
 # 4. 施加资源限制（docker compose 非 swarm 会忽略 deploy.resources，改用 docker update
 #    显式施加 cgroup 限制；资源值在本脚本内维护，为唯一来源）
@@ -274,6 +316,7 @@ RUNNER_API_CONTAINER="${RUNNER_API_CONTAINER:-aid-runner-api}"
 docker update --cpus 1 --memory 1G --memory-reservation 512M aid-agent-api3
 docker update --cpus 0.5 --memory 512M --memory-reservation 256M "$RUNNER_API_CONTAINER" 2>/dev/null \
     || echo "  跳过 $RUNNER_API_CONTAINER（不存在）"
+step_done "资源限制"
 
 # 5. 修复容器内 /tmp 权限（python:3.11-slim 的 /tmp 是 tmpfs 且默认 755，
 #    Dockerfile 的 chmod 不生效，entrypoint 已处理；此处作为运行时兜底）
@@ -284,6 +327,7 @@ if ! docker exec -u root aid-agent-api3 chmod 1777 /tmp 2>/dev/null; then
       echo "  警告：两种方式均失败，appuser 可能无法写入 /tmp"
 fi
 docker exec -u root aid-agent-api3 ls -ld /tmp || true
+step_done "权限修复"
 
 # 5.1 修复 runner 容器 /tmp 与 /home/appuser/tmp 权限（与 agent2_update.sh [8] 同款）。
 #    worker 是执行体所在容器：/home/appuser/tmp 是其 TMPDIR，tmpfs mode 在本机引擎
@@ -302,6 +346,7 @@ for c in $(docker ps --format '{{.Names}}' | grep -E '^agent3-runner-worker-[0-9
         echo "  警告：$c 权限修复失败（容器不存在或 exec 异常）"
     fi
 done
+step_done "runner权限"
 
 # 6. 等待前端编译完成并原子切换（仅前端有变更时）
 if [ -n "$FRONTEND_PID" ]; then
@@ -326,6 +371,7 @@ fi
 # 用 sudo：dist 为 root 属主时无 sudo 的 chmod 会直接失败
 sudo chown -R ubuntu:ubuntu "$DIST_DIR"
 sudo chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
+step_done "前端切换"
 
 # 7. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
 #    新依赖不会自动安装；下次重建镜像后可移除此步骤）
@@ -366,9 +412,11 @@ else
     echo "    全部容器依赖安装完成"
 fi
 rm -rf "$PIP_TMPDIR"
+step_done "pip安装"
 
 echo ""
 echo "更新完成！"
 echo "=========================================="
 ELAPSED=$(( $(date +%s) - START_TS ))
 echo "总耗时: $(( ELAPSED / 60 )) 分 $(( ELAPSED % 60 )) 秒"
+echo "分段耗时: $TIMING_LIST | 总计 ${ELAPSED}s"

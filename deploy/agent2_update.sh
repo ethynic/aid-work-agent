@@ -97,10 +97,13 @@ set -e
 
 START_TS=$(date +%s)
 LAST_TS=$START_TS
+TIMING_LIST=""
 step_done() {
-    local NOW
+    local NOW LBL="${1:-}"
     NOW=$(date +%s)
     echo "  [计时] 本段 $(( NOW - LAST_TS ))s / 累计 $(( NOW - START_TS ))s"
+    # 无标签调用（理论不存在，兜底）只计时不进汇总
+    [ -n "$LBL" ] && TIMING_LIST="${TIMING_LIST:+$TIMING_LIST + }${LBL}$(( NOW - LAST_TS ))s"
     LAST_TS=$NOW
 }
 
@@ -184,7 +187,7 @@ find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 echo "[1.1] 清除 Python .pyc 缓存..."
 find . -type f -name "*.pyc" -delete 2>/dev/null || true
 find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-step_done
+step_done "拉取+清缓存"
 
 # 2. 前端依赖安装（node_modules 已持久化在宿主机，增量安装，通常很快）
 #    npm 缓存用命名卷持久化（容器内 /root/.npm 每次销毁，
@@ -196,7 +199,7 @@ docker run --rm \
     -v agent2_npm_cache:/root/.npm \
     -w /app node:22-alpine \
     npm install --no-audit --no-fund --prefer-offline
-step_done
+step_done "npm"
 
 # 3. 前端校验 + 编译到 dist.new（后台执行，与后端重启并行，2026-11-24 优化）。
 #    typecheck/边界检查不产出 dist、不影响 nginx，只需在 dist 原子切换前通过；
@@ -218,7 +221,7 @@ mkdir -p "$(dirname "$BUILD_LOG")"
       node scripts/verify-web-build.mjs /app/dist.new
 ) > "$BUILD_LOG" 2>&1 &
 FRONTEND_PID=$!
-step_done
+step_done "前端后台"
 
 # 5. 后端重启（与前端编译并行）。
 #    注：Node PPT 渲染器构建步骤已于 2026-11-26 删除（见变更记录 11b）——
@@ -291,7 +294,7 @@ if docker exec aid-agent-api2 python -c \
 else
     echo "  警告：runner-api /health 暂不可达（重建后异步就绪，稍后 docker ps 核对），渠道对话可能短暂 RUNNER_SERVICE_UNAVAILABLE"
 fi
-step_done
+step_done "重启后端"
 
 # 7. 施加资源限制（docker compose 非 swarm 会忽略 deploy.resources，改用 docker update
 #    显式施加 cgroup 限制；资源值在本脚本内维护，为唯一来源）
@@ -304,7 +307,7 @@ for c in aid-runner-api; do
     docker update --cpus 0.5 --memory 512M --memory-reservation 256M "$c" 2>/dev/null \
         || echo "  跳过 $c（不存在）"
 done
-step_done
+step_done "资源限制"
 
 # 8. 修复容器内 /tmp 与 /home/appuser/tmp 权限（运行时兜底）。
 #    /tmp 是 tmpfs 且模式选项在本机引擎不可靠，Dockerfile 的 chmod 不生效，
@@ -328,7 +331,7 @@ for c in $(docker ps --format '{{.Names}}' | grep -E '^agent2-runner-worker-[0-9
     fi
 done
 docker exec -u root aid-agent-api2 ls -ld /tmp || true
-step_done
+step_done "权限修复"
 
 # 9. 等待前端编译完成
 echo "[8] 等待前端编译完成..."
@@ -337,7 +340,7 @@ if ! wait "$FRONTEND_PID"; then
   echo "  后端已更新但前端仍为旧版本，请检查后重跑本脚本"
   exit 1
 fi
-step_done
+step_done "等待前端"
 
 # 10. 原子切换 dist（同一文件系统内两步 mv，切换瞬间旧→新；nginx 走 /index.html 兜底）
 echo "[9] 原子切换前端 dist..."
@@ -352,7 +355,7 @@ sudo rm -rf "$DIST_DIR.old"
 # 在后续 git 更新/排查时造成 Permission denied 干扰（2026-09-20 事故）
 sudo chown -R ubuntu:ubuntu "$DIST_DIR"
 sudo chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
-step_done
+step_done "dist切换"
 
 # 11. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
 #     新依赖不会自动安装；下次重建镜像后可移除此步骤）
@@ -393,13 +396,14 @@ else
     echo "    全部容器依赖安装完成"
 fi
 rm -rf "$PIP_TMPDIR"
-step_done
+step_done "pip安装"
 
 echo ""
 echo "更新完成！"
 echo "=========================================="
 ELAPSED=$(( $(date +%s) - START_TS ))
 echo "总耗时: $(( ELAPSED / 60 )) 分 $(( ELAPSED % 60 )) 秒"
+echo "分段耗时: $TIMING_LIST | 总计 ${ELAPSED}s"
 
 }
 
