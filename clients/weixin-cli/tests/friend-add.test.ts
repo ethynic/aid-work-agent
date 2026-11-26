@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { createWeixinFriendAddOperation } from '../src/operations/friendAdd.js'
+import { getOperationEntry } from '../src/operations/registry.js'
 import { CancelledError, CodedOperationError } from '../src/operations/types.js'
 
 const executable = fileURLToPath(new URL('../src/cli/index.js', import.meta.url))
@@ -20,6 +21,14 @@ test('friend add rejects ambiguous targets and unsafe verification text before r
     assert.equal(result.code, 'INVALID_ARGUMENT')
     assert.equal(result.effect, 'none')
   }
+})
+
+test('the signed MCP tool validates the snake-case verification argument before any desktop operation', async () => {
+  const operation = getOperationEntry('weixin_friend_add').operation
+  const signal = AbortSignal.abort()
+  const result = await operation.execute({ identifier: 'wx_user_a', verify_message: 'line\nbreak' }, { ...ctx, signal })
+  assert.equal(result.code, 'INVALID_ARGUMENT')
+  assert.equal(result.effect, 'none')
 })
 
 test('friend add sends one trimmed search identifier and exact message over private child stdin', async () => {

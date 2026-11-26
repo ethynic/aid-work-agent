@@ -12,6 +12,7 @@ from src.core.agent_engine import AgentEngine, Outcome
 from src.core.agent_engine.contracts import AgentMode, CheckpointFailure, ExecutionState, Identity, ToolCall, ToolFact
 from src.core.skill_registry import SkillRegistry
 from src.local_tools import repository
+from src.local_tools.catalog import WEIXIN_FRIEND_ADD
 from src.local_tools.device_policy import device_ready_error
 from src.local_tools.lifecycle import current_local_operation, local_operation_scope
 from src.local_tools.plugin_manifests import MANIFEST_DIGESTS, PLUGIN_CHANGED_CODE, VERIFIED_MANIFESTS, load_device_tools, sync_plugin_manifests
@@ -85,6 +86,19 @@ def test_cached_projection_requires_original_signature_without_worker_canonicali
     received, missing = sync_plugin_manifests(path, device['id'], capabilities, capabilities, {PROVIDER: bundle})
     assert missing == [PROVIDER] and VERIFIED_MANIFESTS not in received
     assert received['declared_tools'] == declarations
+
+
+@pytest.mark.asyncio
+async def test_friend_apply_declaration_does_not_make_it_a_model_tool(registrations, monkeypatch):
+    device = make_device(selected=True)
+    device['capabilities_json']['declared_tools'][PROVIDER].append(WEIXIN_FRIEND_ADD)
+    friend = {**definition('identifier', name=WEIXIN_FRIEND_ADD), 'annotations': {'readOnlyHint': False}}
+    registrations(device, definition('target'), friend)
+    monkeypatch.setattr(repository, 'list_devices', lambda tenant, user: [device])
+    catalog, runner = make_runner()
+    await catalog.prime_local_tools(Identity('tenant', 'actor', 'conversation'), include_runtime_plugins=True)
+    assert [tool['name'] for tool in runner.definitions()] == [TOOL]
+    assert not runner.registry.has_tool(WEIXIN_FRIEND_ADD)
 
 
 @pytest.mark.asyncio
