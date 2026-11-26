@@ -42,6 +42,10 @@ fi
 #  11. 2026-11-20 [7] 步增量依赖安装由「仅主 API 容器」改为「本 compose project
 #      内全部同镜像容器」：docker exec 的 pip 安装只落在单容器可写层，Runner
 #      不继承主 API 的安装，导致 rfc8785 仅主 API 有、worker 全缺
+#  13. 2026-11-26 对齐 agent2_update.sh 的三项提速：main() 包裹 + exec 自更新
+#      重入（脚本随发布更新后自动用新版，不再需要跑两遍）；前端校验链双通道
+#      并行（typecheck 门禁与 vite build 产出互不依赖）；pip 安装转后台与前端
+#      等待并行（[5.2]/[7]）
 #  12. 2026-11-26 两项调整（对齐 agent2_update.sh）：
 #      a) 等待语义对齐生产：up --wait 只等主 API/background，runner 服务
 #         （runner-api/worker/monitor/heavy-tools）单独 up --force-recreate 不阻塞
@@ -50,6 +54,7 @@ fi
 #      b) 新增分段计时：每步结束打印「本段/累计」耗时
 # ==============================================================================
 
+main() {
 set -e
 
 # 用法: ./agent3_update.sh [远程分支名]
@@ -70,6 +75,13 @@ if [ -n "$TARGET_BRANCH" ] && { [[ ! "$TARGET_BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9.
 fi
 
 START_TS=$(date +%s)
+
+# 发布脚本自更新机制（2026-11-26）：检出目标版本后若脚本自身内容已变化，
+# exec 重启自身执行新版——避免整轮发布跑在旧解析代码上、需要手动跑两遍。
+# AID_DEPLOY_RERUN=1 守卫只允许重入一次，杜绝死循环；脚本未变化不重入。
+# （main() 包裹保证检出发生时整份脚本已解析完毕，偏移错乱不会发生）
+SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+SCRIPT_SELF_HASH=$(sha256sum "$SCRIPT_PATH" 2>/dev/null | cut -d' ' -f1 || true)
 LAST_TS=$START_TS
 TIMING_LIST=""
 step_done() {
@@ -197,6 +209,11 @@ OLD_HEAD=$(git rev-parse HEAD)
 echo "更新前版本: $(git log -1 --format='%cd %s' --date='format:%Y-%m-%d %H:%M:%S')"
 git fetch --all
 # 参数优先；未传参数时交互选择；stdin 非终端（管道/cron）回退默认 master
+# 自更新重入时沿用首轮选择的分支（否则交互菜单会再弹一次）
+if [ -z "$TARGET_BRANCH" ] && [ -n "${AID_DEPLOY_BRANCH:-}" ]; then
+    echo "自更新重入：沿用首轮选择的分支 $AID_DEPLOY_BRANCH"
+    TARGET_BRANCH="$AID_DEPLOY_BRANCH"
+fi
 if [ -z "$TARGET_BRANCH" ]; then
     if [ -t 0 ]; then
         interactive_select_branch
@@ -219,6 +236,15 @@ fi
 git checkout -f -B "$TARGET_BRANCH" "origin/$TARGET_BRANCH"
 echo "更新后版本: $(git log -1 --format='%cd %s' --date='format:%Y-%m-%d %H:%M:%S')"
 NEW_HEAD=$(git rev-parse HEAD)
+# 自更新重入：脚本文件随本次检出变化 -> exec 新版（重入后再比较必然相同，
+# 且 AID_DEPLOY_RERUN 守卫兜底，不会死循环）
+NEW_SELF_HASH=$(sha256sum "$SCRIPT_PATH" 2>/dev/null | cut -d' ' -f1 || true)
+if [ "${AID_DEPLOY_RERUN:-0}" != "1" ] && [ -n "$SCRIPT_SELF_HASH" ] \
+   && [ "$NEW_SELF_HASH" != "$SCRIPT_SELF_HASH" ]; then
+    echo "[1.2] 发布脚本已随本次更新变化，exec 重启以执行新版脚本（仅重入一次）..."
+    # 交互菜单选中的分支经环境变量带入重入轮次，避免菜单再弹一次
+    AID_DEPLOY_RERUN=1 AID_DEPLOY_BRANCH="$TARGET_BRANCH" exec bash "$SCRIPT_PATH" "$@"
+fi
 find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 
 # 1.1 清除 Python 字节码缓存（避免旧代码运行）
@@ -228,7 +254,7 @@ find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 step_done "拉取+清缓存"
 
 # 2. 判断前端是否需要编译；需要时编译到 dist.new（后台，与后端重启并行）
-FRONTEND_PID=""
+LANE_A_PID=""; LANE_B_PID=""
 if [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
     FRONTEND_CHANGED=$(git diff --name-only "$OLD_HEAD" "$NEW_HEAD" -- frontend/ | wc -l)
 else
@@ -250,10 +276,16 @@ if [ "$FRONTEND_CHANGED" -gt 0 ] || [ ! -d "$DIST_DIR" ]; then
             -w /app node:22-alpine \
             npm install --no-audit --no-fund --prefer-offline
     fi
-    docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm run typecheck
-    docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
-        node scripts/check-dependency-boundaries.mjs --scope=web
-    # vite build + 产物校验放后台，与后端重启并行
+    # 双通道并行（2026-11-26）：通道 A = typecheck/边界检查（门禁，不产出 dist），
+    # 通道 B = vite build/产物校验（产出 dist.new），互不依赖，墙钟时间 = max(两通道)；
+    # 两通道都通过才允许切换 dist（门禁不放松）
+    (
+      docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm run typecheck \
+      && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+          node scripts/check-dependency-boundaries.mjs --scope=web
+    ) > "$BUILD_LOG.a" 2>&1 &
+    LANE_A_PID=$!
+    # 通道 B：vite build + 产物校验
     sudo rm -rf "$DIST_DIR.new"
     mkdir -p "$(dirname "$BUILD_LOG")"
     (
@@ -261,8 +293,8 @@ if [ "$FRONTEND_CHANGED" -gt 0 ] || [ ! -d "$DIST_DIR" ]; then
           npx vite build --outDir dist.new \
         && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
             node scripts/verify-web-build.mjs /app/dist.new
-    ) > "$BUILD_LOG" 2>&1 &
-    FRONTEND_PID=$!
+    ) > "$BUILD_LOG.b" 2>&1 &
+    LANE_B_PID=$!
 else
     echo "[2] 前端代码无变更，跳过编译。"
 fi
@@ -355,11 +387,50 @@ for c in $(docker ps --format '{{.Names}}' | grep -E '^agent3-runner-worker-[0-9
 done
 step_done "runner权限"
 
+# 5.2 增量依赖安装转后台（2026-11-26）：与前端编译等待并行，两段互不依赖。
+#     整个安装循环放进子壳——wait -n 在子壳内只可见 pip 任务，不会误等前台
+#     任务。注意：必须对本 compose project 全部同镜像容器逐个安装——docker
+#     exec 的安装只落在单容器可写层，其它容器不会继承；--force-recreate 又会
+#     丢弃容器内既有安装（2026-11-20 rfc8785 事故）。彻底解法仍是定期重建镜像。
+echo "[5.2] 启动增量依赖安装（后台，与前端编译等待并行）..."
+PIP_PROJECT=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' aid-agent-api3 2>/dev/null || true)
+[ -z "$PIP_PROJECT" ] && PIP_PROJECT="${PWD##*/}"
+PIP_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=$PIP_PROJECT" \
+    --format '{{.Image}} {{.Names}}' | awk '$1 == "aid-agent-api:latest" {print $2}')
+if [ -z "$PIP_CONTAINERS" ]; then
+    echo "  警告：未匹配到同镜像容器，退回仅安装 aid-agent-api3"
+    PIP_CONTAINERS="aid-agent-api3"
+fi
+PIP_TMPDIR=$(mktemp -d)
+(
+    PIP_RUNNING=0
+    for c in $PIP_CONTAINERS; do
+        echo "    -> $c"
+        ( docker exec -u root "$c" \
+              pip install --no-cache-dir -r /app/requirements.txt \
+              -i https://mirrors.cloud.tencent.com/pypi/simple \
+              --quiet || echo "$c" >> "$PIP_TMPDIR/failed" ) &
+        PIP_RUNNING=$((PIP_RUNNING + 1))
+        # 限制并发 4 个：多副本同时跑 pip 的内存峰值偏高
+        if [ "$PIP_RUNNING" -ge 4 ]; then
+            wait -n || true
+            PIP_RUNNING=$((PIP_RUNNING - 1))
+        fi
+    done
+    wait || true
+) &
+PIP_PID=$!
+step_done "pip后台启动"
+
 # 6. 等待前端编译完成并原子切换（仅前端有变更时）
-if [ -n "$FRONTEND_PID" ]; then
-    echo "[6] 等待前端编译完成..."
-    if ! wait "$FRONTEND_PID"; then
-        echo "  错误：前端编译失败，详见 $BUILD_LOG"
+if [ -n "$LANE_A_PID" ]; then
+    echo "[6] 等待前端校验与编译完成..."
+    # 两个通道都要等（避免遗留孤儿进程），任一失败即中止且不切换 dist
+    LANE_FAIL=""
+    if ! wait "$LANE_A_PID"; then LANE_FAIL="typecheck/边界检查"; fi
+    if ! wait "$LANE_B_PID"; then LANE_FAIL="${LANE_FAIL:+$LANE_FAIL }vite构建/产物校验"; fi
+    if [ -n "$LANE_FAIL" ]; then
+        echo "  错误：前端失败环节 [$LANE_FAIL]，详见 $BUILD_LOG.a / $BUILD_LOG.b"
         echo "  后端已更新但前端仍为旧版本，请检查后重跑本脚本"
         exit 1
     fi
@@ -388,38 +459,17 @@ step_done "前端切换"
 #    内所有同镜像容器逐个安装，否则 Runner 侧运行时 import 新依赖直接失败
 #    （2026-11-20 事故：仅主 API 装了 rfc8785，4 个 Runner worker 全部缺包）。
 #    彻底解法仍是定期重建镜像，使依赖固化进镜像层。
-echo "[7] 增量安装新增依赖（本项目全部同镜像容器）..."
-PIP_PROJECT=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' aid-agent-api3 2>/dev/null || true)
-[ -z "$PIP_PROJECT" ] && PIP_PROJECT="${PWD##*/}"
-PIP_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=$PIP_PROJECT" \
-    --format '{{.Image}} {{.Names}}' | awk '$1 == "aid-agent-api:latest" {print $2}')
-if [ -z "$PIP_CONTAINERS" ]; then
-    echo "  警告：未匹配到同镜像容器，退回仅安装 aid-agent-api3"
-    PIP_CONTAINERS="aid-agent-api3"
+echo "[7] 等待依赖安装完成..."
+if ! wait "$PIP_PID"; then
+    echo "  警告：pip 后台任务异常退出，见上方输出"
 fi
-PIP_TMPDIR=$(mktemp -d)
-PIP_RUNNING=0
-for c in $PIP_CONTAINERS; do
-    echo "    -> $c"
-    ( docker exec -u root "$c" \
-          pip install --no-cache-dir -r /app/requirements.txt \
-          -i https://mirrors.cloud.tencent.com/pypi/simple \
-          --quiet || echo "$c" >> "$PIP_TMPDIR/failed" ) &
-    PIP_RUNNING=$((PIP_RUNNING + 1))
-    # 限制并发 4 个：多副本同时跑 pip 的内存峰值对测试机偏高
-    if [ "$PIP_RUNNING" -ge 4 ]; then
-        wait -n || true
-        PIP_RUNNING=$((PIP_RUNNING - 1))
-    fi
-done
-wait || true
 if [ -s "$PIP_TMPDIR/failed" ]; then
     echo "  警告：以下容器依赖安装失败，对应功能可能不可用：$(tr '\n' ' ' < "$PIP_TMPDIR/failed")"
 else
     echo "    全部容器依赖安装完成"
 fi
 rm -rf "$PIP_TMPDIR"
-step_done "pip安装"
+step_done "pip收尾"
 
 echo ""
 echo "更新完成！"
@@ -427,3 +477,6 @@ echo "=========================================="
 ELAPSED=$(( $(date +%s) - START_TS ))
 echo "总耗时: $(( ELAPSED / 60 )) 分 $(( ELAPSED % 60 )) 秒"
 echo "分段耗时: $TIMING_LIST | 总计 ${ELAPSED}s"
+}
+
+{ main "$@"; exit $?; }
