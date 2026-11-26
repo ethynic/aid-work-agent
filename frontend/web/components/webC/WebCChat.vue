@@ -237,6 +237,8 @@ const waitingWaitId = ref('')
  * 观察期间快照里出现同 wait_id 的等待属陈旧快照，忽略并继续观察。 */
 const repliedWaitId = ref('')
 const progressText = ref('')
+/** 上次已打印的 snapshot.progress 原文（值变化才打印日志，长期保留勿删） */
+let lastSnapshotProgressLog: string | undefined
 const streamFailed = ref(false)
 const isTerminal = ref(true)
 const streamingActive = ref(false)
@@ -606,6 +608,11 @@ async function submit() {
     currentSessionId.value = reply.session_id
     if (isUidMode.value) writeStoredSessionId(configId.value, reply.session_id)
     if (isNewSession) void refreshSessions()
+    // 长期保留（勿删）：提交受理结果（身份模式/会话/runner 直答与反问），真机排查渠道链路用
+    console.log(`${new Date().toLocaleTimeString()} [webC submit]`, {
+      mode: identityMode.value, session_id: reply.session_id, runner_id: reply.runner_id,
+      direct_reply: !!reply.direct_reply, waiting_text: reply.waiting_text || '',
+    })
     if (reply.direct_reply) {
       messages.value.push({ role: 'assistant', content: reply.direct_reply, created_at: nowIso(), attachments: [], images: [], files: [] })
       submitting.value = false
@@ -648,6 +655,30 @@ async function cancel() {
   }
 }
 
+// ============== SSE 事件与快照过程日志（长期保留，勿删） ==============
+// 作用：webC 渠道的工具/技能调用起止、执行结果成功/失败、过程状态在此输出到
+// console，供真机 vConsole 长期排查（如签名链接无过程状态类问题）。
+// 写法参照 /chat 页 useAgent.ts addProgress 的 console 风格：时间戳 + [webC xxx]
+// 标签；与 /chat 页 [Agent tool_*] 日志同属「豁免清理：保留观察」范畴，不属于
+// frontend_dev.md 中「临时调试日志（bug 修复后删除）」，后续清理 console 时勿删本节。
+/** 流式正文分块/复位帧：逐帧打印会刷屏，静默跳过 */
+const SSE_MUTED_KINDS = new Set(['response', 'reset'])
+
+/** SSE 事件分级打印：错误 warn；工具/技能/过程 info（与 /chat 页 [Agent tool_*] 同口径）；其余 log */
+function logWebCEvent(kind: string, data: unknown): void {
+  if (SSE_MUTED_KINDS.has(kind)) return
+  const ts = new Date().toLocaleTimeString()
+  if (kind === 'error' || kind === 'iteration_limit') {
+    console.warn(`${ts} [webC ${kind}]`, data)
+  } else if (kind === 'tool_start' || kind === 'tool_result' || kind === 'progress'
+    || kind === 'tool_messages' || kind === 'llm_call') {
+    // 豁免清理：工具/技能调用起止与结果输出，长期保留观察（同 /chat 页 [Agent tool_*]）
+    console.info(`${ts} [webC ${kind}]`, data)
+  } else {
+    console.log(`${ts} [webC ${kind}]`, data)
+  }
+}
+
 function applySnapshot(runner: RunnerSnapshot) {
   const snapshotWaitId = String((runner.snapshot?.waiting as { wait_id?: unknown } | undefined)?.wait_id ?? '')
   if (runner.waiting_text) {
@@ -669,6 +700,14 @@ function applySnapshot(runner: RunnerSnapshot) {
   waitingText.value = ''
   // 过程状态单行呈现：正文未出现前显示，正文出现后由 streamingText 气泡让位（克制原则）
   progressText.value = restrainedProgress(runner.snapshot?.progress)
+  // 长期保留（勿删）：快照 progress 原文与克制化结果对比，值变化时才打印（防刷屏）。
+  // 用于排查「有 progress 事件但页面不显示」——raw 有值而 display 为空即被克制化过滤
+  if (runner.snapshot?.progress !== lastSnapshotProgressLog) {
+    lastSnapshotProgressLog = runner.snapshot?.progress
+    console.info(`${new Date().toLocaleTimeString()} [webC snapshot.progress]`, {
+      raw: runner.snapshot?.progress, display: progressText.value, status: runner.status,
+    })
+  }
   const output = runner.result?.output || runner.snapshot?.output || ''
   streamingText.value = output
   // 仅当用户本就在底部才跟随滚动，避免每帧快照刷新强拉回底部打断回看
@@ -717,6 +756,16 @@ async function consumeEvents(runnerId: string, signal: AbortSignal, cursorRef: {
           buffer = buffer.slice(idx + 2)
           const seqMatch = frame.match(/^id:\s*(\d+)/m)
           if (seqMatch) cursorRef.seq = Math.max(cursorRef.seq, parseInt(seqMatch[1], 10))
+          // 长期保留：解析帧内事件类型与载荷打印（data 为单行 JSON；正文分块类已在 logWebCEvent 内静默）
+          const kindMatch = frame.match(/^event:\s*(\S+)/m)
+          if (kindMatch) {
+            const dataMatch = frame.match(/^data:\s*(.*)$/m)
+            let payload: unknown = undefined
+            if (dataMatch) {
+              try { payload = JSON.parse(dataMatch[1]) } catch { payload = dataMatch[1] }
+            }
+            logWebCEvent(kindMatch[1], payload)
+          }
           if (frame.includes('event:')) scheduleRefresh()
         }
         if (terminalHit) break
