@@ -320,6 +320,25 @@ def load_sso_configs(tenant_id: str) -> List[Dict[str, Any]]:
 # ============== 通用模板 fallback 与 ${VAR} 加载期渲染 ==============
 
 
+def _ensure_db_pool() -> None:
+    """skill 脚本子进程惰性初始化 DB 池
+
+    08e40836 起 skill 子进程 sitecustomize 不再启动期初始化 DB 池（改为首个
+    LLM provider 调用时经 _ensure_subprocess_runtime 惰性化），非 LLM 技能
+    命令默认无 DB 池。本模块被技能脚本（load_api_config.py 等）间接用于读
+    subagent_definitions / tenant_agent_instances / subagent_env_vars，这里
+    按既有先例（case_matching_service / sms_cli）惰性补初始化；初始化失败
+    （无 DB 环境的测试等）保持原降级语义，由调用方 try/except 兜底。
+    """
+    try:
+        from src.db.database import get_postgres_pool, init_postgres_pool
+
+        if get_postgres_pool() is None:
+            init_postgres_pool()
+    except Exception as e:
+        logger.debug(f"[tenant_api_doc] 惰性初始化 DB 池失败（按无 DB 环境降级）: {e}")
+
+
 def _subagent_allowed_skills(subagent_name: str) -> List[str]:
     """子智能体技能白名单（基础技能名，与 SKILL.md name / agent.py 过滤口径一致）
 
@@ -328,6 +347,7 @@ def _subagent_allowed_skills(subagent_name: str) -> List[str]:
     """
     if not subagent_name:
         return []
+    _ensure_db_pool()
     try:
         from src.db.subagent_definition_db import SubagentDefinitionDB
 
@@ -404,6 +424,7 @@ def resolve_base_agent_id(tenant_id: str, subagent_name: str) -> str:
     """
     if not subagent_name or not tenant_id:
         return subagent_name
+    _ensure_db_pool()
     try:
         from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
 
@@ -427,6 +448,7 @@ def load_tenant_env_vars(tenant_id: str, subagent_name: str = "") -> Dict[str, s
     db_tid = db_tenant_id(tenant_id)
     base_name = resolve_base_agent_id(tenant_id, subagent_name) if subagent_name else ""
     env_vars: Dict[str, str] = {}
+    _ensure_db_pool()
     try:
         from src.db.subagent_env_var import SubagentEnvVarDB
 

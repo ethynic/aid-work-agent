@@ -87,7 +87,10 @@ COLUMN_ALIASES = {
 
 def get_db():
     """获取数据库连接池"""
-    from src.db.database import get_db_connection
+    from src.db.database import get_db_connection, get_postgres_pool, init_postgres_pool
+    # skill 子进程 DB 池已惰性化（08e40836），非 LLM 命令需自行补初始化
+    if get_postgres_pool() is None:
+        init_postgres_pool()
     return get_db_connection()
 
 
