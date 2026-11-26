@@ -343,11 +343,12 @@
             </summary>
             <div class="mt-2 text-xs text-muted space-y-2">
               <p>签名必须在<b class="text-default">官网服务端</b>生成（官网有登录体系即有服务端；前端 JS 内嵌密钥等于没有签名，任何人都可伪造身份读取他人会话）。无法做服务端签名的官网请使用匿名模式。</p>
-              <p>链接形态：<code class="font-mono">/c/{tenant_id}/{config_id}?u={userid}&amp;name={urlencode(可选显示名称)}&amp;ts={unix秒}&amp;sig={签名}</code></p>
+              <p>链接形态：<code class="font-mono">{BASE_URL}/c/{tenant_id}/{config_id}?u={userid}&amp;name={urlencode(可选显示名称)}&amp;ts={unix秒}&amp;sig={签名}</code>（<code class="font-mono">{BASE_URL}</code> = 聊天页站点地址 <code class="font-mono">{{ siteOrigin }}</code>）</p>
               <p>签名算法：<code class="font-mono">sig = HMAC-SHA256(key=channel_secret, message="{userid}.{ts}.{name}")</code> hex 小写；name 可缺省（缺省时签名串用空串）；ts 与服务端时间差 ≤ 24 小时。</p>
               <div class="bg-surface border border-default rounded p-2">
                 <p class="font-medium text-default mb-1">本渠道占位符实际取值（替换后即可使用）：</p>
                 <ul class="list-disc list-inside space-y-0.5">
+                  <li><code class="font-mono">{BASE_URL}</code> = 聊天页站点地址 <code class="font-mono text-default">{{ siteOrigin }}</code>（与本管理后台同站点）</li>
                   <li><code class="font-mono">{tenant_id}</code> = 当前租户 <code class="font-mono text-default">{{ tenantId }}</code></li>
                   <li><code class="font-mono">{config_id}</code> = 当前渠道 <code class="font-mono text-default">{{ editingId }}</code></li>
                   <li><code class="font-mono">channel_secret</code>（即上方「签名密钥」字段）= <code class="font-mono break-all whitespace-normal">{{ form.config.channel_secret || '保存配置后由服务端生成' }}</code></li>
@@ -1990,6 +1991,9 @@ function editChannel(ch: any) {
 
 // ==================== 官网客服（web_c）：签名密钥与集成代码 ====================
 
+// 聊天页站点地址（签名说明 MD 与页面展示共用；/c/ 聊天页与本管理后台同源部署）
+const siteOrigin = window.location.origin
+
 // 集成代码随身份模式变化：anon 为纯链接；uid 拼接 userid 参数；ext 拼接签名参数（占位符，
 // 实际值由官网服务端按签名算法生成，见下方签名说明）
 const webCChatUrl = computed(() => {
@@ -2062,6 +2066,7 @@ async function downloadWebCDemo() {
 // web_c 签名说明：示例代码（页面展示与「复制MD」共用一份，占位符统一为 {userid} / channel_secret）
 const webCSignSamples = `Python:
 import hmac, hashlib, time, urllib.parse
+# base = BASE_URL（聊天页站点地址，见上方占位符取值）
 def sign_url(base, tenant_id, config_id, channel_secret, userid, name=""):
     ts = int(time.time())
     sig = hmac.new(channel_secret.encode(), f"{userid}.{ts}.{name}".encode(), hashlib.sha256).hexdigest()
@@ -2088,10 +2093,11 @@ function copyWebCSignDoc() {
     '',
     '## 链接形态',
     '',
-    '`/c/{tenant_id}/{config_id}?u={userid}&name={urlencode(可选显示名称)}&ts={unix秒}&sig={签名}`',
+    '`{BASE_URL}/c/{tenant_id}/{config_id}?u={userid}&name={urlencode(可选显示名称)}&ts={unix秒}&sig={签名}`',
     '',
     '## 占位符实际取值（本渠道）',
     '',
+    `- \`{BASE_URL}\` = 聊天页站点地址 \`${window.location.origin}\`（与本管理后台同站点）`,
     `- \`{tenant_id}\` = 当前租户 \`${tenantId.value}\``,
     `- \`{config_id}\` = 当前渠道 \`${cfg}\``,
     `- \`channel_secret\`（签名密钥）= \`${secret}\``,
