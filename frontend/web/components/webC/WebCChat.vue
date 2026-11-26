@@ -105,7 +105,7 @@
           </template>
 
           <!-- 流式 AI 回复 -->
-          <div v-if="streamingText || waitingText || progressText || streamFailed" class="flex justify-start">
+          <div v-if="streamingText || waitingText || statusLine || streamFailed" class="flex justify-start">
             <div class="max-w-[85%] has-[table]:max-w-full space-y-2">
               <div
                 v-if="streamingText"
@@ -117,13 +117,21 @@
                 <div class="mt-2 text-xs text-muted">请直接回复文字继续</div>
               </div>
               <div v-else-if="streamFailed" class="text-xs text-muted">本轮对话未完成，请重试</div>
-              <!-- 过程状态位：正文未出现前的单行克制过程呈现，替代式更新不留痕迹 -->
-              <div v-else-if="progressText" class="flex items-center gap-1.5 px-1 text-xs text-muted">
-                <span class="w-1.5 h-1.5 rounded-full bg-primary-500 animate-pulse shrink-0"></span>
-                <span class="truncate">{{ progressText }}</span>
+              <!-- 过程状态位：正文未出现前的单行状态，替代式更新不留痕迹。
+                   无工具进度时兜底显示「正在思考…」（PM 要求 2026-11-26：结果出来前
+                   恒有一句工作状态 + 转圈，避免用户分不清在工作还是出错） -->
+              <div v-else-if="statusLine" class="flex items-center gap-1.5 px-1 text-xs text-muted">
+                <svg class="w-3 h-3 animate-spin text-primary-500 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-20" />
+                  <path d="M12 2a10 10 0 0 1 9.54 7" stroke="currentColor" stroke-width="4" stroke-linecap="round" />
+                </svg>
+                <span class="truncate">{{ statusLine }}</span>
               </div>
               <div v-if="streamingText && !isTerminal" class="flex items-center gap-1 text-primary-500">
-                <span class="w-1.5 h-1.5 rounded-full bg-primary-500 animate-pulse"></span>
+                <svg class="w-3 h-3 animate-spin shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-20" />
+                  <path d="M12 2a10 10 0 0 1 9.54 7" stroke="currentColor" stroke-width="4" stroke-linecap="round" />
+                </svg>
                 <span class="text-xs text-muted">正在输入…</span>
               </div>
             </div>
@@ -188,6 +196,7 @@ import {
 } from '@/api/webC'
 import { renderMarkdown } from '@/utils/markdown'
 import { restrainedProgress } from '@/utils/webCProgress'
+import { resolveWebCStatusLine } from '@/utils/webCStatusLine'
 import { generateUuid } from '@/utils/uuid'
 import ImageGallery from '@/components/ui/ImageGallery.vue'
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
@@ -328,6 +337,17 @@ onBeforeUnmount(() => {
 })
 
 const canSubmit = computed(() => (inputText.value.trim().length > 0 || pendingAttachments.value.length > 0))
+// 状态行兜底判定实现见 utils/webCStatusLine.ts 的 resolveWebCStatusLine（可单测）；
+// 覆盖两个空窗：发送后受理返回前（无任何 progress）；工具完成后 progress 被清空
+// 到下一个 progress/正文出现前（2026-11-26 反馈：过程行显示十几秒后凭空消失）。
+const statusLine = computed(() => resolveWebCStatusLine({
+  streamingActive: streamingActive.value,
+  isTerminal: isTerminal.value,
+  streamingText: streamingText.value,
+  waitingText: waitingText.value,
+  streamFailed: streamFailed.value,
+  progressText: progressText.value,
+}))
 // uid 模式（仅 userid 链接）：会话 id 由 sessionStorage 持有，无历史入口（设计 §3.5）
 const isUidMode = computed(() => identityMode.value === 'uid')
 
