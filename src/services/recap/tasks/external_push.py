@@ -1242,10 +1242,26 @@ class ExternalPushAdapter:
 
         meta = parse_api_meta(doc, topic)
         if meta is None:
-            logger.warning(
-                f"[external_push] 租户文档 api-meta 解析失败，放弃推送 tenant={payload.tenant_id}"
-            )
-            _trace_summary(payload, "skipped", "租户文档 api-meta 解析失败")
+            # login_url 残留 ${VAR}（租户未配置推送环境变量，如 APP_ID）= fail-closed
+            # 预期 no-op：管理员对不需要推送的智能体刻意不配环境变量（2026-11-26
+            # tenant_aa3c4ef6c4f3 ×62 巡检确认）。与 tenant_api_doc 渲染期口径一致
+            # 降级 info，不进 WARNING 巡检清单；其余解析失败（缺 api-meta 块 /
+            # 缺 login_url / 非 https）仍属文档配置问题，保持 warning
+            from src.services.tenant_api_doc import find_unresolved_placeholders
+
+            unresolved = find_unresolved_placeholders(doc)
+            if unresolved:
+                logger.info(
+                    f"[external_push] 租户未配置推送环境变量 {unresolved}，按未开通外部推送处理 "
+                    f"tenant={payload.tenant_id}, subagent={subagent_name}"
+                )
+                _trace_summary(payload, "skipped", f"租户未配置推送环境变量 {','.join(unresolved)}")
+            else:
+                logger.warning(
+                    f"[external_push] 租户文档 api-meta 解析失败，放弃推送 "
+                    f"tenant={payload.tenant_id}, subagent={subagent_name}"
+                )
+                _trace_summary(payload, "skipped", "租户文档 api-meta 解析失败")
             return
 
         doc = _strip_excluded_sections(doc, meta, topic)
