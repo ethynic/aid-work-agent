@@ -239,7 +239,10 @@ export class LegacyExecution implements HostAdapter {
     const providers = new ProviderSet(entries, { nodeExecutable: this.nodeExecutable, baseEnv: providerEnvironment(),
       ...(this.supervision.enabled ? { prepareLaunch: (entry: string) => this.supervision.prepareLaunch(entry) } : {}),
       providerEnv: { wecom: { ...wecomLegacyEnv, ...pairedEnv }, 'boss-recruiting': pairedEnv,
-        ...(storeManifests.weixin ? { weixin: { AID_WEIXIN_SERVER_URL: server } } : {}) } })
+        ...(storeManifests.weixin ? { weixin: {
+          AID_WEIXIN_SERVER_URL: server,
+          ...(storeManifests.weixin.tools.includes('weixin_friend_add') ? pairedEnv : {}),
+        } } : {}) } })
     this.providers = providers
     this.runFailure = null
     this.stopping = false

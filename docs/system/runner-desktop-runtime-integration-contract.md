@@ -46,6 +46,12 @@ Device 心跳处理是服务端同步结果的唯一写入者。验签后按认�
 
 Device API、全局最低客户端版本和现有运行能力不变。未声明或无法证明当前签名清单的设备只禁用新入口的提交。提供签名清单和单条回执的生产与消费用例，验证首次提交、重复提交、回执丢失、签名摘要变化及旧 Runtime/旧插件仍可使用原能力。实施与验证见[开发计划](../plans/plan-weixin-agent-friend-requests.md)。
 
+### 微信视觉使用设备配对
+
+2026-11-26 · Device API v1 加性接入。微信好友定位使用专用 POST /api/local-tools/runtime/weixin/visual-locate，接受已配对设备凭证；Runtime 仅向受信签名的微信 Provider 注入现有配对身份。服务端核对设备、活跃租户和用户，并由设备记录确定计费归属。端点只接收当前业务窗口裁剪与好友定位输入，固定 GLM-5.3-Flash，调用原模型网关和客户端用量计费。服务端是鉴权、计费用量及租户归属的唯一写入者。上传的截图和定位输入只供该次定位使用。
+
+微信 CLI 从 0.1.5 起优先使用 Runtime 设备调用。缺少配对上下文时维持旧终端客户端绑定。配对调用失败应报告实际错误，避免重复调用或跨租户降级。已经安装的旧 CLI 与旧接口保持原行为。仅升级服务端不改变旧设备、配对、队列、结果和扣费。新版 CLI 的好友查找可用终端参数 --search-only 停在分类结果，不执行添加或提交。现有 MCP 写工具 schema 和申请回执保持原样。兼容矩阵与验收见[开发计划](../plans/plan-weixin-agent-friend-requests.md#phase-3-设备配对视觉与本机只查验收)。
+
 ### BOSS 筛选容错与本机操作恢复共同检查点
 
 2026-11-12 · 本节登记契约 2.20 的既有事实与 2026-11-18 无人值守恢复增量（代码已实现，Windows 实机验收与正式发版待完成）。适用 BOSS 网页任务。规则见 [筛选输入](../design/recruiting/resume-job-matching-design.md#boss-筛选参数容错)、[恢复交互](agent-application-architecture-design.md#boss-本机操作恢复)。

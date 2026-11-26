@@ -26,7 +26,7 @@ from src.db.models import UserDB
 from src.desktop_automation import audit, payload_resolver
 from src.desktop_automation.adapters import AdapterNotFoundError
 from src.desktop_automation.constants import BUSINESS_KIND_DESKTOP_AUTOMATION, OPERATION_PROTOCOL_V2
-from src.local_tools import catalog, operation_result, pairing, permits, repository, weixin_friends, weixin_summary, weixin_tracking, weixin_tracking_schedule
+from src.local_tools import catalog, operation_result, pairing, permits, repository, weixin_friends, weixin_summary, weixin_tracking, weixin_tracking_schedule, weixin_visual
 from src.local_tools.models import (
     ClaimRequest,
     HeartbeatRequest,
@@ -778,13 +778,7 @@ async def runtime_result(
         raise _http_error(500, "写入结果失败，请稍后重试", e)
 
 
-@router.post("/runtime/boss/visual-diagnose")
-async def runtime_boss_visual_diagnose(
-    body: BossVisualRequestBody, device: Dict = Depends(_require_device)
-):
-    """复用配对设备身份诊断；新请求按实际用量×20，旧费率和回执保持冻结。"""
-    from fastapi.responses import JSONResponse
-
+async def _active_runtime_owner(device: Dict) -> Dict:
     tenant_id, user_id = device["tenant_id"], device["user_id"]
     tenant, user = await asyncio.gather(
         asyncio.to_thread(TenantDB.get_by_id, tenant_id),
@@ -797,11 +791,32 @@ async def runtime_boss_visual_diagnose(
     if (not user or user.get("status") != "active"
             or user.get("role") != "platform_admin" and user.get("tenant_id") != tenant_id):
         raise _http_error(403, "设备用户不存在、已停用或不属于当前租户")
-    caller = RuntimeVisualCaller(tenant_id=tenant_id, device_id=str(device["id"]), user_id=user_id)
+    return tenant
+
+
+@router.post("/runtime/boss/visual-diagnose")
+async def runtime_boss_visual_diagnose(
+    body: BossVisualRequestBody, device: Dict = Depends(_require_device)
+):
+    """复用配对设备身份诊断；新请求按实际用量×20，旧费率和回执保持冻结。"""
+    from fastapi.responses import JSONResponse
+
+    await _active_runtime_owner(device)
+    caller = RuntimeVisualCaller(tenant_id=device["tenant_id"], device_id=str(device["id"]), user_id=device["user_id"])
     result = await diagnose_visual(body, caller)
     if result["state"] in {"reserved", "dispatched"}:
         return JSONResponse(result, status_code=202, headers={"Retry-After": "2"})
     return result
+
+
+@router.post("/runtime/weixin/visual-locate")
+async def runtime_weixin_visual_locate(
+    body: weixin_visual.LocateRequest, device: Dict = Depends(_require_device)
+):
+    tenant = await _active_runtime_owner(device)
+    if float(tenant.get("credit_balance") or 0) <= 0:
+        raise _http_error(402, "积分余额不足")
+    return await weixin_visual.locate(body, device)
 
 
 @router.post("/runtime/wecom/calibrate")

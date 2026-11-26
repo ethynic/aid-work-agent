@@ -10,6 +10,7 @@ const MAX_VERIFY_MESSAGE_LENGTH = 60
 export interface WeixinFriendAddArgs {
   identifier?: string
   verifyMessage?: string
+  searchOnly?: boolean
 }
 
 export function createWeixinFriendAddOperation(
@@ -18,13 +19,15 @@ export function createWeixinFriendAddOperation(
   return {
     name: 'weixin_friend_add',
     execute(args, ctx) {
-      return runWeixinOperation('write', ctx, () => {
+      const searchOnly = args?.searchOnly === true
+      return runWeixinOperation(searchOnly ? 'readonly' : 'write', ctx, () => {
         const identifier = args?.identifier
         if (typeof identifier !== 'string' || identifier.trim().length > MAX_IDENTIFIER_LENGTH
           || !/^(?:\+?[0-9]+|[A-Za-z0-9_-]+)$/.test(identifier.trim())) {
           return 'identifier 必须是一个手机号或微信号'
         }
         const message = args.verifyMessage
+        if (searchOnly && message !== undefined) return '只查模式不接受验证语'
         if (message !== undefined && (typeof message !== 'string' || message.trim().length === 0
           || [...message].length > MAX_VERIFY_MESSAGE_LENGTH || /\p{Cc}/u.test(message))) {
           return 'verify-message 必须是 1 至 60 字的单行验证语'
@@ -36,10 +39,16 @@ export function createWeixinFriendAddOperation(
         try {
           data = await runDriver({
             script: DRIVER_PATH,
-            stdin: JSON.stringify({ identifier: args.identifier!.trim(), verify_message: args.verifyMessage }),
+            stdin: JSON.stringify({
+              identifier: args.identifier!.trim(), verify_message: args.verifyMessage,
+              ...(searchOnly ? { search_only: true } : {}),
+            }),
             signal: opCtx.signal,
+            ...(process.env.AIDWORK_RUNTIME_SERVER?.trim() || process.env.AIDWORK_RUNTIME_DEVICE_TOKEN?.trim()
+              ? { useVisionProxy: false } : {}),
           })
         } catch (err) {
+          if (searchOnly) throw err
           // A terminated process cannot attest whether the final click was already dispatched.
           if (err instanceof CancelledError) {
             throw new CodedOperationError('CANCELLED', '添加好友操作已取消，申请状态需在微信中核对', 'unknown')
@@ -51,7 +60,13 @@ export function createWeixinFriendAddOperation(
           throw new CodedOperationError('INTERNAL_ERROR', '添加好友驱动执行失败，申请状态需在微信中核对')
         }
 
+        if (searchOnly && data.status !== 'addable' && data.status !== 'already_friend' && data.status !== 'already_requested') {
+          throw new CodedOperationError('UI_CHANGED', '无法确认微信搜索结果')
+        }
         switch (data.status) {
+          case 'addable':
+            if (searchOnly) return { message: '已找到可添加的目标，搜索结果已保留', data: { status: data.status }, effect: 'none' }
+            throw new CodedOperationError('EXECUTION_UNKNOWN', '无法确认微信好友申请结果，请在微信中核对')
           case 'already_friend':
             return { message: '目标已是微信好友', data: { status: data.status }, effect: 'none' }
           case 'already_requested':

@@ -30,11 +30,15 @@ using System;
 public static class WeixinProbeWin32 {
     public struct RECT { public int Left, Top, Right, Bottom; }
     public static int Foreground;
+    public static System.Collections.Generic.List<int> Closed = new System.Collections.Generic.List<int>();
     public static uint GetDpiForWindow(IntPtr h) { return 96; }
     public static IntPtr GetForegroundWindow() { return new IntPtr(Foreground); }
     public static bool IsWindowVisible(IntPtr h) { return true; }
     public static bool GetWindowRect(IntPtr h, ref RECT r) { r = new RECT { Left = -500, Top = 20, Right = 100, Bottom = 720 }; return true; }
-    public static bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l) { return true; }
+    public static bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l) {
+        if (m == 0x0010) Closed.Add(h.ToInt32());
+        return true;
+    }
 }
 '@
 function Throw-DriverError($Code, $Message) { throw "WXDRIVE|$Code|$Message" }
@@ -79,7 +83,7 @@ function Send-WeixinKeyChord($Keys, $ForegroundGuard) {
 }
 function Send-WeixinPostMessageText($Hwnd, $Text) { $script:inputs.Add("$Hwnd/$Text") }
 function Send-WeixinPostMessageKey($Hwnd, $Vk, $ScanCode) { $script:inputs.Add("$Hwnd/Enter") }
-function Invoke-KimiVision { param($ImageBytes, $SystemPrompt, $UserText, $ArtifactPrefix, [switch]$ProxyOnly)
+function Invoke-KimiVision { param($ImageBytes, $SystemPrompt, $UserText, $ArtifactPrefix, [switch]$ProxyOnly, $RuntimeFriendStep)
     if (-not $ProxyOnly) { throw 'Request must use billing proxy' }
     switch ($ImageBytes[0]) {
         1 { return @{ plus=@{x=300;y=30} } }
@@ -111,7 +115,7 @@ $env:AID_WEIXIN_ACCESS_TOKEN = 'fixture'
 $env:AID_WEIXIN_PROXY_ERROR = ''
 $rows = foreach ($scenario in @(
     'confirmed', 'closed-unverified', 'form-remains', 'different-query', 'already-friend', 'direct-add',
-    'search-changed', 'form-changed', 'settlement-changed', 'caret-blinks', 'default-message'
+    'search-changed', 'form-changed', 'settlement-changed', 'caret-blinks', 'default-message', 'search-only'
 )) {
     $script:scenario = $scenario
     $script:searchFrames = 0
@@ -122,15 +126,17 @@ $rows = foreach ($scenario in @(
     $script:windows = @{}
     $script:clicks = [Collections.Generic.List[string]]::new()
     $script:inputs = [Collections.Generic.List[string]]::new()
+    [WeixinProbeWin32]::Closed.Clear()
     Open-FixtureWindow 1 '微信'
     $result = $null
     $failure = $null
-    $message = if ($scenario -ne 'default-message') { '你好🤝' }
-    try { $result = Invoke-WeixinFriendAdd 'wx_test' $message }
+    $message = if ($scenario -notin @('search-only', 'default-message')) { '你好🤝' }
+    try { $result = Invoke-WeixinFriendAdd 'wx_test' $message -SearchOnly:($scenario -eq 'search-only') }
     catch { $failure = $_.Exception.Message }
     @{
-        scenario=$scenario; status=$result.status; failure=$failure
+        scenario=$scenario; status=$result.status; failure=$failure; foreground=[WeixinProbeWin32]::Foreground
         clicks=$script:clicks.ToArray(); inputs=$script:inputs.ToArray(); caretDifferences=$script:caretDifferences
+        closed=[WeixinProbeWin32]::Closed.ToArray()
     }
 }
 ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress
@@ -140,12 +146,21 @@ ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress
       assert.equal(result.status, 0, result.stderr)
       const rows = JSON.parse(result.stdout) as Array<{
         scenario: string; status?: string; failure: string; clicks: string[]; inputs: string[]; caretDifferences: number
+        foreground: number; closed: number[]
       }>
-      assert.equal(rows.length, 11)
+      assert.equal(rows.length, 12)
       const searchClicks = ['1/-200/50', '2/-440/100', '3/-380/100']
       const searchInputs = ['CTRL+A', 'DEL', '3/wx_test', '3/Enter']
       for (const row of rows) {
         const confirmation = row.clicks.filter((event) => event === '4/-360/620')
+        if (row.scenario === 'search-only') {
+          assert.deepEqual(row.clicks, searchClicks)
+          assert.deepEqual(row.inputs, searchInputs)
+          assert.equal(row.status, 'addable')
+          assert.equal(row.foreground, 3)
+          assert.deepEqual(row.closed, [])
+          continue
+        }
         if (row.scenario === 'direct-add') {
           assert.deepEqual(row.clicks, [...searchClicks, '3/-380/320'])
           assert.deepEqual(row.inputs, searchInputs)

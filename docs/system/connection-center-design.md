@@ -90,7 +90,7 @@
 
 用户可直接点击带有选中数量的提交按钮。取消勾选后，按钮同步更新待提交数量。设备上的微信已登录且可交互时，按所选清单逐条处理。申请记录按批次展示文件名、北京时间和结果计数。打开详情可筛选「已提交」，查看微信确认送出的联系人和提交时间。微信曾有申请、已是好友、直接添加成好友分别记录，均不计入本批新增申请。无法确认是否送出的记录显示「待核对」，保留原因并避免自动重发。
 
-批次和逐人结果按当前租户及发起用户保存，刷新后可继续查看。只保存核对所需的联系人标识、称呼和结果，不保存原始上传文件、验证语或桌面截图到申请记录。首版采用手动发起。现有[本机添加好友 CLI](../design/weixin/weixin-cli-design.md#12-本机添加好友)每次操作一个目标，Runtime 签名能力、写入回执和未知结果的恢复规则见[共同检查点](runner-desktop-runtime-integration-contract.md#微信好友申请共同检查点)，见[开发计划](../plans/plan-weixin-agent-friend-requests.md)。
+批次和逐人结果按当前租户及发起用户保存，刷新后可继续查看。只保存核对所需的联系人标识、称呼和结果，不保存原始上传文件、验证语或桌面截图到申请记录。首版采用手动发起。好友视觉定位沿用 Runtime 配对身份复用现有模型网关及用量计费，见[视觉配对契约](runner-desktop-runtime-integration-contract.md#微信视觉使用设备配对)。现有[本机添加好友 CLI](../design/weixin/weixin-cli-design.md#12-本机添加好友)每次操作一个目标，Runtime 签名能力、写入回执和未知结果的恢复规则见[共同检查点](runner-desktop-runtime-integration-contract.md#微信好友申请共同检查点)，见[开发计划](../plans/plan-weixin-agent-friend-requests.md)。
 
 ### 2.1.2 连接邮箱
 
