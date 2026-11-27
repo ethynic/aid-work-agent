@@ -4,7 +4,7 @@
  * 严格只读：只查询平台/会话/PowerShell/进程列表，绝不激活窗口、发送输入或改剪贴板。
  * 全部检查 best-effort：单项失败只落 false，不抛出（probe/doctor 都要快速返回结构化结果）。
  *
- * 测试可注入 platform/sessionName/localAppData/execFileFn 替身，模拟非 win32、
+ * 测试可注入 Windows 桌面探测、平台、目录和系统命令，模拟非 win32、
  * 服务会话、WXWork.exe 进程存在性等场景。
  */
 import { execFile } from 'node:child_process'
@@ -15,12 +15,12 @@ export interface ExecFileResult {
   stdout: string
 }
 
-export type ExecFileFn = (file: string, args: string[]) => Promise<ExecFileResult>
+export type ExecFileFn = (file: string, args: string[], timeoutMs?: number) => Promise<ExecFileResult>
 
 /** 默认命令执行：只读命令，5s 超时，不弹窗 */
-const defaultExecFile: ExecFileFn = (file, args) =>
+const defaultExecFile: ExecFileFn = (file, args, timeout = 5000) =>
   new Promise((resolve, reject) => {
-    execFile(file, args, { timeout: 5000, windowsHide: true, encoding: 'utf8' }, (err, stdout) => {
+    execFile(file, args, { timeout, windowsHide: true, encoding: 'utf8' }, (err, stdout) => {
       if (err) reject(err)
       else resolve({ stdout: String(stdout) })
     })
@@ -28,8 +28,7 @@ const defaultExecFile: ExecFileFn = (file, args) =>
 
 export interface ProbeEnvironmentOptions {
   platform?: NodeJS.Platform
-  /** SESSIONNAME 环境变量（win32 交互会话判定）；显式传 undefined 模拟服务会话 */
-  sessionName?: string
+  desktopProbeFn?: () => Promise<WindowsDesktopStatus>
   localAppData?: string
   execFileFn?: ExecFileFn
   /** 每个检查步骤的回调（probe operation 用它发 progress） */
@@ -41,18 +40,73 @@ export interface EnvironmentProbe {
   platform: string
   /** null = 非 win32 无法判定 */
   interactive_session: boolean | null
+  /** SESSIONNAME 仅供旧诊断字段展示。 */
   session_name: string | null
+  desktop_issue?: string
   powershell_available: boolean
   powershell_path: string | null
   wecom_running: boolean
   wecom_processes: number
 }
 
-/** win32 交互会话判定：Console（本地登录）或 RDP-Tcp*（远程桌面）为交互；Services/缺失为非交互 */
-export function isInteractiveSession(sessionName: string | undefined): boolean {
-  if (!sessionName) return false
-  if (sessionName === 'Services') return false
-  return sessionName === 'Console' || sessionName.startsWith('RDP-Tcp')
+type WindowsDesktopStatus = 'interactive' | 'session-inactive' | 'input-unavailable' | 'probe-failed'
+
+const WINDOWS_DESKTOP_CHECK = String.raw`
+$ErrorActionPreference = 'Stop'
+Add-Type -Namespace WeCom -Name DesktopCheck -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("wtsapi32.dll", ExactSpelling = true)]
+private static extern bool WTSQuerySessionInformationW(IntPtr server, int session, int infoClass, out IntPtr value, out int size);
+[System.Runtime.InteropServices.DllImport("wtsapi32.dll")]
+private static extern void WTSFreeMemory(IntPtr value);
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+private static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+private static extern bool CloseDesktop(IntPtr desktop);
+
+public static string Probe(int session) {
+    if (session == 0) return "session-inactive";
+    IntPtr value;
+    int size;
+    const int WTSConnectState = 8;
+    if (!WTSQuerySessionInformationW(IntPtr.Zero, session, WTSConnectState, out value, out size)) return "probe-failed";
+    try {
+        if (size < sizeof(int) || value == IntPtr.Zero) return "probe-failed";
+        const int WTSActive = 0;
+        if (System.Runtime.InteropServices.Marshal.ReadInt32(value) != WTSActive) return "session-inactive";
+    } finally {
+        WTSFreeMemory(value);
+    }
+    const uint GenericAll = 0x10000000;
+    IntPtr desktop = OpenInputDesktop(0, false, GenericAll);
+    if (desktop == IntPtr.Zero) return "input-unavailable";
+    CloseDesktop(desktop);
+    return "interactive";
+}
+'@
+[Console]::Out.Write([WeCom.DesktopCheck]::Probe([Diagnostics.Process]::GetCurrentProcess().SessionId))
+`
+
+const WINDOWS_DESKTOP_ISSUES = {
+  'session-inactive': 'Windows 会话未连接到交互桌面',
+  'input-unavailable': 'Windows 输入桌面不可用，请解锁后重试',
+  'probe-failed': '无法检测 Windows 交互桌面，请核对 PowerShell 运行条件',
+} as const
+
+async function probeWindowsDesktop(execFileFn: ExecFileFn): Promise<WindowsDesktopStatus> {
+  try {
+    const { stdout } = await execFileFn('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-EncodedCommand',
+      Buffer.from(WINDOWS_DESKTOP_CHECK, 'utf16le').toString('base64'),
+    ], 2500)
+    switch (stdout.trim()) {
+      case 'interactive': return 'interactive'
+      case 'session-inactive': return 'session-inactive'
+      case 'input-unavailable': return 'input-unavailable'
+      default: return 'probe-failed'
+    }
+  } catch {
+    return 'probe-failed'
+  }
 }
 
 /** tasklist CSV 输出中的 WXWork.exe 进程数（输出可能是 GBK，但进程名是 ASCII，按子串匹配安全） */
@@ -88,8 +142,7 @@ export async function probeEnvironment(opts: ProbeEnvironmentOptions = {}): Prom
 
   // 交互会话（非 win32 无法判定，置 null）
   step('检查平台与交互桌面会话')
-  const sessionName = platformOk ? (opts.sessionName !== undefined ? opts.sessionName : process.env.SESSIONNAME) : undefined
-  const interactive = platformOk ? isInteractiveSession(sessionName) : null
+  const desktopCheck = platformOk ? (opts.desktopProbeFn?.() ?? probeWindowsDesktop(execFileFn)) : null
 
   // PowerShell 可用性（where.exe 只读查找）
   step('检查 PowerShell 可用性')
@@ -120,11 +173,13 @@ export async function probeEnvironment(opts: ProbeEnvironmentOptions = {}): Prom
     }
   }
 
+  const desktop = await desktopCheck
   return {
     platform_ok: platformOk,
     platform,
-    interactive_session: interactive,
-    session_name: sessionName ?? null,
+    interactive_session: desktop === null ? null : desktop === 'interactive',
+    session_name: platformOk ? (process.env.SESSIONNAME ?? null) : null,
+    ...(desktop !== null && desktop !== 'interactive' ? { desktop_issue: WINDOWS_DESKTOP_ISSUES[desktop] } : {}),
     powershell_available: powershellAvailable,
     powershell_path: powershellPath,
     wecom_running: wecomProcesses > 0,

@@ -133,6 +133,12 @@ CLI 动词 / MCP stdio ──> operations（10 个，统一 OperationResult，�
   KimiVision 链路）未引入本 CLI。
 - **已知启发式弱点**：消息 side（左右）判定仍为启发式，代码注释自认不可靠（§10 遗留）。
 
+### Windows 交互桌面检查（2026-11-27）
+
+`doctor`、`wecom_probe` 和本地库诊断共用只读环境探测。PowerShell 取得自身进程的 Windows 会话 ID。Session 0 和 WTS 非活动会话明确不可交互。活动会话还需能打开实际接收输入的桌面，打开后立即关闭句柄。锁屏或输入桌面不可访问时返回具体原因，系统调用失败或探测超时另报诊断失败。保留旧响应中的 `session_name` 作为诊断信息，环境变量缺失也能判定实际输入桌面。[Windows 会话状态](https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/ne-wtsapi32-wts_connectstate_class) · [Windows 输入桌面](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openinputdesktop)
+
+探测沿用插件的 PowerShell 及已签名发行包，无需额外运行依赖。Runtime 继续读取现有 `runtime_readiness` 字段。企微进程检查、登录态提示、插件工具声明和云端派发格式沿原契约。验收范围见 [W33 计划](../../plans/plan-wecom-cli-group-chat-experiment.md#w33-企微交互桌面误判修复2026-11-27)。
+
 ## 5. 会话读取、待回复和监控（2026-11-06 修订）
 
 `wecom_read_session` 的稳定 `session`、日期模式及旧 `target_name`/账号绑定 `target_ref` 均只从本地库读取；旧目标名沿本地库精确解析与同名消歧。`wecom_unread_list` 返回本地库待回复快照；`wecom_watch_poll` 返回数据库水位后的新消息，失败轮保留水位。三者均不截图、搜索、切换会话或清除未读角标。

@@ -99,7 +99,7 @@ export function createWecomProbeOperation(
           if (env.interactive_session === false) {
             throw new CodedOperationError(
               'INTERACTIVE_SESSION_REQUIRED',
-              '需要已登录且未锁屏的交互桌面会话（当前为非交互会话，如服务/计划任务上下文）',
+              env.desktop_issue ?? '需要已登录且未锁屏的 Windows 交互桌面会话',
             )
           }
           const data: Record<string, unknown> = {
