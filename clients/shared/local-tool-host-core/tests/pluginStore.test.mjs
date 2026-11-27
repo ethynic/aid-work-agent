@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync, randomUUID, sign } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { test } from 'node:test'
@@ -103,6 +103,66 @@ test('refresh checks large releases serially and publishes one complete readines
   assert.equal(peak, 1, 'Large signed OCR archives must not be inflated concurrently')
   assert.ok(store.list().every(plugin => !plugin.ready))
   assert.equal(changes, 3, 'Both refreshed facts publish through one revision notification')
+})
+
+test('starting verifies an unchanged archive and current payload without repeating a trusted version probe', async t => {
+  const verifiedVersion = [], timing = []
+  let ready = true
+  const { home, store, options } = fixture(t, async (_path, _manifest, context) => {
+    verifiedVersion.push(context?.versionVerified === true)
+    return { ready }
+  })
+  options.onCheckTiming = event => timing.push(event)
+  await store.initialize(); await store.import(await pack())
+  const restarted = new PluginStore(options); await restarted.initialize()
+  ready = false
+  await restarted.refresh()
+  assert.deepEqual(verifiedVersion, [false, false, true], 'Readiness runs again but only the same verified entry can reuse its version')
+  assert.deepEqual(timing.map(({ pass, phase, succeeded }) => [pass, phase, succeeded]), [
+    ['initialize', 'archive_read', true], ['initialize', 'archive_verify', true], ['initialize', 'payload_verify', true],
+    ['refresh', 'archive_read', true], ['refresh', 'archive_digest', true], ['refresh', 'payload_verify', true],
+  ])
+  assert.equal(restarted.list()[0].ready, false)
+  assert.ok(restarted.resolveEntries({}).weixin)
+
+  const entry = restarted.resolveEntries({}).weixin
+  const original = statSync(entry)
+  writeFileSync(entry, 'export []')
+  utimesSync(entry, original.atime, original.mtime)
+  assert.equal(statSync(entry).size, original.size, 'Unchanged metadata must not hide altered executable bytes')
+  await restarted.refresh()
+  assert.deepEqual(restarted.resolveEntries({ weixin: 'legacy' }), {}, 'Tampering before a delayed start must block execution including legacy fallback')
+  assert.deepEqual(restarted.declaredPlugins(), [], 'The updated heartbeat must not advertise an invalid plugin')
+  assert.equal(verifiedVersion.length, 3, 'A damaged plugin must not reach even its read-only doctor')
+
+  const { records } = JSON.parse(readFileSync(join(home, 'plugins/inventory.json'), 'utf8'))
+  writeFileSync(entry, 'export {}')
+  await restarted.refresh()
+  assert.equal(verifiedVersion.at(-1), false, 'Recovery must re-establish trust before reuse')
+  const archive = join(home, 'plugins/releases', records[0].directory, 'archive.zip')
+  const changed = Buffer.from(readFileSync(archive)); changed[0] ^= 1
+  writeFileSync(archive, changed)
+  await restarted.refresh()
+  assert.deepEqual(restarted.resolveEntries({}), {}, 'Even an unchanged installed payload requires an intact archived package')
+  assert.equal(timing.at(-1).phase, 'archive_digest')
+  assert.equal(timing.at(-1).succeeded, false)
+})
+
+test('the current release owns the proof and withdrawing its publisher trust removes its runnable entry', async t => {
+  const probes = []
+  const { options, store } = fixture(t, async (_root, manifest, context) => {
+    probes.push([manifest.provider_version, context?.versionVerified === true]); return { ready: true }
+  })
+  await store.initialize(); await store.import(await pack())
+  await store.refresh()
+  await store.import(await pack({ version: '2.0.0', release: 'replacement' }))
+  await store.refresh()
+  assert.deepEqual(probes, [['1.0.0', false], ['1.0.0', true], ['2.0.0', false], ['2.0.0', true]], 'A replacement must establish its own proof before any reuse')
+  options.trust = []
+  await store.refresh()
+  assert.deepEqual(store.declaredPlugins(), [], 'An unchanged archive cannot reuse a proof from different publisher inputs')
+  assert.deepEqual(store.resolveEntries({ weixin: 'legacy' }), {})
+  assert.equal(probes.length, 4, 'Rechecking publisher trust happens before attempting to run the plugin')
 })
 test('disabled state survives higher-version upgrade and repeated imports never re-enable it', async t => {
   const { store } = fixture(t); await store.initialize(); const first = await pack(); await store.import(first)

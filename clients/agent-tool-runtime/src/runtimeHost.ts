@@ -144,7 +144,11 @@ export class LegacyExecution implements HostAdapter {
         // CLI/A1 资产不产生安装权限，PluginStore 维持 FIRST_PARTY_PROVIDERS 默认
         ...(this.pluginOptions!.trust ? { providers: providerIdsOfTrust(this.pluginOptions!.trust) } : {}),
         platform: { platform: process.platform, arch: process.arch, node_version: process.versions.node, node_abi: process.versions.modules, runtime_version: RUNTIME_VERSION },
-        probe: (root, manifest) => probePlugin(this.nodeExecutable, root, manifest, providerEnvironment()),
+        probe: (root, manifest, context) => probePlugin(this.nodeExecutable, root, manifest, providerEnvironment(), context),
+        onCheckTiming: ({ pluginId, pass, phase, elapsedMs, succeeded, files }) => {
+          // Only fixed stages and the allowlisted plugin identity leave the store.
+          logInfo(`[runtime-startup-plugin] provider=${pluginId} pass=${pass} phase=${phase} elapsed_ms=${elapsedMs} result=${succeeded ? 'ok' : 'failed'}${files === undefined ? '' : ` files=${files}`}`)
+        },
         onChanged: () => this.pluginsChanged?.() })
       try { this.pluginStore = makeStore(); await this.pluginStore.initialize() } catch (error) {
         if (this.cleanGeneration && existsSync(join(this.home, 'plugins')) && !lstatSync(join(this.home, 'plugins')).isSymbolicLink()) {
@@ -217,6 +221,7 @@ export class LegacyExecution implements HostAdapter {
     await recoverPairing()
   }
   async start(connection: (value: ConnectionStatus) => void, executionEnded: () => void): Promise<void> {
+    const started = performance.now()
     if (await registrationBlocksExecution(runtimeHomeDir())) throw new ManagementError(11, '新注册尚未完成，请在客户端完成连接配置；可正常退出')
     await recoverPairing()
     const config = loadConfig()
@@ -276,6 +281,7 @@ export class LegacyExecution implements HostAdapter {
       if (recoveryReady) { value.providers = [...(value.providers as string[]), 'runtime-recovery']; value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_observe_v2'] }
       return value
     }
+    let firstHeartbeat = true
     const loop = new PollLoop({
       api,
       runnerDeps: {
@@ -301,7 +307,13 @@ export class LegacyExecution implements HostAdapter {
       capabilities,
       pluginManifests: Object.fromEntries(plugins.map(({ provider_key, envelope, manifest }) => [provider_key, { envelope, manifest }])),
       canClaim: () => Object.values(this.resolveEntries(config)).some(entry => existsSync(entry)),
-      onConnection: connection,
+      onConnection: value => {
+        if (value === 'online' && firstHeartbeat) {
+          firstHeartbeat = false
+          logInfo(`[runtime-startup] phase=heartbeat_online elapsed_ms=${Math.round(performance.now() - started)} host_elapsed_ms=${Math.round(performance.now())}`)
+        }
+        connection(value)
+      },
       // 契约 2.20：并行接单——与能力上报同源（assembleStoreManifests 派生），PollLoop
       // 据此判定领到的作业是否后台并行执行；无声明插件 parallel_tools 为空 → 行为与现状一致
       parallelTools,
@@ -311,6 +323,7 @@ export class LegacyExecution implements HostAdapter {
       logInfo('[session-tasks] 微信自动回复已停用，聊天正文仅在本机读取')
     }
     this.loop = loop
+    logInfo(`[runtime-startup] phase=execution_prepared elapsed_ms=${Math.round(performance.now() - started)}`)
     this.runPromise = loop.run().then(() => {
       if (!this.stopping) executionEnded()
     }, error => {
@@ -349,15 +362,18 @@ export async function openRuntimeHost(options: { home?: string; nodeExecutable?:
   // Legacy helpers have process-wide home state; a Node child owns one composition.
   if (compositionOpen) throw new ManagementError(4, '本进程已有Runtime Host')
   compositionOpen = true
+  const started = performance.now()
   const home = resolve(options.home ?? runtimeHomeDir())
   try {
     // Core preflight may enter read-only mode before adapter.initialize runs.
     // Its device snapshot must still read this composition's explicitly bound home.
     configureRuntimeHome(home)
     const trust = options.trust ?? loadPackagedTrust(dirname(fileURLToPath(import.meta.url)))
-    return await RuntimeHost.open({ home, version: RUNTIME_VERSION, supervisor: options.supervisor ?? 'cli', readOnlyOnFailure: options.supervisor === 'runtime_app',
+    const host = await RuntimeHost.open({ home, version: RUNTIME_VERSION, supervisor: options.supervisor ?? 'cli', readOnlyOnFailure: options.supervisor === 'runtime_app',
       adapter: new LegacyExecution(options.nodeExecutable ?? process.execPath, home, trust ? { platform: options.platform, trust } : undefined,
         options.supervisor === 'runtime_app' && options.cleanGeneration === true) })
+    logInfo(`[runtime-startup] phase=host_open elapsed_ms=${Math.round(performance.now() - started)}`)
+    return host
   } catch (error) {
     compositionOpen = false; configureRuntimeHome(undefined)
     throw error

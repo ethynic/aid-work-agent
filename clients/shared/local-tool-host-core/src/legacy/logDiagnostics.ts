@@ -35,6 +35,14 @@ const uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-
 const identifier = '[a-z][a-z0-9_-]{0,79}'
 const started = new RegExp(`^invocation (${uuid}) 已开始执行 tool=(${identifier})$`)
 const perf = new RegExp(`^\\[runtime-perf\\] invocation=(${uuid}) tool=(${identifier}) provider=(${identifier}) started_ms=(\\d+) lock_wait_ms=(\\d+) lock_prep_ms=(\\d+) provider_call_ms=(\\d+)$`)
+const startupPhase = /^\[runtime-startup\] phase=(host_open|execution_prepared|heartbeat_online) elapsed_ms=(\d{1,12})(?: host_elapsed_ms=(\d{1,12}))?$/
+const pluginStartupPhase = /^\[runtime-startup-plugin\] provider=(ai\.aidwork\.[a-z0-9-]{1,60}) pass=(initialize|refresh|maintenance) phase=(archive_read|archive_verify|archive_digest|payload_verify|version|doctor) elapsed_ms=(\d{1,12}) result=(ok|failed)(?: files=(\d{1,6}))?$/
+const startupLabels: Readonly<Record<string, string>> = {
+  host_open: '本机管理 Host 就绪', execution_prepared: '执行准备完成', heartbeat_online: '首次心跳成功',
+  initialize: '初检', refresh: '执行前复检', maintenance: '插件维护检查',
+  archive_read: '读取归档', archive_verify: '归档验签和解包', archive_digest: '归档摘要复验',
+  payload_verify: '现场文件核对', version: '版本探测', doctor: '就绪诊断',
+}
 const invocationFailure = new RegExp(`^invocation (${uuid}) (执行器异常|桌面资源锁等待超时): `)
 const providerMissing = new RegExp(`^invocation (${uuid}) provider=(${identifier}) 未安装或未配置入口，拒绝执行$`)
 const toolRejected = new RegExp(`^invocation (${uuid}) tool=(${identifier}) 不在受信 manifest，拒绝执行$`)
@@ -78,6 +86,10 @@ export function projectRuntimeLog(line: string): RuntimeLogEntry | null {
   const message = header[3]!, begin = started.exec(message), timing = perf.exec(message)
   if (begin) return { ...base, event: 'invocation-started', summary: '本地工具调用开始', invocationId: begin[1], tool: begin[2] }
   if (timing) return { ...base, event: 'invocation-timing', summary: '本地工具调用阶段耗时', invocationId: timing[1], tool: timing[2], provider: timing[3], durationMs: Number(timing[7]) }
+  const startup = startupPhase.exec(message)
+  if (startup) return { ...base, event: 'runtime-startup-timing', summary: `${startupLabels[startup[1]!]}${startup[3] ? `（Host 启动至此 ${startup[3]} ms）` : ''}`, durationMs: Number(startup[2]) }
+  const plugin = pluginStartupPhase.exec(message)
+  if (plugin) return { ...base, event: 'plugin-startup-timing', provider: plugin[1], summary: `${plugin[1]} · ${startupLabels[plugin[2]!]} · ${startupLabels[plugin[3]!]}${plugin[5] === 'failed' ? '失败' : ''}${plugin[6] ? `（${plugin[6]} 项文件）` : ''}`, durationMs: Number(plugin[4]) }
   const failure = invocationFailure.exec(message), missing = providerMissing.exec(message), rejected = toolRejected.exec(message)
   if (failure) return { ...base, level: 'error', event: 'invocation-failed', summary: failure[2] === '执行器异常' ? '本地执行发生异常；原始错误文本未展示' : '等待桌面资源超时', invocationId: failure[1] }
   if (missing) return { ...base, level: 'error', event: 'provider-unavailable', summary: '调用需要的插件未安装或未配置', invocationId: missing[1], provider: missing[2] }
