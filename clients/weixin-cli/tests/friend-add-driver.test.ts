@@ -32,7 +32,36 @@ Add-Type -TypeDefinition @'
 using System;
 public static class WeixinProbeWin32 {
     public struct RECT { public int Left, Top, Right, Bottom; }
+    public struct POINT { public int X, Y; }
     public static int Foreground;
+    public static int Moves, DriftAt, OccludedAt, FocusLostAt, ZeroInputAt, PartialInputAt;
+    public static bool ButtonHeld, MenuOwnerForeground;
+    public static POINT Cursor;
+    public static Action<int,int,int> Click;
+    public static bool SetCursorPos(int x, int y) {
+        Moves++;
+        Cursor = new POINT { X = x, Y = y };
+        if (Moves == FocusLostAt) Foreground = 999;
+        return true;
+    }
+    public static bool GetCursorPos(out POINT point) {
+        point = Cursor;
+        if (Moves == DriftAt) point.X++;
+        return true;
+    }
+    public static short GetAsyncKeyState(int vk) { return ButtonHeld && vk == 1 ? short.MinValue : (short)0; }
+    public static IntPtr WindowFromPoint(POINT point) {
+        if (Moves == OccludedAt) return new IntPtr(999);
+        int root = MenuOwnerForeground && Moves == 2 ? 2 : Foreground;
+        return new IntPtr(root + 100);
+    }
+    public static IntPtr GetAncestor(IntPtr window, uint flags) { return flags == 2 ? new IntPtr(window.ToInt32() - 100) : IntPtr.Zero; }
+    public static uint SendLeftClick() {
+        if (Moves == ZeroInputAt) return 0;
+        int root = GetAncestor(WindowFromPoint(Cursor), 2).ToInt32();
+        Click(root, Cursor.X, Cursor.Y);
+        return Moves == PartialInputAt ? 1u : 2u;
+    }
     public static System.Collections.Generic.Dictionary<int,IntPtr> Props = new System.Collections.Generic.Dictionary<int,IntPtr>();
     public static bool SetProp(IntPtr h, string name, IntPtr value) { Props[h.ToInt32()] = value; return true; }
     public static IntPtr GetProp(IntPtr h, string name) { return Props.ContainsKey(h.ToInt32()) ? Props[h.ToInt32()] : IntPtr.Zero; }
@@ -94,10 +123,14 @@ function Get-WeixinWindowSnapshot($Hwnd, $Crop) {
     if ($Hwnd -eq 4) { $content = $script:formContent }
     return @{ Image=[byte[]]@($Hwnd, $content); Bounds=$bounds; WindowRect=$rect }
 }
-function Send-WeixinPostMessageClick($Hwnd, $ScreenX, $ScreenY) {
+[WeixinProbeWin32]::Click = [Action[int,int,int]]{
+    param($Hwnd, $ScreenX, $ScreenY)
     $script:clicks.Add("$Hwnd/$ScreenX/$ScreenY")
     if ($Hwnd -eq 1 -and $script:scenario -eq 'cache-plus-miss' -and $ScreenX -eq -200) { return }
-    if ($Hwnd -eq 1) { Open-FixtureWindow 2 '微信' 'Qt51514QWindowToolSaveBits' }
+    if ($Hwnd -eq 1) {
+        Open-FixtureWindow 2 '微信' 'Qt51514QWindowToolSaveBits'
+        if ([WeixinProbeWin32]::MenuOwnerForeground) { [WeixinProbeWin32]::Foreground = 1 }
+    }
     if ($Hwnd -eq 2 -and $script:scenario -eq 'cache-menu-miss' -and $ScreenX -eq -440) { return }
     if ($Hwnd -eq 2) { $script:windows.Remove(2); [void][WeixinProbeWin32]::Props.Remove(2); Open-FixtureWindow 3 '添加朋友' }
     if ($Hwnd -eq 3 -and $ScreenY -eq 320 -and $script:scenario -ne 'direct-add') { Open-FixtureWindow 4 '申请添加朋友' }
@@ -169,6 +202,14 @@ function Run-Fixture([string]$scenario, [switch]$ReuseDesktop) {
     $script:inputs = [Collections.Generic.List[string]]::new()
     $script:visualSteps = [Collections.Generic.List[string]]::new()
     [WeixinProbeWin32]::Closed.Clear()
+    [WeixinProbeWin32]::Moves = 0
+    [WeixinProbeWin32]::DriftAt = if ($scenario -eq 'cursor-drift') { 1 } else { 0 }
+    [WeixinProbeWin32]::OccludedAt = if ($scenario -eq 'window-covered') { 4 } else { 0 }
+    [WeixinProbeWin32]::FocusLostAt = if ($scenario -eq 'focus-stolen') { 4 } else { 0 }
+    [WeixinProbeWin32]::ZeroInputAt = if ($scenario -eq 'input-blocked') { 6 } else { 0 }
+    [WeixinProbeWin32]::PartialInputAt = if ($scenario -eq 'input-partial') { 6 } else { 0 }
+    [WeixinProbeWin32]::ButtonHeld = $scenario -eq 'button-held'
+    [WeixinProbeWin32]::MenuOwnerForeground = $scenario -eq 'menu-owner-foreground'
     $script:closeRead = 0
     if (-not $ReuseDesktop) {
         [IO.Directory]::CreateDirectory((Join-Path $PSScriptRoot 'fixture-state')) | Out-Null
@@ -184,7 +225,7 @@ function Run-Fixture([string]$scenario, [switch]$ReuseDesktop) {
     catch { $failure = $_.Exception.Message }
     @{
         scenario=$scenario; status=$result.status; failure=$failure; foreground=[WeixinProbeWin32]::Foreground
-        clicks=$script:clicks.ToArray(); inputs=$script:inputs.ToArray(); caretDifferences=$script:caretDifferences
+        moves=[WeixinProbeWin32]::Moves; clicks=$script:clicks.ToArray(); inputs=$script:inputs.ToArray(); caretDifferences=$script:caretDifferences
         closed=[WeixinProbeWin32]::Closed.ToArray(); visualSteps=$script:visualSteps.ToArray()
         ownedCount=@((Read-WeixinFriendState 'owned-windows') | Where-Object {$_}).Count
     }
@@ -211,6 +252,9 @@ $script:windows.Remove(3)
 [void][WeixinProbeWin32]::Props.Remove(3)
 Open-FixtureWindow 3 '添加朋友'
 $rows += Run-Fixture 'manual-reused' -ReuseDesktop
+foreach ($scenario in @('cursor-drift', 'window-covered', 'focus-stolen', 'input-blocked', 'input-partial', 'button-held', 'menu-owner-foreground')) {
+    $rows += Run-Fixture $scenario
+}
 ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress
 `, 'utf8')
       const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', script],
@@ -218,15 +262,16 @@ ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress
       assert.equal(result.status, 0, result.stderr)
       const rows = JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1)!) as Array<{
         scenario: string; status?: string; failure: string; clicks: string[]; inputs: string[]; caretDifferences: number
-        foreground: number; closed: number[]; ownedCount: number; visualSteps: string[]
+        foreground: number; closed: number[]; ownedCount: number; visualSteps: string[]; moves: number
       }>
-      assert.equal(rows.length, 24)
+      assert.equal(rows.length, 31)
       const searchClicks = ['1/-200/50', '2/-440/100', '3/-380/100']
       const searchInputs = ['CTRL+A', 'DEL', '3/wx_test', '3/Enter']
       for (const row of rows.slice(0, 12)) {
         const confirmation = row.clicks.filter((event) => event === '4/-360/620')
         if (row.scenario === 'search-only') {
           assert.deepEqual(row.clicks, searchClicks)
+          assert.equal(row.moves, searchClicks.length)
           assert.deepEqual(row.inputs, searchInputs)
           assert.equal(row.status, 'addable')
           assert.equal(row.foreground, 3)
@@ -285,6 +330,27 @@ ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress
       assert.match(manualReused!.failure, /WXDRIVE\|UI_CHANGED/)
       assert.deepEqual(manualReused!.closed, [])
       assert.deepEqual(manualReused!.clicks, [])
+
+      const [cursorDrift, windowCovered, focusStolen, inputBlocked, inputPartial, buttonHeld, menuOwnerForeground] = rows.slice(24)
+      assert.equal(cursorDrift!.moves, 1)
+      assert.deepEqual(cursorDrift!.clicks, [])
+      assert.match(cursorDrift!.failure, /WXDRIVE\|UI_CHANGED/)
+      assert.deepEqual(windowCovered!.clicks, searchClicks)
+      assert.deepEqual(windowCovered!.closed, [3])
+      assert.match(windowCovered!.failure, /WXDRIVE\|UI_CHANGED/)
+      assert.deepEqual(focusStolen!.clicks, searchClicks)
+      assert.deepEqual(focusStolen!.closed, [3])
+      assert.match(focusStolen!.failure, /WXDRIVE\|FOREGROUND_LOST/)
+      assert.deepEqual(inputBlocked!.clicks, [...searchClicks, '3/-380/320', '4/-380/120'])
+      assert.deepEqual(inputBlocked!.closed, [4, 3])
+      assert.match(inputBlocked!.failure, /WXDRIVE\|UI_CHANGED/)
+      assert.deepEqual(inputPartial!.clicks, [...inputBlocked!.clicks, '4/-360/620'])
+      assert.match(inputPartial!.failure, /WXDRIVE\|EXECUTION_UNKNOWN/)
+      assert.equal(buttonHeld!.moves, 0)
+      assert.deepEqual(buttonHeld!.clicks, [])
+      assert.match(buttonHeld!.failure, /WXDRIVE\|UI_CHANGED/)
+      assert.deepEqual(menuOwnerForeground!.clicks.slice(0, 3), searchClicks)
+      assert.equal(menuOwnerForeground!.status, 'request_sent')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

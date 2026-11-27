@@ -70,6 +70,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20261127-1304 | 微信好友流程使用系统鼠标输入 | ✅ 已完成开发，保留坐标缓存和逐条关窗，真机只查通过。 | [设计](design/weixin/weixin-cli-design.md#12-本机添加好友) | [计划](plans/plan-weixin-agent-friend-requests.md#phase-6-好友流程使用-windows-系统鼠标输入) |
 | 20261126-1039 | 微信 Agent 批量提交好友申请 | ✅ 已完成开发，真机批次暴露的配对与回执问题已修，待新版验收。 | [设计](system/connection-center-design.md#批量提交好友申请) | [计划](plans/plan-weixin-agent-friend-requests.md) |
 | 20261124-1012 | 微信 Agent 多群跟踪与近七天总结 | ✅ 已完成开发（已验收每日和站内通知），支持保存群聊、跨日总结、Markdown 摘要与批次回看。 | [设计](system/connection-center-design.md#多群跟踪与近七天总结) | [计划](plans/plan-weixin-agent-group-tracking.md) |
 | 20261123-0850 | 连接中心微信 Agent | ✅ 已完成开发，支持手动群聊今日总结，待真机验收。 | [设计](system/connection-center-design.md#211-微信-agent) | [计划](plans/plan-weixin-agent.md) |
