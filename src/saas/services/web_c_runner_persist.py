@@ -88,6 +88,170 @@ def has_final_message(session_id: str, runner_id: str) -> bool:
         return cursor.fetchone() is not None
 
 
+def _extract_runner_user_payload(row: dict) -> Tuple[str, List[dict], str]:
+    """从 runner 行提取用户消息文本、附件元数据与 client_request_id。"""
+    client_request_id = str(row.get("client_request_id") or "").strip()
+    raw_input = row.get("input") if isinstance(row.get("input"), dict) else {}
+    if not raw_input:
+        snapshot = row.get("snapshot") or row.get("public_snapshot") or {}
+        if isinstance(snapshot, dict) and isinstance(snapshot.get("input"), dict):
+            raw_input = snapshot["input"]
+    text = str(raw_input.get("text") or "").strip()
+    attachments: List[dict] = []
+    for item in raw_input.get("attachments") or []:
+        if isinstance(item, dict) and item.get("file_id"):
+            attachments.append({
+                "type": item.get("type") or "file",
+                "file_id": item["file_id"],
+                "name": item.get("name"),
+                "mime_type": item.get("mime_type"),
+                "size": item.get("size"),
+            })
+    if not text and attachments:
+        text = "（见附件）"
+    return text, attachments, client_request_id
+
+
+def persist_user_message_in_tx(cursor, tenant_id: str, session_id: str,
+                               text: str, attachments: List[dict],
+                               client_request_id: str) -> bool:
+    """事务内幂等写入 web_c 用户消息（命中 uq_web_c_messages_client_request 跳过）。"""
+    if not (tenant_id and session_id and client_request_id and (text or attachments)):
+        return False
+    message_id = f"msg_{uuid.uuid4().hex[:16]}"
+    cursor.execute(
+        """
+        INSERT INTO channel_messages
+        (message_id, session_id, tenant_id, role, content, message_type, attachments, metadata, created_at)
+        VALUES (%s, %s, %s, 'user', %s, 'text', %s::jsonb, %s::jsonb, clock_timestamp())
+        ON CONFLICT DO NOTHING
+        """,
+        (
+            message_id, session_id, tenant_id, text or "（见附件）",
+            json.dumps(attachments, ensure_ascii=False) if attachments else None,
+            json.dumps({"client_request_id": client_request_id}, ensure_ascii=False),
+        ),
+    )
+    inserted = cursor.rowcount > 0
+    if inserted:
+        from datetime import datetime
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            "UPDATE channel_sessions SET last_message_at = %s, updated_at = %s "
+            "WHERE session_id = %s",
+            (now, now, session_id),
+        )
+    return inserted
+
+
+def persist_assistant_message_in_tx(cursor, tenant_id: str, session_id: str, runner_id: str,
+                                    output: str, attachments: List[dict],
+                                    kind: str = "", client_request_id: Optional[str] = None) -> bool:
+    """事务内幂等写入 web_c assistant 消息（不提交，由调用方提交事务）。"""
+    message_id = f"msg_{uuid.uuid4().hex[:16]}"
+    metadata = {"runner_id": runner_id}
+    if kind:
+        metadata["kind"] = kind
+    if client_request_id:
+        metadata["client_request_id"] = client_request_id
+    cursor.execute(
+        """
+        INSERT INTO channel_messages
+        (message_id, session_id, tenant_id, role, content, message_type, attachments, metadata, created_at)
+        VALUES (%s, %s, %s, 'assistant', %s, 'text', %s::jsonb, %s::jsonb, clock_timestamp())
+        ON CONFLICT DO NOTHING
+        """,
+        (
+            message_id, session_id, tenant_id, output or "",
+            json.dumps(attachments, ensure_ascii=False) if attachments else None,
+            json.dumps(metadata, ensure_ascii=False),
+        ),
+    )
+    inserted = cursor.rowcount > 0
+    if inserted:
+        from datetime import datetime
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            "UPDATE channel_sessions SET last_message_at = %s, updated_at = %s "
+            "WHERE session_id = %s",
+            (now, now, session_id),
+        )
+    return inserted
+
+
+def persist_web_c_turn_in_tx(cursor, runner: dict, result: dict, snapshot: dict) -> None:
+    """在 Runner finalize 同一事务内原子落库 web_c 本轮 user + assistant 消息。
+
+    排队模式下，被排队消息的用户消息延迟到此落库（非排队消息已在 /chat 落库，
+    此处 ON CONFLICT DO NOTHING 幂等跳过）；completed 终态随后落库 assistant
+    （含 downloadableFiles/images 附件投影）。因在释放 agent_runner_session_claims
+    之前完成，下一条排队消息必定能看到本轮完整对话历史与生成文件清单。
+    """
+    if (runner.get("source") or "") != "web_c":
+        return
+    tenant_id = runner.get("tenant_id") or ""
+    session_id = runner.get("session_id") or ""
+    runner_id = runner.get("runner_id") or ""
+    if not (tenant_id and session_id and runner_id):
+        return
+    row = {
+        "client_request_id": runner.get("client_request_id"),
+        "input": runner.get("input"),
+        "snapshot": snapshot,
+        "result": result,
+    }
+    user_text, user_attachments, client_request_id = _extract_runner_user_payload(row)
+    if client_request_id and (user_text or user_attachments):
+        persist_user_message_in_tx(
+            cursor, tenant_id, session_id, user_text, user_attachments, client_request_id,
+        )
+    if (result or {}).get("status") != "completed":
+        return
+    output = (result or {}).get("output") or (snapshot or {}).get("output") or ""
+    attachments = runner_files_to_attachments({"snapshot": snapshot, "result": result})
+    persist_assistant_message_in_tx(cursor, tenant_id, session_id, runner_id, output, attachments)
+
+
+def ensure_runner_user_message(tenant_id: str, session_id: str, row: dict) -> bool:
+    """确保 runner 对应的延迟用户消息已落库（供补写与扫描器在落库回复/反问前调用）。"""
+    text, attachments, client_request_id = _extract_runner_user_payload(row)
+    if not (tenant_id and session_id and client_request_id and (text or attachments)):
+        return False
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        inserted = persist_user_message_in_tx(
+            cursor, tenant_id, session_id, text, attachments, client_request_id,
+        )
+        conn.commit()
+        return inserted
+
+
+def ensure_runner_user_message_by_id(tenant_id: str, session_id: str, runner_id: str) -> bool:
+    """按 runner_id 从 agent_runners 读取并补写延迟用户消息（waiting 反问落库前调用）。"""
+    if not (tenant_id and session_id and runner_id):
+        return False
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT client_request_id, input, public_snapshot FROM agent_runners "
+            "WHERE runner_id = %s AND session_id = %s AND source = 'web_c' LIMIT 1",
+            (runner_id, session_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return False
+        text, attachments, client_request_id = _extract_runner_user_payload(dict(row))
+        if not (client_request_id and (text or attachments)):
+            return False
+        inserted = persist_user_message_in_tx(
+            cursor, tenant_id, session_id, text, attachments, client_request_id,
+        )
+        conn.commit()
+        return inserted
+
+
 def persist_assistant_message(tenant_id: str, session_id: str, runner_id: str,
                               output: str, attachments: List[dict],
                               kind: str = "", client_request_id: Optional[str] = None) -> None:
@@ -96,37 +260,12 @@ def persist_assistant_message(tenant_id: str, session_id: str, runner_id: str,
     direct_reply 类（runner_id 为空）按 client_request_id 判重——同会话多次
     纠正/重发回复内容各不相同，仅按 (runner_id, kind) 判重会吞掉后续回复。
     """
-    message_id = f"msg_{uuid.uuid4().hex[:16]}"
-    metadata = {"runner_id": runner_id}
-    if kind:
-        metadata["kind"] = kind
-    if client_request_id:
-        metadata["client_request_id"] = client_request_id
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO channel_messages
-            (message_id, session_id, tenant_id, role, content, message_type, attachments, metadata)
-            VALUES (%s, %s, %s, 'assistant', %s, 'text', %s::jsonb, %s::jsonb)
-            ON CONFLICT DO NOTHING
-            """,
-            (
-                message_id, session_id, tenant_id, output or "",
-                json.dumps(attachments, ensure_ascii=False) if attachments else None,
-                json.dumps(metadata, ensure_ascii=False),
-            ),
+        inserted = persist_assistant_message_in_tx(
+            cursor, tenant_id, session_id, runner_id, output, attachments,
+            kind=kind, client_request_id=client_request_id,
         )
-        inserted = cursor.rowcount > 0
-        if inserted:
-            from datetime import datetime
-
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute(
-                "UPDATE channel_sessions SET last_message_at = %s, updated_at = %s "
-                "WHERE session_id = %s",
-                (now, now, session_id),
-            )
         conn.commit()
         if not inserted:
             logger.debug(f"[web_c] 终态消息已存在，跳过重复落库 runner={runner_id}")
@@ -153,14 +292,27 @@ def persist_clarification_message(tenant_id: str, session_id: str, runner_id: st
         )
         if cursor.fetchone() is not None:
             return False
+        if runner_id:
+            cursor.execute(
+                "SELECT client_request_id, input, public_snapshot FROM agent_runners "
+                "WHERE runner_id = %s AND session_id = %s AND source = 'web_c' LIMIT 1",
+                (runner_id, session_id),
+            )
+            runner_row = cursor.fetchone()
+            if runner_row:
+                user_text, user_atts, req_id = _extract_runner_user_payload(dict(runner_row))
+                if req_id and (user_text or user_atts):
+                    persist_user_message_in_tx(
+                        cursor, tenant_id, session_id, user_text, user_atts, req_id,
+                    )
         message_id = f"msg_{uuid.uuid4().hex[:16]}"
         metadata = {"runner_id": runner_id, "kind": "clarification",
                     "client_request_id": dedup_key}
         cursor.execute(
             """
             INSERT INTO channel_messages
-            (message_id, session_id, tenant_id, role, content, message_type, attachments, metadata)
-            VALUES (%s, %s, %s, 'assistant', %s, 'text', NULL, %s::jsonb)
+            (message_id, session_id, tenant_id, role, content, message_type, attachments, metadata, created_at)
+            VALUES (%s, %s, %s, 'assistant', %s, 'text', NULL, %s::jsonb, clock_timestamp())
             ON CONFLICT DO NOTHING
             """,
             (
@@ -189,6 +341,8 @@ def persist_runner_result(tenant_id: str, session_id: str, row: dict) -> None:
     runner_id = row.get("runner_id") or ""
     if not runner_id or has_final_message(session_id, runner_id):
         return
+    if row.get("client_request_id"):
+        ensure_runner_user_message(tenant_id, session_id, row)
     result = row.get("result") or {}
     output = result.get("output") or (row.get("snapshot") or row.get("public_snapshot") or {}).get("output") or ""
     attachments = runner_files_to_attachments(row)
@@ -199,7 +353,7 @@ def _load_runner_rows(where_sql: str, params: tuple) -> List[dict]:
     """按条件直读 agent_runners（JOIN 会话行过滤已删除会话，投影为统一行形态）。"""
     sql = f"""
         SELECT r.runner_id, r.tenant_id, r.session_id, r.status,
-               r.public_snapshot, r.result
+               r.client_request_id, r.input, r.public_snapshot, r.result
         FROM agent_runners r
         JOIN channel_sessions s ON s.session_id = r.session_id
         WHERE r.source = 'web_c' AND {where_sql}
@@ -217,6 +371,8 @@ def _load_runner_rows(where_sql: str, params: tuple) -> List[dict]:
             "tenant_id": r["tenant_id"],
             "session_id": r["session_id"],
             "status": r["status"],
+            "client_request_id": r.get("client_request_id"),
+            "input": r["input"] if isinstance(r.get("input"), dict) else {},
             "snapshot": r["public_snapshot"] if isinstance(r["public_snapshot"], dict) else {},
             "result": r["result"] if isinstance(r["result"], dict) else {},
         })
@@ -248,6 +404,8 @@ async def backfill_session_runners(tenant_id: str, session_id: str) -> int:
             question, wait_id = clarification_from_row(row)
             if not question or not wait_id:
                 continue
+            if row.get("client_request_id"):
+                await asyncio.to_thread(ensure_runner_user_message, row_tenant, session_id, row)
             if await asyncio.to_thread(
                 persist_clarification_message, row_tenant, session_id,
                 runner_id, question, wait_id,
@@ -337,6 +495,8 @@ class WebCRunnerPersistSweeper:
                 question, wait_id = clarification_from_row(row)
                 if not question or not wait_id:
                     continue
+                if row.get("client_request_id"):
+                    await asyncio.to_thread(ensure_runner_user_message, tenant_id, session_id, row)
                 if await asyncio.to_thread(
                     persist_clarification_message, tenant_id, session_id,
                     runner_id, question, wait_id,

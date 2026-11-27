@@ -67,19 +67,20 @@ class ContextAssembler:
             else:
                 now = datetime.now()
                 timestamp = f"[当前时间: {now.strftime('%Y年%m月%d日 %H:%M:%S')}, {now.strftime('%A')}, 今年是{now.year}年]\n\n"
-                # 跨执行历史附件重物化（2026-11-27）：读历史窗口内 user 消息的附件
-                # 元数据（file_id），供 prepare 把先前轮次（含被取代的中断轮）附件
-                # 重新物化到当前工作区，防跨端/跨轮引用旧附件时「找不到文件」。
+                # 会话已有文件清单（含用户上传与助手生成交付物）：仅读取轻量元数据，
+                # 不预复制文件本体；模型按需通过 checkout_session_file(file_id) 检出。
                 # reader 内部 fail-open（异常返回 []），此处仅兜底进程级异常。
                 history_attachments = None
                 if self.role != AgentMode.SUBAGENT and not zero_history:
                     try:
+                        reader = self.history.reader
+                        fetch_files = getattr(reader, "read_session_files", None) or reader.read_user_attachments
                         history_attachments = await asyncio.to_thread(
-                            self.history.reader.read_user_attachments,
+                            fetch_files,
                             self.identity.session_id, self.history.memory.short_term.max_messages)
                     except Exception:
                         logger.opt(exception=True).warning(
-                            "[context_assembler] 历史附件元数据读取失败，跳过重物化")
+                            "[context_assembler] 会话文件元数据读取失败，跳过清单注入")
                 enhanced, injection, workspace = await asyncio.to_thread(
                     self.attachments.prepare, timestamp + text, attachments, self.identity,
                     self.skills.skill_registry, history_attachments=history_attachments)

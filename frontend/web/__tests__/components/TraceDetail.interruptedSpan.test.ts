@@ -23,4 +23,23 @@ describe('Trace timeline status rendering', () => {
     expect(wrapper.text()).toContain(label)
     wrapper.unmount()
   })
+
+  it('distinguishes superseded_by_other_client from generic superseded', async () => {
+    vi.mocked(getTraceDetail).mockResolvedValue({
+      success: true,
+      trace: {
+        trace_id: 'fixture',
+        status: 'superseded',
+        termination_reason: 'superseded_by_other_client',
+        tags: ['superseded'],
+        total_tokens: 0,
+        duration_ms: 1,
+      } as any,
+      spans: [],
+    })
+    const wrapper = mount(TraceDetail, { global: { stubs: { FullscreenJsonViewer: true } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('被其他端新消息中断')
+    wrapper.unmount()
+  })
 })

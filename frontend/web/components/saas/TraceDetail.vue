@@ -17,7 +17,7 @@
             <div>
               <span class="text-muted text-xs">状态</span>
               <div :class="statusClass(trace.status)" class="inline-block px-2 py-0.5 rounded text-xs font-medium mt-1">
-                {{ statusLabel(trace.status) }}
+                {{ statusLabel(trace.status, trace.termination_reason) }}
               </div>
             </div>
             <div>
@@ -396,7 +396,10 @@ function statusClass(status: string): string {
   return 'bg-info-100 text-info-700'
 }
 
-function statusLabel(status: string): string {
+function statusLabel(status: string, terminationReason?: string | null): string {
+  if (status === 'superseded' && terminationReason === 'superseded_by_other_client') {
+    return '被其他端新消息中断'
+  }
   const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '已取消', running: '运行中',
     interrupted: '已中断', superseded: '被新消息取代', waiting: '等待用户回复', paused: '已暂停' }
   return map[status] || status

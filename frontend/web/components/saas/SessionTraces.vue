@@ -28,7 +28,7 @@
                 <span class="text-xs text-muted font-mono">Trace {{ idx + 1 }}</span>
                 <span class="text-xs text-muted font-mono" :title="trace.trace_id">{{ trace.trace_id }}</span>
                 <span :class="statusClass(trace.status)" class="px-2 py-0.5 rounded text-xs font-medium">
-                  {{ statusLabel(trace.status) }}
+                  {{ statusLabel(trace.status, trace.termination_reason) }}
                 </span>
                 <span v-if="trace.is_intermediate" class="px-2 py-0.5 rounded text-xs font-medium bg-gray-200 text-default">
                   {{ trace.termination_reason === 'message_merged' ? '已被后续消息合并' : '中间处理过程' }}
@@ -118,7 +118,10 @@ function statusClass(status: string): string {
   return 'bg-info-100 text-info-700'
 }
 
-function statusLabel(status: string): string {
+function statusLabel(status: string, terminationReason?: string | null): string {
+  if (status === 'superseded' && terminationReason === 'superseded_by_other_client') {
+    return '被其他端新消息中断'
+  }
   const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '用户取消', interrupted: '执行中断',
     superseded: '被新消息取代', running: '运行中', waiting: '等待用户回复' }
   return map[status] || status
