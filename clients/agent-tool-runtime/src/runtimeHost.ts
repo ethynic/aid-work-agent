@@ -57,6 +57,7 @@ export class LegacyExecution implements HostAdapter {
   private loop: PollLoop | null = null
   private providers: ProviderSet | null = null
   private runPromise: Promise<void> | null = null
+  private backgroundChecks: { controller: AbortController; done?: Promise<void> } | null = null
   private runFailure: unknown = null
   private stopping = false
   private supervision: ProcessSupervision
@@ -298,6 +299,8 @@ export class LegacyExecution implements HostAdapter {
       return value
     }
     let firstHeartbeat = true
+    const backgroundChecks: NonNullable<LegacyExecution['backgroundChecks']> = { controller: new AbortController() }
+    this.backgroundChecks = backgroundChecks
     const loop = new PollLoop({
       api,
       runnerDeps: {
@@ -324,11 +327,16 @@ export class LegacyExecution implements HostAdapter {
       pluginManifests: () => Object.fromEntries(declared().map(({ provider_key, envelope, manifest }) => [provider_key, { envelope, manifest }])),
       canClaim: () => Object.entries(this.resolveEntries(config)).some(([key, entry]) => Boolean(storeManifests[key]) || existsSync(entry)),
       onConnection: value => {
-        if (value === 'online' && firstHeartbeat) {
+        const firstOnline = value === 'online' && firstHeartbeat
+        if (firstOnline) {
           firstHeartbeat = false
           logInfo(`[runtime-startup] phase=heartbeat_online elapsed_ms=${Math.round(performance.now() - started)} host_elapsed_ms=${Math.round(performance.now())}`)
         }
         connection(value)
+        if (firstOnline && !backgroundChecks.controller.signal.aborted) {
+          backgroundChecks.done = Promise.resolve().then(() => this.pluginStore?.verifyEnabledPlugins(backgroundChecks.controller.signal))
+            .catch(() => { logInfo('[runtime-startup] phase=background_plugins_failed') })
+        }
       },
       // 契约 2.20：并行接单——与能力上报同源（assembleStoreManifests 派生），PollLoop
       // 据此判定领到的作业是否后台并行执行；无声明插件 parallel_tools 为空 → 行为与现状一致
@@ -341,14 +349,17 @@ export class LegacyExecution implements HostAdapter {
     this.loop = loop
     logInfo(`[runtime-startup] phase=execution_prepared elapsed_ms=${Math.round(performance.now() - started)}`)
     this.runPromise = loop.run().then(() => {
+      backgroundChecks.controller.abort()
       if (!this.stopping) executionEnded()
     }, error => {
+      backgroundChecks.controller.abort()
       this.runFailure = error; loop.shutdown()
       if (!this.stopping) executionEnded()
     })
   }
   async stop(): Promise<void> {
     this.stopping = true
+    this.backgroundChecks?.controller.abort()
     this.loop?.stopClaiming()
     await this.loop?.drain()
     await this.runPromise
@@ -356,6 +367,8 @@ export class LegacyExecution implements HostAdapter {
     this.providers?.stopAdmission()
     await this.providers?.waitForIdle()
     await this.providers?.shutdownAll()
+    await this.backgroundChecks?.done
+    this.backgroundChecks = null
     this.pluginStore?.resetExecutionChecks()
     this.loop = null; this.providers = null; this.runPromise = null
     // A loop error is not proof of an active process after every execution lane

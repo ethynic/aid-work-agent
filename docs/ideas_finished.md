@@ -7,6 +7,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261127-1116 | Runtime 上线后后台检查插件 | ✅ 已完成开发，签名包联调通过。 | [设计](system/runtime-plugin-host-architecture-design.md#首次在线后的后台插件检查) | [计划](plans/plan-runtime-plugin-host.md#181-首次在线后的后台插件检查) |
 | 20261127-runtime-lazy-startup | Runtime 先连接与插件首用验证 | ✅ 已完成开发，1.6.1 已通过 agent2 上线和微信首用实测。 | [设计](system/runtime-plugin-host-architecture-design.md#启动连接与首次使用检查) | [计划](plans/plan-runtime-plugin-host.md#18-启动连接与首次使用检查2026-11-27) |
 | 20261127-runtime-startup | 已配对 Runtime 启动性能 | ✅ 已完成开发，1.5.0 实装确认重复检查已减少。 | [设计](system/runtime-plugin-host-architecture-design.md#134-能力列表与错误恢复) | [计划](plans/plan-runtime-plugin-host.md#17-已配对-runtime-启动性能2026-11-27) |
 | 20261112-1235 | BOSS 筛选容错与本机操作恢复 | ✅ 已完成开发，待 Windows 实机验收与发版。 | [筛选设计](design/recruiting/resume-job-matching-design.md#boss-筛选参数容错)、[恢复设计](system/agent-application-architecture-design.md#boss-本机操作恢复) | — |

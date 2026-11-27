@@ -58,6 +58,8 @@ test('startup log projection shows first heartbeat and identifies the slow plugi
   assert.equal(plugin.provider, 'ai.aidwork.weixin')
   assert.equal(plugin.durationMs, 31725)
   assert.match(plugin.summary, /现场文件核对.*3741/)
+  const background = projectRuntimeLog(line(payload.replace('initialize', 'background')).trim())
+  assert.match(background.summary, /上线后后台完整检查.*现场文件核对.*3741/)
   const heartbeat = projectRuntimeLog(line('[runtime-startup] phase=heartbeat_online elapsed_ms=5231 host_elapsed_ms=11800').trim())
   assert.equal(heartbeat.event, 'runtime-startup-timing')
   assert.match(heartbeat.summary, /首次心跳成功.*11800 ms/)

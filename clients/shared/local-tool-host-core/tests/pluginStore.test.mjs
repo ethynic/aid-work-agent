@@ -167,7 +167,7 @@ test('the current release owns the proof and withdrawing its publisher trust rem
   assert.equal(probes.length, 4, 'Rechecking publisher trust happens before attempting to run the plugin')
 })
 
-test('startup authenticates only metadata and a slow file read on first use leaves other plugins available', { timeout: 5000 }, async t => {
+test('a slow background file read shares admission with the same plugin and leaves another plugin available', { timeout: 5000 }, async t => {
   const timing = [], probes = []
   const { store, options } = fixture(t)
   await store.initialize()
@@ -184,7 +184,7 @@ test('startup authenticates only metadata and a slow file read on first use leav
     ['metadata', 'archive_envelope'], ['metadata', 'manifest'], ['metadata', 'archive_envelope'], ['metadata', 'manifest'],
   ])
   assert.deepEqual(probes, [], 'The signed catalog can be advertised without running any plugin code')
-  assert.ok(reopened.list().every(item => !item.ready && /首次使用/.test(item.reason)))
+  assert.ok(reopened.list().every(item => !item.ready && item.reason === '等待检查插件'))
   const entries = reopened.resolveEntries({})
   let releaseWeixin, enterWeixin
   const waitForWeixin = new Promise(resolve => { releaseWeixin = resolve })
@@ -195,40 +195,107 @@ test('startup authenticates only metadata and a slow file read on first use leav
     return read(path, ...args)
   })
   syncBuiltinESMExports()
-  const first = reopened.verifyForExecution('weixin', entries.weixin)
-  const duplicate = reopened.verifyForExecution('weixin', entries.weixin, true)
+  const background = reopened.verifyEnabledPlugins(new AbortController().signal)
+  let firstUse
   let timeout
   try {
     await Promise.race([weixinReachedRead, new Promise((_, reject) => {
       timeout = setTimeout(() => reject(new Error('first-use verification must read payload files asynchronously')), 2500)
     })])
+    assert.deepEqual(probes, [], 'The background queue must check only one plugin at a time')
+    firstUse = reopened.verifyForExecution('weixin', entries.weixin)
     await reopened.verifyForExecution('wecom', entries.wecom)
     assert.equal(reopened.list().find(item => item.plugin_id === 'ai.aidwork.wecom').ready, true)
     assert.deepEqual(probes, [['ai.aidwork.wecom', false]], 'A slow payload read on one plugin cannot block another plugin')
   } finally {
     clearTimeout(timeout)
     releaseWeixin()
-    try { await Promise.all([first, duplicate]) } finally { slowRead.mock.restore(); syncBuiltinESMExports() }
+    try { await Promise.all([background, firstUse]) } finally { slowRead.mock.restore(); syncBuiltinESMExports() }
   }
   await reopened.verifyForExecution('weixin', entries.weixin, true)
   assert.deepEqual(probes, [['ai.aidwork.wecom', false], ['ai.aidwork.weixin', false]], 'Parallel and subsequent callers share the same full proof')
   assert.equal(reopened.declaredPlugins().length, 2, 'Authentic but not logged in remains visible for diagnostics')
-  assert.equal(timing.filter(item => item.pass === 'first_use' && item.pluginId === 'ai.aidwork.weixin' && item.phase === 'payload_verify').length, 1)
+  assert.deepEqual(timing.filter(item => item.phase === 'payload_verify').map(item => [item.pluginId, item.pass]), [
+    ['ai.aidwork.wecom', 'first_use'], ['ai.aidwork.weixin', 'background'],
+  ], 'Only one full file check runs per plugin, whether the waiting caller is a task or the background queue')
   const beforeStop = timing.length
   reopened.resetExecutionChecks()
   assert.equal(timing.length, beforeStop, 'Stopping execution must not scan or run plugin files')
-  assert.ok(reopened.list().every(item => !item.ready && /首次使用/.test(item.reason)))
+  assert.ok(reopened.list().every(item => !item.ready && item.reason === '等待检查插件'))
   writeFileSync(entries.weixin, 'export []')
   await assert.rejects(reopened.verifyForExecution('weixin', entries.weixin), /完整检查/, 'A new execution window cannot reuse a proof that preceded the stopped interval')
   assert.equal(probes.length, 2, 'The changed file must be rejected before executing plugin diagnostics')
 })
 
-test('bad file bytes can be discovered on first use without allowing a start or a same-name legacy fallback', async t => {
+test('stopping the background leaves no false failure or queued check in the next execution window', { timeout: 5000 }, async t => {
+  const { store, options } = fixture(t)
+  await store.initialize()
+  await store.import(await pack())
+  await store.import(await pack({ provider: 'ai.aidwork.wecom' }))
+  const started = Promise.withResolvers(), finish = Promise.withResolvers()
+  const probes = [], timing = []
+  const reopened = new PluginStore({ ...options, deferStartupChecks: true, onCheckTiming: event => timing.push(event),
+    async probe(_path, manifest, context) {
+      const provider = manifest.provider_id
+      await context.measure('version', async () => {
+        probes.push([provider, 'version'])
+        if (probes.length === 1) { started.resolve(); await finish.promise }
+      })
+      await context.measure('doctor', async () => { probes.push([provider, 'doctor']) })
+      return { ready: true }
+    },
+  })
+  await reopened.initialize()
+  const window = new AbortController()
+  const background = reopened.verifyEnabledPlugins(window.signal)
+  await started.promise
+  window.abort(); finish.resolve()
+  await background
+  assert.deepEqual(probes, [['ai.aidwork.weixin', 'version']], 'Stopping does not start the next phase or the next plugin')
+  assert.equal(reopened.declaredPlugins().length, 2, 'Cancellation does not withdraw trusted dispatch metadata')
+  assert.ok(reopened.list().every(item => item.reason === '等待检查插件'))
+  assert.ok(timing.every(item => item.succeeded), 'Cancellation is not logged as integrity failure')
+
+  reopened.resetExecutionChecks()
+  await reopened.verifyEnabledPlugins(new AbortController().signal)
+  assert.ok(reopened.list().every(item => item.ready), 'The next window establishes its own complete proofs')
+  assert.deepEqual(probes.slice(1), [
+    ['ai.aidwork.weixin', 'version'], ['ai.aidwork.weixin', 'doctor'],
+    ['ai.aidwork.wecom', 'version'], ['ai.aidwork.wecom', 'doctor'],
+  ])
+})
+
+test('already accepted work retries if it joins a background check while cancellation is settling', { timeout: 5000 }, async t => {
+  const { store, options } = fixture(t)
+  await store.initialize(); await store.import(await pack())
+  const window = new AbortController()
+  let probes = 0, invocation
+  const reopened = new PluginStore({ ...options, deferStartupChecks: true, async probe(_path, _manifest, context) {
+    if (++probes === 1) {
+      window.abort()
+      try { await context.measure('doctor', async () => assert.fail('cancelled work must not start doctor')) }
+      catch (error) {
+        invocation = reopened.verifyForExecution('weixin', reopened.resolveEntries({}).weixin)
+        throw error
+      }
+    }
+    return { ready: true }
+  } })
+  await reopened.initialize()
+  await reopened.verifyEnabledPlugins(window.signal)
+  assert.ok(invocation, 'The already accepted task encounters the cancelling background check')
+  await invocation
+  assert.equal(probes, 2)
+  assert.equal(reopened.list()[0].ready, true)
+})
+
+test('a background check withdraws a damaged plugin and verifies the remaining eligible plugins', async t => {
   const { store, home, options } = fixture(t)
   await store.initialize()
   const signed = await pack()
   await store.import(signed)
   await store.import(await pack({ provider: 'ai.aidwork.wecom' }))
+  await store.import(await pack({ provider: 'ai.aidwork.boss-recruiting' }))
   const entries = store.resolveEntries({})
   writeFileSync(entries.weixin, 'export []')
   const fileMeta = JSON.parse(readFileSync(join(home, 'plugins/inventory.json'), 'utf8')).records.find(item => item.plugin_id === 'ai.aidwork.wecom')
@@ -238,17 +305,18 @@ test('bad file bytes can be discovered on first use without allowing a start or 
   const probes = []
   const reopened = new PluginStore({ ...options, deferStartupChecks: true, probe: async (_root, manifest) => { probes.push(manifest.provider_id); return { ready: true } } })
   await reopened.initialize()
-  assert.deepEqual(reopened.declaredPlugins().map(item => item.provider_key), ['weixin'], 'The altered manifest never enters the signed catalog')
+  assert.deepEqual(reopened.declaredPlugins().map(item => item.provider_key), ['weixin', 'boss-recruiting'], 'The altered manifest never enters the signed catalog')
+  await reopened.verifyEnabledPlugins(new AbortController().signal)
   await assert.rejects(reopened.verifyForExecution('weixin', entries.weixin), /完整检查/)
-  assert.deepEqual(reopened.declaredPlugins(), [], 'The failed payload is withdrawn from every future dispatch snapshot')
-  assert.deepEqual(reopened.resolveEntries({ weixin: 'legacy', wecom: 'legacy' }), {})
-  assert.deepEqual(probes, [], 'A damaged file or manifest cannot even execute version or doctor')
+  assert.deepEqual(reopened.declaredPlugins().map(item => item.provider_key), ['boss-recruiting'], 'The failed payload is withdrawn from every future dispatch snapshot')
+  assert.deepEqual(reopened.resolveEntries({ weixin: 'legacy', wecom: 'legacy' }), { 'boss-recruiting': entries['boss-recruiting'] })
+  assert.deepEqual(probes, ['ai.aidwork.boss-recruiting'], 'A damaged file or manifest cannot even execute version or doctor')
   await reopened.import(signed)
   const repaired = reopened.resolveEntries({}).weixin
   assert.notEqual(repaired, entries.weixin, 'A repaired release gets a new independent proof')
   await assert.rejects(reopened.verifyForExecution('weixin', entries.weixin), /完整检查/)
   await reopened.verifyForExecution('weixin', repaired)
-  assert.deepEqual(probes, ['ai.aidwork.weixin'])
+  assert.deepEqual(probes, ['ai.aidwork.boss-recruiting', 'ai.aidwork.weixin'])
 })
 test('disabled state survives higher-version upgrade and repeated imports never re-enable it', async t => {
   const { store } = fixture(t); await store.initialize(); const first = await pack(); await store.import(first)

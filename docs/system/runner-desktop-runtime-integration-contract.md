@@ -12,6 +12,8 @@ Device 心跳处理是服务端同步结果的唯一写入者。验签后按认�
 
 2026-11-27 1.6.0 启动连接检查点。Core 与 Runtime Host 唯一实现写入者为本轮开发角色。验签的库存与清单元数据可用于心跳和派发，实际代码边界仍由对应 Host 的首次完整验包、现场文件核对与版本探测控制。单插件不能验证时撤回其可用声明与摘要，终态走原无副作用路径。H1、H3、Device、Provider、权限和本地库存保持原版本，旧插件库存、旧 Runtime 与旧服务端无需迁移。[设计](runtime-plugin-host-architecture-design.md#启动连接与首次使用检查) · [计划](../plans/plan-runtime-plugin-host.md#18-启动连接与首次使用检查2026-11-27)
 
+2026-11-27 后台检查增量。Runtime 开发角色唯一写入 Core 与 Runtime Host 的本机调度，沿原 Device 成功心跳开启一次逐插件完整检查。实际调用与后台检查共享每插件的完整校验，沿现有安全排空和派发撤回逻辑。H1、H3、Device、Provider、清单版本、库存与权限保持原约定。[设计](runtime-plugin-host-architecture-design.md#首次在线后的后台插件检查) · [计划](../plans/plan-runtime-plugin-host.md#181-首次在线后的后台插件检查)
+
 ### 企业微信定时消息发送共同检查点
 
 2026-11-16 · 契约 2.21，服务端内部加性，P1 编码基线。已确认业务规则、记录字段、锁序和状态所有权见 [定时发送 P1 编码契约](../design/wecom/wecom-scheduled-send-design.md#p1-编码契约)。

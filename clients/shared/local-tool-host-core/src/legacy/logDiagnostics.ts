@@ -36,11 +36,11 @@ const identifier = '[a-z][a-z0-9_-]{0,79}'
 const started = new RegExp(`^invocation (${uuid}) 已开始执行 tool=(${identifier})$`)
 const perf = new RegExp(`^\\[runtime-perf\\] invocation=(${uuid}) tool=(${identifier}) provider=(${identifier}) started_ms=(\\d+) lock_wait_ms=(\\d+) lock_prep_ms=(\\d+) provider_call_ms=(\\d+)$`)
 const startupPhase = /^\[runtime-startup\] phase=(host_open|execution_prepared|heartbeat_online) elapsed_ms=(\d{1,12})(?: host_elapsed_ms=(\d{1,12}))?$/
-const pluginStartupPhase = /^\[runtime-startup-plugin\] provider=(ai\.aidwork\.[a-z0-9-]{1,60}) pass=(initialize|refresh|maintenance|metadata|first_use|verified_reuse) phase=(archive_envelope|manifest|archive_read|archive_verify|archive_digest|payload_verify|version|doctor|admission) elapsed_ms=(\d{1,12}) result=(ok|failed)(?: files=(\d{1,6}))?$/
+const pluginStartupPhase = /^\[runtime-startup-plugin\] provider=(ai\.aidwork\.[a-z0-9-]{1,60}) pass=(initialize|refresh|maintenance|metadata|background|first_use|verified_reuse) phase=(archive_envelope|manifest|archive_read|archive_verify|archive_digest|payload_verify|version|doctor|admission) elapsed_ms=(\d{1,12}) result=(ok|failed)(?: files=(\d{1,6}))?$/
 const startupLabels: Readonly<Record<string, string>> = {
   host_open: '本机管理 Host 就绪', execution_prepared: '执行准备完成', heartbeat_online: '首次心跳成功',
   initialize: '初检', refresh: '执行前复检', maintenance: '插件维护检查',
-  metadata: '启动签名元数据', first_use: '首次使用完整检查', verified_reuse: '复用已通过的检查',
+  metadata: '启动签名元数据', background: '上线后后台完整检查', first_use: '首次使用完整检查', verified_reuse: '复用已通过的检查',
   archive_envelope: '归档签名信封', manifest: '签名清单', admission: '运行准入',
   archive_read: '读取归档', archive_verify: '归档验签和解包', archive_digest: '归档摘要复验',
   payload_verify: '现场文件核对', version: '版本探测', doctor: '就绪诊断',

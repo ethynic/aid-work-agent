@@ -130,6 +130,7 @@ test('商店微信声明优先于存量 v2Send，配对和心跳同源，为好�
     saveConfig({ server: cloud.baseUrl, device_id: 'legacy', providers: { weixin: { entry, v2Send: true } } })
     // Substitute only the already verified store boundary. Pair/start use the real Host and HTTP loopback.
     Object.assign(adapter, { pluginStore: {
+      async verifyEnabledPlugins() {},
       resetExecutionChecks() {},
       resolveEntries: () => ({ weixin: entry }),
       declaredPlugins: () => [{ plugin_id: manifest.provider_id, provider_key: 'weixin', manifest, declaration,
@@ -169,9 +170,9 @@ test('商店微信声明优先于存量 v2Send，配对和心跳同源，为好�
   }
 })
 
-test('受管企微从签名 schema 上报可用工具，首用失败撤回该插件且其他插件仍执行', {
+test('Runtime 在成功心跳后开始后台检查，检查期间继续心跳和接单', {
   skip: process.platform !== 'win32', timeout: 35_000,
-}, async () => {
+}, async t => {
   const home = mkdtempSync(join(tmpdir(), 'aid-wecom-first-use-'))
   const cloud = new FakeCloud()
   await cloud.start()
@@ -192,11 +193,26 @@ test('受管企微从签名 schema 上报可用工具，首用失败撤回该插
   const wecom = { ...TEST_TOOL_MANIFEST, provider_id: 'ai.aidwork.wecom', tools, tool_declaration: wecomDeclaration }
   const digest = (hex: string) => `sha256:${hex.repeat(64)}`
   const checks: string[] = []
+  const events: string[] = []
+  let releaseHeartbeat!: () => void
+  const firstResponse = new Promise<void>(resolve => { releaseHeartbeat = resolve })
+  const heartbeat = ApiClient.prototype.heartbeat
+  let delayFirstResponse = true
+  t.mock.method(ApiClient.prototype, 'heartbeat', async function(this: ApiClient, ...args: Parameters<ApiClient['heartbeat']>) {
+    const response = await heartbeat.apply(this, args)
+    if (delayFirstResponse) { delayFirstResponse = false; await firstResponse }
+    return response
+  })
   let wecomAvailable = true
   try {
     await adapter.initialize()
     // A missing entry represents late payload damage. Signed metadata alone must still let the device connect.
     Object.assign(adapter, { pluginStore: {
+      async verifyEnabledPlugins(signal: AbortSignal) {
+        events.push('background-started')
+        await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
+        events.push('background-stopped')
+      },
       resetExecutionChecks() {},
       resolveEntries: () => ({ 'test-tool': fakeProviderEntry(), ...(wecomAvailable ? { wecom: join(home, 'missing.js') } : {}) }),
       declaredPlugins: () => [
@@ -213,12 +229,21 @@ test('受管企微从签名 schema 上报可用工具，首用失败撤回该插
     cloud.issueCode('WCFIRST')
     await adapter.pair({ server: cloud.baseUrl, device_name: 'fixture', pairing_code: 'WCFIRST' })
     await adapter.executionMarker(randomUUID())
-    await adapter.start(() => {}, () => {})
+    const begin = () => adapter.start(status => { if (status === 'online') events.push('online') }, () => {})
+    await begin()
     const token = cloud.lastPairToken!
     const capabilities = () => cloud.lastHeartbeatBody(token)?.capabilities as Record<string, unknown> | undefined
-    await cloud.waitFor(() => cloud.heartbeatCount(token) >= 2 && Boolean(capabilities()), 11_000, '两次有效心跳')
+    await cloud.waitFor(() => Boolean(capabilities()), 6_000, '请求已发，成功响应仍未交给 Host')
+    assert.deepEqual(events, [], 'Sending the heartbeat is insufficient to start the background queue')
+    const early = cloud.enqueueInvocation('test_tool_status', {}, { provider: 'test-tool' })
+    await cloud.waitFor(() => cloud.getInvocation(early)?.state === 'succeeded', 6_000, '已领取的业务沿原路径执行')
+    assert.deepEqual(events, [], 'An accepted task does not wait for this execution window to receive its first heartbeat')
+    assert.deepEqual(checks, ['test-tool/false', 'test-tool/true'])
+    releaseHeartbeat()
+    await cloud.waitFor(() => events.filter(event => event === 'online').length >= 2, 11_000, '后台暂停时仍收到两次心跳')
+    assert.deepEqual(events, ['online', 'background-started', 'online'])
     const pool = (adapter as unknown as { providers: ProviderSet }).providers
-    assert.deepEqual(checks, [], 'Multiple successful heartbeats must not admit or spawn any signed Provider')
+    assert.deepEqual(checks, ['test-tool/false', 'test-tool/true'], 'The background queue must not start a business Provider')
     assert.equal(pool.get('wecom').isRunning, false)
     const advertised = capabilities()!.capabilities as string[]
     for (const name of ['wecom_read_sessions', 'wecom_session_directory', 'wecom_session_directory_search', 'wecom_config_doctor']) {
@@ -233,16 +258,22 @@ test('受管企微从签名 schema 上报可用工具，首用失败撤回该插
     assert.equal(aResult.payload.code, 'PROVIDER_NOT_AVAILABLE')
     assert.equal(aResult.payload.effect, 'none')
     assert.equal(pool.get('wecom').isRunning, false)
-    assert.deepEqual(checks, ['wecom/false'])
+    assert.deepEqual(checks.slice(2), ['wecom/false'])
 
     const b = cloud.enqueueInvocation('test_tool_status', {}, { provider: 'test-tool' })
     await cloud.waitFor(() => cloud.getInvocation(b)?.state === 'succeeded', 7_000, '未受影响的插件完成')
-    assert.deepEqual(checks.slice(1), ['test-tool/false', 'test-tool/true'])
+    assert.deepEqual(checks.slice(2), ['wecom/false', 'test-tool/false'])
     await cloud.waitFor(() => !(capabilities()?.providers as string[] | undefined)?.includes('wecom'), 11_000, '心跳撤回')
     assert.deepEqual(capabilities()!.plugin_manifest_digests, { 'test-tool': digest('b') })
     assert.deepEqual(capabilities()!.declared_tools, { 'test-tool': ['test_tool_status', 'test_tool_poll'] })
     assert.deepEqual(capabilities()!.parallel_tools, { 'test-tool': ['test_tool_poll'] })
+    await adapter.stop()
+    assert.equal(events.at(-1), 'background-stopped')
+    await begin()
+    await cloud.waitFor(() => events.filter(event => event === 'background-started').length === 2, 6_000, '重新开始只启动本轮后台检查')
+    assert.deepEqual(events.slice(-3), ['background-stopped', 'online', 'background-started'])
   } finally {
+    releaseHeartbeat()
     await adapter.stop()
     adapter.onDisposed()
     await cloud.stop()

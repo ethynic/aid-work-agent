@@ -19,8 +19,9 @@ interface VerifiedRelease extends ReleaseMetadata {
   verificationInputs: string
 }
 interface ReleaseState { metadata?: ReleaseMetadata; verified?: VerifiedRelease; ready: boolean; reason?: string }
-type PluginCheckPass = 'initialize' | 'refresh' | 'maintenance' | 'metadata' | 'first_use' | 'verified_reuse'
+type PluginCheckPass = 'initialize' | 'refresh' | 'maintenance' | 'metadata' | 'background' | 'first_use' | 'verified_reuse'
 type PluginCheckPhase = 'archive_envelope' | 'manifest' | 'archive_read' | 'archive_verify' | 'archive_digest' | 'payload_verify' | 'version' | 'doctor' | 'admission'
+class PluginCheckCancelled extends Error {}
 export interface PluginProbeContext {
   versionVerified: boolean
   measure<T>(phase: 'version' | 'doctor', work: () => Promise<T>): Promise<T>
@@ -59,7 +60,7 @@ export class PluginStore {
   private readonly allowedProviders: readonly string[]
   private records: Installation[] = []
   private states = new Map<string, ReleaseState>()
-  private readonly firstUses = new Map<string, Promise<void>>()
+  private readonly sessionChecks = new Map<string, { done: Promise<boolean | undefined>; requireExecution: () => void }>()
   private readonly executionProofs = new Map<string, VerifiedRelease>()
   private initialized = false
   private pendingWarning: string | undefined
@@ -187,24 +188,52 @@ export class PluginStore {
     const metadata = state?.verified ?? state?.metadata
     if (record.uninstalled || !record.enabled || !metadata?.declaration
       || entry !== join(this.releases, record.directory, 'payload', metadata.manifest.entrypoint[0]!)) throw unavailable()
-    const previous = state?.verified
-    if (previous?.verificationInputs === this.verificationInputs()) {
-      this.executionProofs.set(record.installation_id, previous)
-      if (atLaunch) this.recordTiming(record, 'verified_reuse', 'admission', 0, true)
-      return
+    const reused = state?.verified?.verificationInputs === this.verificationInputs()
+    if (!await this.verifyForSession(record)) throw unavailable()
+    if (reused && atLaunch) this.recordTiming(record, 'verified_reuse', 'admission', 0, true)
+  }
+
+  async verifyEnabledPlugins(signal: AbortSignal): Promise<void> {
+    this.assertAvailable()
+    for (const record of this.records) {
+      if (signal.aborted) return
+      const state = this.states.get(record.installation_id)
+      if (!record.uninstalled && record.enabled && (state?.metadata || state?.verified)) {
+        await this.verifyForSession(record, signal)
+      }
     }
-    const pending = this.firstUses.get(record.installation_id)
-    if (pending) return pending
-    const check = (async () => {
-      const validated = await this.checkRelease(record, 'first_use')
-      if (!this.records.includes(record)) throw unavailable()
-      this.states.set(record.installation_id, validated)
+  }
+
+  private async verifyForSession(record: Installation, background?: AbortSignal): Promise<boolean> {
+    const id = record.installation_id
+    const previous = this.states.get(id)?.verified
+    if (previous?.verificationInputs === this.verificationInputs()) {
+      this.executionProofs.set(id, previous)
+      return true
+    }
+    const pending = this.sessionChecks.get(id)
+    if (pending) {
+      if (!background) pending.requireExecution()
+      const result = await pending.done
+      if (result !== undefined || background) return result ?? false
+      // An accepted invocation can reach admission after a background cancellation has already begun.
+      return this.verifyForSession(record)
+    }
+    let required = !background
+    const checkActive = () => { if (background?.aborted && !required) throw new PluginCheckCancelled() }
+    const done = this.checkRelease(record, background ? 'background' : 'first_use', checkActive).then(validated => {
+      checkActive()
+      if (!this.records.includes(record)) return false
+      this.states.set(id, validated)
+      if (validated.verified) this.executionProofs.set(id, validated.verified)
       this.options.onChanged?.()
-      if (!validated.verified) throw unavailable()
-      this.executionProofs.set(record.installation_id, validated.verified)
-    })()
-    this.firstUses.set(record.installation_id, check)
-    try { await check } finally { this.firstUses.delete(record.installation_id) }
+      return Boolean(validated.verified)
+    }).catch(error => {
+      if (error instanceof PluginCheckCancelled) return undefined
+      throw error
+    }).finally(() => this.sessionChecks.delete(id))
+    this.sessionChecks.set(id, { done, requireExecution: () => { required = true } })
+    return (await done) ?? false
   }
 
   /** Called after the execution window has drained, without reading the installed payload. */
@@ -213,7 +242,7 @@ export class PluginStore {
     for (const [id, proof] of this.executionProofs) {
       if (this.states.get(id)?.verified !== proof) continue
       const { envelope, manifest, declaration } = proof
-      this.states.set(id, { metadata: { envelope, manifest, declaration }, ready: false, reason: '等待首次使用时检查插件' })
+      this.states.set(id, { metadata: { envelope, manifest, declaration }, ready: false, reason: '等待检查插件' })
       changed = true
     }
     this.executionProofs.clear()
@@ -363,16 +392,21 @@ export class PluginStore {
     catch { /* Diagnostic output must not affect plugin admission. */ }
   }
 
-  private measureFor(record: Installation, pass: PluginCheckPass) {
+  private measureFor(record: Installation, pass: PluginCheckPass, checkActive?: () => void) {
     return async <T>(phase: PluginCheckPhase, work: () => T | Promise<T>, files?: number): Promise<T> => {
+      checkActive?.()
       const started = performance.now()
       let succeeded = false
+      let cancelled = false
       try {
         const result = await work()
         succeeded = true
         return result
+      } catch (error) {
+        cancelled = error instanceof PluginCheckCancelled
+        throw error
       } finally {
-        this.recordTiming(record, pass, phase, Math.round(performance.now() - started), succeeded, files)
+        if (!cancelled) this.recordTiming(record, pass, phase, Math.round(performance.now() - started), succeeded, files)
       }
     }
   }
@@ -405,12 +439,12 @@ export class PluginStore {
         return manifest
       })
       const declaration = parseToolDeclaration(manifest)
-      return { metadata: { envelope, manifest, declaration }, ready: false, ...(record.enabled && declaration ? { reason: '等待首次使用时检查插件' } : {}) }
+      return { metadata: { envelope, manifest, declaration }, ready: false, ...(record.enabled && declaration ? { reason: '等待检查插件' } : {}) }
     } catch { return { ready: false, reason: '插件签名或清单无法确认，请检查或重新导入该插件' } }
   }
 
-  private async checkRelease(record: Installation, pass: PluginCheckPass = 'maintenance'): Promise<ReleaseState> {
-    const measure = this.measureFor(record, pass)
+  private async checkRelease(record: Installation, pass: PluginCheckPass = 'maintenance', checkActive?: () => void): Promise<ReleaseState> {
+    const measure = this.measureFor(record, pass, checkActive)
     try {
       const release = join(this.releases, record.directory)
       const archive = await measure('archive_read', async () => {
@@ -435,10 +469,14 @@ export class PluginStore {
         return this.verifiedRelease(signed, verificationInputs)
       })
       const payload = join(release, 'payload')
-      await measure('payload_verify', () => this.checkFiles(payload, pkg.installedFiles), pkg.installedFiles.size)
+      await measure('payload_verify', () => this.checkFiles(payload, pkg.installedFiles, checkActive), pkg.installedFiles.size)
+      checkActive?.()
       const readiness = await this.options.probe(payload, pkg.manifest, { versionVerified: reuse, measure })
       return { verified: pkg, ...readiness }
-    } catch { return { ready: false, reason: '插件文件、发布信任或运行依赖需要重新核对' } }
+    } catch (error) {
+      if (error instanceof PluginCheckCancelled) throw error
+      return { ready: false, reason: '插件文件、发布信任或运行依赖需要重新核对' }
+    }
   }
   private verificationInputs(): string {
     return JSON.stringify([this.options.trust, this.options.platform, this.allowedProviders])
@@ -452,12 +490,14 @@ export class PluginStore {
     return { envelope, manifest, declaration, outer_digest, installedFiles, verificationInputs }
   }
 
-  private async checkFiles(root: string, files: ReadonlyMap<string, FileIntegrity>): Promise<void> {
+  private async checkFiles(root: string, files: ReadonlyMap<string, FileIntegrity>, checkActive?: () => void): Promise<void> {
     rejectLinks(root)
     const seen = new Set<string>()
     const visit = async (path: string, prefix: string): Promise<void> => {
+      checkActive?.()
       // Keep one outstanding file read per plugin so a slow disk does not stall heartbeats.
       for (const entry of await readdir(path, { withFileTypes: true })) {
+        checkActive?.()
         const file = join(path, entry.name); const relative = prefix + entry.name
         if (entry.isSymbolicLink()) throw new Error('linked plugin payload')
         if (entry.isDirectory()) {
@@ -467,12 +507,14 @@ export class PluginStore {
         else {
           const expected = files.get(relative)
           const stat = await lstat(file)
+          checkActive?.()
           if (!entry.isFile() || !stat.isFile() || !expected || stat.size !== expected.size || sha256(await readFile(file)) !== expected.sha256) throw new Error('modified plugin payload')
           seen.add(relative)
         }
       }
     }
     await visit(root, '')
+    checkActive?.()
     if (seen.size !== files.size) throw new Error('incomplete plugin payload')
   }
 }
