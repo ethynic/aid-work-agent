@@ -61,6 +61,19 @@ else
     COMPOSE_QUIET=()
 fi
 
+# compose 输出收口（2026-11-27，与 agent2_update.sh 同款）：成功时全量重定向到
+# 文件，正常路径零输出；失败时回显过滤噪音后的错误尾部。兼容不支持 --progress
+# 的旧引擎（探测失败也不再有进度帧刷屏）。诺度环境 docker 需 sudo
+COMPOSE_LOG=/tmp/agent_nd_compose.log
+compose_up() {
+    local desc="$1"; shift
+    if ! sudo docker compose "${COMPOSE_ARGS[@]}" "${COMPOSE_QUIET[@]}" "$@" >"$COMPOSE_LOG" 2>&1; then
+        echo "错误：$desc 失败，关键输出如下："
+        grep -vE 'swap limit|Running [0-9]+/' "$COMPOSE_LOG" | tail -40
+        return 1
+    fi
+}
+
 echo "=========================================="
 echo "  AI 数字员工系统 - 快速更新（济南诺度）"
 echo "=========================================="
@@ -133,7 +146,7 @@ echo "[1] 拉取代码..."
 cd "$REPO_DIR"
 OLD_HEAD=$(git rev-parse HEAD)
 echo "更新前版本: $(git log -1 --format='%cd %s' --date=format:'%Y-%m-%d %H:%M:%S')"
-git fetch --all
+git fetch --all --quiet
 if [ -n "$1" ]; then
     if ! git cat-file -e "$1^{commit}" 2>/dev/null; then
         echo "错误：仓库中不存在提交 $1（先确认已 fetch，且版本号正确）"
@@ -169,7 +182,7 @@ sudo docker run --rm \
     -v "$FRONTEND_DIR":/app \
     -v agent_npm_cache:/root/.npm \
     -w /app node:22-alpine \
-    npm install --no-audit --no-fund --prefer-offline
+    npm install --no-audit --no-fund --prefer-offline --loglevel=error
 step_done "npm"
 
 # 3. 前端校验 + 编译到 dist.new（后台执行，与后端重启并行，2026-11-24 优化）。
@@ -238,8 +251,9 @@ if [ -f "$RUNNER_OVERLAY" ]; then
 else
     echo "  警告：未找到 $RUNNER_OVERLAY，将仅按 docker-compose.main.yml 重建（runner 会被 --remove-orphans 删除！）"
 fi
-sudo docker compose "${COMPOSE_ARGS[@]}" "${COMPOSE_QUIET[@]}" up -d --force-recreate --remove-orphans --wait \
+compose_up "后端主服务重启（api/background）" up -d --force-recreate --remove-orphans --wait \
     aid-agent-api aid-agent-background
+echo "    主服务已就绪（api/background Healthy）"
 
 # runner 服务重建使新代码生效；服务名 runner-api / runner-worker
 if [ -f "$RUNNER_OVERLAY" ]; then
@@ -247,7 +261,7 @@ if [ -f "$RUNNER_OVERLAY" ]; then
         | grep -E '^runner' || true)
     if [ -n "$RUNNER_SERVICES" ]; then
         # shellcheck disable=SC2086
-        sudo docker compose "${COMPOSE_ARGS[@]}" "${COMPOSE_QUIET[@]}" up -d --force-recreate $RUNNER_SERVICES
+        compose_up "runner 服务重建" up -d --force-recreate $RUNNER_SERVICES
         echo "    runner 服务已重建: $(echo $RUNNER_SERVICES | tr '\n' ' ')"
     else
         echo "  警告：overlay 中未找到 runner-* 服务定义，未重建 runner"
@@ -267,8 +281,8 @@ step_done "重启后端"
 #    内存上限已在 docker-compose.main.yml 用 mem_limit 声明（混部压缩版），
 #    此处不再用 docker update 覆盖内存）
 echo "[6] 施加容器 CPU 限制..."
-sudo docker update --cpus 2 aid-agent-api
-sudo docker update --cpus 1 aid-agent-background
+sudo docker update --cpus 2 aid-agent-api >/dev/null
+sudo docker update --cpus 1 aid-agent-background >/dev/null
 step_done "资源限制"
 
 # 7. 修复容器内 /tmp 权限（运行时兜底）
@@ -278,7 +292,6 @@ if ! sudo docker exec -u root aid-agent-api chmod 1777 /tmp 2>/dev/null; then
   sudo docker exec -u root aid-agent-api mount -o remount,mode=1777 /tmp 2>/dev/null || \
       echo "  警告：两种方式均失败，appuser 可能无法写入 /tmp"
 fi
-sudo docker exec -u root aid-agent-api ls -ld /tmp || true
 step_done "权限修复"
 
 # 增量依赖安装转后台（2026-11-26）：与前端编译等待并行，两段互不依赖。
@@ -297,14 +310,14 @@ if [ -z "$PIP_CONTAINERS" ]; then
     PIP_CONTAINERS="aid-agent-api"
 fi
 PIP_TMPDIR=$(mktemp -d)
+echo "    目标 $(echo $PIP_CONTAINERS | wc -w) 个容器（并发 4，后台）: $(echo $PIP_CONTAINERS | tr '\n' ' ')"
 (
     PIP_RUNNING=0
     for c in $PIP_CONTAINERS; do
-        echo "    -> $c"
         ( sudo docker exec -u root "$c" \
               pip install --no-cache-dir -r /app/requirements.txt \
               -i https://mirrors.cloud.tencent.com/pypi/simple \
-              --quiet || echo "$c" >> "$PIP_TMPDIR/failed" ) &
+              --quiet --disable-pip-version-check || echo "$c" >> "$PIP_TMPDIR/failed" ) &
         PIP_RUNNING=$((PIP_RUNNING + 1))
         # 限制并发 4 个：多副本同时跑 pip 的内存峰值偏高
         if [ "$PIP_RUNNING" -ge 4 ]; then

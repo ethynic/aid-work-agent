@@ -63,6 +63,19 @@ else
     COMPOSE_QUIET=()
 fi
 
+# compose 输出收口（2026-11-27，与 agent2_update.sh 同款）：成功时全量重定向到
+# 文件，正常路径零输出；失败时回显过滤噪音后的错误尾部。兼容不支持 --progress
+# 的旧引擎（探测失败也不再有进度帧刷屏）
+COMPOSE_LOG=/tmp/agent1_compose.log
+compose_up() {
+    local desc="$1"; shift
+    if ! docker compose "${COMPOSE_ARGS[@]}" "${COMPOSE_QUIET[@]}" "$@" >"$COMPOSE_LOG" 2>&1; then
+        echo "错误：$desc 失败，关键输出如下："
+        grep -vE 'swap limit|Running [0-9]+/' "$COMPOSE_LOG" | tail -40
+        return 1
+    fi
+}
+
 echo "=========================================="
 echo "  仿真环境（agent1）- 验证模式更新"
 echo "=========================================="
@@ -117,7 +130,7 @@ fi
 echo "[1] 拉取代码..."
 cd "$SIM_DIR"
 echo "更新前版本: $(git log -1 --format='%cd %s' --date=format:'%Y-%m-%d %H:%M:%S')"
-git fetch --all
+git fetch --all --quiet
 if [ -n "$1" ]; then
     if ! git cat-file -e "$1^{commit}" 2>/dev/null; then
         echo "错误：仓库中不存在提交 $1（先确认已 fetch，且版本号正确）"
@@ -150,7 +163,7 @@ docker run --rm \
     -v "$FRONTEND_DIR":/app \
     -v agent1_npm_cache:/root/.npm \
     -w /app node:22-alpine \
-    npm install --no-audit --no-fund --prefer-offline
+    npm install --no-audit --no-fund --prefer-offline --loglevel=error
 step_done "npm"
 
 # 3. 前端校验 + 编译到 dist.new（后台执行，与后端重启并行，2026-11-24 优化）。
@@ -195,7 +208,8 @@ echo "[5] 重启仿真后端 aid-agent-api1（及已启用的 runner 容器）..
 # --wait 只等主 api（2026-11-26 对齐生产语义）：runner-sim 服务的 healthcheck
 # （monitor-sim start_period 4m）不再串进发布总时长
 # --remove-orphans：overlay 服务名变更后，旧容器占用同名 container_name 会导致建容器冲突
-docker compose "${COMPOSE_ARGS[@]}" "${COMPOSE_QUIET[@]}" up -d --remove-orphans --force-recreate --wait api
+compose_up "仿真后端重启（api）" up -d --remove-orphans --force-recreate --wait api
+echo "    主服务已就绪（api Healthy）"
 
 # runner-sim 服务重建使新代码生效（代码经 .:/app 挂载，重建保证进程加载新代码）；
 # 不带 --wait（与生产对齐，就绪靠下方 /health 探测告警）
@@ -203,7 +217,7 @@ RUNNER_SERVICES=$(docker compose "${COMPOSE_ARGS[@]}" config --services 2>/dev/n
     | grep -E '^runner' || true)
 if [ -n "$RUNNER_SERVICES" ]; then
     # shellcheck disable=SC2086
-    docker compose "${COMPOSE_ARGS[@]}" "${COMPOSE_QUIET[@]}" up -d --force-recreate $RUNNER_SERVICES
+    compose_up "runner-sim 服务重建" up -d --force-recreate $RUNNER_SERVICES
     echo "    runner 服务已重建（不等待健康）: $(echo $RUNNER_SERVICES | tr '\n' ' ')"
     # runner-api-sim 可达性探测（失败仅告警不阻断，重建后异步就绪）
     if docker exec aid-agent-api1 python -c \
@@ -232,14 +246,14 @@ if [ -z "$PIP_CONTAINERS" ]; then
     PIP_CONTAINERS="aid-agent-api1"
 fi
 PIP_TMPDIR=$(mktemp -d)
+echo "    目标 $(echo $PIP_CONTAINERS | wc -w) 个容器（并发 4，后台）: $(echo $PIP_CONTAINERS | tr '\n' ' ')"
 (
     PIP_RUNNING=0
     for c in $PIP_CONTAINERS; do
-        echo "    -> $c"
         ( docker exec -u root "$c" \
               pip install --no-cache-dir -r /app/requirements.txt \
               -i https://mirrors.cloud.tencent.com/pypi/simple \
-              --quiet || echo "$c" >> "$PIP_TMPDIR/failed" ) &
+              --quiet --disable-pip-version-check || echo "$c" >> "$PIP_TMPDIR/failed" ) &
         PIP_RUNNING=$((PIP_RUNNING + 1))
         # 限制并发 4 个：多副本同时跑 pip 的内存峰值偏高
         if [ "$PIP_RUNNING" -ge 4 ]; then

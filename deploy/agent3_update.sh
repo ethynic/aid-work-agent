@@ -52,6 +52,10 @@ fi
 #         等待健康，发布后仅对 runner-api 做 /health 探测告警——此前 --wait 全量
 #         等待把 runner-monitor（start_period 4m）等 healthcheck 串进发布总时长
 #      b) 新增分段计时：每步结束打印「本段/累计」耗时
+#  14. 2026-11-27 输出精简（与 agent2_update.sh 同款）：compose up 输出重定向
+#      文件（成功零输出、失败回显错误尾部，不依赖 --progress）；git fetch/npm/
+#      checkout 静默；docker update 输出抑制；删除 /tmp ls 回显；pip 加
+#      --disable-pip-version-check、逐容器行改单行汇总
 # ==============================================================================
 
 main() {
@@ -99,6 +103,19 @@ if docker compose up --help 2>&1 | grep -q -- '--progress'; then
 else
     COMPOSE_QUIET=()
 fi
+
+# compose 输出收口（2026-11-27，与 agent2_update.sh 同款）：成功时全量重定向到
+# 文件，正常路径零输出；失败时回显过滤噪音后的错误尾部。兼容不支持 --progress
+# 的旧引擎（探测失败也不再有进度帧刷屏）
+COMPOSE_LOG=/tmp/agent3_compose.log
+compose_up() {
+    local desc="$1"; shift
+    if ! docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_QUIET[@]}" "$@" >"$COMPOSE_LOG" 2>&1; then
+        echo "错误：$desc 失败，关键输出如下："
+        grep -vE 'swap limit|Running [0-9]+/' "$COMPOSE_LOG" | tail -40
+        return 1
+    fi
+}
 
 echo "=========================================="
 echo "  AI 数字员工系统（在线开发） - 快速更新"
@@ -207,7 +224,7 @@ cd "/var/www/agent3"
 echo "当前分支: $(git rev-parse --abbrev-ref HEAD)"
 OLD_HEAD=$(git rev-parse HEAD)
 echo "更新前版本: $(git log -1 --format='%cd %s' --date='format:%Y-%m-%d %H:%M:%S')"
-git fetch --all
+git fetch --all --quiet
 # 参数优先；未传参数时交互选择；stdin 非终端（管道/cron）回退默认 master
 # 自更新重入时沿用首轮选择的分支（否则交互菜单会再弹一次）
 if [ -z "$TARGET_BRANCH" ] && [ -n "${AID_DEPLOY_BRANCH:-}" ]; then
@@ -233,7 +250,7 @@ if [ "$TARGET_BRANCH" != "master" ]; then
 fi
 # checkout -f -B：切换或重建本地分支并强制对齐 origin/<分支>；
 # -f 丢弃本地改动与挡路的未跟踪文件，与原 reset --hard origin/master 的部署语义一致
-git checkout -f -B "$TARGET_BRANCH" "origin/$TARGET_BRANCH"
+git checkout -f -B --quiet "$TARGET_BRANCH" "origin/$TARGET_BRANCH"
 echo "更新后版本: $(git log -1 --format='%cd %s' --date='format:%Y-%m-%d %H:%M:%S')"
 NEW_HEAD=$(git rev-parse HEAD)
 # 自更新重入：脚本文件随本次检出变化 -> exec 新版（重入后再比较必然相同，
@@ -274,7 +291,7 @@ if [ "$FRONTEND_CHANGED" -gt 0 ] || [ ! -d "$DIST_DIR" ]; then
             -v "$FRONTEND_DIR":/app \
             -v agent3_npm_cache:/root/.npm \
             -w /app node:22-alpine \
-            npm install --no-audit --no-fund --prefer-offline
+            npm install --no-audit --no-fund --prefer-offline --loglevel=error
     fi
     # 双通道并行（2026-11-26）：通道 A = typecheck/边界检查（门禁，不产出 dist），
     # 通道 B = vite build/产物校验（产出 dist.new），互不依赖，墙钟时间 = max(两通道)；
@@ -321,8 +338,9 @@ fi
 # --wait 只等主 API/background（2026-11-26 对齐生产 agent_update.sh 语义）：
 # runner 服务（runner-api/runner-worker/runner-monitor/heavy-tools）的
 # healthcheck（monitor start_period 4m、heavy-tools 60s）不再串进发布总时长
-docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_QUIET[@]}" up -d --force-recreate --remove-orphans --wait \
+compose_up "后端主服务重启（api/background）" up -d --force-recreate --remove-orphans --wait \
     aid-agent-api aid-agent-background
+echo "    主服务已就绪（api/background Healthy）"
 
 # runner 服务重建使新代码生效；不带 --wait（与生产对齐，就绪靠下方 /health 探测告警）
 if [ -f docker-compose.agent-runner.yml ]; then
@@ -330,7 +348,7 @@ if [ -f docker-compose.agent-runner.yml ]; then
         | grep -E '^runner|^heavy-tools' || true)
     if [ -n "$RUNNER_SERVICES" ]; then
         # shellcheck disable=SC2086
-        docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_QUIET[@]}" up -d --force-recreate $RUNNER_SERVICES
+        compose_up "runner 服务重建" up -d --force-recreate $RUNNER_SERVICES
         echo "    runner 服务已重建（不等待健康）: $(echo $RUNNER_SERVICES | tr '\n' ' ')"
     fi
     # runner-api 可达性探测（失败仅告警不阻断，重建后异步就绪）
@@ -352,8 +370,8 @@ step_done "重启后端"
 echo "[4] 施加容器资源限制..."
 RUNNER_API_CONTAINER="$(grep -E '^AGENT_RUNNER_API_CONTAINER=' .env 2>/dev/null | cut -d= -f2- || true)"
 RUNNER_API_CONTAINER="${RUNNER_API_CONTAINER:-aid-runner-api}"
-docker update --cpus 1 --memory 1G --memory-reservation 512M aid-agent-api3
-docker update --cpus 0.5 --memory 512M --memory-reservation 256M "$RUNNER_API_CONTAINER" 2>/dev/null \
+docker update --cpus 1 --memory 1G --memory-reservation 512M aid-agent-api3 >/dev/null
+docker update --cpus 0.5 --memory 512M --memory-reservation 256M "$RUNNER_API_CONTAINER" >/dev/null 2>/dev/null \
     || echo "  跳过 $RUNNER_API_CONTAINER（不存在）"
 step_done "资源限制"
 
@@ -365,7 +383,6 @@ if ! docker exec -u root aid-agent-api3 chmod 1777 /tmp 2>/dev/null; then
   docker exec -u root aid-agent-api3 mount -o remount,mode=1777 /tmp 2>/dev/null || \
       echo "  警告：两种方式均失败，appuser 可能无法写入 /tmp"
 fi
-docker exec -u root aid-agent-api3 ls -ld /tmp || true
 step_done "权限修复"
 
 # 5.1 修复 runner 容器 /tmp 与 /home/appuser/tmp 权限（与 agent2_update.sh [8] 同款）。
@@ -402,14 +419,14 @@ if [ -z "$PIP_CONTAINERS" ]; then
     PIP_CONTAINERS="aid-agent-api3"
 fi
 PIP_TMPDIR=$(mktemp -d)
+echo "    目标 $(echo $PIP_CONTAINERS | wc -w) 个容器（并发 4，后台）: $(echo $PIP_CONTAINERS | tr '\n' ' ')"
 (
     PIP_RUNNING=0
     for c in $PIP_CONTAINERS; do
-        echo "    -> $c"
         ( docker exec -u root "$c" \
               pip install --no-cache-dir -r /app/requirements.txt \
               -i https://mirrors.cloud.tencent.com/pypi/simple \
-              --quiet || echo "$c" >> "$PIP_TMPDIR/failed" ) &
+              --quiet --disable-pip-version-check || echo "$c" >> "$PIP_TMPDIR/failed" ) &
         PIP_RUNNING=$((PIP_RUNNING + 1))
         # 限制并发 4 个：多副本同时跑 pip 的内存峰值偏高
         if [ "$PIP_RUNNING" -ge 4 ]; then
