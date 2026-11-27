@@ -121,7 +121,7 @@
       <ul v-if="view.plugins" class="runtime-plugin-list">
         <li v-for="plugin in view.plugins.plugins" :key="plugin.installation_id">
           <div class="runtime-plugin-info"><div class="runtime-plugin-heading"><h3>{{ plugin.display_name }}</h3><span class="runtime-muted">{{ plugin.version || '版本未知' }}</span></div><p v-if="plugin.reason" class="runtime-muted">{{ plugin.reason }}</p></div>
-          <p class="runtime-plugin-state"><span>{{ plugin.enabled ? '已启用' : '已停用' }}</span><span :class="plugin.ready ? 'ready' : 'pending'">{{ plugin.ready ? '最近检查：已就绪' : '最近检查：未就绪' }}</span></p>
+          <p class="runtime-plugin-state"><span>{{ plugin.enabled ? '已启用' : '已停用' }}</span><span v-if="plugin.ready || !plugin.reason" :class="plugin.ready ? 'ready' : 'pending'">{{ plugin.ready ? '最近检查：已就绪' : '最近检查：未就绪' }}</span></p>
           <div v-if="controller.supportsPlugins" class="runtime-actions runtime-plugin-actions">
             <button type="button" class="runtime-secondary" :disabled="cannotAct || !view.plugins" @click="controller.mutate(plugin.enabled ? 'plugins.disable' : 'plugins.enable', { installation_id: plugin.installation_id })">{{ plugin.enabled ? '停用' : '启用' }}</button>
             <button type="button" class="runtime-secondary runtime-danger" :disabled="cannotAct || !view.plugins" @click="confirmRemoval = plugin.installation_id">卸载</button>

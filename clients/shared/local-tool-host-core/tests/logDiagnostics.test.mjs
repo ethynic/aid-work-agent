@@ -51,6 +51,22 @@ test('time filtering, live partial tails and bounded snapshots report their actu
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
+test('startup log projection shows first heartbeat and identifies the slow plugin without arbitrary fields', () => {
+  const payload = '[runtime-startup-plugin] provider=ai.aidwork.weixin pass=initialize phase=payload_verify elapsed_ms=31725 result=ok files=3741'
+  const plugin = projectRuntimeLog(line(payload).trim())
+  assert.equal(plugin.event, 'plugin-startup-timing')
+  assert.equal(plugin.provider, 'ai.aidwork.weixin')
+  assert.equal(plugin.durationMs, 31725)
+  assert.match(plugin.summary, /现场文件核对.*3741/)
+  const background = projectRuntimeLog(line(payload.replace('initialize', 'background')).trim())
+  assert.match(background.summary, /上线后后台完整检查.*现场文件核对.*3741/)
+  const heartbeat = projectRuntimeLog(line('[runtime-startup] phase=heartbeat_online elapsed_ms=5231 host_elapsed_ms=11800').trim())
+  assert.equal(heartbeat.event, 'runtime-startup-timing')
+  assert.match(heartbeat.summary, /首次心跳成功.*11800 ms/)
+  assert.equal(projectRuntimeLog(line(`${payload} path=C:/private.txt`).trim()), null)
+  assert.equal(projectRuntimeLog(line(payload.replace('payload_verify', 'arbitrary message')).trim()), null)
+})
+
 test('current rt and connections homes plus old generation pointers resolve read-only without mixing another connection', () => {
   const root = fixture(), userData = path.join(root, profile.userDataDir), pointer = path.join(userData, 'installation-v2/current.json')
   try {

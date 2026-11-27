@@ -3,6 +3,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 export const RUNTIME_UPDATE_EXIT_ARGUMENT = '--aidwork-exit-for-update'
+export type RuntimeExitMode = 'quit' | 'update' | 'uninstall'
 export function shouldResumeRuntime(input: { intent: boolean | undefined; recovered: boolean; login: boolean; reconciling?: boolean }): boolean {
   return input.intent !== false && (input.intent === true || input.recovered || input.login || input.reconciling === true)
 }
@@ -24,6 +25,16 @@ export class RuntimeUpdateIntent {
   save(resume: boolean): Promise<void> { return this.serialize(() => this.saveValue(resume)) }
   read(): Promise<boolean | undefined> { return this.serialize(() => this.readValue()) }
   clear(): Promise<void> { return this.serialize(async () => { rmSync(this.file, { force: true }) }) }
+  recordExit(mode: RuntimeExitMode, state: unknown): Promise<void> {
+    return this.serialize(async () => {
+      const active = state === 'running' || state === 'starting'
+      if (mode === 'update') {
+        // Keep the first snapshot if the installer retries after a partially completed drain.
+        if ((active || state === 'stopped' || state === 'draining') && await this.readValue() === undefined) await this.saveValue(active)
+      } else if (mode === 'quit' && active) await this.saveValue(true)
+      else rmSync(this.file, { force: true })
+    })
+  }
   private async saveValue(resume: boolean): Promise<void> {
     mkdirSync(path.dirname(this.file), { recursive: true })
     const temp = `${this.file}.${randomUUID()}.tmp`

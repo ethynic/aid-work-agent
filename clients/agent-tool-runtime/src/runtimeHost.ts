@@ -16,7 +16,7 @@ import { loadDeviceToken } from './credentials.js'
 import { checkDesktopInteractive } from './desktopCheck.js'
 import { deriveResourceKey } from './desktopLock.js'
 import { PollLoop } from './pollLoop.js'
-import { ProviderSet, type ProviderManager } from './providerManager.js'
+import { inspectWecomToolSchemas, ProviderCheckError, ProviderSet, type ProviderManager } from './providerManager.js'
 import { ResultOutbox, resultOutboxDir } from './resultOutbox.js'
 import { dpapiProtect, dpapiUnprotect } from './dpapi.js'
 import { logInfo } from './log.js'
@@ -27,7 +27,7 @@ import { ManagementError, RuntimeHost, PACKAGE_LIMITS, sha256, type ConnectionSt
 import { PluginStore } from '@aid/local-tool-host-core/plugins/store'
 import { configureRuntimeHome, type RuntimeConfig } from './config.js'
 import { join } from 'node:path'
-import { dirname, resolve } from 'node:path'
+import { dirname, posix, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { atomicWrite, recoverPairing } from './pairingStore.js'
 import { assertNoLegacyRuntimeProcess } from './legacyProcessCheck.js'
@@ -57,6 +57,7 @@ export class LegacyExecution implements HostAdapter {
   private loop: PollLoop | null = null
   private providers: ProviderSet | null = null
   private runPromise: Promise<void> | null = null
+  private backgroundChecks: { controller: AbortController; done?: Promise<void> } | null = null
   private runFailure: unknown = null
   private stopping = false
   private supervision: ProcessSupervision
@@ -139,12 +140,17 @@ export class LegacyExecution implements HostAdapter {
     try { await recoverPairing() } catch { throw new ManagementError(11, '设备配对资料未能恢复，原身份文件和待处理事务已保留') }
     if (this.pluginOptions) {
       const makeStore = () => new PluginStore({ home: this.home, trust: this.pluginOptions!.trust,
+        deferStartupChecks: true,
         // 契约 2.20 修订：安装白名单由产品信任配置驱动（trust roots 覆盖的 provider_id
         // 并集）——往信任配置加新 provider 身份即可安装接入，无需改源码；无信任配置的
         // CLI/A1 资产不产生安装权限，PluginStore 维持 FIRST_PARTY_PROVIDERS 默认
         ...(this.pluginOptions!.trust ? { providers: providerIdsOfTrust(this.pluginOptions!.trust) } : {}),
         platform: { platform: process.platform, arch: process.arch, node_version: process.versions.node, node_abi: process.versions.modules, runtime_version: RUNTIME_VERSION },
-        probe: (root, manifest) => probePlugin(this.nodeExecutable, root, manifest, providerEnvironment()),
+        probe: (root, manifest, context) => probePlugin(this.nodeExecutable, root, manifest, providerEnvironment(), context),
+        onCheckTiming: ({ pluginId, pass, phase, elapsedMs, succeeded, files }) => {
+          // Only fixed stages and the allowlisted plugin identity leave the store.
+          logInfo(`[runtime-startup-plugin] provider=${pluginId} pass=${pass} phase=${phase} elapsed_ms=${elapsedMs} result=${succeeded ? 'ok' : 'failed'}${files === undefined ? '' : ` files=${files}`}`)
+        },
         onChanged: () => this.pluginsChanged?.() })
       try { this.pluginStore = makeStore(); await this.pluginStore.initialize() } catch (error) {
         if (this.cleanGeneration && existsSync(join(this.home, 'plugins')) && !lstatSync(join(this.home, 'plugins')).isSymbolicLink()) {
@@ -217,6 +223,7 @@ export class LegacyExecution implements HostAdapter {
     await recoverPairing()
   }
   async start(connection: (value: ConnectionStatus) => void, executionEnded: () => void): Promise<void> {
+    const started = performance.now()
     if (await registrationBlocksExecution(runtimeHomeDir())) throw new ManagementError(11, '新注册尚未完成，请在客户端完成连接配置；可正常退出')
     await recoverPairing()
     const config = loadConfig()
@@ -224,11 +231,11 @@ export class LegacyExecution implements HostAdapter {
     const server = config.server
     let token: string
     try { token = await loadDeviceToken() } catch { throw new ManagementError(9, '设备凭证不可用，请核对本机身份') }
-    await this.pluginStore?.refresh()
-    const entries = Object.fromEntries(Object.entries(this.resolveEntries(config)).filter(([, entry]) => existsSync(entry)))
-    const plugins = this.pluginStore?.declaredPlugins() ?? []
+    const declared = () => this.pluginStore?.declaredPlugins() ?? []
+    const plugins = declared()
     const store = this.storeDeclarations(plugins)
     const { manifests: storeManifests, parallelTools } = store
+    const entries = Object.fromEntries(Object.entries(this.resolveEntries(config)).filter(([key, entry]) => Boolean(storeManifests[key]) || existsSync(entry)))
     const api = new ApiClient(server, token)
     const wecomLegacyEnv: Record<string, string> = {}
     for (const key of ['AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN']) {
@@ -238,6 +245,10 @@ export class LegacyExecution implements HostAdapter {
     const pairedEnv = { AIDWORK_RUNTIME_SERVER: server, AIDWORK_RUNTIME_DEVICE_TOKEN: token }
     const providers = new ProviderSet(entries, { nodeExecutable: this.nodeExecutable, baseEnv: providerEnvironment(),
       ...(this.supervision.enabled ? { prepareLaunch: (entry: string) => this.supervision.prepareLaunch(entry) } : {}),
+      verifyProvider: async (key, entry, atLaunch) => {
+        try { await this.pluginStore?.verifyForExecution(key, entry, atLaunch) }
+        catch { throw new ProviderCheckError() }
+      },
       providerEnv: { wecom: { ...wecomLegacyEnv, ...pairedEnv }, 'boss-recruiting': pairedEnv,
         ...(storeManifests.weixin ? { weixin: {
           AID_WEIXIN_SERVER_URL: server,
@@ -256,26 +267,40 @@ export class LegacyExecution implements HostAdapter {
     logInfo(`[runtime] providers: ${Object.keys(entries).join(', ')}`)
     // v2 写路径数据目录（journal/ + result-outbox/，跟随 runtime home；启动重投共用同一 outbox 实例）
     const dataDir = runtimeHomeDir()
-    const bossRecoveryReady = Boolean(entries['boss-recruiting'] && existsSync(resolve(dirname(entries['boss-recruiting']), '../main/operations/bossRecoveryProbe.js')))
-    const wecomRecoveryReady = Boolean(entries.wecom && this.supervision.enabled)
-    const recoveryReady = bossRecoveryReady || wecomRecoveryReady
+    const recoveryCapabilities = (available: Record<string, string>, active: ReturnType<typeof declared>) => {
+      const boss = active.find(plugin => plugin.provider_key === 'boss-recruiting')?.manifest
+      const probe = '../main/operations/bossRecoveryProbe.js'
+      const bossRecoveryReady = boss
+        ? boss.distribution.required_files.some(file => file?.path === posix.join(posix.dirname(boss.entrypoint[0]!), probe))
+        : Boolean(available['boss-recruiting'] && existsSync(resolve(dirname(available['boss-recruiting']), probe)))
+      const wecomRecoveryReady = Boolean(available.wecom && this.supervision.enabled
+        && (active.some(plugin => plugin.provider_key === 'wecom') || existsSync(available.wecom)))
+      return { recoveryReady: bossRecoveryReady || wecomRecoveryReady, wecomRecoveryReady }
+    }
     const capabilities = () => {
+      const active = declared()
+      const available = this.resolveEntries(config)
+      const signedWecom = active.find(plugin => plugin.provider_key === 'wecom')
+      const signedFlags = signedWecom ? inspectWecomToolSchemas(signedWecom.manifest.tools) : undefined
       let wecom: ProviderManager | undefined
-      if (entries.wecom && !this.stopping) {
+      if (!signedWecom && available.wecom && !this.stopping) {
         try { wecom = providers.get('wecom') } catch { /* The existing recovery operation temporarily owns the pool. */ }
       }
-      // Discovery never delays heartbeat/claim and cannot invoke a business tool.
-      // A failed transport is retried by the next heartbeat, without another worker.
+      // Only legacy directly configured WeCom needs discovery to advertise extra schemas.
       void wecom?.inspectWecomBusinessTools().catch(() => {})
-      const value = deviceCapabilities(this.effectiveConfig(config), wecom?.wecomBusinessReady,
-        wecom?.wecomDirectoryReady, wecom?.wecomDirectorySearchReady,
-        wecom?.wecomConfigDoctorReady, wecom?.wecomConfigCalibrateReady,
-        store)
+      const value = deviceCapabilities(this.effectiveConfig(config, available), signedFlags?.businessSupported ?? wecom?.wecomBusinessReady,
+        signedFlags?.directorySupported ?? wecom?.wecomDirectoryReady, signedFlags?.directorySearchSupported ?? wecom?.wecomDirectorySearchReady,
+        signedFlags?.configDoctorSupported ?? wecom?.wecomConfigDoctorReady, signedFlags?.configCalibrateSupported ?? wecom?.wecomConfigCalibrateReady,
+        this.storeDeclarations(active))
+      const { recoveryReady, wecomRecoveryReady } = recoveryCapabilities(available, active)
       if (recoveryReady && this.supervision.enabled) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_stop_v1']
       if (wecomRecoveryReady) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_wecom_v1']
       if (recoveryReady) { value.providers = [...(value.providers as string[]), 'runtime-recovery']; value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_observe_v2'] }
       return value
     }
+    let firstHeartbeat = true
+    const backgroundChecks: NonNullable<LegacyExecution['backgroundChecks']> = { controller: new AbortController() }
+    this.backgroundChecks = backgroundChecks
     const loop = new PollLoop({
       api,
       runnerDeps: {
@@ -288,7 +313,7 @@ export class LegacyExecution implements HostAdapter {
             await this.supervision.noteBusinessExecution()
           }
         },
-        ...(recoveryReady ? { recoveryObservation: recoveryObservation(providers, this.supervision) } : {}),
+        ...(recoveryCapabilities(entries, plugins).recoveryReady ? { recoveryObservation: recoveryObservation(providers, this.supervision) } : {}),
         desktopCheck: async () => (await checkDesktopInteractive()).interactive,
         desktopResourceKey: deriveResourceKey(),
         runtimeDataDir: dataDir,
@@ -299,9 +324,20 @@ export class LegacyExecution implements HostAdapter {
       // logInfo = stderr + %APPDATA% 文件双写，前缀格式不变。
       onEvent: (msg) => logInfo(msg),
       capabilities,
-      pluginManifests: Object.fromEntries(plugins.map(({ provider_key, envelope, manifest }) => [provider_key, { envelope, manifest }])),
-      canClaim: () => Object.values(this.resolveEntries(config)).some(entry => existsSync(entry)),
-      onConnection: connection,
+      pluginManifests: () => Object.fromEntries(declared().map(({ provider_key, envelope, manifest }) => [provider_key, { envelope, manifest }])),
+      canClaim: () => Object.entries(this.resolveEntries(config)).some(([key, entry]) => Boolean(storeManifests[key]) || existsSync(entry)),
+      onConnection: value => {
+        const firstOnline = value === 'online' && firstHeartbeat
+        if (firstOnline) {
+          firstHeartbeat = false
+          logInfo(`[runtime-startup] phase=heartbeat_online elapsed_ms=${Math.round(performance.now() - started)} host_elapsed_ms=${Math.round(performance.now())}`)
+        }
+        connection(value)
+        if (firstOnline && !backgroundChecks.controller.signal.aborted) {
+          backgroundChecks.done = Promise.resolve().then(() => this.pluginStore?.verifyEnabledPlugins(backgroundChecks.controller.signal))
+            .catch(() => { logInfo('[runtime-startup] phase=background_plugins_failed') })
+        }
+      },
       // 契约 2.20：并行接单——与能力上报同源（assembleStoreManifests 派生），PollLoop
       // 据此判定领到的作业是否后台并行执行；无声明插件 parallel_tools 为空 → 行为与现状一致
       parallelTools,
@@ -311,15 +347,19 @@ export class LegacyExecution implements HostAdapter {
       logInfo('[session-tasks] 微信自动回复已停用，聊天正文仅在本机读取')
     }
     this.loop = loop
+    logInfo(`[runtime-startup] phase=execution_prepared elapsed_ms=${Math.round(performance.now() - started)}`)
     this.runPromise = loop.run().then(() => {
+      backgroundChecks.controller.abort()
       if (!this.stopping) executionEnded()
     }, error => {
+      backgroundChecks.controller.abort()
       this.runFailure = error; loop.shutdown()
       if (!this.stopping) executionEnded()
     })
   }
   async stop(): Promise<void> {
     this.stopping = true
+    this.backgroundChecks?.controller.abort()
     this.loop?.stopClaiming()
     await this.loop?.drain()
     await this.runPromise
@@ -327,6 +367,9 @@ export class LegacyExecution implements HostAdapter {
     this.providers?.stopAdmission()
     await this.providers?.waitForIdle()
     await this.providers?.shutdownAll()
+    await this.backgroundChecks?.done
+    this.backgroundChecks = null
+    this.pluginStore?.resetExecutionChecks()
     this.loop = null; this.providers = null; this.runPromise = null
     // A loop error is not proof of an active process after every execution lane
     // and provider has drained. Business journals/outbox remain unchanged.
@@ -349,15 +392,18 @@ export async function openRuntimeHost(options: { home?: string; nodeExecutable?:
   // Legacy helpers have process-wide home state; a Node child owns one composition.
   if (compositionOpen) throw new ManagementError(4, '本进程已有Runtime Host')
   compositionOpen = true
+  const started = performance.now()
   const home = resolve(options.home ?? runtimeHomeDir())
   try {
     // Core preflight may enter read-only mode before adapter.initialize runs.
     // Its device snapshot must still read this composition's explicitly bound home.
     configureRuntimeHome(home)
     const trust = options.trust ?? loadPackagedTrust(dirname(fileURLToPath(import.meta.url)))
-    return await RuntimeHost.open({ home, version: RUNTIME_VERSION, supervisor: options.supervisor ?? 'cli', readOnlyOnFailure: options.supervisor === 'runtime_app',
+    const host = await RuntimeHost.open({ home, version: RUNTIME_VERSION, supervisor: options.supervisor ?? 'cli', readOnlyOnFailure: options.supervisor === 'runtime_app',
       adapter: new LegacyExecution(options.nodeExecutable ?? process.execPath, home, trust ? { platform: options.platform, trust } : undefined,
         options.supervisor === 'runtime_app' && options.cleanGeneration === true) })
+    logInfo(`[runtime-startup] phase=host_open elapsed_ms=${Math.round(performance.now() - started)}`)
+    return host
   } catch (error) {
     compositionOpen = false; configureRuntimeHome(undefined)
     throw error

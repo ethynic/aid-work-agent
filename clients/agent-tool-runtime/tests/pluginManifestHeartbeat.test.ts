@@ -10,8 +10,9 @@ import { ApiClient } from '../src/apiClient.js'
 import { PollLoop } from '../src/pollLoop.js'
 import { ProviderSet } from '../src/providerManager.js'
 
-for (const supportsSync of [false, true]) {
-  test(`manifest heartbeat ${supportsSync ? 'sends only the requested snapshot' : 'continues with an old server'}`, async () => {
+for (const mode of ['old server', 'requested snapshot', 'withdrawn plugin'] as const) {
+  test(`manifest heartbeat handles ${mode}`, async () => {
+    const supportsSync = mode !== 'old server'
     // These objects stand in for the PluginStore's verified snapshot. This test
     // drives the wire protocol and never opens a real provider process.
     const a = { envelope: { manifest_digest: `sha256:${'a'.repeat(64)}` }, manifest: { provider_id: 'ai.aidwork.a' } } as SignedPluginManifest
@@ -20,10 +21,13 @@ for (const supportsSync of [false, true]) {
     const claims = new Map<boolean, Record<string, unknown>>()
     let sentSerial = false
     let drainedSerial = false
+    let pluginAValid = true
     let finish!: () => void
     const complete = new Promise<void>(resolve => { finish = resolve })
     const finishIfReady = () => {
-      if (heartbeats.length >= 3 && claims.has(false) && (!supportsSync || claims.has(true) && drainedSerial)) finish()
+      const afterWithdrawal = [...claims.values()].every(body => !Object.hasOwn((body.plugin_manifest_digests ?? {}) as object, 'a'))
+      if (heartbeats.length >= 3 && claims.has(false) && (!supportsSync || claims.has(true) && drainedSerial)
+        && (mode !== 'withdrawn plugin' || afterWithdrawal)) finish()
     }
     const server = createServer(async (request, response) => {
       const chunks = []
@@ -47,8 +51,10 @@ for (const supportsSync of [false, true]) {
         response.end(JSON.stringify({ success: true }))
       } else {
         heartbeats.push(body)
+        if (mode === 'withdrawn plugin') pluginAValid = false
         response.end(JSON.stringify({ success: true, selected: true, parallel_claim: supportsSync,
-          ...(supportsSync && heartbeats.length === 1 ? { missing_plugin_manifests: ['b', 'not-installed'] } : {}) }))
+          ...(supportsSync && heartbeats.length === 1
+            ? { missing_plugin_manifests: [...(mode === 'withdrawn plugin' ? ['a'] : []), 'b', 'not-installed'] } : {}) }))
       }
       finishIfReady()
     })
@@ -64,23 +70,24 @@ for (const supportsSync of [false, true]) {
       parallelTools: { b: ['tool_b'] },
       onInvocationEnd: () => { drainedSerial = true; finishIfReady() },
       heartbeatIntervalMs: 15,
-      capabilities: () => ({ declared_tools: { a: ['tool_a'], b: ['tool_b'] } }),
-      pluginManifests: { a, b },
+      capabilities: () => ({ declared_tools: { ...(pluginAValid ? { a: ['tool_a'] } : {}), b: ['tool_b'] } }),
+      pluginManifests: () => ({ ...(pluginAValid ? { a } : {}), b }),
     })
     const processing = loop.run()
     try {
       await Promise.race([complete, once(AbortSignal.timeout(3000), 'abort').then(() => {
         throw new Error('heartbeat fixture did not converge')
       })])
-      for (const request of heartbeats.slice(0, 3)) {
-        assert.deepEqual(request.capabilities.plugin_manifest_digests, { a: a.envelope.manifest_digest, b: b.envelope.manifest_digest })
-        assert.deepEqual(request.capabilities.declared_tools, { a: ['tool_a'], b: ['tool_b'] })
+      for (const [index, request] of heartbeats.slice(0, 3).entries()) {
+        const showA = mode !== 'withdrawn plugin' || index === 0
+        assert.deepEqual(request.capabilities.plugin_manifest_digests, { ...(showA ? { a: a.envelope.manifest_digest } : {}), b: b.envelope.manifest_digest })
+        assert.deepEqual(request.capabilities.declared_tools, { ...(showA ? { a: ['tool_a'] } : {}), b: ['tool_b'] })
       }
       assert.equal(heartbeats[0]!.plugin_manifests, undefined)
       assert.deepEqual(heartbeats[1]!.plugin_manifests, supportsSync ? { b } : undefined)
       assert.equal(heartbeats[2]!.plugin_manifests, undefined)
       for (const claim of claims.values()) {
-        assert.deepEqual(claim, { plugin_manifest_digests: { a: a.envelope.manifest_digest, b: b.envelope.manifest_digest } })
+        assert.deepEqual(claim, { plugin_manifest_digests: { ...(pluginAValid ? { a: a.envelope.manifest_digest } : {}), b: b.envelope.manifest_digest } })
       }
     } finally {
       loop.shutdown()

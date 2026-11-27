@@ -17,7 +17,7 @@ import { RuntimeCleanConnection, readRuntimeConnectionInfo } from './runtimeClea
 import { cleanupRuntimePreviousHome, prepareRuntimeInstallation, rotateRuntimeConnection, selectRuntimeConnection } from './runtimeInstallation.js'
 import { RuntimeSelections } from './runtimeSelection.js'
 import { RuntimeStartup, runtimeLoginLaunch, resumeRuntimeAtLogin } from './runtimeStartup.js'
-import { RuntimeUpdateIntent, runtimeUpdateExit, RUNTIME_UPDATE_EXIT_ARGUMENT, shouldResumeRuntime } from './runtimeUpdate.js'
+import { RuntimeUpdateIntent, runtimeUpdateExit, RUNTIME_UPDATE_EXIT_ARGUMENT, shouldResumeRuntime, type RuntimeExitMode } from './runtimeUpdate.js'
 import { applicationMenuTemplate, resolvePlatformWindowOptions, shouldQuitWhenAllWindowsClosed } from './platform.js'
 import { normalizeDownloadUrl, normalizeExternalUrl, readDownloadBody, safeSuggestedName } from './systemCapabilities.js'
 import {
@@ -617,15 +617,25 @@ if (!hasSingleInstanceLock) {
     if (exitPending) return
     exitPending = true
     void (async () => {
-      await runtimeSupervisor!.stopAndExit(undefined, maintenanceRequested || updateIntent ? async state => {
-        if (updateRequested && updateIntent && ['running', 'starting', 'stopped', 'draining'].includes(String(state.state))) {
-          if (await updateIntent.read() === undefined) await updateIntent.save(['running', 'starting'].includes(String(state.state)))
-        } else if (!updateRequested) await updateIntent?.clear()
+      const intent = updateIntent
+      const exitMode = (): RuntimeExitMode => updateRequested ? 'update' : maintenanceRequested ? 'uninstall' : 'quit'
+      let previousState: unknown
+      let recordedMode: RuntimeExitMode | undefined
+      await runtimeSupervisor!.stopAndExit(undefined, intent ? async ({ state }) => {
+        previousState = state
+        const mode = exitMode()
+        if (mode !== 'quit') { await intent.recordExit(mode, state); recordedMode = mode }
       } : undefined)
-    })().then(async () => {
       await runtimeSelections?.invalidate()
+      // Ordinary quit saves only after safe shutdown. Also honor an installer that arrived during the drain.
+      let mode = exitMode()
+      while (intent && mode !== recordedMode) {
+        try { await intent.recordExit(mode, previousState) } catch { logLifecycle('runtime-exit-intent-save-failed') }
+        recordedMode = mode
+        mode = exitMode()
+      }
       exitAllowed = true; app.quit()
-    }).catch(async () => {
+    })().catch(async () => {
       quitting = false
       const action = maintenanceRequested ? (updateRequested ? '升级' : '卸载') : '退出'
       maintenanceRequested = false; updateRequested = false
