@@ -98,7 +98,13 @@ const effectiveTraceCount = computed(() => traces.value.filter(trace =>
 ).length)
 
 function goBack() {
-  router.push('/portal/monitoring')
+  // 有应用内来源页面则原路回退一层（列表页状态在 URL query 中，页码/筛选得以保留）；
+  // 直接打开 URL 无应用内历史时兜底回列表
+  if (window.history.state?.back) {
+    router.back()
+  } else {
+    router.push('/portal/monitoring')
+  }
 }
 
 function goToDetail(traceId: string) {
