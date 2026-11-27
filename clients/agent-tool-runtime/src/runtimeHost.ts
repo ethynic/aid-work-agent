@@ -16,7 +16,7 @@ import { loadDeviceToken } from './credentials.js'
 import { checkDesktopInteractive } from './desktopCheck.js'
 import { deriveResourceKey } from './desktopLock.js'
 import { PollLoop } from './pollLoop.js'
-import { ProviderSet, type ProviderManager } from './providerManager.js'
+import { inspectWecomToolSchemas, ProviderCheckError, ProviderSet, type ProviderManager } from './providerManager.js'
 import { ResultOutbox, resultOutboxDir } from './resultOutbox.js'
 import { dpapiProtect, dpapiUnprotect } from './dpapi.js'
 import { logInfo } from './log.js'
@@ -27,7 +27,7 @@ import { ManagementError, RuntimeHost, PACKAGE_LIMITS, sha256, type ConnectionSt
 import { PluginStore } from '@aid/local-tool-host-core/plugins/store'
 import { configureRuntimeHome, type RuntimeConfig } from './config.js'
 import { join } from 'node:path'
-import { dirname, resolve } from 'node:path'
+import { dirname, posix, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { atomicWrite, recoverPairing } from './pairingStore.js'
 import { assertNoLegacyRuntimeProcess } from './legacyProcessCheck.js'
@@ -139,6 +139,7 @@ export class LegacyExecution implements HostAdapter {
     try { await recoverPairing() } catch { throw new ManagementError(11, '设备配对资料未能恢复，原身份文件和待处理事务已保留') }
     if (this.pluginOptions) {
       const makeStore = () => new PluginStore({ home: this.home, trust: this.pluginOptions!.trust,
+        deferStartupChecks: true,
         // 契约 2.20 修订：安装白名单由产品信任配置驱动（trust roots 覆盖的 provider_id
         // 并集）——往信任配置加新 provider 身份即可安装接入，无需改源码；无信任配置的
         // CLI/A1 资产不产生安装权限，PluginStore 维持 FIRST_PARTY_PROVIDERS 默认
@@ -229,11 +230,11 @@ export class LegacyExecution implements HostAdapter {
     const server = config.server
     let token: string
     try { token = await loadDeviceToken() } catch { throw new ManagementError(9, '设备凭证不可用，请核对本机身份') }
-    await this.pluginStore?.refresh()
-    const entries = Object.fromEntries(Object.entries(this.resolveEntries(config)).filter(([, entry]) => existsSync(entry)))
-    const plugins = this.pluginStore?.declaredPlugins() ?? []
+    const declared = () => this.pluginStore?.declaredPlugins() ?? []
+    const plugins = declared()
     const store = this.storeDeclarations(plugins)
     const { manifests: storeManifests, parallelTools } = store
+    const entries = Object.fromEntries(Object.entries(this.resolveEntries(config)).filter(([key, entry]) => Boolean(storeManifests[key]) || existsSync(entry)))
     const api = new ApiClient(server, token)
     const wecomLegacyEnv: Record<string, string> = {}
     for (const key of ['AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN']) {
@@ -243,6 +244,10 @@ export class LegacyExecution implements HostAdapter {
     const pairedEnv = { AIDWORK_RUNTIME_SERVER: server, AIDWORK_RUNTIME_DEVICE_TOKEN: token }
     const providers = new ProviderSet(entries, { nodeExecutable: this.nodeExecutable, baseEnv: providerEnvironment(),
       ...(this.supervision.enabled ? { prepareLaunch: (entry: string) => this.supervision.prepareLaunch(entry) } : {}),
+      verifyProvider: async (key, entry, atLaunch) => {
+        try { await this.pluginStore?.verifyForExecution(key, entry, atLaunch) }
+        catch { throw new ProviderCheckError() }
+      },
       providerEnv: { wecom: { ...wecomLegacyEnv, ...pairedEnv }, 'boss-recruiting': pairedEnv,
         ...(storeManifests.weixin ? { weixin: {
           AID_WEIXIN_SERVER_URL: server,
@@ -261,21 +266,32 @@ export class LegacyExecution implements HostAdapter {
     logInfo(`[runtime] providers: ${Object.keys(entries).join(', ')}`)
     // v2 写路径数据目录（journal/ + result-outbox/，跟随 runtime home；启动重投共用同一 outbox 实例）
     const dataDir = runtimeHomeDir()
-    const bossRecoveryReady = Boolean(entries['boss-recruiting'] && existsSync(resolve(dirname(entries['boss-recruiting']), '../main/operations/bossRecoveryProbe.js')))
-    const wecomRecoveryReady = Boolean(entries.wecom && this.supervision.enabled)
-    const recoveryReady = bossRecoveryReady || wecomRecoveryReady
+    const recoveryCapabilities = (available: Record<string, string>, active: ReturnType<typeof declared>) => {
+      const boss = active.find(plugin => plugin.provider_key === 'boss-recruiting')?.manifest
+      const probe = '../main/operations/bossRecoveryProbe.js'
+      const bossRecoveryReady = boss
+        ? boss.distribution.required_files.some(file => file?.path === posix.join(posix.dirname(boss.entrypoint[0]!), probe))
+        : Boolean(available['boss-recruiting'] && existsSync(resolve(dirname(available['boss-recruiting']), probe)))
+      const wecomRecoveryReady = Boolean(available.wecom && this.supervision.enabled
+        && (active.some(plugin => plugin.provider_key === 'wecom') || existsSync(available.wecom)))
+      return { recoveryReady: bossRecoveryReady || wecomRecoveryReady, wecomRecoveryReady }
+    }
     const capabilities = () => {
+      const active = declared()
+      const available = this.resolveEntries(config)
+      const signedWecom = active.find(plugin => plugin.provider_key === 'wecom')
+      const signedFlags = signedWecom ? inspectWecomToolSchemas(signedWecom.manifest.tools) : undefined
       let wecom: ProviderManager | undefined
-      if (entries.wecom && !this.stopping) {
+      if (!signedWecom && available.wecom && !this.stopping) {
         try { wecom = providers.get('wecom') } catch { /* The existing recovery operation temporarily owns the pool. */ }
       }
-      // Discovery never delays heartbeat/claim and cannot invoke a business tool.
-      // A failed transport is retried by the next heartbeat, without another worker.
+      // Only legacy directly configured WeCom needs discovery to advertise extra schemas.
       void wecom?.inspectWecomBusinessTools().catch(() => {})
-      const value = deviceCapabilities(this.effectiveConfig(config), wecom?.wecomBusinessReady,
-        wecom?.wecomDirectoryReady, wecom?.wecomDirectorySearchReady,
-        wecom?.wecomConfigDoctorReady, wecom?.wecomConfigCalibrateReady,
-        store)
+      const value = deviceCapabilities(this.effectiveConfig(config, available), signedFlags?.businessSupported ?? wecom?.wecomBusinessReady,
+        signedFlags?.directorySupported ?? wecom?.wecomDirectoryReady, signedFlags?.directorySearchSupported ?? wecom?.wecomDirectorySearchReady,
+        signedFlags?.configDoctorSupported ?? wecom?.wecomConfigDoctorReady, signedFlags?.configCalibrateSupported ?? wecom?.wecomConfigCalibrateReady,
+        this.storeDeclarations(active))
+      const { recoveryReady, wecomRecoveryReady } = recoveryCapabilities(available, active)
       if (recoveryReady && this.supervision.enabled) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_stop_v1']
       if (wecomRecoveryReady) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_wecom_v1']
       if (recoveryReady) { value.providers = [...(value.providers as string[]), 'runtime-recovery']; value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_observe_v2'] }
@@ -294,7 +310,7 @@ export class LegacyExecution implements HostAdapter {
             await this.supervision.noteBusinessExecution()
           }
         },
-        ...(recoveryReady ? { recoveryObservation: recoveryObservation(providers, this.supervision) } : {}),
+        ...(recoveryCapabilities(entries, plugins).recoveryReady ? { recoveryObservation: recoveryObservation(providers, this.supervision) } : {}),
         desktopCheck: async () => (await checkDesktopInteractive()).interactive,
         desktopResourceKey: deriveResourceKey(),
         runtimeDataDir: dataDir,
@@ -305,8 +321,8 @@ export class LegacyExecution implements HostAdapter {
       // logInfo = stderr + %APPDATA% 文件双写，前缀格式不变。
       onEvent: (msg) => logInfo(msg),
       capabilities,
-      pluginManifests: Object.fromEntries(plugins.map(({ provider_key, envelope, manifest }) => [provider_key, { envelope, manifest }])),
-      canClaim: () => Object.values(this.resolveEntries(config)).some(entry => existsSync(entry)),
+      pluginManifests: () => Object.fromEntries(declared().map(({ provider_key, envelope, manifest }) => [provider_key, { envelope, manifest }])),
+      canClaim: () => Object.entries(this.resolveEntries(config)).some(([key, entry]) => Boolean(storeManifests[key]) || existsSync(entry)),
       onConnection: value => {
         if (value === 'online' && firstHeartbeat) {
           firstHeartbeat = false
@@ -340,6 +356,7 @@ export class LegacyExecution implements HostAdapter {
     this.providers?.stopAdmission()
     await this.providers?.waitForIdle()
     await this.providers?.shutdownAll()
+    this.pluginStore?.resetExecutionChecks()
     this.loop = null; this.providers = null; this.runPromise = null
     // A loop error is not proof of an active process after every execution lane
     // and provider has drained. Business journals/outbox remain unchanged.

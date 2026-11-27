@@ -5,6 +5,7 @@
  * （assembleStoreManifests）注入 runnerDeps.manifests 与能力上报。
  */
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -129,7 +130,7 @@ test('商店微信声明优先于存量 v2Send，配对和心跳同源，为好�
     saveConfig({ server: cloud.baseUrl, device_id: 'legacy', providers: { weixin: { entry, v2Send: true } } })
     // Substitute only the already verified store boundary. Pair/start use the real Host and HTTP loopback.
     Object.assign(adapter, { pluginStore: {
-      async refresh() {},
+      resetExecutionChecks() {},
       resolveEntries: () => ({ weixin: entry }),
       declaredPlugins: () => [{ plugin_id: manifest.provider_id, provider_key: 'weixin', manifest, declaration,
         envelope: { manifest_digest: `sha256:${'a'.repeat(64)}` } }],
@@ -160,6 +161,87 @@ test('商店微信声明优先于存量 v2Send，配对和心跳同源，为好�
     const result = calls.find(call => call.type === 'operation_result' || call.type === 'result')
     assert.equal(result?.payload.code, 'PROTOCOL_NOT_SUPPORTED')
     assert.equal(providers.get('weixin').isRunning, false)
+  } finally {
+    await adapter.stop()
+    adapter.onDisposed()
+    await cloud.stop()
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('受管企微从签名 schema 上报可用工具，首用失败撤回该插件且其他插件仍执行', {
+  skip: process.platform !== 'win32', timeout: 35_000,
+}, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'aid-wecom-first-use-'))
+  const cloud = new FakeCloud()
+  await cloud.start()
+  const adapter = new LegacyExecution(process.execPath, home, undefined, true)
+  const stringValue = { type: 'string' }
+  const stringArray = { type: 'array', items: stringValue }
+  const integer = { type: 'integer' }
+  const tools = [
+    ['wecom_read_session', { session: stringValue }],
+    ['wecom_read_sessions', { sessions: stringArray, cursor: stringValue, limit: integer }],
+    ['wecom_message_send', { session: stringValue, text: stringValue }],
+    ['wecom_session_directory', { mode: { ...stringValue, enum: ['search'] }, session: stringValue, sessions: stringArray,
+      query: stringValue, type: { ...stringValue, enum: ['contact', 'group', 'any'] }, limit: integer }],
+    ['wecom_config_doctor', {}],
+  ].map(([name, properties]) => ({ name: String(name), inputSchema: { type: 'object', properties }, annotations: { readOnlyHint: name !== 'wecom_message_send' } }))
+  const wecomDeclaration = { version: 1 as const, tools: tools.map(({ name }) => ({ name,
+    ...(name === 'wecom_session_directory' ? { parallel: true } : {}) })) }
+  const wecom = { ...TEST_TOOL_MANIFEST, provider_id: 'ai.aidwork.wecom', tools, tool_declaration: wecomDeclaration }
+  const digest = (hex: string) => `sha256:${hex.repeat(64)}`
+  const checks: string[] = []
+  let wecomAvailable = true
+  try {
+    await adapter.initialize()
+    // A missing entry represents late payload damage. Signed metadata alone must still let the device connect.
+    Object.assign(adapter, { pluginStore: {
+      resetExecutionChecks() {},
+      resolveEntries: () => ({ 'test-tool': fakeProviderEntry(), ...(wecomAvailable ? { wecom: join(home, 'missing.js') } : {}) }),
+      declaredPlugins: () => [
+        { plugin_id: TEST_TOOL_MANIFEST.provider_id, provider_key: 'test-tool', manifest: TEST_TOOL_MANIFEST, declaration: TEST_TOOL_MANIFEST.tool_declaration,
+          envelope: { manifest_digest: digest('b') } },
+        ...(wecomAvailable ? [{ plugin_id: wecom.provider_id, provider_key: 'wecom', manifest: wecom, declaration: wecomDeclaration,
+          envelope: { manifest_digest: digest('a') } }] : []),
+      ],
+      async verifyForExecution(provider: string, _entry: string, atLaunch: boolean) {
+        checks.push(`${provider}/${atLaunch}`)
+        if (provider === 'wecom') { wecomAvailable = false; throw new Error('invalid payload fixture') }
+      },
+    } })
+    cloud.issueCode('WCFIRST')
+    await adapter.pair({ server: cloud.baseUrl, device_name: 'fixture', pairing_code: 'WCFIRST' })
+    await adapter.executionMarker(randomUUID())
+    await adapter.start(() => {}, () => {})
+    const token = cloud.lastPairToken!
+    const capabilities = () => cloud.lastHeartbeatBody(token)?.capabilities as Record<string, unknown> | undefined
+    await cloud.waitFor(() => cloud.heartbeatCount(token) >= 2 && Boolean(capabilities()), 11_000, '两次有效心跳')
+    const pool = (adapter as unknown as { providers: ProviderSet }).providers
+    assert.deepEqual(checks, [], 'Multiple successful heartbeats must not admit or spawn any signed Provider')
+    assert.equal(pool.get('wecom').isRunning, false)
+    const advertised = capabilities()!.capabilities as string[]
+    for (const name of ['wecom_read_sessions', 'wecom_session_directory', 'wecom_session_directory_search', 'wecom_config_doctor']) {
+      assert.ok(advertised.includes(name), `Signed tools advertise ${name} without an MCP process`)
+    }
+    assert.deepEqual(capabilities()!.plugin_manifest_digests, { wecom: digest('a'), 'test-tool': digest('b') })
+    assert.deepEqual((capabilities()!.parallel_tools as Record<string, string[]>).wecom, ['wecom_session_directory'])
+
+    const a = cloud.enqueueInvocation('wecom_session_directory', {}, { provider: 'wecom', parallel: true })
+    await cloud.waitFor(() => cloud.getInvocation(a)?.state === 'failed', 7_000, '损坏插件确定未执行')
+    const aResult = cloud.callsFor(a).find(call => call.type === 'result')!
+    assert.equal(aResult.payload.code, 'PROVIDER_NOT_AVAILABLE')
+    assert.equal(aResult.payload.effect, 'none')
+    assert.equal(pool.get('wecom').isRunning, false)
+    assert.deepEqual(checks, ['wecom/false'])
+
+    const b = cloud.enqueueInvocation('test_tool_status', {}, { provider: 'test-tool' })
+    await cloud.waitFor(() => cloud.getInvocation(b)?.state === 'succeeded', 7_000, '未受影响的插件完成')
+    assert.deepEqual(checks.slice(1), ['test-tool/false', 'test-tool/true'])
+    await cloud.waitFor(() => !(capabilities()?.providers as string[] | undefined)?.includes('wecom'), 11_000, '心跳撤回')
+    assert.deepEqual(capabilities()!.plugin_manifest_digests, { 'test-tool': digest('b') })
+    assert.deepEqual(capabilities()!.declared_tools, { 'test-tool': ['test_tool_status', 'test_tool_poll'] })
+    assert.deepEqual(capabilities()!.parallel_tools, { 'test-tool': ['test_tool_poll'] })
   } finally {
     await adapter.stop()
     adapter.onDisposed()
