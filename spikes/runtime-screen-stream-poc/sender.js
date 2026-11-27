@@ -1,6 +1,6 @@
 // 发送端（对应设计里的 Runtime 采集窗口）：先建立不含画面的连接并判定观看端是不是本机，确认不是之后才采集。
 // 画面不显示、不落盘。每次收到 start 都先清理上一次的连接和采集。
-const cfg = { codec: 'default', policy: 'lan', capture: 'getDisplayMedia', sourceId: null, fps: 15, iceServers: [], localAddresses: [], order: 'connect-first', sameMachine: 'check', leaseSec: 30, connectTimeoutSec: 30 };
+const cfg = { codec: 'default', policy: 'lan', capture: 'getDisplayMedia', sourceId: null, fps: 15, iceServers: [], localAddresses: [], order: 'connect-first', sameMachine: 'check', peerPortCheck: false, leaseSec: 30, connectTimeoutSec: 30 };
 let pc = null;
 let stream = null;
 let transceiver = null;
@@ -94,15 +94,53 @@ function verdict() {
   return POC.verdict({ locals: cfg.localAddresses, mapped: ownMapped, remotes });
 }
 
+// 「同一台电脑」的第二种证据（cfg.peerPortCheck）：对端连入用的端口是不是本机的一个套接字，由主进程查本机端口表回答。
+// 连接统计里对端候选不给地址，但给端口。全部成功候选对的对端端口都是本机的 → 同机；有不属于本机的 → 另一台电脑。
+// 不依赖 mDNS 解析，适用于对端在另一个网段、名字解析不出来的情况。
+const portQueries = {};
+let portQuerySeq = 0;
+function askLocalPorts(ports) {
+  return new Promise((resolve) => {
+    const id = ++portQuerySeq;
+    portQueries[id] = resolve;
+    window.poc.event('peer-ports', { id, ports });
+    setTimeout(() => { if (portQueries[id]) { delete portQueries[id]; resolve(null); } }, 3000);
+  });
+}
+async function peerPorts(mine) {
+  try {
+    const reports = await mine.getStats();
+    const seen = new Map();
+    reports.forEach((r) => {
+      if (r.type !== 'candidate-pair' || r.state !== 'succeeded') return;
+      const remote = reports.get(r.remoteCandidateId);
+      if (remote && remote.port) seen.set(remote.protocol + ':' + remote.port, { port: remote.port, protocol: remote.protocol || 'udp' });
+    });
+    return [...seen.values()];
+  } catch (e) {
+    return [];
+  }
+}
+
 async function verifyThenCapture(mine) {
   const skipped = cfg.sameMachine === 'skip';
   let result = verdict();
   // 候选名还在解析、或本机的公网映射地址还没到时等一小会儿，仍然拿不到确切结果就按「无法确认」处理。
   for (let i = 0; i < 15 && !skipped && result.verdict === 'unknown' && remotes.length; i++) { await new Promise((r) => setTimeout(r, 100)); result = verdict(); }
+  let peer = null;
+  if (!skipped && cfg.peerPortCheck && result.verdict !== 'same') {
+    // 地址候选的规则没有判成同机：再看对端端口。等成功的候选对出现，最多约 1.5 秒。
+    let ports = [];
+    for (let i = 0; i < 15 && !ports.length; i++) { ports = await peerPorts(mine); if (!ports.length) await new Promise((r) => setTimeout(r, 100)); }
+    const answer = ports.length ? await askLocalPorts(ports) : null;
+    peer = { pairs: ports.length, local: answer ? answer.filter((r) => r.local).length : null };
+    // 查不到结果时保持原结论（多半是无法确认，不采集）。规则 5：对端端口全是本机套接字，同机；规则 6：有不属于本机的，另一台电脑。
+    if (answer && answer.length) result = answer.every((r) => r.local) ? { verdict: 'same', rule: 5, evidence: result.evidence } : { verdict: 'other', rule: 6, evidence: result.evidence };
+  }
   const pair = await pairInfo(mine);
   const slim = pair ? { local: pair.local, remote: pair.remote, relay: pair.relay, rttMs: pair.rttMs } : null;
-  // evidence 只有计数和是否不同，不含地址。
-  log('machine-check', { verdict: skipped ? 'skipped(' + result.verdict + ')' : result.verdict, rule: result.rule, evidence: result.evidence, pair: slim });
+  // evidence 只有计数和是否不同，不含地址；peer 只有条数。
+  log('machine-check', { verdict: skipped ? 'skipped(' + result.verdict + ')' : result.verdict, rule: result.rule, evidence: result.evidence, peer, pair: slim });
   if (!skipped && result.verdict !== 'other') return closeAll(result.verdict === 'same' ? 'same-machine' : 'machine-check-unknown');
   await startCapture(mine);
 }
@@ -190,6 +228,7 @@ window.poc.onMessage(async (m) => {
     if (m.kind === 'stop') { return closeAll('stopped'); }
     if (m.kind === 'renew') { lastRenewAt = Date.now(); return; }
     if (m.kind === 'resolved') { const r = remotes.find((x) => x.id === m.data.id); if (r) r.address = m.data.address || null; return; }
+    if (m.kind === 'peer-ports') { const done = portQueries[m.data.id]; if (done) { delete portQueries[m.data.id]; done(m.data.result); } return; }
     if (!pc) return;
     if (m.kind === 'answer') { await pc.setRemoteDescription(m.data); log('answer-set', { dt: Date.now() - t0 }); return; }
     if (m.kind === 'candidate') {

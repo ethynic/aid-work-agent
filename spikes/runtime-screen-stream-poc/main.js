@@ -27,6 +27,28 @@ const LEASE_OUT_AT_SEC = num('POC_LEASE_OUT_AT_SEC', 0); // 开始采集多少�
 const MOTION = opt('POC_MOTION', '0') === '1';
 const SAMPLE = num('POC_SAMPLE_SEC', 5);
 const CONNECT_TIMEOUT = num('POC_CONNECT_TIMEOUT_SEC', 30);
+// 「同一台电脑」的第二种证据（POC_PEER_PORT_CHECK=1）：对端连入用的端口是不是本机的一个套接字。
+// 连接统计里对端候选不给地址，但给端口。对端和 Runtime 在同一台电脑上时，它的端口会出现在本机端口表里；
+// 在另一台电脑上时不会（偶然撞上同一个端口号的概率约 1%～2%，撞上时判为同机，只是这一次不采集，重试即可）。
+// 每次判定各查一次 UDP 表和 TCP 表（netstat 约 30～100 毫秒），只看本机地址一列，只记端口和查没查到。
+const PEER_PORT_CHECK = opt('POC_PEER_PORT_CHECK', '0') === '1';
+function localPorts(protocol) {
+  return new Promise((resolve) => {
+    execFile('netstat', ['-ano', '-p', protocol], { windowsHide: true }, (err, stdout) => {
+      const ports = new Set();
+      for (const line of String(stdout || '').split('\n')) {
+        const cells = line.trim().split(/\s+/);
+        // 每行是「协议 本机地址 对端地址 [状态] 进程」，本机地址形如 192.168.1.2:5000 或 [::]:5000
+        if (cells.length >= 2 && cells[0].toUpperCase() === protocol.toUpperCase()) ports.add(Number(cells[1].slice(cells[1].lastIndexOf(':') + 1)));
+      }
+      resolve({ ok: !err, ports });
+    });
+  });
+}
+async function checkPeerPorts(peers) {
+  const [udp, tcp] = await Promise.all([localPorts('udp'), localPorts('tcp')]);
+  return peers.map((p) => ({ port: p.port, protocol: p.protocol, local: (p.protocol === 'tcp' ? tcp : udp).ports.has(Number(p.port)) }));
+}
 const FPS = num('POC_FPS', 15);
 const HTTP_PORT = num('POC_HTTP_PORT', 8791);
 const HTTP_HOST = opt('POC_HTTP_HOST', '0.0.0.0');
@@ -207,13 +229,17 @@ function handleViewer(kind, data) {
 }
 
 // 信令中转模式：Runtime 侧主动把信令交给服务器，对应产品里 Host 用设备身份访问服务器。
-async function postSignal(kind, data) {
+// 逐条按顺序发：连接请求必须先于地址候选到达。并发发送时到达顺序没有保证，实测前 3 条候选会先于请求到达，
+// 观看端因为还没有远端描述而丢弃它们（2026-11-27 两台电脑实测，丢掉的正好是可直达的内网地址）。
+let postChain = Promise.resolve();
+function postSignal(kind, data) {
   const body = JSON.stringify({ kind, data });
   signaling.bytesOut += Buffer.byteLength(body);
   signaling.requests += 1;
-  try {
-    await fetch(SIGNAL_URL + '/api/runtime', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
-  } catch (e) { /* 服务器连不上：由画面租约处理，这里不重试 */ }
+  postChain = postChain
+    .then(() => fetch(SIGNAL_URL + '/api/runtime', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }))
+    .catch(() => { /* 服务器连不上：由画面租约处理，这里不重试 */ });
+  return postChain;
 }
 
 // 模拟 Runtime 连不上服务器：开始采集 LEASE_OUT_AT_SEC 秒之后不再续期，也不再取信令。
@@ -263,6 +289,16 @@ function onEvent(role, name, data) {
     const key = d.kind + ':' + d.type + ':' + d.proto;
     candCounts[role] = candCounts[role] || {};
     candCounts[role][key] = (candCounts[role][key] || 0) + 1;
+    // 每一类候选第一次出现时记一行（只有类型，不含地址），用来确认有没有收集到回环地址等特定类型
+    if (candCounts[role][key] === 1) writeLine({ ev: 'cand-kind', role, kind: d.kind, type: d.type, proto: d.proto });
+    return;
+  }
+  if (name === 'peer-ports') {
+    // 采集窗口问：这些对端端口是不是本机的套接字。查完把结果按原编号回给它，只记条数。
+    checkPeerPorts(d.ports || []).then((result) => {
+      writeLine({ ev: 'peer-ports', checked: result.length, local: result.filter((r) => r.local).length });
+      if (senderAlive()) sender.webContents.send('poc:signal', { kind: 'peer-ports', data: { id: d.id, result } });
+    });
     return;
   }
   writeLine({ ev: 'page', role, name, data: d });
@@ -467,7 +503,7 @@ async function main() {
   };
   const deadline = Date.now() + 15000;
   while (ready.size < (receiver ? 2 : 1) && Date.now() < deadline) await sleep(100);
-  const config = { codec: CODEC, policy: CANDIDATES, fps: FPS, iceServers: ICE_SERVERS, localAddresses, order: ORDER, sameMachine: SAME_MACHINE, leaseSec: LEASE_SEC, connectTimeoutSec: CONNECT_TIMEOUT, attach: opt('POC_ATTACH', 'replaceTrack') };
+  const config = { codec: CODEC, policy: CANDIDATES, fps: FPS, iceServers: ICE_SERVERS, localAddresses, order: ORDER, sameMachine: SAME_MACHINE, leaseSec: LEASE_SEC, connectTimeoutSec: CONNECT_TIMEOUT, attach: opt('POC_ATTACH', 'replaceTrack'), peerPortCheck: PEER_PORT_CHECK };
   sender.webContents.send('poc:signal', { kind: 'config', data: config });
   if (receiver) receiver.webContents.send('poc:signal', { kind: 'config', data: { policy: CANDIDATES, iceServers: ICE_SERVERS } });
   writeLine({ ev: 'ready', windowsReady: ready.size, config: Object.assign({}, config, { localAddresses: '(' + localAddresses.length + ' 项，不记录)' }) });

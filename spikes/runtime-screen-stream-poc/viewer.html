@@ -21,10 +21,19 @@ const video = document.getElementById('v');
 const hud = document.getElementById('hud');
 const policy = new URLSearchParams(location.search).get('cand') || 'lan';
 window.__poc = { events: [], cands: [], mdns: [], stats: null, startedAt: 0, connectedMs: null, firstFrameMs: null, path: null, pcState: '', endReason: null };
+// 连接诊断（不含地址）：本机候选按类型计数，对端候选加进去了几个、失败了几个及原因
+window.__poc.diag = { local: {}, remoteOk: 0, remoteFail: [], remoteEarly: 0 };
 let pc = null;
 let attached = false;
 let seq = 0;
 let t0 = 0;
+// 对端候选可能先于连接请求到达（信令经服务器转交，到达顺序不保证）。还没有远端描述时 addIceCandidate 会报错，
+// 所以先收起来，等连接请求处理完再按顺序加进去。
+let remoteReady = false;
+const earlyCandidates = [];
+const addCandidate = (data) => pc.addIceCandidate(data).then(() => { window.__poc.diag.remoteOk += 1; }, (err) => {
+  window.__poc.diag.remoteFail.push(String((err && err.message) || err).slice(0, 90));
+});
 
 const post = (kind, data) => fetch('/api/signal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, data }) }).catch(() => {});
 const mark = (name, extra) => {
@@ -50,13 +59,16 @@ async function poll() {
       if (s.kind === 'offer') {
         mark('offer-received', {});
         await pc.setRemoteDescription(s.data);
+        remoteReady = true;
+        for (const data of earlyCandidates.splice(0)) await addCandidate(data);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         const sd = pc.currentLocalDescription || pc.localDescription;
         await post('answer', { type: sd.type, sdp: sd.sdp });
         mark('answer-posted', { bytes: sd.sdp.length });
       } else if (s.kind === 'candidate') {
-        await pc.addIceCandidate(s.data).catch(() => {});
+        if (!remoteReady) { window.__poc.diag.remoteEarly += 1; earlyCandidates.push(s.data); return; }
+        await addCandidate(s.data);
       } else if (s.kind === 'end') {
         if (!window.__poc.endReason) { window.__poc.endReason = (s.data && s.data.reason) || 'unknown'; mark('runtime-end', { reason: window.__poc.endReason }); }
       }
@@ -78,6 +90,8 @@ async function tick() {
     'rx: ' + (rx.framesDecoded || 0) + ' frames  ' + (rx.fps || 0) + ' fps  ' + (rx.w || 0) + 'x' + (rx.h || 0),
     'codec: ' + (rx.codec || '-') + '  dec: ' + (rx.dec || '-'),
     'rtt: ' + (s.pair && s.pair.rttMs != null ? s.pair.rttMs + ' ms' : '-') + '  end: ' + (window.__poc.endReason || '-'),
+    'ice: ' + pc.iceConnectionState + '  gather: ' + pc.iceGatheringState + '  sig: ' + pc.signalingState,
+    'cands local: ' + JSON.stringify(window.__poc.diag.local) + '  remote ok: ' + window.__poc.diag.remoteOk + ' early: ' + window.__poc.diag.remoteEarly + ' failed: ' + window.__poc.diag.remoteFail.length + (window.__poc.diag.remoteFail.length ? ' (' + window.__poc.diag.remoteFail[0] + ')' : ''),
   ].join('\n');
 }
 
@@ -97,6 +111,7 @@ async function tick() {
     if (!e.candidate) return;
     const c = POC.classify(e.candidate);
     window.__poc.cands.push(c);
+    window.__poc.diag.local[c.type + (c.kind === 'mdns' ? '/mdns' : '')] = (window.__poc.diag.local[c.type + (c.kind === 'mdns' ? '/mdns' : '')] || 0) + 1;
     if (c.kind === 'mdns') window.__poc.mdns.push(e.candidate.address);
     post('viewer-log', Object.assign({ name: 'cand' }, c));
     if (POC.keep(e.candidate, policy)) post('candidate', e.candidate.toJSON());

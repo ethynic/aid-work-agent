@@ -27,6 +27,12 @@ const v4 = Object.values(os.networkInterfaces()).flat()
 const lan = v4.find((i) => /^192\.168\./.test(i.address)) || v4.find((i) => !/^172\.(1[6-9]|2\d|3[01])\./.test(i.address)) || v4[0];
 const LAN_IP = lan ? lan.address : null;
 
+// 应答 socket 必须绑定到内网地址，不能绑任意地址（0.0.0.0）：Windows 对绑定任意地址的 UDP socket 按最优路由发包，
+// 开着代理虚拟网卡的电脑上，发往其他网段的回包会被送进代理，代理改写源端口后对方就认不出来了（2026-11-27 踩过）。
+// 绑定到具体地址后走强主机模型，只会从这个网卡发出。
+const NAT_STUN = ['stun.miwifi.com', 'stun.chat.bilibili.com', 'stun.hitv.com', 'stun.cloudflare.com', 'stun.voip.blackberry.com'];
+const NAT_KIND = (n) => (!n ? '未知' : !n.answers ? '无法判断（没有公网 STUN 应答）' : n.distinct === 1 ? '锥形' : '对称型');
+
 function buildRequest() {
   const req = Buffer.alloc(20);
   req.writeUInt16BE(0x0001, 0);
@@ -49,8 +55,8 @@ function parseMapped(msg) {
   }
   return null;
 }
-// 从 socket 向公网 STUN 服务器查询本机的公网映射地址
-function publicMapping(sock) {
+// 从 socket 向一个 STUN 服务器查询本机的映射地址
+function mappingOf(sock, host, port) {
   return new Promise((resolve) => {
     let tid = null;
     let tries = 0;
@@ -65,15 +71,27 @@ function publicMapping(sock) {
       tries += 1;
       const req = buildRequest();
       tid = req.slice(8, 20);
-      sock.send(req, PUBLIC_STUN.port, PUBLIC_STUN.host);
+      sock.send(req, port, host);
       if (tries < 4) setTimeout(send, 700);
     };
     sock.on('message', onMessage);
     send();
   });
 }
+// 本机经公网 STUN 得到的公网映射地址
+const publicMapping = (sock) => mappingOf(sock, PUBLIC_STUN.host, PUBLIC_STUN.port);
+// 本机出口的映射行为：同一个 socket 向多个公网 STUN 服务器查询，比较公网端口
+async function ownNatType(sock) {
+  const ports = [];
+  for (const host of NAT_STUN) {
+    const mapped = await mappingOf(sock, host, 3478);
+    if (mapped) ports.push(mapped.port);
+  }
+  return { answers: ports.length, distinct: new Set(ports).size };
+}
 
 let publicInfo = null; // { ip, port }：本应答 socket 经公网 STUN 查到的公网映射
+let ownNat = null; // { answers, distinct }：本机出口的映射行为
 // 模拟 ICE 打洞：本应答 socket 也向对方的公网映射地址连发几个包，让双方的出口设备放开对这个地址的过滤
 function punch(ip, port) {
   let sent = 0;
@@ -173,6 +191,7 @@ function natMapping() {
   item('4. 出口 NAT 类型（本机的公网出口）：' + natText, nat.answers && nat.ports.length === 1 ? '#34d399' : '#f87171');
   note('本机出口 NAT：应答 ' + nat.answers + ' 次，不同的公网端口 ' + nat.ports.length + ' 个');
   note('检测服务器的公网映射地址：' + (conf.aPublicMasked || '未知'));
+  note('检测服务器的出口 NAT 类型：' + (conf.aNatKind || '未知'));
   let text;
   if (!results.public) text = '结论：这台电脑不能用 UDP 访问公网，外网直连走不通。';
   else if (same === false) text = '结论：两台电脑在不同的公网出口后面，属于正常的跨网络直连，能不能通取决于两端的 NAT 类型，需要用验证程序实测。';
@@ -192,6 +211,7 @@ http.createServer((req, res) => {
       public: 'stun:' + PUBLIC_STUN.host + ':' + PUBLIC_STUN.port,
       hairpin: publicInfo ? 'stun:' + publicInfo.ip + ':' + publicInfo.port : null,
       aPublicMasked: publicInfo ? maskPublic(publicInfo.ip) + ':' + publicInfo.port : null,
+      aNatKind: NAT_KIND(ownNat),
     });
   }
   if (url.pathname === '/report') {
@@ -207,8 +227,10 @@ http.createServer((req, res) => {
   res.end(PAGE);
 }).listen(HTTP_PORT, '0.0.0.0', () => console.log('NET_CHECK page http://' + LAN_IP + ':' + HTTP_PORT + '/'));
 
-answer.bind(UDP_PORT, async () => {
-  console.log('NET_CHECK answering udp/' + UDP_PORT);
+answer.bind(UDP_PORT, LAN_IP, async () => {
+  console.log('NET_CHECK answering udp/' + UDP_PORT + ' on ' + maskPrivate(LAN_IP));
   publicInfo = await publicMapping(answer);
+  ownNat = await ownNatType(answer);
   console.log('NET_CHECK own public mapping ' + (publicInfo ? maskPublic(publicInfo.ip) + ':' + publicInfo.port : 'unknown'));
+  console.log('NET_CHECK own NAT type ' + NAT_KIND(ownNat) + ' (answers ' + ownNat.answers + ', distinct ports ' + ownNat.distinct + ')');
 });
