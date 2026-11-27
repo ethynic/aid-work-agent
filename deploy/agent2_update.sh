@@ -101,6 +101,13 @@ fi
 #         两通道都通过才切换 dist，门禁不放松
 #      d) 脚本自更新重入：检出后脚本内容变化即 exec 重启自身执行新版
 #         （AID_DEPLOY_RERUN=1 守卫防死循环），发布不再需要手动跑两遍
+#  13. 2026-11-27 输出精简（正常路径 ≤60 行）：
+#      a) compose up 输出重定向到文件，成功不打进度、失败才回显错误尾部——
+#         不依赖 --progress（旧引擎探测失败时 TTY 进度帧会灌出千余行日志）
+#      b) git fetch/checkout 静默（版本行已自打）、npm 加 --loglevel=error
+#      c) docker update 输出抑制（成功回显容器名）、删除 /tmp ls 回显
+#      d) pip 加 --disable-pip-version-check（[notice] 升级提示每次 2 行×9 容器）
+#      e) pip 目标容器清单改单行汇总（去掉逐容器 "-> 名" 行）
 # ==============================================================================
 
 set -e
@@ -123,6 +130,19 @@ if docker compose up --help 2>&1 | grep -q -- '--progress'; then
 else
     COMPOSE_QUIET=()
 fi
+
+# compose 输出收口（2026-11-27）：成功时全量重定向到文件，正常路径零输出；
+# 失败时回显过滤掉 swap-limit/进度噪音后的错误尾部。兼容不支持 --progress
+# 的旧引擎（探测失败也不再有进度帧刷屏）
+COMPOSE_LOG=/tmp/agent2_compose.log
+compose_up() {
+    local desc="$1"; shift
+    if ! docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_QUIET[@]}" "$@" >"$COMPOSE_LOG" 2>&1; then
+        echo "错误：$desc 失败，关键输出如下："
+        grep -vE 'swap limit|Running [0-9]+/' "$COMPOSE_LOG" | tail -40
+        return 1
+    fi
+}
 
 echo "=========================================="
 echo "  AI 数字员工系统（测试） - 快速更新"
@@ -188,7 +208,7 @@ if [ -n "$WORKTREE_STATUS" ]; then
 fi
 echo "发布分支: origin/$DEPLOY_BRANCH"
 # 显式请求源 ref：远端已删除但本地仍有缓存时也必须失败，绝不回退 master。
-if ! git fetch --no-tags origin "+refs/heads/$DEPLOY_BRANCH:refs/remotes/origin/$DEPLOY_BRANCH"; then
+if ! git fetch --no-tags --quiet origin "+refs/heads/$DEPLOY_BRANCH:refs/remotes/origin/$DEPLOY_BRANCH"; then
     echo "错误：无法获取 origin/$DEPLOY_BRANCH，发布已中止。" >&2
     exit 1
 fi
@@ -198,7 +218,7 @@ if ! TARGET_SHA=$(git rev-parse --verify "refs/remotes/origin/$DEPLOY_BRANCH^{co
 fi
 echo "发布提交: $TARGET_SHA"
 # detached HEAD 保留原本地分支指针；不覆盖目标版本路径上的 ignored 文件。
-if ! git checkout --detach --no-overwrite-ignore "$TARGET_SHA"; then
+if ! git checkout --detach --quiet --no-overwrite-ignore "$TARGET_SHA"; then
     echo "错误：无法安全检出目标提交，发布已中止。" >&2
     exit 1
 fi
@@ -229,7 +249,7 @@ docker run --rm \
     -v "$FRONTEND_DIR":/app \
     -v agent2_npm_cache:/root/.npm \
     -w /app node:22-alpine \
-    npm install --no-audit --no-fund --prefer-offline
+    npm install --no-audit --no-fund --prefer-offline --loglevel=error
 step_done "npm"
 
 # 3. 前端校验 + 编译到 dist.new（后台执行，与后端重启并行，2026-11-24 优化）。
@@ -313,15 +333,16 @@ fi
 # --wait 只等主 API/background（2026-11-26 对齐生产 agent_update.sh 语义）：
 # runner 服务（runner-api/runner-worker/runner-monitor/heavy-tools）的
 # healthcheck（monitor start_period 4m、heavy-tools 60s）不再串进发布总时长
-docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_QUIET[@]}" up -d --force-recreate --remove-orphans --wait \
+compose_up "后端主服务重启（api/background）" up -d --force-recreate --remove-orphans --wait \
     aid-agent-api aid-agent-background
+echo "    主服务已就绪（api/background Healthy）"
 
 # runner 服务重建使新代码生效；不带 --wait（与生产对齐，就绪靠下方 /health 探测告警）
 RUNNER_SERVICES=$(docker compose "${COMPOSE_FILES[@]}" config --services 2>/dev/null \
     | grep -E '^runner|^heavy-tools' || true)
 if [ -n "$RUNNER_SERVICES" ]; then
     # shellcheck disable=SC2086
-    docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_QUIET[@]}" up -d --force-recreate $RUNNER_SERVICES
+    compose_up "runner 服务重建" up -d --force-recreate $RUNNER_SERVICES
     echo "    runner 服务已重建（不等待健康）: $(echo $RUNNER_SERVICES | tr '\n' ' ')"
 fi
 # runner-api 可达性探测（失败仅告警不阻断，重建后异步就绪）
@@ -339,10 +360,10 @@ step_done "重启后端"
 #    runner-api 为轻量 IO 进程给 0.5C/512M；worker 限额由 overlay 每副本配置。
 #    容器不存在时（未启用 overlay 的分支）docker update 报错忽略。
 echo "[6] 施加容器资源限制..."
-docker update --cpus 1 --memory 1G --memory-reservation 512M aid-agent-api2
-docker update --cpus 0.5 --memory 512M --memory-reservation 256M aid-agent-background2
+docker update --cpus 1 --memory 1G --memory-reservation 512M aid-agent-api2 >/dev/null
+docker update --cpus 0.5 --memory 512M --memory-reservation 256M aid-agent-background2 >/dev/null
 for c in aid-runner-api; do
-    docker update --cpus 0.5 --memory 512M --memory-reservation 256M "$c" 2>/dev/null \
+    docker update --cpus 0.5 --memory 512M --memory-reservation 256M "$c" >/dev/null 2>/dev/null \
         || echo "  跳过 $c（不存在）"
 done
 step_done "资源限制"
@@ -368,7 +389,6 @@ for c in $(docker ps --format '{{.Names}}' | grep -E '^agent2-runner-worker-[0-9
         echo "  警告：$c 权限修复失败（容器不存在或 exec 异常）"
     fi
 done
-docker exec -u root aid-agent-api2 ls -ld /tmp || true
 step_done "权限修复"
 
 # 7.5 增量依赖安装转后台（2026-11-26）：与前端编译等待并行，两段互不依赖。
@@ -387,14 +407,14 @@ if [ -z "$PIP_CONTAINERS" ]; then
     PIP_CONTAINERS="aid-agent-api2"
 fi
 PIP_TMPDIR=$(mktemp -d)
+echo "    目标 $(echo $PIP_CONTAINERS | wc -w) 个容器（并发 4，后台）: $(echo $PIP_CONTAINERS | tr '\n' ' ')"
 (
     PIP_RUNNING=0
     for c in $PIP_CONTAINERS; do
-        echo "    -> $c"
         ( docker exec -u root "$c" \
               pip install --no-cache-dir -r /app/requirements.txt \
               -i https://mirrors.cloud.tencent.com/pypi/simple \
-              --quiet || echo "$c" >> "$PIP_TMPDIR/failed" ) &
+              --quiet --disable-pip-version-check || echo "$c" >> "$PIP_TMPDIR/failed" ) &
         PIP_RUNNING=$((PIP_RUNNING + 1))
         # 限制并发 4 个：9 个容器同时跑 pip 的内存峰值对测试机偏高
         if [ "$PIP_RUNNING" -ge 4 ]; then
