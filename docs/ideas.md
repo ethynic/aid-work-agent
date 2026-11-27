@@ -98,7 +98,6 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
-| 20261127-wecom-desktop-readiness | 企业微信插件交互桌面判定 | 🔧 部分完成 | 根据 Windows 当前会话和输入桌面判断企微插件就绪条件。 | [设计](design/wecom/wecom-cli-design.md#windows-交互桌面检查2026-11-27) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w33-企微交互桌面误判修复2026-11-27) |
 | 20261118-1530 | Excel 模板填充耗时优化（结构缓存 + 残留提示 + 读取快路径） | 🔧 部分完成（开发+单测完成，待部署） | 聊易 trace 317s 拆解：结构分析思考型 LLM 占 54%；新增结构分析缓存（模板 hash + data 键签名，1h）、未映射数值行提示、读取意图规则快路径与多档位一次给全 data 引导；不做关思考（用户裁决）。24+ 新单测 + 284 excel 相关全绿；三轮独立审查 17 条发现（路由读快路径写意图绕过 2 轮、缓存污染、检测异常等）已全部修复，路由判定收敛为白名单残差法。 | — | [计划](plans/plan-excel-template-fill-latency-optimization.md) |
 | 20261111-1130 | lead-search-proxy 双出口扩展（46 新增出口 + web_search.py 多代理轮换） | 🔧 部分完成（agent2 双出口已部署验证，243 待部署） | sci-dialog-46（博物馆宽带出口）部署同款 tinyproxy 容器 + 双隧道（254:18081/243:18081），151→243 隧道已补建，安全组已放行双落点验证通过（123.158.82.107）；web_search.py 多代理逗号分隔 round-robin 轮换 + 失败出口 10 分钟熔断回直连（daa80168 已合并 master）；agent2 容器已切双代理并 e2e 验证（轮换交替生效、零 errors）；243 代码与 env 部署暂缓（用户裁决）。 | — | — |
 | 20261110-1130 | 跨轮 workspace 旧路径改写（防 image_render 等工具首调失败） | ✅ 已完成开发（待部署） | Runner 上一轮工作区清理后旧路径仍残留会话历史致下一轮首调失败：context_assembler 加载历史后改写（反查索引 ws_file_idx 命中转 file_id、未命中失效标记）；图片附件装配时注册 ImageRegistry（source=user_upload）；image_render 报错加自纠提示。25 单测通过。 | — | — |
