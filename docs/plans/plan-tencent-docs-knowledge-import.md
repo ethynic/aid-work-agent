@@ -73,7 +73,7 @@
 | # | 任务 | 说明 | 状态（2026-10-20） |
 |---|------|------|------|
 | 1 | 开发者账号与应用创建 | 见 §7；个人开发者凭据已开通；**「创建第三方应用」入口缺失根因已定位：个人开发者身份本无此入口（非平台功能缺失），改以企业开发者注册、待审核通过后创建第三方应用** | 🔧 个人 Token 已开通，企业开发者注册审核中 |
-| 2 | OAuth 服务端实现 | authorize 跳转（`new_login=1`）、回调、code 换 token（code 10 分钟一次性）、refresh（提前 24h 按 `expires_in` 懒刷新）、加密存储、37017/37019 失效处理 | ✅ 已完成开发（2026-11-20：第三方应用过审，oauth.py + 回调路由 + Redis 一次性 state + 懒刷新，74 单测全绿，独立测试与 CR 无 P0/P1；已提交 master 538e1728，真机联调待部署后） |
+| 2 | OAuth 服务端实现 | authorize 跳转（`new_login=1`）、回调、code 换 token（code 10 分钟一次性）、refresh（提前 24h 按 `expires_in` 懒刷新）、加密存储、37017/37019 失效处理 | 🔧 已部署测试环境（2026-11-27：测试应用凭据落 agent2 `.env` 三项并随 3c993c46 部署，容器 healthy、settings 加载确认；待真机金路径联调后转 ✅） |
 | 3 | drive 文件列表适配 | 文件枚举 + 元信息 + 关键字搜索 + `encodedID`→`fileID` converter + `shortcutID` 处理，分页 | ✅ 可先行——凭个人 Token 开发联调（文件列表已实测通） |
 | 4 | doc v3 树转 Markdown 转换器 | 递归遍历 Document/Paragraph/Run/Text 属性树，Paragraph 边界补 `\n`；样式/表格/图片映射策略实现时定 | ✅ 可先行——doc v3 读取已实测通（注意 URL 中 `$` 编码为 `%24`） |
 | 5 | 导入任务框架 | 异步队列 + 频控限速（单用户 300 次/分、单文件 150 次/分）+ 状态落库 + 前端任务页 | ✅ 已完成开发（2026-10-20：调度器/导入服务/DB 4 表/36 单测全绿） |
@@ -102,6 +102,16 @@
 | 授权回调域 | `agent.aidingyi.cn`（域名级白名单） | 完整 redirect_uri `https://agent.aidingyi.cn/api/knowledge/tdoc/oauth/callback` 落 `TDOC_OAUTH_REDIRECT_URI` |
 
 对应配置：`src/config/settings.py` TencentDocsConfig（oauth_client_id / oauth_client_secret / oauth_redirect_uri / oauth_state_ttl_seconds）+ `configs/config.yaml` tencent_docs 段（`${TDOC_OAUTH_*}` 占位符）。**client_secret 禁止写入代码/配置仓库**。
+
+**测试环境应用（2026-11-27 新增）**：为 agent2 另行申请的第三方应用，与上表生产应用相互独立：
+
+| 项 | 值 | 说明 |
+|----|----|------|
+| client_id | `787576ee799747b29c29638f7e501f5e` | 落 agent2 服务器 `.env` `TDOC_OAUTH_CLIENT_ID` |
+| client_secret | （不落仓库，见 agent2 `.env`） | 同上，仅服务端 env |
+| 授权回调域 | `agent2.aidingyi.cn` | `TDOC_OAUTH_REDIRECT_URI=https://agent2.aidingyi.cn/api/knowledge/tdoc/oauth/callback`，**agent2 必须显式配置**——config.yaml 默认值指向生产域，不写会被生产回调域劫走 |
+
+agent2 `.env` 备份件在服务器 `/home/ubuntu/env_backups/`；`.env` 权限恒为 775（容器 appuser 需读，600 会使 gunicorn 全挂）。已随 3c993c46 部署并确认 settings 加载（`tencent_docs.enabled=False` 不拦 OAuth，入口判定走 `is_oauth_configured()`）。
 
 **开发期账号准备**：
 - 开发者本人腾讯文档账号放测试文档：在线文档若干（树转换器素材）、表格/智能表各 1-2 篇（验证 scope/类型拒绝行为）、一篇他人共享的快捷方式文档（验证 `shortcutID` 分支）
