@@ -139,13 +139,19 @@ get_url、official_account_follow）未产品化——实际方向转向会话�
 
 ## 12. 本机添加好友
 
+好友流程的鼠标操作先用 SetCursorPos 移动 Windows 光标，再用 SendInput 投递一对左键按下与松开事件。驱动在移动前后核对窗口身份、前台和截图坐标范围，确认实际光标仍在目标位置、命中本轮目标窗口或其子控件后才点击。窗口被覆盖、前台改变或光标偏离时停止。好友操作在当前可交互的 Windows 桌面执行，坐标缓存、关窗归属及申请结果确认沿用原有行为。参见[开发计划](../../plans/plan-weixin-agent-friend-requests.md#phase-6-好友流程使用-windows-系统鼠标输入)。
+
 `aid-weixin add --domain friend --identifier <手机号或微信号> [--verify-message <验证语>] [--json]` 每次处理一个明确的标识。省略验证语时保留微信预填内容。操作复用 CLI renderer、统一 `OperationResult`、桌面互斥及 PowerShell Win32 驱动，要求当前微信已登录且窗口可交互。
 
 操作顺序为主窗口「+」→「添加朋友」→输入修剪后的标识并回车→核定当前搜索结果。弹窗按微信进程与准确标题识别。坐标从当前窗口的截图获取，点击前检查坐标范围及窗口身份。在模型等待期间，用户可能在同一窗口换搜目标，因此模型返回后还需本地重拍并核对搜索窗口内容。初始结果已是好友或明确显示已发送申请时返回 `effect=none`，查无结果返回 `TARGET_NOT_FOUND`。
 
 点击「添加到通讯录」后，如果出现申请窗口则填写验证语并点击一次「确定」。当前标识的搜索状态明确显示申请已发送时返回 `request_sent`，微信确认直接添加为好友时返回 `friend_added`，两者均为 `effect=applied`。写入步骤后未能确认时返回 `effect=unknown`，调用方不得自动重试。
 
-视觉定位强制使用当前微信 CLI 激活绑定及 `POST /api/client/v1/llm/chat` 的现有模型和用量计费路径。新入口不写 Workbuddy 的坐标缓存或联系人日志。微信 CLI 负责产生本机回执，当前阶段可由本机终端调用。MCP 工具公开及 Runtime 调度按第 7 节在沙箱写验收后单独登记。
+视觉定位强制使用当前微信 CLI 激活绑定及 `POST /api/client/v1/llm/chat` 的现有模型和用量计费路径。新入口不写 Workbuddy 的坐标缓存或联系人日志。微信 CLI 负责产生本机回执。0.1.4 起，同一操作通过签名工具 weixin_friend_add 接入连接中心。0.1.5 起，已配对 Runtime 使用设备凭证调用[好友视觉定位](../../system/runner-desktop-runtime-integration-contract.md#微信视觉使用设备配对)，复用既有模型和租户计费。终端 add 的 --search-only 在查找结果处停住，保留微信搜索窗口。服务端为用户提交的批次创建逐目标调用，Runtime 在选定设备串行执行。签名与回执见[微信好友申请共同检查点](../../system/runner-desktop-runtime-integration-contract.md#微信好友申请共同检查点)。
+
+微信 CLI 0.1.6 的批量执行在本机缓存加号、菜单项和搜索输入框的窗口内相对坐标。按版本、布局及控件证据核对缓存，以安全确认后的重新定位替换失效缓存。每个目标的搜索结果和执行回执单独核对。每项收尾只关闭本轮拥有的弹窗，确认窗口消失，必要时重试。中断后由后续 CLI 在操作前识别可证明归属的旧窗口，复用 Runtime 原有回执补传和队列推进。终端只查仍保留搜索结果。详见[开发计划](../../plans/plan-weixin-agent-friend-requests.md#phase-4-固定坐标缓存逐条收尾与恢复)。
+
+已配对 Runtime 的好友视觉定位只使用配对服务地址及设备凭证。运行环境同时含有 `AID_WEIXIN_SERVER_URL` 时，旧代理激活状态不影响好友视觉定位。分别缺少任一配对字段时返回 `CONFIG_MISSING`，由批次按回执的写入状态区分「未提交」与「待核对」。
 
 开发完成记录（2026-11-24 补记；原开发计划已清理，Git 历史可查）：✅ 开发完成（2026-11-17）。本机 CLI、微信驱动和服务端视觉计费已落地，Windows 新增独测 7/7，真实微信已验到搜索。遗留：真实好友申请与积分扣减待验。
 

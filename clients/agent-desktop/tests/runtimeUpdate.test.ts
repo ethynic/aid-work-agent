@@ -32,6 +32,41 @@ test('protected update intent preserves explicit stop and rejects another produc
     await intent.clear(); assert.equal(await intent.read(), undefined)
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
+test('a safe ordinary exit resumes an active Runtime on reopen, while a stopped Runtime stays stopped', async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'aid-quit-intent-'))
+  const protection = { protect: async (value: string) => Buffer.from(value).toString('base64'), unprotect: async (value: string) => Buffer.from(value, 'base64').toString() }
+  const open = () => new RuntimeUpdateIntent(directory, 'product', 'home', protection)
+  try {
+    for (const state of ['running', 'starting']) {
+      await open().recordExit('quit', state)
+      const reopened = open()
+      assert.equal(shouldResumeRuntime({ intent: await reopened.read(), recovered: false, login: false }), true)
+      await reopened.clear()
+      assert.equal(shouldResumeRuntime({ intent: await open().read(), recovered: false, login: false }), false)
+    }
+    for (const state of ['stopped', 'draining', 'blocked', 'reconciling']) {
+      await open().recordExit('quit', 'running')
+      await open().recordExit('quit', state)
+      assert.equal(await open().read(), undefined, `Ordinary exit in ${state} must leave no active intent`)
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('maintenance keeps the first upgrade intent across drain retries; uninstall clears it', async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'aid-maintenance-intent-'))
+  const protection = { protect: async (value: string) => Buffer.from(value).toString('base64'), unprotect: async (value: string) => Buffer.from(value, 'base64').toString() }
+  const intent = new RuntimeUpdateIntent(directory, 'product', 'home', protection)
+  try {
+    await intent.recordExit('update', 'running')
+    await intent.recordExit('update', 'draining')
+    assert.equal(await intent.read(), true)
+    await intent.recordExit('uninstall', 'running')
+    assert.equal(await intent.read(), undefined, 'Uninstall must not leave a request to reconnect on the next launch')
+    await intent.recordExit('update', 'stopped')
+    assert.equal(await intent.read(), false, 'A stopped upgrade still overrides login and interrupted recovery')
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
 test('a delayed expired read cannot archive a new saved intent or race another read', async () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'aid-update-decrypt-race-'))
   let entered!: () => void, release!: () => void

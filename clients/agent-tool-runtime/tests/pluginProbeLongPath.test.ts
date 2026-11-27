@@ -21,4 +21,10 @@ test('plugin version and readiness probes preserve an existing Windows home beyo
   const result = await probePlugin(node, root, manifest, {})
   assert.equal(result.ready, false)
   assert.equal(result.reason, '请登录业务应用', 'A retained long home must reach the business readiness check instead of failing child-process pipes')
+
+  writeFileSync(join(root, 'probe.cjs'), `if(process.argv[2]==='version'){process.exit(9)}else{console.log(JSON.stringify({success:true,runtime_readiness:{ready:true}}))}`)
+  const stages: string[] = []
+  const rechecked = await probePlugin(node, root, manifest, {}, { versionVerified: true, measure: (phase, work) => { stages.push(phase); return work() } })
+  assert.deepEqual(stages, ['doctor'], 'An already revalidated release must diagnose current readiness without repeating version')
+  assert.equal(rechecked.ready, true)
 })

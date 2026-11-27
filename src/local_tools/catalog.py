@@ -23,6 +23,10 @@ WEIXIN_GROUP_DAILY_SUMMARY = "weixin_group_daily_summary"
 WEIXIN_GROUP_RANGE_SUMMARY = "weixin_group_range_summary"
 WEIXIN_SUMMARY_TOOLS = frozenset({WEIXIN_GROUP_DAILY_SUMMARY, WEIXIN_GROUP_RANGE_SUMMARY})
 WEIXIN_DAILY_SUMMARY_KIND = "weixin_daily_summary"
+WEIXIN_FRIEND_ADD = "weixin_friend_add"
+WEIXIN_FRIEND_BATCH_KIND = "weixin_friend_batch"
+WEIXIN_CONNECTION_CENTER_TOOLS = WEIXIN_SUMMARY_TOOLS | {WEIXIN_FRIEND_ADD}
+WEIXIN_SIGNED_KINDS = (WEIXIN_DAILY_SUMMARY_KIND, WEIXIN_FRIEND_BATCH_KIND)
 
 TRUSTED_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "runtime-recovery": {"provider_id":"ai.aidwork.runtime-recovery", "min_provider_version":"1.0.0",

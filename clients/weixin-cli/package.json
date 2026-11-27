@@ -1,6 +1,6 @@
 {
   "name": "aid-weixin",
-  "version": "0.1.3",
+  "version": "0.1.8",
   "private": true,
   "description": "微信操作 CLI / MCP Provider（M1 骨架：operation 契约 + CLI + MCP stdio + conformance）",
   "type": "module",

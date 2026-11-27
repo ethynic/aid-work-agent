@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>示例企业官网 - 登录</title>
+<!--
+  官网客服「签名链接（ext 模式）」demo 登录页（聊易，agent.0635easy.com）
+  流程：本页提交登录 -> 后端 web_c_sig_demo_server.py 校验账号并 HMAC 签名
+      -> 跳转到 /c/{tenant_id}/{config_id}?u=...&ts=...&name=...&sig=... 聊天页
+  后端 API 经 nginx location /web_c_sig_demo/api/ 代理到 127.0.0.1:8790。
+-->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #333; min-height: 100vh;
+    background: linear-gradient(135deg, #1f2d3d 0%, #3b5998 100%);
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 40px; background: rgba(0,0,0,.18); color: #fff;
+  }
+  header .logo { font-size: 20px; font-weight: bold; }
+  main { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .login-card {
+    width: 360px; max-width: 100%; background: #fff; border-radius: 12px;
+    padding: 36px 32px; box-shadow: 0 8px 32px rgba(0,0,0,.3);
+  }
+  .login-card h1 { font-size: 20px; margin-bottom: 6px; color: #1f2d3d; }
+  .login-card .tip { font-size: 13px; color: #888; margin-bottom: 24px; }
+  .field { margin-bottom: 16px; }
+  .field label { display: block; font-size: 13px; color: #666; margin-bottom: 6px; }
+  .field input {
+    width: 100%; height: 42px; padding: 0 12px; font-size: 14px;
+    border: 1px solid #d9d9d9; border-radius: 6px; outline: none;
+  }
+  .field input:focus { border-color: #3b82f6; }
+  #btn-login {
+    width: 100%; height: 44px; margin-top: 8px; border: none; cursor: pointer;
+    background: #3b82f6; color: #fff; font-size: 15px; border-radius: 6px;
+  }
+  #btn-login:hover { background: #2563eb; }
+  #btn-login:disabled { background: #93b4f5; cursor: not-allowed; }
+  #error {
+    display: none; margin-top: 14px; padding: 10px 12px; font-size: 13px;
+    color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px;
+  }
+  .demo-accounts { margin-top: 20px; font-size: 12px; color: #999; line-height: 1.8; }
+  footer {
+    padding: 16px 40px; background: rgba(0,0,0,.18); color: rgba(255,255,255,.7);
+    text-align: center; font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">示例企业</div>
+  <div style="font-size:13px;opacity:.8;">签名链接模式演示</div>
+</header>
+<main>
+  <div class="login-card">
+    <h1>用户登录</h1>
+    <div class="tip">登录后进入 AI 智能客服（签名链接由官网服务端生成）</div>
+    <form id="login-form">
+      <div class="field">
+        <label for="username">用户名</label>
+        <input id="username" name="username" autocomplete="username" placeholder="请输入用户名" required>
+      </div>
+      <div class="field">
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required>
+      </div>
+      <button id="btn-login" type="submit">登 录</button>
+      <div id="error"></div>
+      <div class="demo-accounts">演示账号：张三 / 123，李四 / 123</div>
+    </form>
+  </div>
+</main>
+<footer>示例企业官网 · 签名链接 demo</footer>
+<script>
+  const form = document.getElementById('login-form');
+  const btn = document.getElementById('btn-login');
+  const errBox = document.getElementById('error');
+
+  function showError(msg) {
+    errBox.textContent = msg;
+    errBox.style.display = 'block';
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errBox.style.display = 'none';
+    // 防重复提交：进行中直接返回（含回车绕过按钮 disabled 的路径）
+    if (btn.disabled) return;
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+    if (!username || !password) { showError('请输入用户名和密码'); return; }
+    btn.disabled = true;
+    btn.textContent = '登录中...';
+    try {
+      const resp = await fetch('/web_c_sig_demo/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success && data.url) {
+        btn.textContent = '登录成功，正在跳转...';
+        window.location.href = data.url;
+        return;
+      }
+      showError(data.error || ('登录失败（HTTP ' + resp.status + '）'));
+    } catch (err) {
+      showError('网络异常，请稍后重试');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '登 录';
+    }
+  });
+</script>
+</body>
+</html>

@@ -78,10 +78,10 @@ export async function runDoctorChecks(opts: DoctorCommandOptions = {}): Promise<
     severity: 'gate',
     detail:
       env.interactive_session === true
-        ? `SESSIONNAME=${env.session_name}`
+        ? 'Windows 输入桌面可用'
         : env.interactive_session === null
           ? '非 Windows 平台，无法判定'
-          : '非交互会话（服务/计划任务上下文），无法操作企业微信前台',
+          : (env.desktop_issue ?? 'Windows 交互桌面不可用'),
   })
 
   checks.push({
@@ -118,7 +118,7 @@ export async function runDoctorChecks(opts: DoctorCommandOptions = {}): Promise<
     runtime_readiness: {
       ready: checks.every((c) => c.severity !== 'gate' || c.ok) && env.wecom_running,
       reason: !env.wecom_running ? '请启动企业微信并登录'
-        : checks.some((c) => c.severity === 'gate' && !c.ok) ? '桌面运行条件未满足' : '基础条件已满足，请确认企业微信已登录',
+        : env.desktop_issue ?? (checks.some((c) => c.severity === 'gate' && !c.ok) ? '桌面运行条件未满足' : '基础条件已满足，请确认企业微信已登录'),
     },
   }
 }

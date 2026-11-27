@@ -5,6 +5,7 @@
  * （assembleStoreManifests）注入 runnerDeps.manifests 与能力上报。
  */
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -105,7 +106,7 @@ test('无并行工具声明仅上报 tool_declarations_v1 与 declared_tools，�
   assert.ok((caps['capabilities'] as string[]).includes('tool_declarations_v1'))
 })
 
-test('商店微信声明优先于存量 v2Send，配对和心跳同源且不向微信传设备凭据', {
+test('商店微信声明优先于存量 v2Send，配对和心跳同源，为好友视觉转交现有配对身份', {
   skip: process.platform !== 'win32', timeout: 30_000,
 }, async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'aid-weixin-store-'))
@@ -115,6 +116,7 @@ test('商店微信声明优先于存量 v2Send，配对和心跳同源且不向�
   const tools = [
     { name: 'weixin_probe', annotations: { readOnlyHint: true } },
     { name: 'weixin_message_send', annotations: { readOnlyHint: false } },
+    { name: 'weixin_friend_add', annotations: { readOnlyHint: false } },
   ]
   const declaration = { version: 1 as const, tools: tools.map(({ name }) => ({ name })) }
   const manifest = {
@@ -128,7 +130,8 @@ test('商店微信声明优先于存量 v2Send，配对和心跳同源且不向�
     saveConfig({ server: cloud.baseUrl, device_id: 'legacy', providers: { weixin: { entry, v2Send: true } } })
     // Substitute only the already verified store boundary. Pair/start use the real Host and HTTP loopback.
     Object.assign(adapter, { pluginStore: {
-      async refresh() {},
+      async verifyEnabledPlugins() {},
+      resetExecutionChecks() {},
       resolveEntries: () => ({ weixin: entry }),
       declaredPlugins: () => [{ plugin_id: manifest.provider_id, provider_key: 'weixin', manifest, declaration,
         envelope: { manifest_digest: `sha256:${'a'.repeat(64)}` } }],
@@ -147,7 +150,9 @@ test('商店微信声明优先于存量 v2Send，配对和心跳同源且不向�
 
     const providers = (adapter as unknown as { providers: ProviderSet }).providers
     const wxManager = providers.get('weixin') as unknown as { providerEnv: Record<string, string> }
-    assert.deepEqual(wxManager.providerEnv, { AID_WEIXIN_SERVER_URL: cloud.baseUrl })
+    assert.deepEqual(wxManager.providerEnv, {
+      AID_WEIXIN_SERVER_URL: cloud.baseUrl, AIDWORK_RUNTIME_SERVER: cloud.baseUrl, AIDWORK_RUNTIME_DEVICE_TOKEN: token,
+    })
 
     const request = cloud.enqueueInvocation('weixin_message_send_v2', {}, { provider: 'weixin' })
     await cloud.waitFor(() => cloud.callsFor(request).some(call =>
@@ -158,6 +163,117 @@ test('商店微信声明优先于存量 v2Send，配对和心跳同源且不向�
     assert.equal(result?.payload.code, 'PROTOCOL_NOT_SUPPORTED')
     assert.equal(providers.get('weixin').isRunning, false)
   } finally {
+    await adapter.stop()
+    adapter.onDisposed()
+    await cloud.stop()
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('Runtime 在成功心跳后开始后台检查，检查期间继续心跳和接单', {
+  skip: process.platform !== 'win32', timeout: 35_000,
+}, async t => {
+  const home = mkdtempSync(join(tmpdir(), 'aid-wecom-first-use-'))
+  const cloud = new FakeCloud()
+  await cloud.start()
+  const adapter = new LegacyExecution(process.execPath, home, undefined, true)
+  const stringValue = { type: 'string' }
+  const stringArray = { type: 'array', items: stringValue }
+  const integer = { type: 'integer' }
+  const tools = [
+    ['wecom_read_session', { session: stringValue }],
+    ['wecom_read_sessions', { sessions: stringArray, cursor: stringValue, limit: integer }],
+    ['wecom_message_send', { session: stringValue, text: stringValue }],
+    ['wecom_session_directory', { mode: { ...stringValue, enum: ['search'] }, session: stringValue, sessions: stringArray,
+      query: stringValue, type: { ...stringValue, enum: ['contact', 'group', 'any'] }, limit: integer }],
+    ['wecom_config_doctor', {}],
+  ].map(([name, properties]) => ({ name: String(name), inputSchema: { type: 'object', properties }, annotations: { readOnlyHint: name !== 'wecom_message_send' } }))
+  const wecomDeclaration = { version: 1 as const, tools: tools.map(({ name }) => ({ name,
+    ...(name === 'wecom_session_directory' ? { parallel: true } : {}) })) }
+  const wecom = { ...TEST_TOOL_MANIFEST, provider_id: 'ai.aidwork.wecom', tools, tool_declaration: wecomDeclaration }
+  const digest = (hex: string) => `sha256:${hex.repeat(64)}`
+  const checks: string[] = []
+  const events: string[] = []
+  let releaseHeartbeat!: () => void
+  const firstResponse = new Promise<void>(resolve => { releaseHeartbeat = resolve })
+  const heartbeat = ApiClient.prototype.heartbeat
+  let delayFirstResponse = true
+  t.mock.method(ApiClient.prototype, 'heartbeat', async function(this: ApiClient, ...args: Parameters<ApiClient['heartbeat']>) {
+    const response = await heartbeat.apply(this, args)
+    if (delayFirstResponse) { delayFirstResponse = false; await firstResponse }
+    return response
+  })
+  let wecomAvailable = true
+  try {
+    await adapter.initialize()
+    // A missing entry represents late payload damage. Signed metadata alone must still let the device connect.
+    Object.assign(adapter, { pluginStore: {
+      async verifyEnabledPlugins(signal: AbortSignal) {
+        events.push('background-started')
+        await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
+        events.push('background-stopped')
+      },
+      resetExecutionChecks() {},
+      resolveEntries: () => ({ 'test-tool': fakeProviderEntry(), ...(wecomAvailable ? { wecom: join(home, 'missing.js') } : {}) }),
+      declaredPlugins: () => [
+        { plugin_id: TEST_TOOL_MANIFEST.provider_id, provider_key: 'test-tool', manifest: TEST_TOOL_MANIFEST, declaration: TEST_TOOL_MANIFEST.tool_declaration,
+          envelope: { manifest_digest: digest('b') } },
+        ...(wecomAvailable ? [{ plugin_id: wecom.provider_id, provider_key: 'wecom', manifest: wecom, declaration: wecomDeclaration,
+          envelope: { manifest_digest: digest('a') } }] : []),
+      ],
+      async verifyForExecution(provider: string, _entry: string, atLaunch: boolean) {
+        checks.push(`${provider}/${atLaunch}`)
+        if (provider === 'wecom') { wecomAvailable = false; throw new Error('invalid payload fixture') }
+      },
+    } })
+    cloud.issueCode('WCFIRST')
+    await adapter.pair({ server: cloud.baseUrl, device_name: 'fixture', pairing_code: 'WCFIRST' })
+    await adapter.executionMarker(randomUUID())
+    const begin = () => adapter.start(status => { if (status === 'online') events.push('online') }, () => {})
+    await begin()
+    const token = cloud.lastPairToken!
+    const capabilities = () => cloud.lastHeartbeatBody(token)?.capabilities as Record<string, unknown> | undefined
+    await cloud.waitFor(() => Boolean(capabilities()), 6_000, '请求已发，成功响应仍未交给 Host')
+    assert.deepEqual(events, [], 'Sending the heartbeat is insufficient to start the background queue')
+    const early = cloud.enqueueInvocation('test_tool_status', {}, { provider: 'test-tool' })
+    await cloud.waitFor(() => cloud.getInvocation(early)?.state === 'succeeded', 6_000, '已领取的业务沿原路径执行')
+    assert.deepEqual(events, [], 'An accepted task does not wait for this execution window to receive its first heartbeat')
+    assert.deepEqual(checks, ['test-tool/false', 'test-tool/true'])
+    releaseHeartbeat()
+    await cloud.waitFor(() => events.filter(event => event === 'online').length >= 2, 11_000, '后台暂停时仍收到两次心跳')
+    assert.deepEqual(events, ['online', 'background-started', 'online'])
+    const pool = (adapter as unknown as { providers: ProviderSet }).providers
+    assert.deepEqual(checks, ['test-tool/false', 'test-tool/true'], 'The background queue must not start a business Provider')
+    assert.equal(pool.get('wecom').isRunning, false)
+    const advertised = capabilities()!.capabilities as string[]
+    for (const name of ['wecom_read_sessions', 'wecom_session_directory', 'wecom_session_directory_search', 'wecom_config_doctor']) {
+      assert.ok(advertised.includes(name), `Signed tools advertise ${name} without an MCP process`)
+    }
+    assert.deepEqual(capabilities()!.plugin_manifest_digests, { wecom: digest('a'), 'test-tool': digest('b') })
+    assert.deepEqual((capabilities()!.parallel_tools as Record<string, string[]>).wecom, ['wecom_session_directory'])
+
+    const a = cloud.enqueueInvocation('wecom_session_directory', {}, { provider: 'wecom', parallel: true })
+    await cloud.waitFor(() => cloud.getInvocation(a)?.state === 'failed', 7_000, '损坏插件确定未执行')
+    const aResult = cloud.callsFor(a).find(call => call.type === 'result')!
+    assert.equal(aResult.payload.code, 'PROVIDER_NOT_AVAILABLE')
+    assert.equal(aResult.payload.effect, 'none')
+    assert.equal(pool.get('wecom').isRunning, false)
+    assert.deepEqual(checks.slice(2), ['wecom/false'])
+
+    const b = cloud.enqueueInvocation('test_tool_status', {}, { provider: 'test-tool' })
+    await cloud.waitFor(() => cloud.getInvocation(b)?.state === 'succeeded', 7_000, '未受影响的插件完成')
+    assert.deepEqual(checks.slice(2), ['wecom/false', 'test-tool/false'])
+    await cloud.waitFor(() => !(capabilities()?.providers as string[] | undefined)?.includes('wecom'), 11_000, '心跳撤回')
+    assert.deepEqual(capabilities()!.plugin_manifest_digests, { 'test-tool': digest('b') })
+    assert.deepEqual(capabilities()!.declared_tools, { 'test-tool': ['test_tool_status', 'test_tool_poll'] })
+    assert.deepEqual(capabilities()!.parallel_tools, { 'test-tool': ['test_tool_poll'] })
+    await adapter.stop()
+    assert.equal(events.at(-1), 'background-stopped')
+    await begin()
+    await cloud.waitFor(() => events.filter(event => event === 'background-started').length === 2, 6_000, '重新开始只启动本轮后台检查')
+    assert.deepEqual(events.slice(-3), ['background-stopped', 'online', 'background-started'])
+  } finally {
+    releaseHeartbeat()
     await adapter.stop()
     adapter.onDisposed()
     await cloud.stop()

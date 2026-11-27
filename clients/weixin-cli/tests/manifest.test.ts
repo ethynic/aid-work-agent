@@ -65,8 +65,9 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源（上位�
     'weixin_chat_latest',
     'weixin_group_daily_summary',
     'weixin_group_range_summary',
+    'weixin_friend_add',
   ])
-  assert.equal(m.tools.length, 9)
+  assert.equal(m.tools.length, 10)
   const probe = m.tools[0]!
   assert.equal(probe.name, 'weixin_probe')
   assert.ok(probe.title.length > 0 && probe.description.length > 0)
@@ -78,6 +79,11 @@ test('manifest 字段完整且与静态 provider-manifest.json 同源（上位�
   const send = byName.get('weixin_message_send')!
   assert.equal(send.annotations.readOnlyHint, false)
   assert.equal(send.annotations.idempotentHint, false)
+  const friend = byName.get('weixin_friend_add')!
+  assert.equal(friend.annotations.readOnlyHint, false)
+  assert.equal(friend.annotations.idempotentHint, false)
+  assert.deepEqual(friend.inputSchema.required, ['identifier'])
+  assert.deepEqual(Object.keys(friend.inputSchema.properties as object), ['identifier', 'verify_message'])
   assert.equal(byName.get('weixin_chat_latest')!.annotations.readOnlyHint, true)
   assert.equal(byName.has('weixin_name_resolve'), false)
   assert.throws(() => getOperationEntry('weixin_name_resolve'), /漂移/)
@@ -102,9 +108,9 @@ test('toolDefs ↔ registry 一致性守卫：每个 toolDef 可取到 operation
   assert.throws(() => getOperationEntry('weixin_nonexistent'), /漂移/)
 })
 
-test('标准多模态发送是唯一声明的聊天写工具', () => {
+test('仅标准多模态发送和好友申请为写工具', () => {
   const derived = manifestTools().filter((t) => t.annotations.readOnlyHint !== true).map((t) => t.name).sort()
-  assert.deepEqual(derived, ['weixin_message_send'])
+  assert.deepEqual(derived, ['weixin_friend_add', 'weixin_message_send'])
 })
 
 test('tool_declaration：version 1、精确的云端工具声明；微信全部串行', () => {
@@ -119,6 +125,7 @@ test('tool_declaration：version 1、精确的云端工具声明；微信全部�
     'weixin_chat_latest',
     'weixin_group_daily_summary',
     'weixin_group_range_summary',
+    'weixin_friend_add',
   ])
   assert.equal(new Set(m.tool_declaration.tools.map((t) => t.name)).size, m.tool_declaration.tools.length, '声明名不重复')
   for (const declared of m.tool_declaration.tools) {
@@ -158,6 +165,7 @@ test('version --json 输出与 buildManifest/computeSchemaDigest 同源', () => 
     'weixin_chat_latest',
     'weixin_group_daily_summary',
     'weixin_group_range_summary',
+    'weixin_friend_add',
   ])
   assert.deepEqual(parsed.tool_declaration, buildManifest().tool_declaration)
 })

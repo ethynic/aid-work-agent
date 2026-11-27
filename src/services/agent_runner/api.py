@@ -11,7 +11,7 @@ from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
-from .contracts import RunnerError, RunnerSubmit, SessionRef, SessionQuery
+from .contracts import RunnerCancelRequest, RunnerError, RunnerSubmit, SessionRef, SessionQuery
 from .control_contracts import RunnerControl
 from .event_stream import ObserverAdmission, open_runner_events, parse_cursor
 
@@ -148,9 +148,11 @@ def create_app(*, config=None, manager=None):
         return await asyncio.to_thread(manager.channel_result, runner_id, credentials(request))
 
     @app.post("/v1/runners/{runner_id}/cancel")
-    async def cancel(runner_id: str, request: Request):
+    async def cancel(runner_id: str, request: Request, body: RunnerCancelRequest | None = None):
         enabled()
-        return {"success": True, "runner": await asyncio.to_thread(manager.cancel, runner_id, credentials(request))}
+        reason = (body.reason if body else None) or None
+        return {"success": True, "runner": await asyncio.to_thread(
+            manager.cancel, runner_id, credentials(request), reason)}
 
     @app.post("/v1/runners/{runner_id}/admin-cancel")
     async def admin_cancel(runner_id: str, request: Request):

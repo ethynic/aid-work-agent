@@ -35,8 +35,8 @@ export interface PollLoopOptions {
   onInvocationStart?: (inv: ClaimedInvocation) => void
   onInvocationEnd?: (inv: ClaimedInvocation) => void
   capabilities?: () => Record<string, unknown>
-  /** The same verified installation snapshot used for this loop's provider declarations. */
-  pluginManifests?: Record<string, SignedPluginManifest>
+  /** Re-read local dispatch metadata so first-use failure withdraws both digest and body. */
+  pluginManifests?: Record<string, SignedPluginManifest> | (() => Record<string, SignedPluginManifest>)
   canClaim?: () => boolean
   onConnection?: (state: 'online' | 'offline' | 'revoked') => void
   /** 契约 2.20：本设备心跳已上报的并行工具映射（provider_key → tool 名单），与能力上报
@@ -63,7 +63,6 @@ export class PollLoop {
   private readonly controller = new AbortController()
   private readonly claimController = new AbortController()
   private readonly runnerShutdown = new AbortController()
-  private readonly pluginManifestDigests?: Record<string, string>
   private stopped = false
   private replayPromise: Promise<void> | null = null
   private nextEvidenceCleanupAt = 0
@@ -91,11 +90,17 @@ export class PollLoop {
       backoffMaxMs: 30_000,
       ...options,
     }
-    this.hasParallelTools = Object.values(options.parallelTools ?? {})
-      .some(tools => Array.isArray(tools) && (tools as readonly string[]).length > 0)
-    if (options.pluginManifests) this.pluginManifestDigests = Object.fromEntries(
-      Object.entries(options.pluginManifests).map(([key, bundle]) => [key, bundle.envelope.manifest_digest]))
+    this.hasParallelTools = Object.values(options.parallelTools ?? {}).some(tools => tools.length > 0)
   }
+
+  private get pluginManifests() {
+    return typeof this.opts.pluginManifests === 'function' ? this.opts.pluginManifests() : this.opts.pluginManifests
+  }
+
+  private pluginManifestDigests(manifests = this.pluginManifests) {
+    return manifests && Object.fromEntries(Object.entries(manifests).map(([key, bundle]) => [key, bundle.envelope.manifest_digest]))
+  }
+
 
   get isStopped(): boolean {
     return this.stopped
@@ -178,15 +183,15 @@ export class PollLoop {
 
   private async heartbeatLoop(): Promise<void> {
     const { api, heartbeatIntervalMs, backoffBaseMs, backoffMaxMs } = this.opts
-    const plugins = Object.entries(this.opts.pluginManifests ?? {})
-    const digests = this.pluginManifestDigests
     let missingPlugins: string[] = []
     let backoff = backoffBaseMs
     while (!this.stopped) {
       this.opts.onHeartbeatAttempt?.(Date.now())
       try {
         const capabilities = this.opts.capabilities?.() ?? deviceCapabilities()
-        const requested = plugins.filter(([key]) => missingPlugins.includes(key))
+        const plugins = this.pluginManifests
+        const digests = this.pluginManifestDigests(plugins)
+        const requested = Object.entries(plugins ?? {}).filter(([key]) => missingPlugins.includes(key))
         const hb = await api.heartbeat({
           runtime_version: RUNTIME_VERSION,
           capabilities: digests ? { ...capabilities, plugin_manifest_digests: digests } : capabilities,
@@ -241,7 +246,7 @@ export class PollLoop {
       }
       let inv: ClaimedInvocation | null = null
       try {
-        inv = await api.claim(claimWaitSeconds, false, this.claimController.signal, this.pluginManifestDigests)
+        inv = await api.claim(claimWaitSeconds, false, this.claimController.signal, this.pluginManifestDigests())
         backoff = backoffBaseMs
       } catch (err) {
         if (err instanceof AbortLoopError || this.stopped || !this.accepting) break
@@ -298,7 +303,7 @@ export class PollLoop {
       }
       let inv: ClaimedInvocation | null = null
       try {
-        inv = await api.claim(claimWaitSeconds, true, this.claimController.signal, this.pluginManifestDigests)
+        inv = await api.claim(claimWaitSeconds, true, this.claimController.signal, this.pluginManifestDigests())
         backoff = backoffBaseMs
       } catch (err) {
         if (err instanceof AbortLoopError || this.stopped || !this.accepting) return

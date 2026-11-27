@@ -59,9 +59,10 @@ export class WeixinAgentError extends Error {
   constructor(message: string, public readonly code?: string) { super(message) }
 }
 async function request<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
+  const form = body instanceof FormData
   const res = await fetch(BASE + path, {
-    method, signal, headers: { ...getAuthHeader(), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    method, signal, headers: { ...getAuthHeader(), ...(body === undefined || form ? {} : { 'Content-Type': 'application/json' }) },
+    body: form ? body : body === undefined ? undefined : JSON.stringify(body),
   })
   if (!res.ok) {
     const detail = (await res.json().catch(() => null))?.detail
@@ -87,3 +88,46 @@ export const saveSchedule = (body: ScheduleDefinition, id?: string) =>
   request<Schedule>(id ? `/schedules/${id}` : '/schedules', id ? 'PUT' : 'POST', body)
 export const setSchedulePaused = (id: string, paused: boolean) =>
   request<Schedule>(`/schedules/${id}`, 'PATCH', { paused })
+
+export interface FriendContact {
+  name: string
+  identifier: string
+  verify_message: string
+  selected: boolean
+}
+export interface FriendPreview {
+  filename: string
+  contacts: Array<FriendContact & { exclusion: string | null }>
+}
+export type FriendStatus = 'queued' | 'running' | 'request_sent' | 'friend_added' | 'already_requested' |
+  'already_friend' | 'failed' | 'unknown' | 'skipped'
+export interface FriendResult {
+  name: string
+  identifier: string
+  status: FriendStatus
+  reason: string | null
+  submitted_at: string | null
+}
+export interface FriendBatchSummary {
+  id: string
+  filename: string
+  created_at: string
+  state: 'running' | 'completed'
+  total: number
+  counts: Partial<Record<FriendStatus, number>>
+}
+export interface FriendBatch extends FriendBatchSummary {
+  contacts: FriendResult[]
+}
+export const previewFriends = (file: File) => {
+  const form = new FormData()
+  form.append('file', file)
+  return request<FriendPreview>('/friends/preview', 'POST', form)
+}
+export const startFriendBatch = (body: {
+  request_id: string; device_id: string; filename: string; verify_message: string; contacts: FriendContact[]
+}) => request<FriendBatch>('/friends/batches', 'POST', body)
+export const getFriendBatch = (id: string, signal?: AbortSignal) =>
+  request<FriendBatch>(`/friends/batches/${encodeURIComponent(id)}`, 'GET', undefined, signal)
+export const listFriendBatches = (offset = 0) =>
+  request<{ batches: FriendBatchSummary[]; has_more: boolean }>(`/friends/batches?offset=${offset}`)

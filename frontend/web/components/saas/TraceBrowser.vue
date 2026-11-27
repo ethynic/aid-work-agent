@@ -27,6 +27,8 @@
           <option value="completed">已完成</option>
           <option value="failed">失败</option>
           <option value="cancelled">用户取消</option>
+          <option value="interrupted">执行中断</option>
+          <option value="superseded">被新消息取代</option>
         </select>
         <select v-model="filterSourceType" @change="loadData"
           class="px-3 py-1.5 border border-default rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">
@@ -148,7 +150,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import { getTracedSessions, type SessionSummary } from '@/api/monitor'
 import { formatDateTimeWithSeconds as formatDateTime } from '@/utils/date'
@@ -157,19 +159,21 @@ import BasePagination from '@/components/ui/BasePagination.vue'
 import BaseTable, { type TableColumn } from '@/components/ui/BaseTable.vue'
 
 const router = useRouter()
+const route = useRoute()
 const toast = useToast()
 
 const sessions = ref<SessionSummary[]>([])
 const loading = ref(false)
-const page = ref(1)
-const pageSize = ref(20)
+// 初始值从 URL query 恢复：从会话/详情页 router.back() 回退时保留原页码与筛选
+const page = ref(Number(route.query.page) || 1)
+const pageSize = ref(Number(route.query.page_size) || 20)
 const total = ref(0)
-const filterStatus = ref('')
-const filterSourceType = ref('')
-const timeRange = ref('')
-const search = ref('')
-const filterTenantId = ref('')
-const filterUserId = ref('')
+const filterStatus = ref((route.query.status as string) || '')
+const filterSourceType = ref((route.query.source_type as string) || '')
+const timeRange = ref((route.query.time_range as string) || '')
+const search = ref((route.query.search as string) || '')
+const filterTenantId = ref((route.query.tenant_id as string) || '')
+const filterUserId = ref((route.query.user_id as string) || '')
 const traceIdInput = ref('')
 
 const columns: TableColumn[] = [
@@ -238,6 +242,22 @@ function jumpToTrace() {
   router.push(`/portal/monitoring/trace/${encodeURIComponent(tid)}`)
 }
 
+// 列表状态同步进 URL query（replace 不新增历史记录），供下级页面 router.back() 回退时恢复
+function syncQuery() {
+  router.replace({
+    query: {
+      page: page.value > 1 ? String(page.value) : undefined,
+      page_size: pageSize.value !== 20 ? String(pageSize.value) : undefined,
+      status: filterStatus.value || undefined,
+      source_type: filterSourceType.value || undefined,
+      time_range: timeRange.value || undefined,
+      search: search.value || undefined,
+      tenant_id: filterTenantId.value || undefined,
+      user_id: filterUserId.value || undefined,
+    },
+  }).catch(() => {}) // 同参 replace 的冗余导航异常吞掉
+}
+
 async function loadData() {
   loading.value = true
   try {
@@ -259,6 +279,7 @@ async function loadData() {
     console.error('Failed to load sessions:', e)
   } finally {
     loading.value = false
+    syncQuery()
   }
 }
 

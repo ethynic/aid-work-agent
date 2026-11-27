@@ -865,7 +865,7 @@ async def test_context_assembler_keeps_generic_incoming_and_browser_continuation
             {'id': 'browser', 'type': 'function', 'function': {'name': 'browser', 'arguments': '{}'}}]})
     compression = SimpleNamespace(_run_compression_phase=AsyncMock(), event=None)
     remember = SimpleNamespace(_handle_remember_intent=AsyncMock())
-    attachment_port = SimpleNamespace(prepare=MagicMock(side_effect=lambda text, *args: (text, 'file instructions', None)),
+    attachment_port = SimpleNamespace(prepare=MagicMock(side_effect=lambda text, *args, **kwargs: (text, 'file instructions', None)),
         build_image_reference_content=MagicMock(return_value=(None, None)),
         _build_multimodal_user_content=MagicMock(return_value=None))
     history = SimpleNamespace(reader=SimpleNamespace(assert_authorized=MagicMock()),

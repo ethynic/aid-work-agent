@@ -590,12 +590,14 @@ class TestGetAgentToken:
             assert _get_agent_token("tenant_x", "pre-sales") == "tok_exact"
             mock_all.assert_not_called()  # 精确命中不再遍历
 
-    def test_fallback_to_tenant_wide(self):
+    def test_no_tenant_wide_fallback(self):
+        """2026-11-24 定版：环境变量按智能体隔离，无租户级兜底
+        （兜底曾把对话内容推到错误的外部系统），未配置即返回 None"""
         with patch("src.db.subagent_env_var.SubagentEnvVarDB.get_vars",
                    return_value=[{"var_name": "OTHER", "var_value": "x"}]), \
-             patch("src.db.subagent_env_var.SubagentEnvVarDB.get_all_vars_for_tenant",
-                   return_value=[{"var_name": "AGENT_TOKEN", "var_value": "tok_wide"}]):
-            assert _get_agent_token("tenant_x", "pre-sales") == "tok_wide"
+             patch("src.db.subagent_env_var.SubagentEnvVarDB.get_all_vars_for_tenant") as mock_all:
+            assert _get_agent_token("tenant_x", "pre-sales") is None
+            mock_all.assert_not_called()  # 不再借用同租户其他智能体的凭证
 
     def test_empty_value_skipped(self):
         with patch("src.db.subagent_env_var.SubagentEnvVarDB.get_vars",
@@ -1037,6 +1039,31 @@ class TestAdapter:
             asyncio.run(ExternalPushAdapter.execute(payload))
             mock_gw.chat_with_tools.assert_not_called()
             mock_gw.chat_lite.assert_not_called()
+
+    def test_unresolved_env_placeholder_downgrades_to_info(self):
+        """login_url 残留 ${APP_ID}（租户未配置推送环境变量）：fail-closed 预期 no-op，
+        降级 info 不进 WARNING 巡检清单（2026-11-26 tenant_aa3c4ef6c4f3 ×62 巡检确认）"""
+        payload = _make_payload()
+        doc = _doc(login_url="https://erp${APP_ID}.aidingyi.cn/api/v1/erp.delegate/login")
+        with patch("src.services.recap.tasks.external_push._collect_context", return_value=_ctx()), \
+             patch("src.services.recap.tasks.external_push._load_tenant_doc", return_value=doc), \
+             patch("src.services.recap.tasks.external_push.logger") as mock_logger, \
+             patch("src.llm.gateway.llm_gateway") as mock_gw:
+            asyncio.run(ExternalPushAdapter.execute(payload))
+            mock_logger.info.assert_called_once()
+            mock_logger.warning.assert_not_called()
+            mock_gw.chat_with_tools.assert_not_called()
+            mock_gw.chat_lite.assert_not_called()
+
+    def test_bad_api_meta_without_placeholder_keeps_warning(self):
+        """无 api-meta 块（文档配置问题，与环境变量无关）：保持 warning"""
+        payload = _make_payload()
+        with patch("src.services.recap.tasks.external_push._collect_context", return_value=_ctx()), \
+             patch("src.services.recap.tasks.external_push._load_tenant_doc",
+                   return_value="# 文档\n无 api-meta 块"), \
+             patch("src.services.recap.tasks.external_push.logger") as mock_logger:
+            asyncio.run(ExternalPushAdapter.execute(payload))
+            mock_logger.warning.assert_called_once()
 
     def test_missing_assignee_phone_aborts_before_llm(self):
         payload = _make_payload()

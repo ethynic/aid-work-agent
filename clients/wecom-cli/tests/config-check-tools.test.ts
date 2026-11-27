@@ -170,7 +170,7 @@ function makeDoctorDeps(
 /** runDoctorChecks 的 env 注入（Console 交互会话 + PowerShell 可用 + 企微运行中） */
 const ENV_INJECT = {
   platform: 'win32' as NodeJS.Platform,
-  sessionName: 'Console',
+  desktopProbeFn: async () => 'interactive' as const,
   execFileFn: async (file: string) => ({
     stdout:
       file === 'where.exe'

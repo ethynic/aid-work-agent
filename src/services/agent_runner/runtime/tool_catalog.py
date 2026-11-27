@@ -68,7 +68,7 @@ class ToolCatalog:
 
     async def _load_plugin_tools(self, root, selected):
         from jsonschema.exceptions import SchemaError
-        from src.local_tools.catalog import TRUSTED_PROVIDERS, WEIXIN_SUMMARY_TOOLS, declared_tools_for_device
+        from src.local_tools.catalog import TRUSTED_PROVIDERS, WEIXIN_CONNECTION_CENTER_TOOLS, declared_tools_for_device
         from src.local_tools.plugin_manifests import MANIFEST_DIGESTS, load_device_tools
         from src.local_tools.plugin_tool import RuntimePluginTool
 
@@ -80,7 +80,7 @@ class ToolCatalog:
         counts = Counter(definition['name'] for _, definition in candidates)
         for provider_key, definition in candidates:
             name = definition['name']
-            if name in WEIXIN_SUMMARY_TOOLS or name in self._excluded_tools:
+            if name in WEIXIN_CONNECTION_CENTER_TOOLS or name in self._excluded_tools:
                 continue
             if (counts[name] != 1 or name in reserved or self.tool_registry.has_tool(name)
                     or self._tool_controls.get(name) or name in {'use_skill', 'skill_complete'}):

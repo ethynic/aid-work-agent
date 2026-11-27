@@ -38,6 +38,11 @@ export class ProviderNotAvailableError extends Error {
   }
 }
 
+/** Only the local trusted launch guard raises this before plugin execution. */
+export class ProviderCheckError extends Error {
+  constructor() { super('插件未通过首次使用检查，请检查或重新导入该插件'); this.name = 'ProviderCheckError' }
+}
+
 export interface ProviderProgress {
   progress?: number
   total?: number
@@ -63,6 +68,7 @@ export interface ProviderCallOptions {
 export interface ProviderOptions {
   /** Trusted composition only; containment intent must be durable before launch. */
   prepareLaunch?: (entry: string) => Promise<{ command: string; args: string[] }>
+  verifyProvider?: (entry: string, atLaunch: boolean) => Promise<void>
   shutdownTimeoutMs?: number
   env?: Record<string, string>
   nodeExecutable?: string
@@ -86,6 +92,34 @@ function wecomBusinessTools(tools: Tool[]): ReadonlySet<string> {
     if (tool.name === 'wecom_message_send') return props?.session?.type === 'string' && props.text?.type === 'string'
     return false
   }).map(tool => tool.name))
+}
+
+/** The same schema rules serve legacy discovery and authenticated offline manifests. */
+export function inspectWecomToolSchemas(toolDefinitions: readonly unknown[]) {
+  const tools = toolDefinitions.filter((value): value is Tool => {
+    const candidate = value as Partial<Tool> | null | undefined
+    return typeof candidate?.name === 'string' && candidate.inputSchema?.type === 'object'
+  })
+  const businessTools = wecomBusinessTools(tools)
+  const directory = tools.find(tool => tool.name === 'wecom_session_directory')
+  const directoryProps = directory?.inputSchema.properties as Record<string, { type?: string; enum?: string[]; items?: { type?: string } }> | undefined
+  const directorySupported = directory?.annotations?.readOnlyHint === true &&
+    directoryProps?.mode?.type === 'string' && directoryProps?.session?.type === 'string' &&
+    directoryProps?.sessions?.type === 'array' && directoryProps?.sessions?.items?.type === 'string'
+  const directorySearchSupported = directorySupported &&
+    Array.isArray(directoryProps?.mode?.enum) && directoryProps.mode.enum.includes('search') &&
+    directoryProps.query?.type === 'string' && directoryProps.type?.type === 'string' &&
+    Array.isArray(directoryProps.type.enum) && ['contact', 'group', 'any'].every(value => directoryProps?.type?.enum?.includes(value)) &&
+    directoryProps.limit?.type === 'integer'
+  const doctor = tools.find(tool => tool.name === 'wecom_config_doctor')
+  const configDoctorSupported = doctor?.annotations?.readOnlyHint === true && Object.keys(doctor.inputSchema.properties ?? {}).length === 0
+  const configCalibrateSupported = tools.some(tool => tool.name === 'wecom_config_calibrate')
+  const props = tools.find(tool => tool.name === 'wecom_read_session')?.inputSchema.properties
+  type AttachmentSchema = { type?: string; properties?: Record<string, { type?: string }>; anyOf?: AttachmentSchema[] }
+  const attachment = props?.attachment as AttachmentSchema | undefined
+  const object = attachment?.type === 'object' ? attachment : Array.isArray(attachment?.anyOf) ? attachment.anyOf.find(item => item?.type === 'object') : undefined
+  return { businessTools, businessSupported: WECOM_BUSINESS_TOOLS.every(name => businessTools.has(name)), directorySupported, directorySearchSupported,
+    configDoctorSupported, configCalibrateSupported, attachmentSupported: object?.properties?.message_id?.type === 'integer' }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -126,6 +160,7 @@ export class ProviderManager {
   private transportFailure: string | null = null
   private transportGeneration = 0
   private readonly prepareLaunch: ProviderOptions['prepareLaunch']
+  private readonly verifyProvider: ProviderOptions['verifyProvider']
   private starting: Promise<void> | null = null
   private wecomTools: ReadonlySet<string> | undefined
   private wecomAttachmentReadSupported: boolean | undefined
@@ -134,6 +169,7 @@ export class ProviderManager {
   constructor(entry: string, opts: ProviderOptions = {}) {
     this.entry = entry
     this.prepareLaunch = opts.prepareLaunch
+    this.verifyProvider = opts.verifyProvider
     this.shutdownTimeoutMs = opts.shutdownTimeoutMs ?? 5_000
     this.providerEnv = opts.env ?? {}
     this.nodeExecutable = opts.nodeExecutable ?? process.execPath
@@ -157,6 +193,9 @@ export class ProviderManager {
     return this.client !== null && !this.crashed
   }
 
+  /** Check local integrity before occupying the desktop or acquiring a write permit. */
+  async prepareExecution(atLaunch = false): Promise<void> { await this.verifyProvider?.(this.entry, atLaunch) }
+
   /** 启动 Provider（已运行则复用；崩溃后自动 respawn） */
   async ensureStarted(): Promise<void> {
     if (this.starting) return this.starting
@@ -169,6 +208,8 @@ export class ProviderManager {
     if (this.shuttingDown) throw new ProviderCrashError('ProviderManager 正在关闭，不再启动 Provider')
     if (this.client && !this.crashed) return
     await this.disposeDead()
+    if (this.shuttingDown) throw new ProviderCrashError('Provider is shutting down')
+    await this.prepareExecution(true)
     if (this.shuttingDown) throw new ProviderCrashError('Provider is shutting down')
     const launch = await this.prepareLaunch?.(this.entry)
     if (this.shuttingDown) throw new ProviderCrashError('Provider is shutting down')
@@ -261,31 +302,13 @@ export class ProviderManager {
       await this.ensureStarted()
       if (this.wecomTools) return this.wecomTools
       const listed = await this.client!.listTools({}, { timeout: 5000 })
-      this.wecomTools = wecomBusinessTools(listed.tools)
-      const directory = listed.tools.find(tool => tool.name === 'wecom_session_directory')
-      const directoryProps = directory?.inputSchema.properties as Record<string, { type?: string; enum?: string[]; items?: { type?: string } }> | undefined
-      this.directorySupported = directory?.annotations?.readOnlyHint === true &&
-        directoryProps?.mode?.type === 'string' && directoryProps?.session?.type === 'string' &&
-        directoryProps?.sessions?.type === 'array' && directoryProps?.sessions?.items?.type === 'string'
-      this.directorySearchSupported = this.directorySupported &&
-        directoryProps?.mode?.enum?.includes('search') === true &&
-        directoryProps?.query?.type === 'string' &&
-        directoryProps?.type?.type === 'string' &&
-        ['contact', 'group', 'any'].every(value => directoryProps?.type?.enum?.includes(value)) &&
-        directoryProps?.limit?.type === 'integer'
-      // 代理任务配置工具（契约 §3，沿 W30 真实 schema 检查先例）：doctor 只读提示 +
-      // 无参输入 schema；calibrate 仅要求存在（写副作用在调用侧沿写工具语义把关）
-      const doctor = listed.tools.find(tool => tool.name === 'wecom_config_doctor')
-      const doctorProps = doctor?.inputSchema.properties as Record<string, unknown> | undefined
-      this.configDoctorSupported = doctor?.annotations?.readOnlyHint === true &&
-        doctor?.inputSchema.type === 'object' && Object.keys(doctorProps ?? {}).length === 0
-      this.configCalibrateSupported = listed.tools.some(tool => tool.name === 'wecom_config_calibrate')
-      const read = listed.tools.find(tool => tool.name === 'wecom_read_session')
-      const props = read?.inputSchema.properties as Record<string, unknown> | undefined
-      type AttachmentSchema = { type?: string; properties?: Record<string, { type?: string }>; anyOf?: AttachmentSchema[] }
-      const attachment = props?.attachment as AttachmentSchema | undefined
-      const object = attachment?.type === 'object' ? attachment : attachment?.anyOf?.find(item => item.type === 'object')
-      this.wecomAttachmentReadSupported = object?.properties?.message_id?.type === 'integer'
+      const capabilities = inspectWecomToolSchemas(listed.tools)
+      this.wecomTools = capabilities.businessTools
+      this.directorySupported = capabilities.directorySupported
+      this.directorySearchSupported = capabilities.directorySearchSupported
+      this.configDoctorSupported = capabilities.configDoctorSupported
+      this.configCalibrateSupported = capabilities.configCalibrateSupported
+      this.wecomAttachmentReadSupported = capabilities.attachmentSupported
       return this.wecomTools
     })()
     this.wecomInspection = inspection
@@ -480,14 +503,19 @@ export class ProviderManager {
  * - 未配置入口的 key 调 get() 抛 ProviderNotAvailableError（清晰失败，不静默降级）
  * - shutdownAll() 回收全部已创建的 Provider 子进程
  */
+export type ProviderSetOptions = Omit<ProviderOptions, 'env' | 'verifyProvider'> & {
+  providerEnv?: Record<string, Record<string, string>>
+  verifyProvider?: (key: string, entry: string, atLaunch: boolean) => Promise<void>
+}
+
 export class ProviderSet {
   private readonly entries: Record<string, string>
-  private readonly managerOpts: Omit<ProviderOptions, 'env'> & { providerEnv?: Record<string, Record<string, string>> }
+  private readonly managerOpts: ProviderSetOptions
   private readonly managers = new Map<string, ProviderManager>()
   private accepting = true
   private recoveringPool = false
 
-  constructor(entries: Record<string, string>, opts: Omit<ProviderOptions, 'env'> & { providerEnv?: Record<string, Record<string, string>> } = {}) {
+  constructor(entries: Record<string, string>, opts: ProviderSetOptions = {}) {
     this.entries = { ...entries }
     this.managerOpts = opts
   }
@@ -509,7 +537,8 @@ export class ProviderSet {
     if (existing) return existing
     const entry = this.entries[key]
     if (!entry) throw new ProviderNotAvailableError(key)
-    const manager = new ProviderManager(entry, { ...this.managerOpts, env: this.managerOpts.providerEnv?.[key] })
+    const manager = new ProviderManager(entry, { ...this.managerOpts, env: this.managerOpts.providerEnv?.[key],
+      verifyProvider: (entry, atLaunch) => this.managerOpts.verifyProvider?.(key, entry, atLaunch) ?? Promise.resolve() })
     this.managers.set(key, manager)
     return manager
   }

@@ -5,7 +5,7 @@ import type { ConnectionDiagnosis, ManagementRequest, RuntimeManagementPort } fr
 
 const wrappers: VueWrapper[] = []
 afterEach(() => { wrappers.forEach((wrapper) => wrapper.unmount()); wrappers.length = 0; localStorage.clear(); document.body.innerHTML = '' })
-function mountPage(options: { features?: string[]; state?: string; ready?: boolean; version?: string; pairReject?: boolean; recovery?: boolean; registration?: ConnectionDiagnosis | null; automatic?: boolean; connection?: string; unpaired?: boolean; server?: string | null } = {}) {
+function mountPage(options: { features?: string[]; state?: string; ready?: boolean; reason?: string | null; version?: string; pairReject?: boolean; recovery?: boolean; registration?: ConnectionDiagnosis | null; automatic?: boolean; connection?: string; unpaired?: boolean; server?: string | null } = {}) {
   const requests: ManagementRequest[] = []
   const port: RuntimeManagementPort = {
     request: vi.fn(async (request) => {
@@ -13,7 +13,7 @@ function mountPage(options: { features?: string[]; state?: string; ready?: boole
       const base = { request_id: request.request_id, method: request.method, code: 0, error: '' }
       if (request.method === 'describe') return { ...base, result: { api_major: 1, host_version: '0.2.14', features: options.features ?? ['events', 'first_party_plugins'], instance_id: 'host-one', revision: 1 } }
       if (request.method === 'getState') return { ...base, result: { instance_id: 'host-one', revision: 1, state: options.state ?? 'stopped', supervisor: 'runtime_app', connection: options.connection ?? 'offline', ...(!options.unpaired ? { device: { device_id: 'device-one', name: '测试设备' } } : {}), ...(options.state === 'reconciling' ? { blocked_reason: '历史执行事实缺少结案证明' } : {}) } }
-      if (request.method === 'plugins.list') return { ...base, result: { instance_id: 'host-one', revision: 1, plugins: [{ installation_id: 'installed-one', plugin_id: 'weixin', display_name: '微信', release_id: 'opaque-release', enabled: true, ready: options.ready ?? false, reason: '请登录微信', ...(options.version ? { version: options.version } : {}) }] } }
+      if (request.method === 'plugins.list') return { ...base, result: { instance_id: 'host-one', revision: 1, plugins: [{ installation_id: 'installed-one', plugin_id: 'weixin', display_name: '微信', release_id: 'opaque-release', enabled: true, ready: options.ready ?? false, ...(options.reason === null ? {} : { reason: options.reason ?? '请登录微信' }), ...(options.version ? { version: options.version } : {}) }] } }
       if (request.method === 'pair' && options.pairReject) return { ...base, code: 11, error: '历史执行事实缺少结案证明', result: null }
       return { ...base, result: { operation_id: 'operation-one', operation: request.method.replace('plugins.', ''), status: 'succeeded', code: 0, error: '' } }
     }),
@@ -231,11 +231,22 @@ describe('Runtime management page', () => {
   it('distinguishes enabled from ready and never derives version from release identifier', async () => {
     const { wrapper } = mountPage(); await flushPromises()
     expect(wrapper.text()).toContain('已启用')
-    expect(wrapper.text()).toContain('未就绪')
     expect(wrapper.text()).toContain('请登录微信')
     expect(wrapper.text()).toContain('版本未知')
     expect(wrapper.text()).not.toContain('opaque-release')
     expect(wrapper.findAll('input').every((input) => wrapper.find(`label[for="${input.attributes('id')}"]`).exists())).toBe(true)
+  })
+  it('shows the pending first check without labelling it a failed check', async () => {
+    const { wrapper } = mountPage({ reason: '等待首次使用时检查插件' }); await flushPromises()
+    const plugin = wrapper.get('.runtime-plugin-list li')
+    expect(plugin.text()).toContain('等待首次使用时检查插件')
+    expect(plugin.text()).not.toContain('最近检查：未就绪')
+  })
+  it('shows the successful check and keeps a fallback when an older host sends no failure reason', async () => {
+    const ready = mountPage({ ready: true, reason: null }); await flushPromises()
+    expect(ready.wrapper.get('.runtime-plugin-state').text()).toContain('最近检查：已就绪')
+    const withoutReason = mountPage({ reason: null }); await flushPromises()
+    expect(withoutReason.wrapper.get('.runtime-plugin-state').text()).toContain('最近检查：未就绪')
   })
   it('requires explicit confirmation before uninstall and preserves opaque installation identity', async () => {
     const { wrapper, requests } = mountPage(); await flushPromises()

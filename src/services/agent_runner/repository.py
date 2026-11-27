@@ -166,7 +166,7 @@ class RunnerRepository:
             return {"rows": page, "active": active, "has_more": has_more,
                     "next_cursor": page[-1]["runner_id"] if has_more else None}
 
-    def cancel(self, principal, runner_id):
+    def cancel(self, principal, runner_id, reason=None):
         with self.connection_factory() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM agent_runners WHERE runner_id=%s FOR UPDATE", (runner_id,))
@@ -175,24 +175,43 @@ class RunnerRepository:
                 raise RunnerError("RUNNER_NOT_FOUND", 404)
             self.assert_owner(principal, row)
             previous = row
+            # 取消来源标记（观测投影用）：engine 周期性 save_checkpoint 会整体覆盖
+            # checkpoint，cancel_reason 经 _preserve_server_checkpoint 跨保存保留。
+            # 占位符顺序（running 分支）：automatic -> CANCEL_CHECKPOINT_KEY -> reason。
             if row["status"] == RunnerStatus.QUEUED.value:
                 # No execution/claim/usage existed. Keep accepted input in its
                 # projection; no chat/record/debit is fabricated for unstarted work.
-                cursor.execute("""UPDATE agent_runners SET status='cancelled', cancel_requested=TRUE,
+                if reason:
+                    checkpoint_set = ("jsonb_set(COALESCE(checkpoint,'{}'::jsonb),ARRAY['cancel_reason'],"
+                                      "to_jsonb(%s::text))")
+                    params: tuple = (reason, runner_id)
+                else:
+                    checkpoint_set = "checkpoint"
+                    params = (runner_id,)
+                cursor.execute(f"""UPDATE agent_runners SET status='cancelled', cancel_requested=TRUE,
                     settlement_status='settled', revision=revision+1, view_revision=view_revision+1,
                     control_revision=control_revision+1, updated_at=CURRENT_TIMESTAMP,
-                    finished_at=CURRENT_TIMESTAMP WHERE runner_id=%s RETURNING *""", (runner_id,))
+                    checkpoint={checkpoint_set},
+                    finished_at=CURRENT_TIMESTAMP WHERE runner_id=%s RETURNING *""", params)
                 row = decoded(cursor.fetchone())
             elif row["status"] not in ("completed", "failed", "cancelled") and not row["cancel_requested"]:
                 from .auto_local_recovery import CANCEL_CHECKPOINT_KEY, publicly_automatic
                 from src.config.settings import settings
                 automatic = (row['status'] != 'finalizing' and publicly_automatic(row, row.get('checkpoint') or {},
                     settings.agent_runner.auto_local_recovery_providers, local_recovery_applicable(row)))
-                cursor.execute("""UPDATE agent_runners SET cancel_requested=TRUE,
-                    checkpoint=CASE WHEN %s THEN jsonb_set(checkpoint,ARRAY[%s], 'true'::jsonb) ELSE checkpoint END,
+                base_set = ("CASE WHEN %s THEN jsonb_set(checkpoint,ARRAY[%s], 'true'::jsonb)"
+                            " ELSE checkpoint END")
+                if reason:
+                    checkpoint_set = ("jsonb_set(COALESCE(" + base_set + ",'{}'::jsonb),"
+                                      "ARRAY['cancel_reason'],to_jsonb(%s::text))")
+                    params = (automatic, CANCEL_CHECKPOINT_KEY, reason, runner_id)
+                else:
+                    checkpoint_set = base_set
+                    params = (automatic, CANCEL_CHECKPOINT_KEY, runner_id)
+                cursor.execute(f"""UPDATE agent_runners SET cancel_requested=TRUE,
+                    checkpoint={checkpoint_set},
                     view_revision=view_revision+1, control_revision=control_revision+1,
-                    updated_at=CURRENT_TIMESTAMP WHERE runner_id=%s RETURNING *""",
-                    (automatic, CANCEL_CHECKPOINT_KEY, runner_id))
+                    updated_at=CURRENT_TIMESTAMP WHERE runner_id=%s RETURNING *""", params)
                 row = decoded(cursor.fetchone())
             if row['cancel_requested'] or row['status'] in ('completed','failed','cancelled'):
                 from .control_repository import close_pending_controls

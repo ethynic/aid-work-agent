@@ -210,34 +210,47 @@ export async function readSignedEnvelope(file: string, trust: PublisherTrust[], 
   } finally { archive.close() }
 }
 
+export function verifyReleasePlatform(envelope: ReleaseEnvelope, platform: PackagePlatform): void {
+  if (envelope.platform !== platform.platform || envelope.arch !== platform.arch
+    || semver.lt(platform.runtime_version, envelope.min_runtime_version)
+    || (envelope.max_runtime_version !== null && semver.gt(platform.runtime_version, envelope.max_runtime_version))) invalid('插件平台或Runtime版本不兼容')
+}
+
+/** The signed manifest authenticates dispatch metadata without opening the inner ZIP. */
+export function verifyRuntimeManifest(bytes: Buffer, envelope: ReleaseEnvelope, platform: PackagePlatform): RuntimeManifest {
+  if (bytes.length > 16 * 1024 ** 2) invalid('插件完整manifest缺失或过大')
+  const manifest = json(bytes) as RuntimeManifest
+  if (!manifest || envelope.manifest_digest !== `sha256:${sha256(canonicalJson(manifest))}` || manifest.manifest_version !== 1
+    || manifest.provider_id !== envelope.provider_id || manifest.provider_version !== envelope.provider_version
+    || typeof manifest.display_name !== 'string' || !manifest.display_name || manifest.display_name.length > 128
+    || typeof manifest.description !== 'string' || typeof manifest.schema_digest !== 'string' || !manifest.schema_digest
+    || !Array.isArray(manifest.tools) || !manifest.tools.length || manifest.execution_target !== 'local_required'
+    || !Array.isArray(manifest.entrypoint) || manifest.entrypoint.length !== 3
+    || manifest.entrypoint[1] !== 'mcp' || manifest.entrypoint[2] !== '--stdio'
+    || typeof manifest.entrypoint[0] !== 'string' || !manifest.entrypoint[0].endsWith('.js')) invalid('插件manifest契约无效')
+  safePackagePath(manifest.entrypoint[0])
+  const distro = manifest.distribution
+  if (!distro || distro.platform !== platform.platform || distro.arch !== platform.arch || distro.node?.version !== platform.node_version
+    || distro.node.modules_abi !== platform.node_abi || !Array.isArray(distro.required_files)) invalid('插件Node或发行依赖不兼容')
+  return manifest
+}
+
 export async function verifyOfflinePackage(bytes: Buffer, trust: PublisherTrust[], platform: PackagePlatform,
   providers: readonly string[] = FIRST_PARTY_PROVIDERS): Promise<VerifiedPackage> {
   try {
     const outer = await readSafeZip(bytes, { ...PACKAGE_LIMITS, entries: 2, expanded: PACKAGE_LIMITS.archive + 65536, file: PACKAGE_LIMITS.archive })
     if (outer.size !== 2 || !outer.has('envelope.json') || !outer.has('payload.zip') || outer.get('envelope.json')!.length > 65536) invalid()
     const envelope = verifyEnvelope(outer.get('envelope.json')!, trust, providers)
-    if (envelope.platform !== platform.platform || envelope.arch !== platform.arch
-      || semver.lt(platform.runtime_version, envelope.min_runtime_version)
-      || (envelope.max_runtime_version !== null && semver.gt(platform.runtime_version, envelope.max_runtime_version))) invalid('插件平台或Runtime版本不兼容')
+    verifyReleasePlatform(envelope, platform)
     const payload = outer.get('payload.zip')!
     if (envelope.package_size !== payload.length || envelope.package_digest !== `sha256:${sha256(payload)}`) invalid('插件内容摘要无效')
     const files = await readSafeZip(payload)
     const manifestBytes = files.get('runtime-manifest.json')
-    if (!manifestBytes || manifestBytes.length > 16 * 1024 ** 2) invalid('插件完整manifest缺失或过大')
-    const manifest = json(manifestBytes) as RuntimeManifest
-    if (envelope.manifest_digest !== `sha256:${sha256(canonicalJson(manifest))}` || manifest.manifest_version !== 1
-      || manifest.provider_id !== envelope.provider_id || manifest.provider_version !== envelope.provider_version
-      || typeof manifest.display_name !== 'string' || !manifest.display_name || manifest.display_name.length > 128
-      || typeof manifest.description !== 'string' || typeof manifest.schema_digest !== 'string' || !manifest.schema_digest
-      || !Array.isArray(manifest.tools) || !manifest.tools.length || manifest.execution_target !== 'local_required'
-      || !Array.isArray(manifest.entrypoint) || manifest.entrypoint.length !== 3
-      || manifest.entrypoint[1] !== 'mcp' || manifest.entrypoint[2] !== '--stdio'
-      || !manifest.entrypoint[0]?.endsWith('.js') || !files.has(safePackagePath(manifest.entrypoint[0]))) invalid('插件manifest契约无效')
-    const distro = manifest.distribution
-    if (!distro || distro.platform !== platform.platform || distro.arch !== platform.arch || distro.node?.version !== platform.node_version
-      || distro.node.modules_abi !== platform.node_abi || !Array.isArray(distro.required_files)) invalid('插件Node或发行依赖不兼容')
+    if (!manifestBytes) invalid('插件完整manifest缺失或过大')
+    const manifest = verifyRuntimeManifest(manifestBytes, envelope, platform)
+    if (!files.has(manifest.entrypoint[0]!)) invalid('插件manifest契约无效')
     const required = new Set<string>()
-    for (const file of distro.required_files) {
+    for (const file of manifest.distribution.required_files) {
       if (!file || typeof file.path !== 'string' || file.path === 'runtime-manifest.json' || required.has(file.path)) invalid()
       safePackagePath(file.path); required.add(file.path)
       const contents = files.get(file.path)

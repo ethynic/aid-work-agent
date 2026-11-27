@@ -81,20 +81,82 @@ fi
 #      内全部同镜像容器」（api/background/runner-api/worker/heavy-tools/monitor）：
 #      docker exec 的 pip 安装只落在单容器可写层，Runner 不继承主 API 的安装，
 #      导致 rfc8785 仅主 API 有、4 个 worker 全缺
+#  11. 2026-11-26 三项调整：
+#      a) 等待语义对齐生产（agent_update.sh）：--wait 只等主 API/background，
+#         runner 服务（runner-api/worker/monitor/heavy-tools）单独 up
+#         --force-recreate 不阻塞等待健康，发布后仅对 runner-api 做 /health 探测
+#         （失败仅告警）。此前 --wait 全量等待把 runner-monitor（start_period 4m）
+#         等 healthcheck 串进发布总时长，发布耗时比生产多 1.5 分钟
+#      b) 删除 Node PPT 渲染器构建步骤：dist/render.js 是 untracked 构建产物，
+#         渲染器源码（src/tools/ppt/renderer-node/src/*.ts 或 package-lock.json）
+#         变更时需手工重建，命令见 git 历史中本步骤原实现（npm ci + npm run build）
+#      c) 新增分段计时：每步结束打印「本段/累计」耗时，定位发布慢的环节
+#  12. 2026-11-26 两项调整：
+#      a) compose up 加 --progress quiet（版本探测兼容旧引擎）：TTY 进度帧重绘
+#         重定向时会灌出数千行发布日志
+#      b) pip 依赖安装转后台（[7.5]）与前端编译等待并行：两段互不依赖，
+#         总时长取 max(前端等待, pip) 而非相加；失败仍汇总告警
+#      c) 前端校验链拆双通道并行：typecheck/边界检查（门禁）与 vite build/
+#         产物校验（产出 dist.new）互不依赖，墙钟时间取 max(两通道)，
+#         两通道都通过才切换 dist，门禁不放松
+#      d) 脚本自更新重入：检出后脚本内容变化即 exec 重启自身执行新版
+#         （AID_DEPLOY_RERUN=1 守卫防死循环），发布不再需要手动跑两遍
+#  13. 2026-11-27 输出精简（正常路径 ≤60 行）：
+#      a) compose up 输出重定向到文件，成功不打进度、失败才回显错误尾部——
+#         不依赖 --progress（旧引擎探测失败时 TTY 进度帧会灌出千余行日志）
+#      b) git fetch/checkout 静默（版本行已自打）、npm 加 --loglevel=error
+#      c) docker update 输出抑制（成功回显容器名）、删除 /tmp ls 回显
+#      d) pip 加 --disable-pip-version-check（[notice] 升级提示每次 2 行×9 容器）
+#      e) pip 目标容器清单改单行汇总（去掉逐容器 "-> 名" 行）
 # ==============================================================================
 
 set -e
 
 START_TS=$(date +%s)
+LAST_TS=$START_TS
+TIMING_LIST=""
+step_done() {
+    local NOW LBL="${1:-}"
+    NOW=$(date +%s)
+    echo "  [计时] 本段 $(( NOW - LAST_TS ))s / 累计 $(( NOW - START_TS ))s"
+    # 无标签调用（理论不存在，兜底）只计时不进汇总
+    [ -n "$LBL" ] && TIMING_LIST="${TIMING_LIST:+$TIMING_LIST + }${LBL}$(( NOW - LAST_TS ))s"
+    LAST_TS=$NOW
+}
+
+# compose 支持 --progress 时静默进度输出（TTY 进度帧重绘会灌出数千行发布日志）
+if docker compose up --help 2>&1 | grep -q -- '--progress'; then
+    COMPOSE_QUIET=(--progress quiet)
+else
+    COMPOSE_QUIET=()
+fi
+
+# compose 输出收口（2026-11-27）：成功时全量重定向到文件，正常路径零输出；
+# 失败时回显过滤掉 swap-limit/进度噪音后的错误尾部。兼容不支持 --progress
+# 的旧引擎（探测失败也不再有进度帧刷屏）
+COMPOSE_LOG=/tmp/agent2_compose.log
+compose_up() {
+    local desc="$1"; shift
+    if ! docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_QUIET[@]}" "$@" >"$COMPOSE_LOG" 2>&1; then
+        echo "错误：$desc 失败，关键输出如下："
+        grep -vE 'swap limit|Running [0-9]+/' "$COMPOSE_LOG" | tail -40
+        return 1
+    fi
+}
 
 echo "=========================================="
 echo "  AI 数字员工系统（测试） - 快速更新"
 echo "=========================================="
 
+# 发布脚本自更新机制（2026-11-26）：检出目标版本后若脚本自身内容已变化，
+# exec 重启自身执行新版——避免整轮发布跑在旧解析代码上、需要手动跑两遍。
+# AID_DEPLOY_RERUN=1 守卫只允许重入一次，杜绝死循环；脚本未变化不重入。
+SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+SCRIPT_SELF_HASH=$(sha256sum "$SCRIPT_PATH" 2>/dev/null | cut -d' ' -f1 || true)
+
 FRONTEND_DIR="/var/www/agent2/frontend"
 DIST_DIR="$FRONTEND_DIR/dist"
 BUILD_LOG="/var/www/agent2/log/frontend-build.log"
-PPT_RENDERER_DIR="/var/www/agent2/src/tools/ppt/renderer-node"
 
 # 配置 Git 安全目录（避免所有权检查错误）
 git config --global --add safe.directory /var/www/agent2 2>/dev/null || true
@@ -146,7 +208,7 @@ if [ -n "$WORKTREE_STATUS" ]; then
 fi
 echo "发布分支: origin/$DEPLOY_BRANCH"
 # 显式请求源 ref：远端已删除但本地仍有缓存时也必须失败，绝不回退 master。
-if ! git fetch --no-tags origin "+refs/heads/$DEPLOY_BRANCH:refs/remotes/origin/$DEPLOY_BRANCH"; then
+if ! git fetch --no-tags --quiet origin "+refs/heads/$DEPLOY_BRANCH:refs/remotes/origin/$DEPLOY_BRANCH"; then
     echo "错误：无法获取 origin/$DEPLOY_BRANCH，发布已中止。" >&2
     exit 1
 fi
@@ -156,18 +218,27 @@ if ! TARGET_SHA=$(git rev-parse --verify "refs/remotes/origin/$DEPLOY_BRANCH^{co
 fi
 echo "发布提交: $TARGET_SHA"
 # detached HEAD 保留原本地分支指针；不覆盖目标版本路径上的 ignored 文件。
-if ! git checkout --detach --no-overwrite-ignore "$TARGET_SHA"; then
+if ! git checkout --detach --quiet --no-overwrite-ignore "$TARGET_SHA"; then
     echo "错误：无法安全检出目标提交，发布已中止。" >&2
     exit 1
 fi
 echo "更新后版本: $(git log -1 --format='%cd %s' --date='format:%Y-%m-%d %H:%M:%S')"
 NEW_HEAD=$(git rev-parse HEAD)
+# 自更新重入：脚本文件随本次检出变化 -> exec 新版（重入后再比较必然相同，
+# 且 AID_DEPLOY_RERUN 守卫兜底，不会死循环）
+NEW_SELF_HASH=$(sha256sum "$SCRIPT_PATH" 2>/dev/null | cut -d' ' -f1 || true)
+if [ "${AID_DEPLOY_RERUN:-0}" != "1" ] && [ -n "$SCRIPT_SELF_HASH" ] \
+   && [ "$NEW_SELF_HASH" != "$SCRIPT_SELF_HASH" ]; then
+    echo "[1.2] 发布脚本已随本次更新变化，exec 重启以执行新版脚本（仅重入一次）..."
+    AID_DEPLOY_RERUN=1 exec bash "$SCRIPT_PATH" "$@"
+fi
 find . -type d -name "__pycache__" -exec chmod -R 777 {} + 2>/dev/null || true
 
 # 1.1 清除 Python 字节码缓存（避免旧代码运行）
 echo "[1.1] 清除 Python .pyc 缓存..."
 find . -type f -name "*.pyc" -delete 2>/dev/null || true
 find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+step_done "拉取+清缓存"
 
 # 2. 前端依赖安装（node_modules 已持久化在宿主机，增量安装，通常很快）
 #    npm 缓存用命名卷持久化（容器内 /root/.npm 每次销毁，
@@ -178,8 +249,8 @@ docker run --rm \
     -v "$FRONTEND_DIR":/app \
     -v agent2_npm_cache:/root/.npm \
     -w /app node:22-alpine \
-    npm install --no-audit --no-fund --prefer-offline
-
+    npm install --no-audit --no-fund --prefer-offline --loglevel=error
+step_done "npm"
 
 # 3. 前端校验 + 编译到 dist.new（后台执行，与后端重启并行，2026-11-24 优化）。
 #    typecheck/边界检查不产出 dist、不影响 nginx，只需在 dist 原子切换前通过；
@@ -188,48 +259,33 @@ docker run --rm \
 #    代价：类型/边界错误时后端已重启（多一次服务重启），属可接受取舍。
 #    build 用 npx vite build --outDir（npm run build 是复合命令，追加 --outDir
 #    会透传给最后的 verify 脚本导致误解析）
-echo "[3] 前端校验 + 编译 dist.new（后台，与后端重启并行）..."
+# 双通道并行（2026-11-26）：串行链 ~83s 是发布最大单项。typecheck/边界检查是
+# 门禁（不产出 dist），vite build/产物校验产出 dist.new——两通道互不依赖，
+# 拆分后墙钟时间 = max(两通道)。两通道都必须通过才允许切换 dist（门禁不放松）；
+# 代价：typecheck 失败时 build 已跑完（白编译一次），属可接受取舍。
+echo "[3] 前端校验 + 编译 dist.new（双通道后台，与后端重启并行）..."
 sudo rm -rf "$DIST_DIR.new"
 mkdir -p "$(dirname "$BUILD_LOG")"
 (
   docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine npm run typecheck \
   && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
-      node scripts/check-dependency-boundaries.mjs --scope=web \
-  && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
+      node scripts/check-dependency-boundaries.mjs --scope=web
+) > "$BUILD_LOG.a" 2>&1 &
+LANE_A_PID=$!
+(
+  docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
       npx vite build --outDir dist.new \
   && docker run --rm -v "$FRONTEND_DIR":/app -w /app node:22-alpine \
       node scripts/verify-web-build.mjs /app/dist.new
-) > "$BUILD_LOG" 2>&1 &
-FRONTEND_PID=$!
+) > "$BUILD_LOG.b" 2>&1 &
+LANE_B_PID=$!
+step_done "前端后台"
 
-# 5. 构建 Node PPT 渲染器（PptxGenJS）。容器挂载整个项目目录，镜像内产物会被
-#    挂载遮住，node_modules/dist 必须落在宿主机检出目录（untracked，git reset
-#    不会删除）。dist/render.js 比 package-lock.json 和全部 .ts 源码新且
-#    pptxgenjs 已安装时跳过构建（只改 .ts 不动依赖也要重建，否则沿用旧 dist）；
-#    npm 缓存复用前端的命名卷，避免重复拉包元数据
-echo "[5] 构建 Node PPT 渲染器..."
-if [ -f "$PPT_RENDERER_DIR/dist/render.js" ] && \
-   [ "$PPT_RENDERER_DIR/dist/render.js" -nt "$PPT_RENDERER_DIR/package-lock.json" ] && \
-   [ -d "$PPT_RENDERER_DIR/node_modules/pptxgenjs" ] && \
-   ! find "$PPT_RENDERER_DIR/src" -name '*.ts' -newer "$PPT_RENDERER_DIR/dist/render.js" | grep -q .; then
-  echo "  dist/render.js 已是最新，跳过构建"
-else
-  docker run --rm \
-      -v "$PPT_RENDERER_DIR":/app \
-      -v agent2_npm_cache:/root/.npm \
-      -w /app node:22-alpine \
-      sh -c "npm ci --no-audit --no-fund --prefer-offline && npm run build"
-  # 构建后校验产物存在：docker run 成功但产物缺失时明确报错，避免带病重启后端
-  if [ ! -f "$PPT_RENDERER_DIR/dist/render.js" ]; then
-    echo "  错误：Node PPT 渲染器构建失败，dist/render.js 不存在"
-    exit 1
-  fi
-  # 侧车以 root 构建，产物属主为 root；恢复为 ubuntu，避免 root 属主文件
-  # 在后续 git 更新/排查时造成 Permission denied 干扰（同第 [10] 步 dist 处理）
-  sudo chown -R ubuntu:ubuntu "$PPT_RENDERER_DIR/dist" "$PPT_RENDERER_DIR/node_modules"
-fi
-
-# 6. 后端重启（与前端编译并行）。
+# 5. 后端重启（与前端编译并行）。
+#    注：Node PPT 渲染器构建步骤已于 2026-11-26 删除（见变更记录 11b）——
+#    renderer-node 源码（src/tools/ppt/renderer-node/src 或 package-lock.json）
+#    变更时需手工重建 dist/render.js，用 node:22-alpine 侧车容器
+#    npm ci + npm run build，npm 缓存卷 agent2_npm_cache 可复用。
 #    不先 down：up --force-recreate 会自动 stop→remove→create，api 与 background
 #    由 compose 串行错开重建，避免所有容器同时停止的全停窗口
 #    AgentRunner overlay：分支含 docker-compose.agent-runner.yml 时叠加一并重建
@@ -243,7 +299,7 @@ fi
 #    agent2 的 runner-api 固定容器名须避免被其它 compose project 占用；worker
 #    使用 Compose project/service/副本序号命名，按 overlay 的 replicas 扩槽。
 #    三个宿主变量在此固定为 test 环境专属值，避免接错网络/目录。
-echo "[6] 重启后端服务..."
+echo "[5] 重启后端服务..."
 COMPOSE_FILES=(-f docker-compose.test.yml)
 if [ -f docker-compose.agent-runner.yml ]; then
     COMPOSE_FILES+=(-f docker-compose.agent-runner.yml)
@@ -274,19 +330,43 @@ if [ -f docker-compose.agent-runner.yml ]; then
 else
     echo "    未发现 AgentRunner overlay，仅主 compose"
 fi
-docker compose "${COMPOSE_FILES[@]}" up -d --force-recreate --remove-orphans --wait
+# --wait 只等主 API/background（2026-11-26 对齐生产 agent_update.sh 语义）：
+# runner 服务（runner-api/runner-worker/runner-monitor/heavy-tools）的
+# healthcheck（monitor start_period 4m、heavy-tools 60s）不再串进发布总时长
+compose_up "后端主服务重启（api/background）" up -d --force-recreate --remove-orphans --wait \
+    aid-agent-api aid-agent-background
+echo "    主服务已就绪（api/background Healthy）"
+
+# runner 服务重建使新代码生效；不带 --wait（与生产对齐，就绪靠下方 /health 探测告警）
+RUNNER_SERVICES=$(docker compose "${COMPOSE_FILES[@]}" config --services 2>/dev/null \
+    | grep -E '^runner|^heavy-tools' || true)
+if [ -n "$RUNNER_SERVICES" ]; then
+    # shellcheck disable=SC2086
+    compose_up "runner 服务重建" up -d --force-recreate $RUNNER_SERVICES
+    echo "    runner 服务已重建（不等待健康）: $(echo $RUNNER_SERVICES | tr '\n' ' ')"
+fi
+# runner-api 可达性探测（失败仅告警不阻断，重建后异步就绪）
+if docker exec aid-agent-api2 python -c \
+    "import urllib.request; urllib.request.urlopen('http://runner-api:8091/health', timeout=5)" \
+    2>/dev/null; then
+    echo "    runner-api 健康检查通过"
+else
+    echo "  警告：runner-api /health 暂不可达（重建后异步就绪，稍后 docker ps 核对），渠道对话可能短暂 RUNNER_SERVICE_UNAVAILABLE"
+fi
+step_done "重启后端"
 
 # 7. 施加资源限制（docker compose 非 swarm 会忽略 deploy.resources，改用 docker update
 #    显式施加 cgroup 限制；资源值在本脚本内维护，为唯一来源）
 #    runner-api 为轻量 IO 进程给 0.5C/512M；worker 限额由 overlay 每副本配置。
 #    容器不存在时（未启用 overlay 的分支）docker update 报错忽略。
-echo "[7] 施加容器资源限制..."
-docker update --cpus 1 --memory 1G --memory-reservation 512M aid-agent-api2
-docker update --cpus 0.5 --memory 512M --memory-reservation 256M aid-agent-background2
+echo "[6] 施加容器资源限制..."
+docker update --cpus 1 --memory 1G --memory-reservation 512M aid-agent-api2 >/dev/null
+docker update --cpus 0.5 --memory 512M --memory-reservation 256M aid-agent-background2 >/dev/null
 for c in aid-runner-api; do
-    docker update --cpus 0.5 --memory 512M --memory-reservation 256M "$c" 2>/dev/null \
+    docker update --cpus 0.5 --memory 512M --memory-reservation 256M "$c" >/dev/null 2>/dev/null \
         || echo "  跳过 $c（不存在）"
 done
+step_done "资源限制"
 
 # 8. 修复容器内 /tmp 与 /home/appuser/tmp 权限（运行时兜底）。
 #    /tmp 是 tmpfs 且模式选项在本机引擎不可靠，Dockerfile 的 chmod 不生效，
@@ -294,7 +374,7 @@ done
 #    的容器。/home/appuser/tmp 是 worker 的 TMPDIR：compose 挂 tmpfs 后按镜像
 #    目录模式落 755 root:root，gosu appuser 写不进会使 Playwright 渲染等报
 #    EACCES（2026-11-12 事故），必须恢复 appuser 属主。
-echo "[8] 修复容器 /tmp 与 /home/appuser/tmp 权限..."
+echo "[7] 修复容器 /tmp 与 /home/appuser/tmp 权限..."
 docker exec -u root aid-agent-api2 chmod 1777 /tmp 2>/dev/null \
     || echo "  警告：aid-agent-api2 /tmp chmod 失败"
 # 2026-11-13 池路由退役（B1）：worker 容器改为 Compose 副本序号命名
@@ -309,18 +389,58 @@ for c in $(docker ps --format '{{.Names}}' | grep -E '^agent2-runner-worker-[0-9
         echo "  警告：$c 权限修复失败（容器不存在或 exec 异常）"
     fi
 done
-docker exec -u root aid-agent-api2 ls -ld /tmp || true
+step_done "权限修复"
 
-# 9. 等待前端编译完成
-echo "[9] 等待前端编译完成..."
-if ! wait "$FRONTEND_PID"; then
-  echo "  错误：前端编译失败，详见 $BUILD_LOG"
+# 7.5 增量依赖安装转后台（2026-11-26）：与前端编译等待并行，两段互不依赖。
+#     整个安装循环放进子壳——wait -n 在子壳内只可见 pip 任务，不会误等前台
+#     FRONTEND_PID。注意：必须对本 compose project 全部同镜像容器逐个安装，
+#     docker exec 的安装只落在单容器可写层，其它容器不会继承；而 [5] 的
+#     --force-recreate 又会丢弃容器内既有安装（2026-11-20 rfc8785 事故）。
+#     彻底解法仍是定期重建镜像，使依赖固化进镜像层。
+echo "[7.5] 启动增量依赖安装（后台，与前端编译等待并行）..."
+PIP_PROJECT=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' aid-agent-api2 2>/dev/null || true)
+[ -z "$PIP_PROJECT" ] && PIP_PROJECT="${PWD##*/}"
+PIP_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=$PIP_PROJECT" \
+    --format '{{.Image}} {{.Names}}' | awk '$1 == "aid-agent-api:latest" {print $2}')
+if [ -z "$PIP_CONTAINERS" ]; then
+    echo "  警告：未匹配到同镜像容器，退回仅安装 aid-agent-api2"
+    PIP_CONTAINERS="aid-agent-api2"
+fi
+PIP_TMPDIR=$(mktemp -d)
+echo "    目标 $(echo $PIP_CONTAINERS | wc -w) 个容器（并发 4，后台）: $(echo $PIP_CONTAINERS | tr '\n' ' ')"
+(
+    PIP_RUNNING=0
+    for c in $PIP_CONTAINERS; do
+        ( docker exec -u root "$c" \
+              pip install --no-cache-dir -r /app/requirements.txt \
+              -i https://mirrors.cloud.tencent.com/pypi/simple \
+              --quiet --disable-pip-version-check || echo "$c" >> "$PIP_TMPDIR/failed" ) &
+        PIP_RUNNING=$((PIP_RUNNING + 1))
+        # 限制并发 4 个：9 个容器同时跑 pip 的内存峰值对测试机偏高
+        if [ "$PIP_RUNNING" -ge 4 ]; then
+            wait -n || true
+            PIP_RUNNING=$((PIP_RUNNING - 1))
+        fi
+    done
+    wait || true
+) &
+PIP_PID=$!
+step_done "pip后台启动"
+
+echo "[8] 等待前端校验与编译完成..."
+# 两个通道都要等（避免遗留孤儿进程），任一失败即中止且不切换 dist
+LANE_FAIL=""
+if ! wait "$LANE_A_PID"; then LANE_FAIL="typecheck/边界检查"; fi
+if ! wait "$LANE_B_PID"; then LANE_FAIL="${LANE_FAIL:+$LANE_FAIL }vite构建/产物校验"; fi
+if [ -n "$LANE_FAIL" ]; then
+  echo "  错误：前端失败环节 [$LANE_FAIL]，详见 $BUILD_LOG.a / $BUILD_LOG.b"
   echo "  后端已更新但前端仍为旧版本，请检查后重跑本脚本"
   exit 1
 fi
+step_done "等待前端"
 
 # 10. 原子切换 dist（同一文件系统内两步 mv，切换瞬间旧→新；nginx 走 /index.html 兜底）
-echo "[10] 原子切换前端 dist..."
+echo "[9] 原子切换前端 dist..."
 sudo rm -rf "$DIST_DIR.old"
 [ -d "$DIST_DIR" ] && mv "$DIST_DIR" "$DIST_DIR.old"
 mv "$DIST_DIR.new" "$DIST_DIR"
@@ -332,52 +452,27 @@ sudo rm -rf "$DIST_DIR.old"
 # 在后续 git 更新/排查时造成 Permission denied 干扰（2026-09-20 事故）
 sudo chown -R ubuntu:ubuntu "$DIST_DIR"
 sudo chmod 777 "$DIST_DIR" # dist 目录需要 777 权限，否则无法ftp上传微信验证文件
+step_done "dist切换"
 
-# 11. 增量安装 requirements.txt 中新增的依赖（快速更新脚本不重建镜像，
-#     新依赖不会自动安装；下次重建镜像后可移除此步骤）
-#     注意：api/background/runner-api/runner-worker/heavy-tools/runner-monitor 共用
-#     同一镜像，docker exec 的安装只落在单个容器的可写层，其它容器不会继承；而
-#     [6] 的 --force-recreate 又会丢弃容器内既有安装。因此必须对本 compose project
-#     内所有同镜像容器逐个安装，否则 Runner 侧运行时 import 新依赖直接失败
-#     （2026-11-20 事故：仅主 API 装了 rfc8785，4 个 Runner worker 全部缺包）。
-#     彻底解法仍是定期重建镜像，使依赖固化进镜像层。
-echo "[11] 增量安装新增依赖（本项目全部同镜像容器）..."
-PIP_PROJECT=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' aid-agent-api2 2>/dev/null || true)
-[ -z "$PIP_PROJECT" ] && PIP_PROJECT="${PWD##*/}"
-PIP_CONTAINERS=$(docker ps --filter "label=com.docker.compose.project=$PIP_PROJECT" \
-    --format '{{.Image}} {{.Names}}' | awk '$1 == "aid-agent-api:latest" {print $2}')
-if [ -z "$PIP_CONTAINERS" ]; then
-    echo "  警告：未匹配到同镜像容器，退回仅安装 aid-agent-api2"
-    PIP_CONTAINERS="aid-agent-api2"
+# 10. 等待增量依赖安装完成（[7.5] 后台启动，已与前端编译等待并行）
+echo "[10] 等待依赖安装完成..."
+if ! wait "$PIP_PID"; then
+    echo "  警告：pip 后台任务异常退出，见上方输出"
 fi
-PIP_TMPDIR=$(mktemp -d)
-PIP_RUNNING=0
-for c in $PIP_CONTAINERS; do
-    echo "    -> $c"
-    ( docker exec -u root "$c" \
-          pip install --no-cache-dir -r /app/requirements.txt \
-          -i https://mirrors.cloud.tencent.com/pypi/simple \
-          --quiet || echo "$c" >> "$PIP_TMPDIR/failed" ) &
-    PIP_RUNNING=$((PIP_RUNNING + 1))
-    # 限制并发 4 个：9 个容器同时跑 pip 的内存峰值对测试机偏高
-    if [ "$PIP_RUNNING" -ge 4 ]; then
-        wait -n || true
-        PIP_RUNNING=$((PIP_RUNNING - 1))
-    fi
-done
-wait || true
 if [ -s "$PIP_TMPDIR/failed" ]; then
     echo "  警告：以下容器依赖安装失败，对应功能可能不可用：$(tr '\n' ' ' < "$PIP_TMPDIR/failed")"
 else
     echo "    全部容器依赖安装完成"
 fi
 rm -rf "$PIP_TMPDIR"
+step_done "pip收尾"
 
 echo ""
 echo "更新完成！"
 echo "=========================================="
 ELAPSED=$(( $(date +%s) - START_TS ))
 echo "总耗时: $(( ELAPSED / 60 )) 分 $(( ELAPSED % 60 )) 秒"
+echo "分段耗时: $TIMING_LIST | 总计 ${ELAPSED}s"
 
 }
 

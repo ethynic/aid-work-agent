@@ -13,7 +13,8 @@ def is_interrupted_trace(trace: dict) -> bool:
         return False
     if trace.get("subagent_id"):
         return False
-    if trace.get("status") not in {"completed", "cancelled"}:
+    # superseded（被新消息取代，2026-11-26）与 cancelled 同类：渠道轮次展示语义一致
+    if trace.get("status") not in {"completed", "cancelled", "superseded"}:
         return False
     if trace.get("error_message") or trace.get("output"):
         return False

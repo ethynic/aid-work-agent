@@ -1,0 +1,17 @@
+# /etc/systemd/system/web-c-sig-demo2.service
+# 官网客服签名链接 demo 登录后端 2 号（聊易服务器托管，连接 agent2 测试环境）
+# 与 web-c-sig-demo.service（demo1）并存：不同文件、不同端口（8791 vs 8790）
+[Unit]
+Description=web_c signed-link demo2 login backend (Liaoyi host -> agent2)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/var/www/agent/www_static
+ExecStart=/usr/bin/python3 /var/www/agent/www_static/web_c_sig_demo2_server.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

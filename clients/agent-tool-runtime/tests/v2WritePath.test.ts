@@ -17,6 +17,7 @@ import { fakeProviderEntry, startTestStack } from './helpers/runtimeStack.js'
 import { FakeCloud } from './helpers/fakeCloud.js'
 import { ApiClient, ApiError } from '../src/apiClient.js'
 import { desktopLockName, deriveResourceKey } from '../src/desktopLock.js'
+import { ProviderCheckError } from '../src/providerManager.js'
 import type { ProviderManifest } from '../src/providers.js'
 
 /** v2 契约样例 manifest（仅测试注入；宪章 P1-D 前生产注册表不变） */
@@ -87,6 +88,37 @@ async function waitForOperationResult(stack: TestStack, id: string, label: strin
   )
   return stack.cloud.callsFor(id).find((c) => c.type === 'operation_result')!
 }
+
+test('插件首验失败保留 started 租约，写动作不申请许可、不进 journal，并回执确定未执行', async () => {
+  const checks: Array<{ key: string; atLaunch: boolean }> = []
+  const stack = await startTestStack({ providerEntries: { weixin: fakeProviderEntry() }, manifests: { weixin: V2_WEIXIN_MANIFEST },
+    providerOptions: { verifyProvider: async (key, _entry, atLaunch) => {
+      checks.push({ key, atLaunch }); throw new ProviderCheckError()
+    } },
+  })
+  try {
+    const args = v2Args()
+    const id = stack.cloud.enqueueInvocation('weixin_message_send_v2', args, { provider: 'weixin' })
+    const { payload } = await waitForOperationResult(stack, id, '首验失败的确定回执')
+    assert.equal(payload.code, 'PROVIDER_NOT_AVAILABLE')
+    assert.equal(payload.effect, 'none')
+    assert.equal(payload.phase, 'prepared')
+    assert.equal(payload.safe_to_retry, false)
+    assert.equal(payload.permit_id, undefined)
+    assert.equal(stack.cloud.callsFor(id).filter(call => call.type === 'started').length, 1)
+    assert.equal(stack.cloud.callsFor(id).some(call => call.type === 'write_authorize'), false)
+    assert.equal(existsSync(path.join(stack.dataDir, 'journal', `${id}.jsonl`)), false)
+    assert.equal(stack.providers.get('weixin').isRunning, false)
+    assert.deepEqual(checks, [{ key: 'weixin', atLaunch: false }])
+    await assert.rejects(stack.providers.get('weixin').ensureStarted(), ProviderCheckError,
+      'Direct launch without native helper must still honor the guard')
+    assert.deepEqual(checks[1], { key: 'weixin', atLaunch: true })
+    assert.equal(stack.providers.get('weixin').isRunning, false)
+  } finally {
+    await stack.stop()
+    rmSync(stack.dataDir, { recursive: true, force: true })
+  }
+})
 
 /** 回执日志出现早于 Runtime 收 2xx 执行 remove()——outbox 清空必须等待而非即时断言 */
 async function waitForOutboxDrained(stack: TestStack, label = 'outbox drained'): Promise<void> {

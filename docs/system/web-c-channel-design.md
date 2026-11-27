@@ -164,6 +164,7 @@ C 端流程：
 
 1. `POST /chat`：验签 -> 限流 -> 积分拦截 -> `get_or_create_session` -> 用户消息 `add_message`（`channel_messages`，role=user）-> `ChannelRunnerAgent.submit()` -> 返回 `runner_id`。
 2. `GET /runners/{runner_id}/events`：SSE 透传 Runner events，前端 token 级渲染。
+   - **过程状态克制呈现（2026-11-25 补）**：快照 `snapshot.progress`（`durable_control` 只保留最新一条 progress 事件文本，public_view 口径已透出）在前端渲染为单行状态位——正文出现前显示、正文出现即让位、替代式更新不留痕迹；经 `utils/webCProgress.ts` 的 `restrainedProgress` 克制化（过滤失败/澄清类、剥离 emoji 前缀、截断 40 字）。滚动跟随仅在用户处于底部时生效。SSE 事件帧本身仍无载荷，状态经 120ms 节流快照刷新获得，零后端改动。
 3. **终态落库（代理层职责）**：事件流出现 `completed` 时，读 Runner `/v1/runners/{runner_id}/channel-result` 的 output 与 public snapshot 的 `downloadableFiles`/`images` 投影（口径同 `runner_agent.py:222-232`），assistant 消息落 `channel_messages`。终态回复按会话与 `runner_id` 去重。用户消息与直接回复按会话、角色和 `client_request_id` 去重，同一次请求可保留两条消息。唯一索引仅匹配官网客服会话前缀，其他渠道继续使用各自的落库规则。SSE 断开后，下次拉取 `/sessions/{sid}/messages` 前触发补写检查。
 4. 提问等待（clarification）：以渠道文本化口径渲染（沿用 `ask_render` 的 single/segments 结构，web_c 归入 single 渠道组），用户以普通文本回复 -> 下一轮 `/chat` 走既有 reply control 路径（`submit()` 已含）。结构化表单交互列 Phase 2+ 升级项。
    - **反问落库（2026-11-19 补）**：`waiting` 非终态，SSE 不关闭、终态落库覆盖不到中途 ask_user；代理层在 `/chat` 返回 waiting、`GET /runners/{runner_id}` 轮询命中 waiting、`/sessions/{sid}/messages` 拉取前补写检查三处，把渠道文本化反问按 `kind=clarification` 落 `channel_messages`（幂等键 `clarify_{wait_id}`，复用 `uq_web_c_messages_client_request` 唯一部分索引），保证接待页与历史可见（含访客反问后关页场景）。

@@ -47,6 +47,7 @@ const DECLARED_TOOLS = new Set([
   'weixin_chat_latest',
   'weixin_group_daily_summary',
   'weixin_group_range_summary',
+  'weixin_friend_add',
 ])
 
 /** 调度声明：白名单工具按清单顺序一项 {name} */

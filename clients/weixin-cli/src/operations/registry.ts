@@ -13,6 +13,7 @@ import { createNameOperations } from './nameOperations.js'
 import { createWeixinChatLatestOperation } from './chatLatest.js'
 import { createWeixinGroupDailySummaryOperation } from './groupDailySummary.js'
 import { createWeixinGroupRangeSummaryOperation } from './groupRangeSummary.js'
+import { createWeixinFriendAddOperation } from './friendAdd.js'
 import type { WeixinOperation } from './types.js'
 
 export interface OperationEntry {
@@ -26,6 +27,7 @@ export interface OperationEntry {
 }
 
 const nameOperations = createNameOperations()
+const friendAdd = createWeixinFriendAddOperation()
 export const OPERATIONS: Record<string, OperationEntry> = {
   weixin_probe: { operation: createWeixinProbeOperation(), cli: { write: false } },
   weixin_chat_search: { operation: createWeixinChatSearchOperation(), cli: { write: false } },
@@ -36,6 +38,14 @@ export const OPERATIONS: Record<string, OperationEntry> = {
   weixin_chat_latest: { operation: createWeixinChatLatestOperation(), cli: { write: false } },
   weixin_group_daily_summary: { operation: createWeixinGroupDailySummaryOperation(), cli: { write: false } },
   weixin_group_range_summary: { operation: createWeixinGroupRangeSummaryOperation(), cli: { write: false } },
+  weixin_friend_add: {
+    operation: {
+      name: friendAdd.name,
+      execute: ({ identifier, verify_message }, context) =>
+        friendAdd.execute({ identifier, verifyMessage: verify_message }, context),
+    },
+    cli: { write: true },
+  },
 }
 
 export const OPERATION_NAMES = Object.keys(OPERATIONS)

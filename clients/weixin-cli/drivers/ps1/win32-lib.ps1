@@ -34,8 +34,15 @@ public static class WeixinProbeWin32 {
  [DllImport("user32.dll")] public static extern void keybd_event(byte k,byte s,uint f,IntPtr e);
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out RECT r);
  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
+ [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
+ [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+ [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h,uint flags);
+ [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vk);
  [DllImport("user32.dll")] public static extern void mouse_event(uint f,uint x,uint y,uint d,IntPtr e);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern bool SetProp(IntPtr h,string name,IntPtr value);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr GetProp(IntPtr h,string name);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr RemoveProp(IntPtr h,string name);
  [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h,ref POINT p);
  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint f);
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c);
@@ -43,7 +50,7 @@ public static class WeixinProbeWin32 {
  [DllImport("user32.dll")] public static extern bool AreDpiAwarenessContextsEqual(IntPtr a,IntPtr b);
  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
  [DllImport("user32.dll",SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,UIntPtr w,IntPtr l,uint f,uint t,out UIntPtr r);
- // SendInput：逐字输入 Unicode 字符（KEYEVENTF_UNICODE 不依赖 IME/键盘布局）
+ // SendInput：系统鼠标输入和不依赖 IME/键盘布局的 Unicode 按键输入
  [DllImport("user32.dll",SetLastError=true)] public static extern uint SendInput(uint n, INPUT[] p, int cb);
  public struct RECT { public int Left,Top,Right,Bottom; }
  public struct POINT { public int X, Y; }
@@ -51,6 +58,15 @@ public static class WeixinProbeWin32 {
  [StructLayout(LayoutKind.Explicit)] public struct INPUTUNION { [FieldOffset(0)] public KEYBDINPUT ki; [FieldOffset(0)] public MOUSEINPUT mi; }
  [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
  [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT { public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+ public static uint SendLeftClick() {
+    var events = new INPUT[2];
+    events[0].u.mi.dwFlags = 0x0002; // MOUSEEVENTF_LEFTDOWN
+    events[1].u.mi.dwFlags = 0x0004; // MOUSEEVENTF_LEFTUP
+    int size = Marshal.SizeOf(typeof(INPUT));
+    uint sent = SendInput(2, events, size);
+    if (sent == 1) SendInput(1, new[] { events[1] }, size);
+    return sent;
+ }
 }
 "@)
 }

@@ -695,6 +695,11 @@ class UploadConfirmItem(BaseModel):
 class UploadConfirmRequest(BaseModel):
     file_id: str = Field(..., description="上传阶段返回的 file_id")
     sheets: List[UploadConfirmItem] = Field(..., description="逐 sheet 决策")
+    filename: Optional[str] = Field(
+        default=None,
+        max_length=200,
+        description="用户原始文件名（上传阶段 needs_confirmation 事件回传），仅用于展示与表名提示",
+    )
 
 
 @router.post("/upload/confirm")
@@ -729,7 +734,15 @@ async def confirm_upload(
     if not src_path.resolve().is_relative_to(base_dir):
         return _error_response("源文件不存在或已失效，请重新上传", status_code=404)
 
-    filename = src_path.name
+    # 优先使用用户原始文件名（上传阶段经 needs_confirmation 回传）；
+    # 未携带或形态异常时回退为持久化文件名（旧前端兼容），仅丢展示名不影响功能
+    filename = (payload.filename or "").strip()
+    filename = Path(filename).name  # 只取 basename，杜绝路径分隔符
+    if not filename or filename in (".", "..") or len(filename) > 200:
+        filename = src_path.name
+    # 后缀与源文件不一致时以源文件后缀为准（防止展示名与实际可下载文件类型矛盾）
+    if src_path.suffix and Path(filename).suffix.lower() != src_path.suffix.lower():
+        filename = Path(filename).stem + src_path.suffix
     decisions = [
         {"sheet_name": item.sheet_name, "header_row": item.header_row, "selected": item.selected}
         for item in payload.sheets

@@ -320,6 +320,58 @@ def load_sso_configs(tenant_id: str) -> List[Dict[str, Any]]:
 # ============== 通用模板 fallback 与 ${VAR} 加载期渲染 ==============
 
 
+def _ensure_db_pool() -> None:
+    """skill 脚本子进程惰性初始化 DB 池
+
+    08e40836 起 skill 子进程 sitecustomize 不再启动期初始化 DB 池（改为首个
+    LLM provider 调用时经 _ensure_subprocess_runtime 惰性化），非 LLM 技能
+    命令默认无 DB 池。本模块被技能脚本（load_api_config.py 等）间接用于读
+    subagent_definitions / tenant_agent_instances / subagent_env_vars，这里
+    按既有先例（case_matching_service / sms_cli）惰性补初始化；初始化失败
+    （无 DB 环境的测试等）保持原降级语义，由调用方 try/except 兜底。
+    """
+    try:
+        from src.db.database import get_postgres_pool, init_postgres_pool
+
+        if get_postgres_pool() is None:
+            init_postgres_pool()
+    except Exception as e:
+        logger.debug(f"[tenant_api_doc] 惰性初始化 DB 池失败（按无 DB 环境降级）: {e}")
+
+
+# ============== DB 访问状态追踪（区分「租户未配置」与「配置读取失败」） ==============
+#
+# 2026-11-26 教训：08e40836 把 skill 子进程 DB 池惰性化后，本模块 DB 读静默
+# 降级，load_api_config 的 configured=false 与「租户真没配置」不可区分，
+# 回归被伪装成配置问题排查了半天。此处记录 resolve 期间的 DB 访问失败，
+# load_api_doc_with_status 据此把 db_unavailable 与 no_doc 分开上报。
+
+_db_access_error: Optional[str] = None
+_db_access_warned = False
+
+
+def _record_db_access_error(context: str, error: Exception) -> None:
+    """记录一次 DB 访问失败；每进程首次升 warning（主日志可见），后续 debug 防刷屏"""
+    global _db_access_error, _db_access_warned
+    _db_access_error = f"{context}: {error}"
+    if not _db_access_warned:
+        _db_access_warned = True
+        logger.warning(f"[tenant_api_doc] DB 访问失败（本进程首次告警）: {_db_access_error}")
+    else:
+        logger.debug(f"[tenant_api_doc] DB 访问失败: {_db_access_error}")
+
+
+def reset_db_access_error() -> None:
+    """清空 DB 访问失败标记（resolve 入口调用，避免读到上次调用的残留）"""
+    global _db_access_error
+    _db_access_error = None
+
+
+def get_db_access_error() -> Optional[str]:
+    """返回本进程最近一次 resolve 期间的 DB 访问失败描述；无失败时为 None"""
+    return _db_access_error
+
+
 def _subagent_allowed_skills(subagent_name: str) -> List[str]:
     """子智能体技能白名单（基础技能名，与 SKILL.md name / agent.py 过滤口径一致）
 
@@ -328,6 +380,7 @@ def _subagent_allowed_skills(subagent_name: str) -> List[str]:
     """
     if not subagent_name:
         return []
+    _ensure_db_pool()
     try:
         from src.db.subagent_definition_db import SubagentDefinitionDB
 
@@ -337,7 +390,7 @@ def _subagent_allowed_skills(subagent_name: str) -> List[str]:
             if allowed:
                 return [str(s) for s in allowed]
     except Exception as e:
-        logger.debug(f"[tenant_api_doc] 读取 DB 智能体技能白名单失败 agent={subagent_name}: {e}")
+        _record_db_access_error(f"读取 DB 智能体技能白名单失败 agent={subagent_name}", e)
     try:
         # 用 cached_builtin_subagent_registry（带目录构造 + 进程级缓存），不要用
         # src.subagents.registry.subagent_registry 全局单例——后者无参构造不加载，
@@ -367,6 +420,7 @@ def resolve_doc_text(
     （如 sales-assistant）同样适用。allowed_skills 传入时不再逐智能体查库。
     副本实例先解析为父定义名（文档与技能白名单均按父定义读取）。
     """
+    reset_db_access_error()
     subagent_name = resolve_base_agent_id(tenant_id, subagent_name)
     tenant_doc = load_tenant_doc(tenant_id, subagent_name)
     if tenant_doc is not None:
@@ -404,6 +458,7 @@ def resolve_base_agent_id(tenant_id: str, subagent_name: str) -> str:
     """
     if not subagent_name or not tenant_id:
         return subagent_name
+    _ensure_db_pool()
     try:
         from src.db.tenant_agent_instance_db import TenantAgentInstanceDB
 
@@ -412,7 +467,7 @@ def resolve_base_agent_id(tenant_id: str, subagent_name: str) -> str:
         if row and base and row.get("agent_id") != base:
             return str(base)
     except Exception as e:
-        logger.debug(f"[tenant_api_doc] 解析副本实例父定义失败 tenant={tenant_id}, agent={subagent_name}: {e}")
+        _record_db_access_error(f"解析副本实例父定义失败 tenant={tenant_id}, agent={subagent_name}", e)
     return subagent_name
 
 
@@ -427,6 +482,7 @@ def load_tenant_env_vars(tenant_id: str, subagent_name: str = "") -> Dict[str, s
     db_tid = db_tenant_id(tenant_id)
     base_name = resolve_base_agent_id(tenant_id, subagent_name) if subagent_name else ""
     env_vars: Dict[str, str] = {}
+    _ensure_db_pool()
     try:
         from src.db.subagent_env_var import SubagentEnvVarDB
 
@@ -435,7 +491,7 @@ def load_tenant_env_vars(tenant_id: str, subagent_name: str = "") -> Dict[str, s
                 if var.get("var_name") and var.get("var_value"):
                     env_vars[var["var_name"]] = var["var_value"]
     except Exception as e:
-        logger.warning(f"[tenant_api_doc] 读取租户环境变量失败 tenant={tenant_id}: {e}")
+        _record_db_access_error(f"读取租户环境变量失败 tenant={tenant_id}", e)
     return env_vars
 
 
@@ -446,6 +502,7 @@ def load_tenant_env_vars_map(tenant_id: str) -> Dict[str, Dict[str, str]]:
     不再合并租户级 `*` 兜底。列表场景批量预取，避免逐智能体 N+1 查询。
     """
     grouped: Dict[str, Dict[str, str]] = {}
+    _ensure_db_pool()
     try:
         from src.db.subagent_env_var import SubagentEnvVarDB
 
@@ -457,7 +514,7 @@ def load_tenant_env_vars_map(tenant_id: str) -> Dict[str, Dict[str, str]]:
                 continue
             grouped.setdefault(agent, {})[name] = value
     except Exception as e:
-        logger.warning(f"[tenant_api_doc] 读取租户环境变量失败 tenant={tenant_id}: {e}")
+        _record_db_access_error(f"读取租户环境变量失败 tenant={tenant_id}", e)
     return grouped
 
 
@@ -527,6 +584,35 @@ def load_rendered_doc(
     if doc is None:
         return None
     return render_doc_placeholders(doc, tenant_id, subagent_name, env_vars=env_vars)
+
+
+def load_api_doc_with_status(
+    tenant_id: str,
+    subagent_name: str,
+) -> Dict[str, Any]:
+    """带状态的接口文档加载入口（技能脚本专用）
+
+    把「租户真没配置」与「配置读取失败（基础设施故障）」区分开：
+    - ok：文档加载且非凭证占位符渲染齐全
+    - db_unavailable：resolve 期间有 DB 访问失败且未能拿到文档——技能脚本
+      子进程 DB 池故障等回归应落到这里，而不是伪装成租户未配置
+      （2026-11-26 08e40836 回归教训）
+    - missing_env_vars：文档就绪但非凭证占位符（如 APP_ID）未渲染齐
+    - no_doc：租户未上传文档、技能白名单无匹配模板，且无 DB 故障
+
+    注意：文档已成功加载时即使有 DB 失败也返回 ok（白名单经内置 registry
+    兜底成功的合法路径），DB 失败仅在「没拿到文档」时才作为原因上报。
+    """
+    doc = load_rendered_doc(tenant_id, subagent_name)
+    unresolved = find_unresolved_placeholders(doc) if doc else []
+    if doc is not None and not unresolved:
+        return {"status": "ok", "content": doc}
+    db_error = get_db_access_error()
+    if db_error:
+        return {"status": "db_unavailable", "content": None, "error": db_error}
+    if doc is not None:
+        return {"status": "missing_env_vars", "content": None, "unresolved": unresolved}
+    return {"status": "no_doc", "content": None}
 
 
 def find_unresolved_placeholders(doc_text: str) -> List[str]:

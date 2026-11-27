@@ -149,6 +149,12 @@ export interface BootstrapResponse {
   allow_attachment?: boolean
   /** 历史会话入口开关（渠道 config，默认 false：不显示右上角「历史会话」按钮） */
   show_history?: boolean
+  /** 页面标题（渠道 config，缺省空串：保持系统默认标题不覆盖） */
+  title?: string
+  /** 副标题（渠道 config，缺省空串：C 端兜底显示「智能助手」） */
+  subtitle?: string
+  /** 自定义 Logo（渠道 config，data URL；空串：系统默认图标） */
+  logo?: string
   identity: { mode: string; channel_user_id: string; display_name?: string | null }
   subagent: { agent_id: string; name: string } | null
   sessions: { session_id: string; subagent_id: string; updated_at: string; last_message_at: string }[]
@@ -217,15 +223,27 @@ export function cancelRunner(
 export interface RunnerSnapshot {
   runner_id: string
   status: string
-  snapshot: { output?: string; images?: unknown[]; downloadableFiles?: { file_id: string; name?: string; file_name?: string; size?: number; mime_type?: string; download_url?: string }[]; waiting?: Record<string, unknown> }
+  /** progress = Runner 最新一条过程状态（单行文本，public_view 口径），用于流式期间克制的过程呈现 */
+  snapshot: { output?: string; progress?: string; images?: unknown[]; downloadableFiles?: { file_id: string; name?: string; file_name?: string; size?: number; mime_type?: string; download_url?: string }[]; waiting?: Record<string, unknown> }
   result?: { output?: string; images?: unknown[] } | null
   waiting_text?: string
+  /** 终态 cancelled 的取消来源（public_view 白名单透出）：superseded_by_new_message =
+   * 被其他端新消息取代；用户主动停止不透出，聊天页据此显示取代提示 */
+  cancel_reason?: string
 }
 
 export function getRunner(
   tenantId: string, configId: string, identity: IdentityQuery, runnerId: string
 ): Promise<{ success: boolean; runner: RunnerSnapshot }> {
   return request(identityPath(tenantId, configId, identity, `/runners/${encodeURIComponent(runnerId)}`))
+}
+
+/** 会话活跃执行查询：刷新/重进后恢复观察用（无活跃执行时 runner_id 为 null） */
+export function getActiveRunner(
+  tenantId: string, configId: string, identity: IdentityQuery, sessionId: string
+): Promise<{ success: boolean; runner_id: string | null; status: string | null }> {
+  return request(identityPath(tenantId, configId, identity,
+    `/sessions/${encodeURIComponent(sessionId)}/active-runner`))
 }
 
 export interface SessionSummary {

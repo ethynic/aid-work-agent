@@ -13,6 +13,9 @@ class AttachmentAssembler:
     _MULTIMODAL_MAX_IMAGES = 3
     _MULTIMODAL_MAX_BYTES = 5 * 1024 * 1024
     _IMAGE_ARTIFACT_PREFIX = "image_"
+    # 历史附件重物化上限（2026-11-27）：控制单次执行的副本磁盘占用与 files_context 噪音
+    _HISTORY_MAX_FILES = 10
+    _HISTORY_MAX_TOTAL_BYTES = 100 * 1024 * 1024
 
     def _read_multimodal_image(self, path: str) -> Optional[Tuple[str, str, bytes]]:
         """Read one bounded image; returns (mime, sha256, data) or None when unusable."""
@@ -170,9 +173,103 @@ class AttachmentAssembler:
             logger.opt(exception=True).warning(f"[SUBAGENT] 附件图片注册 file_id 失败（不阻断装配）: {e}")
             return None
 
-    def prepare(self, user_input, attachments, identity, skill_registry):
-        import base64
+    def _create_session_workspace(self, identity):
+        """创建执行级 skill_ws_ 工作区（当前附件物化与历史附件重物化共用）。
+
+        工作目录必须落在租户存储目录下，避免在项目根目录产生 skill_ws_* 散落目录。
+        """
         import tempfile
+        ws_tenant_id = identity.tenant_id
+        ws_root = self.workspace_root
+        if ws_root is not None:
+            ws_root.mkdir(parents=True, exist_ok=True)
+        elif ws_tenant_id:
+            from src.core.storage import ensure_tenant_storage_dir
+            ws_root = os.path.abspath(ensure_tenant_storage_dir(ws_tenant_id, "temp"))
+        workspace = Path(tempfile.mkdtemp(prefix="skill_ws_", dir=ws_root))
+        logger.info(f"Created session workspace: {workspace}")
+        return workspace
+
+    def _materialize_history_attachments(self, history_attachments, session_workspace,
+                                         identity, current_attachments):
+        """跨执行历史附件重物化（2026-11-27）。
+
+        背景：历史消息从 DB 重载只保留 content 文本，先前轮次（含被新消息取代
+        的中断轮）用户上传的附件实体随旧工作区清理删除，新执行的模型只能答
+        「找不到文件」。本方法把历史 user 消息的附件（DB 元数据含 file_id）从
+        租户存储重新复制到当前工作区 history_files/ 子目录，并在 files_context
+        中给出路径，模型可直接引用。
+
+        语义约束：
+        - 仅 best-effort：file_id 解析失败（Redis TTL 过期/文件已清理）跳过该条，
+          不阻断装配；与 workspace_path_rewriter 的失效标记同一 fail-open 方向。
+        - 与当前消息附件按 file_id 去重（当前消息落库后其元数据也在历史窗口内，
+          不去重会双份物化）。
+        - 上限 _HISTORY_MAX_FILES / _HISTORY_MAX_TOTAL_BYTES，控制磁盘与噪音。
+        - 只复制不改写历史原文（trace/审计依赖原文），与 workspace_path_rewriter
+          「只改上下文投影不改 DB」同一原则。
+        """
+        try:
+            current_file_ids = {str(ref.get("file_id")) for ref in (current_attachments or [])
+                                if ref.get("file_id")}
+            seen = set()
+            selected = []
+            for item in history_attachments or []:
+                file_id = str(item.get("file_id") or "")
+                if not file_id or file_id in seen or file_id in current_file_ids:
+                    continue
+                seen.add(file_id)
+                selected.append(item)
+            if not selected:
+                return ""
+            from src.core.redis_client import redis_client
+            from src.core.storage import resolve_scoped_uploaded_file, configured_storage_root
+            history_dir = session_workspace / "history_files"
+            entries = []
+            total_bytes = 0
+            storage_root = configured_storage_root()
+            for item in selected:
+                if len(entries) >= self._HISTORY_MAX_FILES:
+                    break
+                file_id = item["file_id"]
+                info = redis_client.hgetall(redis_client.make_key("uploaded_file", file_id))
+                resolved = resolve_scoped_uploaded_file(
+                    file_id, identity.tenant_id, storage_root=storage_root, metadata=info)
+                if not resolved or not resolved.get("path"):
+                    logger.debug(f"[SUBAGENT] 历史附件已失效跳过 file_id={file_id}")
+                    continue
+                size = int(resolved.get("size") or 0)
+                if total_bytes + size > self._HISTORY_MAX_TOTAL_BYTES:
+                    logger.info(f"[SUBAGENT] 历史附件总量超上限，停止重物化已选 {len(entries)} 个")
+                    break
+                history_dir.mkdir(parents=True, exist_ok=True)
+                target = history_dir / Path(resolved["path"]).name
+                if target.exists():
+                    continue
+                shutil.copyfile(resolved["path"], target)
+                total_bytes += size
+                entries.append({
+                    "name": item.get("name") or target.name,
+                    "path": str(target),
+                    "size": size,
+                })
+            if not entries:
+                return ""
+            lines = ["", "", "**📎 Historical attachments (from earlier messages in this session, re-materialized to current workspace):**"]
+            for f in entries:
+                lines.append(f"- File: `{f['name']}`")
+                lines.append(f"  Full path: `{f['path']}`")
+                lines.append(f"  Size: {f['size']} bytes")
+            lines.append("以上文件来自本会话较早的用户消息，如需处理请直接使用上述路径；无法恢复的历史文件已省略，必要时请用户重新上传。")
+            logger.info(f"[SUBAGENT] 历史附件重物化 {len(entries)} 个 (total {total_bytes} bytes)")
+            return "\n".join(lines)
+        except Exception as e:
+            # 重物化为增强能力，任何异常不阻断执行装配
+            logger.opt(exception=True).warning(f"[SUBAGENT] 历史附件重物化失败（不阻断装配）: {e}")
+            return ""
+
+    def prepare(self, user_input, attachments, identity, skill_registry, history_attachments=None):
+        import base64
         enhanced_input = user_input
         auto_loaded_skill = None
         uploaded_files_info = []
@@ -188,27 +285,18 @@ class AttachmentAssembler:
                     att_url = att.get("url", "")
                     att_mime = att.get("mime_type", "")
                     att_content = att.get("content", "")
-                
+
                     attachment_info.append(f"- {att_name} ({att_type}, {att_mime or 'unknown type'})")
-                
+
                     if skill_registry:
                         matched_skill = skill_registry.match_by_file(att_name)
                         if matched_skill:
                             auto_loaded_skill = matched_skill
                             logger.info(f"Auto-matched skill '{matched_skill}' for file: {att_name}")
-                
+
                     if att_content or att_url:
                         if session_workspace is None:
-                            # 工作目录必须落在租户存储目录下，避免在项目根目录产生 skill_ws_* 散落目录
-                            ws_tenant_id = identity.tenant_id
-                            ws_root = self.workspace_root
-                            if ws_root is not None:
-                                ws_root.mkdir(parents=True,exist_ok=True)
-                            elif ws_tenant_id:
-                                from src.core.storage import ensure_tenant_storage_dir
-                                ws_root = os.path.abspath(ensure_tenant_storage_dir(ws_tenant_id, "temp"))
-                            session_workspace = Path(tempfile.mkdtemp(prefix="skill_ws_", dir=ws_root))
-                            logger.info(f"Created session workspace: {session_workspace}")
+                            session_workspace = self._create_session_workspace(identity)
                     
                         file_path = session_workspace / att_name
                     
@@ -253,9 +341,20 @@ class AttachmentAssembler:
                             files_context += f"  Full path: `{f['path']}`\n"
                             files_context += f"  Size: {f['size']} bytes\n"
                         files_context += "\n**IMPORTANT: When delegating to subagent, include the file paths above in task_description!**\n"
-                
+
                     enhanced_input = f"{user_input}\n\n[Attachments]\n" + "\n".join(attachment_info) + files_context
-        
+
+            # 跨执行历史附件重物化（2026-11-27）：当前消息无附件但历史窗口有附件
+            # 时也创建工作区；与当前附件按 file_id 去重，best-effort 不阻断装配
+            history_context = ""
+            if history_attachments:
+                if session_workspace is None:
+                    session_workspace = self._create_session_workspace(identity)
+                history_context = self._materialize_history_attachments(
+                    history_attachments, session_workspace, identity, attachments)
+                if history_context:
+                    enhanced_input = f"{enhanced_input}{history_context}"
+
 
             injection = ""
             if auto_loaded_skill:
