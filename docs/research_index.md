@@ -6,6 +6,7 @@
 
 | 调研主题 | 文档 | 关联功能 |
 |---------|------|---------|
+| 微信 UIA 控件树间歇不可读 | [真机实验](research/weixin-uia-intermittent-20261126.md) | 微信 4.2.1.10 的好友只查和关窗未复现控件树丢失。 |
 | 通用浏览器工具重构选型 | [调研](research/browser-tool-rebuild-research.md) | 开源执行器选型、本机可见 Chrome 与 MCP 接入验证。 |
 | 就业咨询智能体客户数据库同步方案 | [调研](research/employment-agent-db-sync-research.md) | 2026-11-17 定稿（§7 现行方案）：宏陶模式两 module（lyjy_employment+sccy_policy）纯 KB 路线，六分类映射表定版；deadline→expires_at 检索层归零作废滞后；目录全量+内容增量双层 run；岗位电话直接给、求职者 PII 零同步；区域匹配+iframe 嵌官网。开发已立项：[计划](plans/plan-employment-kb-sync.md)。 |
 | 就业咨询智能体关联库表数据字典 | [数据字典](research/employment-agent-db-data-dictionary.md) | 2026-11-11：只读探查 gt_lyjy（聊易就业）与 gt_sccy（水城创业网），筛出 85 张关联表含字段类型与注释；两库无共享主键靠手机号/身份证关联，缺口为机器人会话表与意向/短板回流画像表。 |
