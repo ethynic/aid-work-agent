@@ -102,10 +102,34 @@ function Assert-WeixinFriendFrameUnchanged($Window, $Frame) {
     Throw-DriverError 'UI_CHANGED' '微信窗口内容在识别期间发生变化，无法确认当前操作对象'
 }
 
-function Click-WeixinFriendPoint($Window, $Frame, $Point, [int64]$MenuOwner = 0) {
+function Click-WeixinFriendPoint($Window, $Frame, $Point, [int64]$MenuOwner = 0, $WriteStarted = $null) {
     $position = Get-WeixinFriendPoint $Frame $Point
     Assert-WeixinFriendFrame $Window $Frame $MenuOwner
-    Send-WeixinPostMessageClick -Hwnd $Window.Hwnd @position
+    if (([WeixinProbeWin32]::GetAsyncKeyState(0x01) -band 0x8000) -ne 0) {
+        Throw-DriverError 'UI_CHANGED' '鼠标左键已按下，已停止微信点击'
+    }
+    if (-not [WeixinProbeWin32]::SetCursorPos($position.ScreenX, $position.ScreenY)) {
+        Throw-DriverError 'UI_CHANGED' '无法移动光标到微信操作位置'
+    }
+    Assert-WeixinFriendFrame $Window $Frame $MenuOwner
+    $cursor = New-Object WeixinProbeWin32+POINT
+    if (-not [WeixinProbeWin32]::GetCursorPos([ref]$cursor) -or
+        $cursor.X -ne $position.ScreenX -or $cursor.Y -ne $position.ScreenY) {
+        Throw-DriverError 'UI_CHANGED' '光标已离开微信操作位置，已停止点击'
+    }
+    $hit = [WeixinProbeWin32]::WindowFromPoint($cursor)
+    if ([WeixinProbeWin32]::GetAncestor($hit, 2).ToInt64() -ne $Window.Hwnd) { # GA_ROOT
+        Throw-DriverError 'UI_CHANGED' '光标位置未命中本轮微信窗口，已停止点击'
+    }
+    if (([WeixinProbeWin32]::GetAsyncKeyState(0x01) -band 0x8000) -ne 0) {
+        Throw-DriverError 'UI_CHANGED' '鼠标左键已按下，已停止微信点击'
+    }
+
+    # 一旦投递写入点击，只有明确没有插入事件时才可以报告未提交。
+    if ($WriteStarted) { $WriteStarted.Value = $true }
+    $sent = [WeixinProbeWin32]::SendLeftClick()
+    if ($sent -eq 0 -and $WriteStarted) { $WriteStarted.Value = $false }
+    if ($sent -ne 2) { Throw-DriverError 'UI_CHANGED' '微信鼠标点击未完整投递' }
 }
 
 function Set-WeixinFriendField($Window, [string]$Text) {
@@ -286,13 +310,10 @@ function Invoke-WeixinFriendAdd([string]$Identifier, [AllowNull()][string]$Verif
             default { Throw-DriverError 'UI_CHANGED' '无法确认当前微信搜索结果，已停止申请' }
         }
 
-        $addPoint = Get-WeixinFriendPoint $classification.Frame $classification.Result.add
-        Assert-WeixinFriendFrame $search $classification.Frame
         if (Find-WeixinFriendDialog $main.ProcessId $applyTitle) {
             Throw-DriverError 'UI_CHANGED' '微信好友申请窗口已被打开'
         }
-        $openingApplication = $true
-        Send-WeixinPostMessageClick -Hwnd $search.Hwnd @addPoint
+        Click-WeixinFriendPoint $search $classification.Frame $classification.Result.add -WriteStarted ([ref]$openingApplication)
         $apply = Wait-WeixinFriendDialog $main.ProcessId $applyTitle
         if (-not $apply) {
             # Some accounts do not require verification. An absent form alone cannot prove the outcome.
@@ -321,9 +342,7 @@ Return {"verify":{"x":int,"y":int}|null, "confirm":{"x":int,"y":int}|null}.
             Click-WeixinFriendPoint $apply $frame $form.verify
             Set-WeixinFriendField $apply $VerifyMessage
         }
-        Assert-WeixinFriendFrame $apply $frame
-        $submitted = $true
-        Send-WeixinPostMessageClick -Hwnd $apply.Hwnd @confirm
+        Click-WeixinFriendPoint $apply $frame $form.confirm -WriteStarted ([ref]$submitted)
         Start-Sleep -Seconds 5
         if ((Find-WeixinFriendDialog $main.ProcessId $applyTitle) -or
             (Get-WeixinFriendSearchState $search $Identifier).Result.state -cnotin @('pending', 'friend')) {

@@ -139,6 +139,8 @@ get_url、official_account_follow）未产品化——实际方向转向会话�
 
 ## 12. 本机添加好友
 
+好友流程的鼠标操作先用 SetCursorPos 移动 Windows 光标，再用 SendInput 投递一对左键按下与松开事件。驱动在移动前后核对窗口身份、前台和截图坐标范围，确认实际光标仍在目标位置、命中本轮目标窗口或其子控件后才点击。窗口被覆盖、前台改变或光标偏离时停止。好友操作在当前可交互的 Windows 桌面执行，坐标缓存、关窗归属及申请结果确认沿用原有行为。参见[开发计划](../../plans/plan-weixin-agent-friend-requests.md#phase-6-好友流程使用-windows-系统鼠标输入)。
+
 `aid-weixin add --domain friend --identifier <手机号或微信号> [--verify-message <验证语>] [--json]` 每次处理一个明确的标识。省略验证语时保留微信预填内容。操作复用 CLI renderer、统一 `OperationResult`、桌面互斥及 PowerShell Win32 驱动，要求当前微信已登录且窗口可交互。
 
 操作顺序为主窗口「+」→「添加朋友」→输入修剪后的标识并回车→核定当前搜索结果。弹窗按微信进程与准确标题识别。坐标从当前窗口的截图获取，点击前检查坐标范围及窗口身份。在模型等待期间，用户可能在同一窗口换搜目标，因此模型返回后还需本地重拍并核对搜索窗口内容。初始结果已是好友或明确显示已发送申请时返回 `effect=none`，查无结果返回 `TARGET_NOT_FOUND`。
