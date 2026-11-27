@@ -30,7 +30,7 @@ const USAGE = `aid-weixin — 微信操作 CLI / MCP Provider（M2）
                             微信全局搜索好友/群（只读，返回带 target_ref 的结果列表）
   send --domain chat --target-ref <ref> --text <文本>
                             向目标发送 1 条文本消息（写动作，发送后校验，失败不自动重试）
-  add --domain friend --identifier <手机号或微信号> [--verify-message <验证语>] [--json]
+  add --domain friend --identifier <手机号或微信号> [--verify-message <验证语> | --search-only] [--json]
                             提交一条微信好友申请，视觉定位使用服务端计费代理
   read --domain chat-history --target-name <当前会话全名> [--since-days N] [--max-pages N]
                             在本机读取已打开会话的聊天记录

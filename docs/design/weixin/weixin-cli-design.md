@@ -145,7 +145,9 @@ get_url、official_account_follow）未产品化——实际方向转向会话�
 
 点击「添加到通讯录」后，如果出现申请窗口则填写验证语并点击一次「确定」。当前标识的搜索状态明确显示申请已发送时返回 `request_sent`，微信确认直接添加为好友时返回 `friend_added`，两者均为 `effect=applied`。写入步骤后未能确认时返回 `effect=unknown`，调用方不得自动重试。
 
-视觉定位强制使用当前微信 CLI 激活绑定及 `POST /api/client/v1/llm/chat` 的现有模型和用量计费路径。新入口不写 Workbuddy 的坐标缓存或联系人日志。微信 CLI 负责产生本机回执，当前阶段可由本机终端调用。MCP 工具公开及 Runtime 调度按第 7 节在沙箱写验收后单独登记。
+视觉定位强制使用当前微信 CLI 激活绑定及 `POST /api/client/v1/llm/chat` 的现有模型和用量计费路径。新入口不写 Workbuddy 的坐标缓存或联系人日志。微信 CLI 负责产生本机回执。0.1.4 起，同一操作通过签名工具 weixin_friend_add 接入连接中心。0.1.5 起，已配对 Runtime 使用设备凭证调用[好友视觉定位](../../system/runner-desktop-runtime-integration-contract.md#微信视觉使用设备配对)，复用既有模型和租户计费。终端 add 的 --search-only 在查找结果处停住，保留微信搜索窗口。服务端为用户提交的批次创建逐目标调用，Runtime 在选定设备串行执行。签名与回执见[微信好友申请共同检查点](../../system/runner-desktop-runtime-integration-contract.md#微信好友申请共同检查点)。
+
+微信 CLI 0.1.6 的批量执行在本机缓存加号、菜单项和搜索输入框的窗口内相对坐标。按版本、布局及控件证据核对缓存，以安全确认后的重新定位替换失效缓存。每个目标的搜索结果和执行回执单独核对。每项收尾只关闭本轮拥有的弹窗，确认窗口消失，必要时重试。中断后由后续 CLI 在操作前识别可证明归属的旧窗口，复用 Runtime 原有回执补传和队列推进。终端只查仍保留搜索结果。详见[开发计划](../../plans/plan-weixin-agent-friend-requests.md#phase-4-固定坐标缓存逐条收尾与恢复)。
 
 开发完成记录（2026-11-24 补记；原开发计划已清理，Git 历史可查）：✅ 开发完成（2026-11-17）。本机 CLI、微信驱动和服务端视觉计费已落地，Windows 新增独测 7/7，真实微信已验到搜索。遗留：真实好友申请与积分扣减待验。
 

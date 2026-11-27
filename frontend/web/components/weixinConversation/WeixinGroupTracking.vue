@@ -3,19 +3,22 @@
     <AppHeader title="微信 Agent" :is-logged-in="isLoggedIn" :user="admin" @toggle-sidebar="toggleSidebar?.()" @logout="logout" />
     <main class="flex-1 min-h-0 overflow-y-auto px-4 py-6 sm:px-6">
       <div class="mx-auto max-w-6xl space-y-4">
-        <div class="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 class="m-0 text-2xl font-semibold text-default">微信 Agent</h1>
-            <p class="mt-1 text-sm text-muted">跟踪常用微信群，生成近七天内的群聊总结。</p>
-          </div>
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-default">
+          <nav aria-label="微信 Agent 功能" class="flex flex-wrap gap-3">
+            <BaseButton v-for="item in workspaces" :key="item.id" type="button" intent="ghost"
+              class="-mb-px rounded-none border-b-2"
+              :class="workspace === item.id ? 'border-primary-700 text-primary-700 font-semibold' : 'border-transparent'"
+              :aria-pressed="workspace === item.id" :aria-controls="`weixin-workspace-${item.id}`"
+              @click="showWorkspace(item.id)">{{ item.label }}</BaseButton>
+          </nav>
           <div class="flex flex-wrap items-center gap-3 text-sm">
             <span class="text-muted" role="status">{{ deviceStatus }}</span>
             <RouterLink class="text-primary-700 underline" :to="{ name: 'tenant-local-tools', params: { tenant_id: tenantId } }">管理设备</RouterLink>
-            <BaseButton type="button" intent="ghost" @click="refreshDevice">刷新</BaseButton>
+            <BaseButton type="button" intent="ghost" :disabled="loadingDevice" @click="refreshDevice">刷新</BaseButton>
           </div>
         </div>
 
-        <div class="grid items-start gap-4 md:grid-cols-[minmax(14rem,17rem)_minmax(0,1fr)]">
+        <div v-show="workspace === 'groups'" id="weixin-workspace-groups" class="grid items-start gap-4 md:grid-cols-[minmax(14rem,17rem)_minmax(0,1fr)]">
           <BaseCard>
             <div class="flex flex-wrap items-center justify-between gap-2">
               <h2 class="m-0 text-base font-semibold text-default">跟踪群聊</h2>
@@ -161,6 +164,8 @@
             </BaseCard>
           </div>
         </div>
+        <WeixinFriendRequests v-if="friendsVisited" v-show="workspace === 'friends'" id="weixin-workspace-friends"
+          :device="device" :loading-device="loadingDevice" />
       </div>
     </main>
 
@@ -199,6 +204,7 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
+import WeixinFriendRequests from './WeixinFriendRequests.vue'
 import WeixinSchedules from './WeixinSchedules.vue'
 import WeixinSummaryMarkdown from './WeixinSummaryMarkdown.vue'
 import { formatBeijing } from './beijingTime'
@@ -208,10 +214,19 @@ const router = useRouter()
 const tenantId = computed(() => String(route.params.tenant_id ?? ''))
 const toggleSidebar = inject<() => void>('toggleSidebar')
 const { admin, isLoggedIn, logout } = useTenantAuth()
+const workspaces = [{ id: 'groups', label: '群聊总结' }, { id: 'friends', label: '批量加好友' }] as const
+type Workspace = typeof workspaces[number]['id']
+const workspace = ref<Workspace>('groups')
+const friendsVisited = ref(false)
+function showWorkspace(id: Workspace) {
+  if (id === 'friends') friendsVisited.value = true
+  workspace.value = id
+}
 const tabs = [{ id: 'generate', label: '生成总结' }, { id: 'schedule', label: '定时总结' }, { id: 'history', label: '总结历史' }] as const
 type Tab = typeof tabs[number]['id']
 const tab = computed<Tab>(() => route.query.tab === 'schedule' ? 'schedule' : route.query.tab === 'history' ? 'history' : 'generate')
 const batchId = computed(() => typeof route.query.batch === 'string' ? route.query.batch : '')
+watch([tab, batchId], () => { workspace.value = 'groups' })
 function changeTab(id: Tab) {
   if (id !== tab.value) void router.push({ query: { tab: id, ...(id === 'history' && batchId.value ? { batch: batchId.value } : {}) } })
 }

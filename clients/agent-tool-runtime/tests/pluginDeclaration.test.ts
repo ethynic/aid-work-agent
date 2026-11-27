@@ -105,7 +105,7 @@ test('无并行工具声明仅上报 tool_declarations_v1 与 declared_tools，�
   assert.ok((caps['capabilities'] as string[]).includes('tool_declarations_v1'))
 })
 
-test('商店微信声明优先于存量 v2Send，配对和心跳同源且不向微信传设备凭据', {
+test('商店微信声明优先于存量 v2Send，配对和心跳同源，为好友视觉转交现有配对身份', {
   skip: process.platform !== 'win32', timeout: 30_000,
 }, async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'aid-weixin-store-'))
@@ -115,6 +115,7 @@ test('商店微信声明优先于存量 v2Send，配对和心跳同源且不向�
   const tools = [
     { name: 'weixin_probe', annotations: { readOnlyHint: true } },
     { name: 'weixin_message_send', annotations: { readOnlyHint: false } },
+    { name: 'weixin_friend_add', annotations: { readOnlyHint: false } },
   ]
   const declaration = { version: 1 as const, tools: tools.map(({ name }) => ({ name })) }
   const manifest = {
@@ -147,7 +148,9 @@ test('商店微信声明优先于存量 v2Send，配对和心跳同源且不向�
 
     const providers = (adapter as unknown as { providers: ProviderSet }).providers
     const wxManager = providers.get('weixin') as unknown as { providerEnv: Record<string, string> }
-    assert.deepEqual(wxManager.providerEnv, { AID_WEIXIN_SERVER_URL: cloud.baseUrl })
+    assert.deepEqual(wxManager.providerEnv, {
+      AID_WEIXIN_SERVER_URL: cloud.baseUrl, AIDWORK_RUNTIME_SERVER: cloud.baseUrl, AIDWORK_RUNTIME_DEVICE_TOKEN: token,
+    })
 
     const request = cloud.enqueueInvocation('weixin_message_send_v2', {}, { provider: 'weixin' })
     await cloud.waitFor(() => cloud.callsFor(request).some(call =>

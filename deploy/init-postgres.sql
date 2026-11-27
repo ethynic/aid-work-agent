@@ -6124,3 +6124,22 @@ CREATE INDEX IF NOT EXISTS idx_lt_weixin_range_pending ON local_tool_invocations
     WHERE tool_name='weixin_group_range_summary'
       AND (state IN ('queued','claimed','running','cancel_requested')
            OR (state IN ('failed','unknown','expired','cancelled') AND arguments_json ? 'grant'));
+
+CREATE TABLE IF NOT EXISTS bs_weixin_friend_batches (
+    id UUID NOT NULL,
+    tenant_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    device_id UUID NOT NULL,
+    filename TEXT NOT NULL,
+    contacts_json JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (tenant_id, user_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_weixin_friend_batch_owner
+    ON bs_weixin_friend_batches (tenant_id, user_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_lt_weixin_friend_identifier
+    ON local_tool_invocations (tenant_id, user_id, (arguments_json->>'identifier'))
+    WHERE business_kind='weixin_friend_batch';
+CREATE INDEX IF NOT EXISTS idx_lt_weixin_friend_queued
+    ON local_tool_invocations (deadline_at)
+    WHERE business_kind='weixin_friend_batch' AND state='queued';

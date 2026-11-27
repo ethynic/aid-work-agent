@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { createWeixinFriendAddOperation } from '../src/operations/friendAdd.js'
+import { getOperationEntry } from '../src/operations/registry.js'
 import { CancelledError, CodedOperationError } from '../src/operations/types.js'
 
 const executable = fileURLToPath(new URL('../src/cli/index.js', import.meta.url))
@@ -20,6 +21,14 @@ test('friend add rejects ambiguous targets and unsafe verification text before r
     assert.equal(result.code, 'INVALID_ARGUMENT')
     assert.equal(result.effect, 'none')
   }
+})
+
+test('the signed MCP tool validates the snake-case verification argument before any desktop operation', async () => {
+  const operation = getOperationEntry('weixin_friend_add').operation
+  const signal = AbortSignal.abort()
+  const result = await operation.execute({ identifier: 'wx_user_a', verify_message: 'line\nbreak' }, { ...ctx, signal })
+  assert.equal(result.code, 'INVALID_ARGUMENT')
+  assert.equal(result.effect, 'none')
 })
 
 test('friend add sends one trimmed search identifier and exact message over private child stdin', async () => {
@@ -71,8 +80,47 @@ test('friend add preserves explicit proxy refusals and prevents running a possib
   }
 })
 
+test('search-only requests the driver safety fence and never treats a write receipt as success', async () => {
+  const input = { identifier: 'wx_user_a', searchOnly: true }
+  const op = createWeixinFriendAddOperation(async ({ stdin }) => {
+    assert.deepEqual(JSON.parse(stdin!), { identifier: 'wx_user_a', search_only: true })
+    return { status: 'addable' }
+  })
+  const result = await op.execute(input, ctx)
+  assert.equal(result.success, true)
+  assert.equal(result.effect, 'none')
+  assert.deepEqual(result.data, { status: 'addable' })
+
+  const unexpectedWrite = createWeixinFriendAddOperation(async () => ({ status: 'request_sent' }))
+  const rejected = await unexpectedWrite.execute(input, ctx)
+  assert.equal(rejected.success, false)
+  const timeout = createWeixinFriendAddOperation(async () => { throw new CodedOperationError('RESULT_TIMEOUT', '超时') })
+  assert.equal((await timeout.execute(input, ctx)).effect, 'none')
+})
+
+test('a paired device uses its existing credentials without starting legacy activation', async () => {
+  const savedUrl = process.env.AIDWORK_RUNTIME_SERVER
+  const savedToken = process.env.AIDWORK_RUNTIME_DEVICE_TOKEN
+  process.env.AIDWORK_RUNTIME_SERVER = 'https://runtime.example.invalid'
+  process.env.AIDWORK_RUNTIME_DEVICE_TOKEN = 'synthetic-paired-device'
+  try {
+    const op = createWeixinFriendAddOperation(async (input) => {
+      assert.equal(input.useVisionProxy, false)
+      assert.ok(!JSON.stringify(input).includes('synthetic-paired-device'))
+      return { status: 'addable' }
+    })
+    assert.equal((await op.execute({ identifier: 'wx_user_a', searchOnly: true }, ctx)).effect, 'none')
+  } finally {
+    if (savedUrl === undefined) delete process.env.AIDWORK_RUNTIME_SERVER
+    else process.env.AIDWORK_RUNTIME_SERVER = savedUrl
+    if (savedToken === undefined) delete process.env.AIDWORK_RUNTIME_DEVICE_TOKEN
+    else process.env.AIDWORK_RUNTIME_DEVICE_TOKEN = savedToken
+  }
+})
+
 test('friend add CLI rejects duplicated or missing flags instead of submitting to a guessed target', () => {
-  for (const extra of [['--identifier', 'wx_user_b'], ['--verify-message'], ['wx_user_b'], ['--typo']]) {
+  for (const extra of [['--identifier', 'wx_user_b'], ['--verify-message'], ['wx_user_b'], ['--typo'], ['--search-only', 'false'],
+    ['--search-only', '--search-only'], ['--search-only', '--verify-message', 'hi']]) {
     const command = spawnSync(process.execPath, [
       executable, 'add', '--domain', 'friend', '--identifier', 'wx_user_a', '--json', ...extra,
     ], { encoding: 'utf8' })

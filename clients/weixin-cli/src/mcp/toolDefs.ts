@@ -129,4 +129,10 @@ TOOL_DEFS.push({
   zodShape: rangeSummaryShape,
   annotations: { title: '生成微信群聊时段总结', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 })
+TOOL_DEFS.push({
+  name: 'weixin_friend_add', title: '提交微信好友申请',
+  description: '连接中心专用。按单个手机号或微信号提交好友申请，回执报告已确认的微信操作结果。',
+  zodShape: { identifier: z.string().min(1).max(64), verify_message: z.string().min(1).optional() },
+  annotations: { title: '提交微信好友申请', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+})
 export const TOOL_NAMES = TOOL_DEFS.map((t) => t.name)

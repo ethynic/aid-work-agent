@@ -70,6 +70,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20261126-1039 | 微信 Agent 批量提交好友申请 | ✅ 已完成开发，真机验证坐标缓存，模拟验证关窗恢复，待正式签名与写入验收。 | [设计](system/connection-center-design.md#批量提交好友申请) | [计划](plans/plan-weixin-agent-friend-requests.md) |
 | 20261124-1012 | 微信 Agent 多群跟踪与近七天总结 | ✅ 已完成开发（已验收每日和站内通知），支持保存群聊、跨日总结、Markdown 摘要与批次回看。 | [设计](system/connection-center-design.md#多群跟踪与近七天总结) | [计划](plans/plan-weixin-agent-group-tracking.md) |
 | 20261123-0850 | 连接中心微信 Agent | ✅ 已完成开发，支持手动群聊今日总结，待真机验收。 | [设计](system/connection-center-design.md#211-微信-agent) | [计划](plans/plan-weixin-agent.md) |
 | 20261113-1443 | Runner 检查点恢复 | ✅ 已完成开发（待发版验收），按原检查点续跑并支持会话内补传及核对。 | [设计](system/agent-application-architecture-design.md#58-runner-按检查点继续执行2026-11-13已实现) | [开发计划](plans/plan-runner-server-skill-interruption-recovery.md) |
