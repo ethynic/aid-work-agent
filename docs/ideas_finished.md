@@ -7,6 +7,7 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261127-runtime-startup | 已配对 Runtime 启动性能 | ✅ 已完成开发，1.5.0 实装确认重复检查已减少。 | [设计](system/runtime-plugin-host-architecture-design.md#134-能力列表与错误恢复) | [计划](plans/plan-runtime-plugin-host.md#17-已配对-runtime-启动性能2026-11-27) |
 | 20261112-1235 | BOSS 筛选容错与本机操作恢复 | ✅ 已完成开发，待 Windows 实机验收与发版。 | [筛选设计](design/recruiting/resume-job-matching-design.md#boss-筛选参数容错)、[恢复设计](system/agent-application-architecture-design.md#boss-本机操作恢复) | — |
 | 20261109-1314 | 企业微信代理旧失败批不再阻断监控 | ✅ 已完成开发；独立测试通过，待部署真机验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#95-接口兼容与验收边界) | [计划](plans/plan-wecom-proxy-event-driven.md#p11-旧失败批不再阻断合法后续监控2026-11-09) |
 | 20261109-1230 | 企业微信代理不同 Runtime 独立调度 | ✅ 已完成开发；独立测试通过，待部署真机验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#9-企业微信代理任务新消息触发回答2026-11-08设计待开发) | [计划](plans/plan-wecom-proxy-event-driven.md#p10-不同-runtime-的代理调度独立2026-11-09) |
