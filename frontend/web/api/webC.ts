@@ -227,6 +227,9 @@ export interface RunnerSnapshot {
   snapshot: { output?: string; progress?: string; images?: unknown[]; downloadableFiles?: { file_id: string; name?: string; file_name?: string; size?: number; mime_type?: string; download_url?: string }[]; waiting?: Record<string, unknown> }
   result?: { output?: string; images?: unknown[] } | null
   waiting_text?: string
+  /** 终态 cancelled 的取消来源（public_view 白名单透出）：superseded_by_new_message =
+   * 被其他端新消息取代；用户主动停止不透出，聊天页据此显示取代提示 */
+  cancel_reason?: string
 }
 
 export function getRunner(

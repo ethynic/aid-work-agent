@@ -67,6 +67,12 @@ class SessionQuery(BaseModel):
         extra = "forbid"
 
 
+# 渠道新消息取代在途执行的取消来源标记（repository.cancel 写入 checkpoint，
+# worker._persist_trace 据此投影 obs_traces=superseded；public_runner 据此向
+# web_c 前端透出，供被取消端区分「用户主动停止」与「被其他端新消息取代」）。
+SUPERSEDED_CANCEL_REASON = 'superseded_by_new_message'
+
+
 class RunnerCancelRequest(BaseModel):
     """取消请求（可选 body）：reason 记录取消来源供观测投影（如渠道侧新消息
     取代在途执行 -> superseded_by_new_message）；用户主动停止不传，投影不变。"""

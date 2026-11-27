@@ -79,6 +79,12 @@
                 <div v-if="msg.created_at" class="text-xs text-muted mt-1 mr-2 text-right tabular-nums">{{ formatMsgTime(msg.created_at) }}</div>
               </div>
             </div>
+            <!-- 被其他端新消息取代提示：居中轻提示，不用对话气泡 -->
+            <div v-else-if="msg.kind === 'superseded'" class="flex justify-center py-1">
+              <div class="text-xs text-muted bg-surface-hover border border-default rounded-lg px-3 py-1.5 text-center max-w-[85%]">
+                {{ msg.content }}
+              </div>
+            </div>
             <!-- AI 消息 -->
             <div v-else class="flex justify-start">
               <div class="max-w-[85%] has-[table]:max-w-full space-y-2">
@@ -330,6 +336,9 @@ function isNearBottom(): boolean {
 }
 
 let observeAbort = new AbortController()
+/** 终态为「被新消息取代」的挂起标记：终态收尾 reload 后插入提示气泡
+ * （reload 会整体替换 messages，提示必须在 reload 之后 push） */
+const supersededNoticePending = ref(false)
 const activeRunnerId = ref('')
 
 onBeforeUnmount(() => {
@@ -519,6 +528,7 @@ async function refreshSessions() {
 function resetStreamState() {
   observeAbort.abort()
   observeAbort = new AbortController()
+  supersededNoticePending.value = false
   streamingText.value = ''
   waitingText.value = ''
   waitingWaitId.value = ''
@@ -776,12 +786,20 @@ function applySnapshot(runner: RunnerSnapshot) {
   if (isNearBottom()) scrollToBottom()
 }
 
-async function refreshOnce(runnerId: string): Promise<'running' | 'terminal'> {
+async function refreshOnce(runnerId: string, signal?: AbortSignal): Promise<'running' | 'terminal'> {
   const { runner } = await getRunner(tenantId.value, configId.value, identity.value, runnerId)
   applySnapshot(runner)
   if (['completed', 'failed', 'cancelled'].includes(runner.status)) {
     isTerminal.value = true
     if (runner.status !== 'completed') streamFailed.value = true
+    // 被其他端新消息取代（public_view 白名单透出 cancel_reason）：仅本次观察未被
+    // 中止时记挂起标记。同端提交新消息会先 resetStreamState abort 旧观察，
+    // in-flight 刷新借此排除，避免同端误显示「其他设备」提示。
+    if (runner.status === 'cancelled'
+        && runner.cancel_reason === 'superseded_by_new_message'
+        && signal && !signal.aborted) {
+      supersededNoticePending.value = true
+    }
     return 'terminal'
   }
   return 'running'
@@ -802,7 +820,7 @@ async function consumeEvents(runnerId: string, signal: AbortSignal, cursorRef: {
       if (refreshTimer || terminalHit) return
       refreshTimer = setTimeout(() => {
         refreshTimer = null
-        void refreshOnce(runnerId)
+        void refreshOnce(runnerId, signal)
           .then(state => { if (state === 'terminal') terminalHit = true })
           .catch(() => { /* 单次刷新失败容忍，等下一帧 */ })
       }, 120)
@@ -843,7 +861,7 @@ async function consumeEvents(runnerId: string, signal: AbortSignal, cursorRef: {
     // （agent2 2026-11-25 tr_runner_bc18 事故：回复落库后页面不显示）。
     let state: 'running' | 'terminal' = 'running'
     try {
-      if (await refreshOnce(runnerId) === 'terminal') state = 'terminal'
+      if (await refreshOnce(runnerId, signal) === 'terminal') state = 'terminal'
     } catch { /* 刷新失败按 running 继续重连 */ }
     if (state === 'terminal' || signal.aborted) return
     await new Promise(resolve => setTimeout(resolve, 1000))
@@ -855,7 +873,7 @@ async function pollUntilTerminal(runnerId: string, signal: AbortSignal) {
   for (let i = 0; i < 600; i++) {
     if (signal.aborted) return
     try {
-      if (await refreshOnce(runnerId) === 'terminal') return
+      if (await refreshOnce(runnerId, signal) === 'terminal') return
     } catch {
       /* 网络抖动容忍 */
     }
@@ -885,7 +903,7 @@ async function observeRunner(runnerId: string) {
   } finally {
     if (!signal.aborted) {
       try {
-        await refreshOnce(runnerId)
+        await refreshOnce(runnerId, signal)
       } catch {
         /* 终态刷新失败时由 reload 校准 */
       }
@@ -903,6 +921,20 @@ async function observeRunner(runnerId: string) {
     submitting.value = false
     // 服务端权威校准（同时触发终态补写）
     await reloadMessages()
+    // 被其他端新消息取代：reload 会整体替换 messages，提示必须在 reload 后插入
+    if (supersededNoticePending.value) {
+      supersededNoticePending.value = false
+      messages.value.push({
+        role: 'assistant',
+        content: '您在其他设备发送了新消息，此处的问题已被新消息取代，未生成回答',
+        created_at: nowIso(),
+        kind: 'superseded',
+        attachments: [],
+        images: [],
+        files: []
+      })
+      void scrollToBottomAfterRender()
+    }
     void focusInput()
   }
 }

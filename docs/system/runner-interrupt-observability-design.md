@@ -162,3 +162,49 @@ error 结果不区分「受理前拒绝」与「受理后失败」——前者�
 - 回归：wiring / runner_agent_profile / worker_trace_error_code / trace_merge_semantics 31 例绿。
 - 前端：vue-tsc + build 通过；webCIdentity 测试 12 例绿。
 - 真机（部署后）：web_c 会话执行中刷新页面 -> 输入框禁用并恢复观察；执行中发新消息 -> obs_traces.status=superseded、TraceBrowser 筛选可见。
+
+### 6.6 被取消端用户提示与历史附件重物化（2026-11-27 扩展）
+
+多端同账号边缘场景（PC 与手机同时提问，第二端新消息 supersede 第一端在途执行）的两个体验缺口修复：
+
+**1. 被取消端提示「已被您其他设备的新消息取代」（P1）**
+
+- 后端：`public_view.public_runner` 白名单透出 `cancel_reason`——仅终态 `cancelled` 且
+  `cancel_reason=superseded_by_new_message` 时暴露（与 `contracts.SUPERSEDED_CANCEL_REASON`
+  同值，本模块保持零依赖内联字面量）；用户主动停止（无 reason）与其他取消原因不透出，防内部枚举泄漏。
+  常量收口 `contracts.py`，worker.py 保留 import 别名。
+- 前端：`WebCChat.vue` `refreshOnce` 检测 superseded 终态记挂起标记（`supersededNoticePending`）；
+  `observeRunner` finally 在 `reloadMessages()` **之后**插入提示消息（reload 整体替换 messages，
+  提示必须后置），渲染为居中轻提示「您在其他设备发送了新消息，此处的问题已被新消息取代，未生成回答」。
+- 同端守卫：同端提交新消息先 `resetStreamState` abort 旧观察，in-flight 终态刷新凭
+  `signal.aborted` 排除，避免同端误显示「其他设备」提示。`refreshOnce` 全调用点补传 `signal`。
+- 已知边界：提示为会话内即时呈现，不落库——PC 刷新后仅见问题无回答（终态 runner 不被
+  adoptActiveRunner 接管），属可接受的轻量实现。
+
+**2. 历史附件跨执行重物化（P2）**
+
+根因：历史消息从 DB 重载（`history._reload_memory_from_db`）只保留 content 文本，先前轮次
+（含被取代的中断轮）用户上传的附件实体随旧工作区 `_cleanup_completed_resources` 清理删除，
+新执行的模型历史里只剩「（见附件）」，只能答「找不到文件」。
+
+- 元数据源：`HistoryRepository.read_user_attachments(session_id, limit)`——过滤口径与
+  read_web / read_channel 完全一致（压缩窗口、租户归属、渠道 status/is_recalled），返回
+  user 消息附件元数据（file_id/name/mime/type/size）；异常 fail-open 返回 `[]`。
+- 重物化：`AttachmentAssembler.prepare` 新增 `history_attachments` 参数——与当前消息附件按
+  file_id 去重（当前消息落库后元数据也在历史窗口内），经 `resolve_scoped_uploaded_file`
+  租户域解析（`uploaded_file:{file_id}` Redis 元数据 + 存储扫描兜底）复制到当前工作区
+  `history_files/` 子目录，files_context 追加「Historical attachments」块给出路径。
+- 约束：best-effort（file_id 失效跳过不阻断装配，与 workspace_path_rewriter 失效标记同向）；
+  上限 10 个文件 / 100MB；只物化不改历史原文（trace/审计依赖原文）；工作区创建抽公共方法
+  `_create_session_workspace`（当前消息无附件但历史有附件时也创建）。
+- 装配接线：`context_assembler.prepare` 在历史加载分支（非 SUBAGENT、非 zero_history）读取
+  附件元数据并传入 prepare。
+- 已知边界：`uploaded_file:{file_id}` Redis TTL 过期后无法恢复（对话附件 24h），此时该条
+  静默省略，模型需请用户重新上传。
+
+**验证**：单测 `tests/unit/test_runner_history_attachment_rematerialization.py` 13 例
+（物化/去重/失效跳过/上限/fail-open/JSON 解析/public_runner 白名单 5 例）+
+`test_runner_attachment_registration.py`、`test_runner_workspace_path_rewriter.py`、
+`test_web_c_channel.py`、`test_runner_adapter_contract.py`、`test_background_runner.py`
+回归 118 例绿；前端 vue-tsc（仅 desktop 既有 6 错，与本次无关）+ build 通过，
+webC 相关 vitest 25 例绿。

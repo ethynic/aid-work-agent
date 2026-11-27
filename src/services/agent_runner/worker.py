@@ -162,7 +162,8 @@ def _automatic_cancel_output(checkpoint):
     return None
 
 
-SUPERSEDED_CANCEL_REASON = 'superseded_by_new_message'
+# 常量已收口 contracts（public_view 白名单透出复用），此处保留别名兼容既有引用
+from .contracts import SUPERSEDED_CANCEL_REASON
 
 
 def _project_trace_status(runner):
