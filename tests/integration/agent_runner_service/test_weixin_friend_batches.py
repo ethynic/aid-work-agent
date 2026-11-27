@@ -154,6 +154,37 @@ def test_friend_batch_requires_signed_device_and_classifies_only_confirmed_recei
         assert all("contacts" not in row for row in history["batches"])
         assert len(client.get(f"{FRIENDS}/batches", headers=_web_headers(actors["a_other"])).json()["batches"]) == 0
 
+        config_request = {
+            **payload, "request_id": str(uuid4()), "contacts": [
+                {"identifier": "wx_config_none", "selected": True},
+                {"identifier": "wx_config_uncertain", "selected": True},
+            ],
+        }
+        config_batch = client.post(f"{FRIENDS}/batches", headers=headers, json=config_request).json()
+        config_path = f"{FRIENDS}/batches/{config_batch['id']}"
+        for effect, expected in [("none", "failed"), ("unknown", "unknown")]:
+            item = claim().json()
+            start = client.post(runtime_path(item, "started"), headers=device_headers,
+                                json={"claim_token": item["claim_token"]})
+            assert start.status_code == 200
+            report = {"claim_token": item["claim_token"], "success": False, "effect": effect, "code": "CONFIG_MISSING"}
+            path = runtime_path(item, "result")
+            assert client.post(path, headers=device_headers, json={**report, "claim_token": str(uuid4())}).status_code == 404
+            for response in [report, {**report, "effect": "unknown" if effect == "none" else "none"}]:
+                saved = client.post(path, headers=device_headers, json=response)
+                assert saved.status_code == 200 and saved.json()["state"] == expected
+
+        result = client.get(config_path, headers=headers).json()
+        assert result["counts"] == {"failed": 1, "unknown": 1}
+        assert [row["reason"] for row in result["contacts"]] == ["CONFIG_MISSING", "EXECUTION_UNKNOWN"]
+        assert all(row["submitted_at"] is None for row in result["contacts"])
+        assert client.get(config_path, headers=_web_headers(actors["a_other"])).status_code == 404
+        assert client.get(config_path, headers=_web_headers(actors["b"])).status_code == 404
+        config_preview = client.post(f"{FRIENDS}/preview", headers=headers, files={
+            "file": ("核对.csv", "手机号或微信号\nwx_config_none\nwx_config_uncertain\n".encode(), "text/csv"),
+        }).json()
+        assert [row["exclusion"] for row in config_preview["contacts"]] == [None, "PREVIOUS_UNKNOWN"]
+
         reconfigured = sign({**definition, "description": "new signed schema"})
         c_request = {**payload, "request_id": str(uuid4()), "contacts": [{"identifier": "wx_test_c", "selected": True}]}
         c_batch = client.post(f"{FRIENDS}/batches", headers=headers, json=c_request).json()

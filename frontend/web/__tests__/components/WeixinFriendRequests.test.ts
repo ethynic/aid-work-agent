@@ -16,11 +16,12 @@ vi.mock('@/composables/useTenantAuth', () => ({
 
 const filename = '联系清单.csv'
 const result: FriendBatch = {
-  id: 'batch-a', filename, created_at: '2026-11-26T02:00:00Z', state: 'completed', total: 4,
-  counts: { request_sent: 1, skipped: 2, unknown: 1 },
+  id: 'batch-a', filename, created_at: '2026-11-26T02:00:00Z', state: 'completed', total: 5,
+  counts: { request_sent: 1, skipped: 2, unknown: 1, failed: 1 },
   contacts: [
     { name: '小周', identifier: 'wx_test_a', status: 'request_sent', reason: null, submitted_at: '2026-11-26T02:01:00Z' },
     { name: '小陈', identifier: 'wx_test_b', status: 'unknown', reason: 'EXECUTION_UNKNOWN', submitted_at: null },
+    { name: '小余', identifier: 'wx_test_config', status: 'failed', reason: 'CONFIG_MISSING', submitted_at: null },
   ],
 }
 
@@ -125,6 +126,8 @@ describe('微信 Agent 批量加好友', () => {
       expect(getFriendBatch).toHaveBeenCalledWith(result.id, expect.any(AbortSignal))
       expect(wrapper.text()).toContain(filename)
       expect(wrapper.text()).toContain('请在微信中核对申请状态')
+      expect(wrapper.text()).toContain('未提交 1 条')
+      expect(wrapper.text()).toContain('微信视觉服务配置不可用')
     } finally {
       wrapper.unmount()
     }

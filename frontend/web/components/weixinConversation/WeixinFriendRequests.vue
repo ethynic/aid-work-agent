@@ -142,6 +142,7 @@ const reasonLabels: Record<string, string> = {
   PREVIOUS_UNKNOWN: '上一批次待核对', REQUEST_IN_PROGRESS: '已有任务在处理', NOT_SELECTED: '本次未选中',
   TARGET_NOT_FOUND: '微信未找到目标', NOT_LOGGED_IN: '微信尚未登录', WEIXIN_NOT_FOUND: '运行设备未打开微信',
   DESKTOP_NOT_INTERACTIVE: '运行设备桌面不可交互', RESULT_TIMEOUT: '运行设备未在有效期内完成',
+  CONFIG_MISSING: '微信视觉服务配置不可用',
   LOCAL_DEVICE_PLUGIN_CHANGED: '运行设备的微信插件已变化',
 }
 function reasonText(status: FriendStatus, code: string) {

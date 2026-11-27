@@ -97,7 +97,7 @@ function Invoke-KimiVision {
     $moonDirect = @{ ApiUrl = $script:KimiApiBase; Token = $script:KimiApiKey; Model = $script:KimiModel; Mode = 'direct'; Tag = 'moonshot-direct' }
     $serverUrl = ([string]$env:AID_WEIXIN_SERVER_URL).TrimEnd('/')
     $billingProxy = $null
-    if (-not [string]::IsNullOrWhiteSpace($serverUrl)) {
+    if (-not $runtimeFriend -and -not [string]::IsNullOrWhiteSpace($serverUrl)) {
         $billingProxy = @{ ApiUrl = ($serverUrl + '/api/client/v1/llm/chat'); Token = [string]$env:AID_WEIXIN_ACCESS_TOKEN; Model = $script:ZhipuModel; Mode = 'proxy'; Tag = 'glm-proxy' }
     }
     if ($runtimeFriend) {

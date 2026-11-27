@@ -10,7 +10,7 @@ import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 
-test('paired friend vision sends only the fixed step and never falls back after refusal', {
+test('paired friend vision works without a legacy token and never falls back after refusal', {
   skip: process.platform !== 'win32',
   timeout: 20_000,
 }, async () => {
@@ -36,8 +36,9 @@ test('paired friend vision sends only the fixed step and never falls back after 
 $ErrorActionPreference = 'Stop'
 . '${common}'
 $image = [Text.Encoding]::UTF8.GetBytes('synthetic image bytes')
-$calls = @(foreach ($i in 1..5) {
+$calls = @(foreach ($i in 1..6) {
     if ($i -eq 5) { $env:AIDWORK_RUNTIME_DEVICE_TOKEN = '' }
+    if ($i -eq 6) { $env:AIDWORK_RUNTIME_SERVER = ''; $env:AIDWORK_RUNTIME_DEVICE_TOKEN = 'runtime-fixture-token' }
     try {
         Invoke-KimiVision -ImageBytes $image -SystemPrompt 'not transmitted' -UserText 'not transmitted' -ProxyOnly -RuntimeFriendStep 'plus'
     } catch {
@@ -56,14 +57,16 @@ Write-DriverJson @{ ok = $true; data = @{ calls = $calls; files = @([IO.Director
         AIDWORK_RUNTIME_SERVER: url,
         AIDWORK_RUNTIME_DEVICE_TOKEN: 'runtime-fixture-token',
         AID_WEIXIN_SERVER_URL: url,
-        AID_WEIXIN_ACCESS_TOKEN: 'legacy-unused-token',
+        AID_WEIXIN_ACCESS_TOKEN: '',
         AID_WEIXIN_PROXY_ERROR: 'legacy binding unavailable',
       },
     })
     const line = stdout.split(/\r?\n/).find((value) => value.startsWith('DRIVER_JSON: '))
     assert.ok(line)
     const { calls, files } = JSON.parse(line.slice('DRIVER_JSON: '.length)).data
-    assert.deepEqual(calls, [{ plus: { x: 12, y: 34 } }, 'CONFIG_MISSING', 'CONFIG_MISSING', 'INTERNAL_ERROR', 'CONFIG_MISSING'])
+    assert.deepEqual(calls, [
+      { plus: { x: 12, y: 34 } }, 'CONFIG_MISSING', 'CONFIG_MISSING', 'INTERNAL_ERROR', 'CONFIG_MISSING', 'CONFIG_MISSING',
+    ])
     assert.deepEqual(files, ['proxy-test.ps1'])
     assert.equal(requests.length, 4)
     for (const request of requests) {
