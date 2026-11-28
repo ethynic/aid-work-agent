@@ -10,6 +10,8 @@
 
 /** 兜底工作文案：本轮执行中但暂无工具进度时显示 */
 export const WEB_C_WORKING_FALLBACK_TEXT = '正在思考…'
+/** 排队中提示文案：同会话存在在途执行时显示 */
+export const WEB_C_QUEUED_TEXT = '当前会话正在处理上一条消息，您的消息已排队等待…'
 
 export interface WebCStatusLineState {
   streamingActive: boolean
@@ -18,11 +20,13 @@ export interface WebCStatusLineState {
   waitingText: string
   streamFailed: boolean
   progressText: string
+  runnerStatus?: string
 }
 
-/** 状态行判定：本轮执行中恒有值——有工具进度显示进度，否则兜底文案；非执行中返回空串 */
+/** 状态行判定：排队中显示排队提示；执行中优先工具进度，否则兜底文案；非执行中返回空串 */
 export function resolveWebCStatusLine(state: WebCStatusLineState): string {
   if (!state.streamingActive || state.isTerminal) return ''
   if (state.streamingText || state.waitingText || state.streamFailed) return ''
+  if (state.runnerStatus === 'queued') return WEB_C_QUEUED_TEXT
   return state.progressText || WEB_C_WORKING_FALLBACK_TEXT
 }

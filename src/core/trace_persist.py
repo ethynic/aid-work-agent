@@ -81,21 +81,35 @@ def persist_now(trace):
     _do_persist(trace)
 
 
-def update_completion(trace_id, *, status, output, duration_ms, error_message=None):
+def update_completion(trace_id, *, status, output, duration_ms, error_message=None,
+                      termination_reason=None, projected_tag=None):
     """Finalizer retry updates outcome without replacing prior execution spans.
 
     error_message：失败终态时由调用方传入 runner result.error_code（如 ITERATION_LIMIT），
     投影进 obs_traces.error_message，免去排查时翻 agent_runners 才能找到终态原因。
+    termination_reason / projected_tag：中断或被取代收尾时同步改写 metadata 与 tags，
+    避免 status 已为 superseded/interrupted 但详情仍残留 user_cancelled/cancelled。
     """
     try:
         from src.db.database import get_logs_connection
+        meta_patch = json.dumps({"termination_reason": termination_reason}, ensure_ascii=False) if termination_reason else None
         with get_logs_connection() as cursor:
             cursor.execute('''UPDATE obs_traces SET status=%s,output=%s,
                 duration_ms=%s,
                 error_message=CASE WHEN %s IN ('completed','cancelled') THEN NULL
                     WHEN %s IS NOT NULL THEN %s ELSE error_message END,
+                metadata=CASE WHEN %s IS NOT NULL
+                    THEN COALESCE(metadata, '{}'::jsonb) || %s::jsonb
+                    ELSE metadata END,
+                tags=CASE WHEN %s IS NOT NULL THEN
+                    CASE WHEN %s = ANY(array_remove(COALESCE(tags, ARRAY[]::text[]), 'cancelled'))
+                        THEN array_remove(COALESCE(tags, ARRAY[]::text[]), 'cancelled')
+                        ELSE array_append(array_remove(COALESCE(tags, ARRAY[]::text[]), 'cancelled'), %s)
+                    END
+                    ELSE tags END,
                 updated_at=NOW() WHERE trace_id=%s''',
-                (status,output,duration_ms,status,error_message,error_message,trace_id))
+                (status, output, duration_ms, status, error_message, error_message,
+                 meta_patch, meta_patch, projected_tag, projected_tag, projected_tag, trace_id))
             updated = bool(cursor.rowcount)
             cursor.commit()
             return updated
@@ -132,7 +146,10 @@ def _do_persist(trace):
                 cur.execute('SELECT tags FROM obs_traces WHERE trace_id=%s FOR UPDATE',(trace.trace_id,))
                 existing = cur.fetchone()
                 if existing:
-                    trace.tags = list(dict.fromkeys([*(existing.get('tags') or []), *trace.tags]))
+                    prev_tags = list(existing.get('tags') or [])
+                    if trace.status in ('superseded', 'interrupted'):
+                        prev_tags = [t for t in prev_tags if t != 'cancelled']
+                    trace.tags = list(dict.fromkeys([*prev_tags, *trace.tags]))
 
             # UPSERT trace
             # total_cost 为参数而非字面量 0：初始取 trace.total_cost（默认 0），

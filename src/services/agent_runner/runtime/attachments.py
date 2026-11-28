@@ -13,8 +13,8 @@ class AttachmentAssembler:
     _MULTIMODAL_MAX_IMAGES = 3
     _MULTIMODAL_MAX_BYTES = 5 * 1024 * 1024
     _IMAGE_ARTIFACT_PREFIX = "image_"
-    # 历史附件重物化上限（2026-11-27）：控制单次执行的副本磁盘占用与 files_context 噪音
-    _HISTORY_MAX_FILES = 10
+    # 会话历史文件清单上限（清单+按需检出，零磁盘预拷贝）
+    _HISTORY_MAX_FILES = 20
     _HISTORY_MAX_TOTAL_BYTES = 100 * 1024 * 1024
 
     def _read_multimodal_image(self, path: str) -> Optional[Tuple[str, str, bytes]]:
@@ -190,6 +190,51 @@ class AttachmentAssembler:
         logger.info(f"Created session workspace: {workspace}")
         return workspace
 
+    def _build_session_files_manifest(self, history_attachments, current_attachments) -> str:
+        """构建会话已有文件轻量清单（清单 + 按需检出，零磁盘预拷贝）。
+
+        与当前消息附件按 file_id 去重，同时展示用户上传与助手生成交付物，
+        模型按需调用 checkout_session_file(file_id=...) 获取本地路径或直接传 file_id。
+        """
+        if not history_attachments:
+            return ""
+        current_file_ids = {
+            str(ref.get("file_id"))
+            for ref in (current_attachments or [])
+            if isinstance(ref, dict) and ref.get("file_id")
+        }
+        seen = set()
+        selected = []
+        for item in history_attachments:
+            if not isinstance(item, dict):
+                continue
+            fid = str(item.get("file_id") or "").strip()
+            if not fid or fid in seen or fid in current_file_ids:
+                continue
+            seen.add(fid)
+            selected.append(item)
+            if len(selected) >= self._HISTORY_MAX_FILES:
+                break
+        if not selected:
+            return ""
+        lines = [
+            "",
+            "",
+            "**📎 本会话已有文件清单（较早轮次，按需检出使用）：**",
+        ]
+        for item in selected:
+            fid = item["file_id"]
+            name = str(item.get("name") or fid)
+            origin_label = "助手生成" if item.get("origin") == "assistant_generated" else "用户上传"
+            size = item.get("size")
+            size_part = f", {size} bytes" if isinstance(size, (int, float)) and size > 0 else ""
+            lines.append(f"- `{fid}` | `{name}` ({origin_label}{size_part})")
+        lines.append(
+            "如需读取、转换或继续处理上述历史文件，请调用 `checkout_session_file(file_id=\"...\")` "
+            "按需检出到当前工作区获取绝对路径（或直接将 `file_id` 传给 `cp` / `read` / `skill_execute` / `image_read`）。"
+        )
+        return "\n".join(lines)
+
     def _materialize_history_attachments(self, history_attachments, session_workspace,
                                          identity, current_attachments):
         """跨执行历史附件重物化（2026-11-27）。
@@ -344,16 +389,12 @@ class AttachmentAssembler:
 
                     enhanced_input = f"{user_input}\n\n[Attachments]\n" + "\n".join(attachment_info) + files_context
 
-            # 跨执行历史附件重物化（2026-11-27）：当前消息无附件但历史窗口有附件
-            # 时也创建工作区；与当前附件按 file_id 去重，best-effort 不阻断装配
-            history_context = ""
+            # 会话已有文件轻量清单（清单 + 按需检出）：不预创建工作区、不预复制文件本体，
+            # 仅向模型注入元数据清单；需要处理时由模型按 file_id 调用 checkout_session_file。
             if history_attachments:
-                if session_workspace is None:
-                    session_workspace = self._create_session_workspace(identity)
-                history_context = self._materialize_history_attachments(
-                    history_attachments, session_workspace, identity, attachments)
-                if history_context:
-                    enhanced_input = f"{enhanced_input}{history_context}"
+                manifest = self._build_session_files_manifest(history_attachments, attachments)
+                if manifest:
+                    enhanced_input = f"{enhanced_input}{manifest}"
 
 
             injection = ""

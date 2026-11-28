@@ -191,7 +191,7 @@ class StubRunnerClient:
     async def request(self, method, path, *, authorization=None, tenant=None, body=None,
                       params=None, accept_new=None, channel_source=None, channel_user=None,
                       channel_chat=None):
-        self.calls.append({"method": method, "path": path, "body": body,
+        self.calls.append({"method": method, "path": path, "body": body, "params": params,
                            "channel_source": channel_source, "channel_user": channel_user})
         return self.responses.pop(0)
 
@@ -790,36 +790,45 @@ class TestSessionActiveRunner:
     waiting 不返回（反问已落历史，回复走新消息 reply 通道）。"""
 
     @staticmethod
-    def _patch_endpoint(active_runners):
+    def _patch_endpoint(active_runners, runners=None):
         identity = SimpleNamespace(tenant_id="t1", config_id="cfg1", channel_user_id="u0011",
                                    mode="uid", subagent_type="x", display_name="")
         client = StubRunnerClient([
-            {"success": True, "runners": [], "active_runners": active_runners,
+            {"success": True, "runners": runners or [], "active_runners": active_runners,
              "has_more": False, "next_cursor": None}])
-        return patch("src.saas.api.web_c._resolve_identity", return_value=identity), \
+        return client, (
+            patch("src.saas.api.web_c._resolve_identity", return_value=identity),
             patch("src.saas.api.web_c._assert_session_owned",
-                  return_value={"session_id": "t1_web_c_uid_0011_x_sab"}), \
-            patch("src.saas.api.web_c._runner_client", return_value=client)
+                  return_value={"session_id": "t1_web_c_uid_0011_x_sab", "subagent_id": "x"}),
+            patch("src.saas.api.web_c._runner_client", return_value=client),
+        )
 
     @pytest.mark.asyncio
     async def test_running_runner_returned_for_adoption(self):
         from src.saas.api import web_c as web_c_mod
 
         row = {"runner_id": "run_live", "status": "running"}
-        patches = self._patch_endpoint([row])
+        client, patches = self._patch_endpoint([row])
         with contextlib.ExitStack() as stack:
             for item in patches:
                 stack.enter_context(item)
             response = await web_c_mod.get_session_active_runner(
                 "t1", "cfg1", "t1_web_c_uid_0011_x_sab", request=SimpleNamespace(headers={}))
         assert response["runner_id"] == "run_live" and response["status"] == "running"
+        assert response["active_runners"][0]["runner_id"] == "run_live"
+        # 验证调用了正确的 /v1/sessions/channel/{sid}/runners 路径与 profile_id 参数（修复 404 缺陷）
+        call = client.calls[0]
+        assert call["method"] == "GET"
+        assert call["path"] == "/v1/sessions/channel/t1_web_c_uid_0011_x_sab/runners"
+        assert call["params"]["profile_id"] == "x"
+        assert call["params"]["source"] == "web_c"
 
     @pytest.mark.asyncio
     async def test_waiting_runner_not_returned(self):
         from src.saas.api import web_c as web_c_mod
 
         row = {"runner_id": "run_wait", "status": "waiting"}
-        patches = self._patch_endpoint([row])
+        _client, patches = self._patch_endpoint([row])
         with contextlib.ExitStack() as stack:
             for item in patches:
                 stack.enter_context(item)
@@ -831,27 +840,159 @@ class TestSessionActiveRunner:
     async def test_finalizing_and_queued_returned(self):
         from src.saas.api import web_c as web_c_mod
 
-        rows = [{"runner_id": "run_fin", "status": "finalizing"},
-                {"runner_id": "run_q", "status": "queued"}]
-        patches = self._patch_endpoint(rows)
+        active_rows = [{"runner_id": "run_fin", "status": "finalizing"}]
+        runners = [{"runner_id": "run_q", "status": "queued", "client_id": "wc_cli_b"}]
+        _client, patches = self._patch_endpoint(active_rows, runners=runners)
         with contextlib.ExitStack() as stack:
             for item in patches:
                 stack.enter_context(item)
             response = await web_c_mod.get_session_active_runner(
                 "t1", "cfg1", "t1_web_c_uid_0011_x_sab", request=SimpleNamespace(headers={}))
-        assert response["runner_id"] in {"run_fin", "run_q"}
+        assert response["runner_id"] == "run_fin"
+        assert [r["runner_id"] for r in response["active_runners"]] == ["run_fin", "run_q"]
+
+    @pytest.mark.asyncio
+    async def test_queued_only_returned_from_runners_page(self):
+        from src.saas.api import web_c as web_c_mod
+
+        runners = [{"runner_id": "run_q1", "status": "queued"}]
+        _client, patches = self._patch_endpoint([], runners=runners)
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await web_c_mod.get_session_active_runner(
+                "t1", "cfg1", "t1_web_c_uid_0011_x_sab", request=SimpleNamespace(headers={}))
+        assert response["runner_id"] == "run_q1" and response["status"] == "queued"
 
     @pytest.mark.asyncio
     async def test_no_active_runner_returns_null(self):
         from src.saas.api import web_c as web_c_mod
 
-        patches = self._patch_endpoint([])
+        _client, patches = self._patch_endpoint([])
         with contextlib.ExitStack() as stack:
             for item in patches:
                 stack.enter_context(item)
             response = await web_c_mod.get_session_active_runner(
                 "t1", "cfg1", "t1_web_c_uid_0011_x_sab", request=SimpleNamespace(headers={}))
         assert response["runner_id"] is None and response["status"] is None
+        assert response["active_runners"] == []
+
+
+class TestWebCQueueMode:
+    """方案 A：web_c 忙时 FIFO 排队不中断在途执行 + 跨端 client_id 标记。"""
+
+    @pytest.mark.asyncio
+    async def test_queue_on_busy_does_not_cancel_running_runner(self):
+        from src.channels.runner_agent import ChannelRunnerAgent
+
+        client = StubRunnerClient([
+            {
+                "success": True,
+                "active_runners": [{"runner_id": "run_1", "status": "running", "client_id": "wc_cli_pc"}],
+                "runners": [{"runner_id": "run_1", "status": "running"}],
+            },
+            {"success": True, "runner": {"runner_id": "run_2", "status": "queued"}},
+        ])
+        agent = ChannelRunnerAgent(
+            source="web_c", session_id="t1_web_c_ext_lisi_sales",
+            channel_user_id="ext_lisi", channel_chat_id=None,
+            profile_id="sales", config_id="cfg1", client=client, tenant_id="t1",
+            client_id="wc_cli_mobile",
+        )
+        outcome = await agent.submit(
+            user_input="国数钱的", client_request_id="req_mobile_1", queue_on_busy=True,
+        )
+        assert outcome.queued is True
+        assert outcome.row["runner_id"] == "run_2"
+        # 不得向 run_1 发送 cancel
+        assert not any("/cancel" in c["path"] for c in client.calls)
+        post_calls = [c["body"] for c in client.calls if c["method"] == "POST" and c["path"] == "/v1/runners"]
+        assert len(post_calls) == 1
+        assert post_calls[0]["request_data"]["client_id"] == "wc_cli_mobile"
+
+    @pytest.mark.asyncio
+    async def test_queue_on_busy_still_cleans_up_stuck_interrupted_runner(self):
+        from src.channels.runner_agent import ChannelRunnerAgent
+
+        client = StubRunnerClient([
+            {
+                "success": True,
+                "active_runners": [{"runner_id": "run_stuck", "status": "interrupted"}],
+                "runners": [],
+            },
+            {"success": True, "runner": {"runner_id": "run_stuck", "status": "cancelled"}},
+            {"success": True, "runner": {"runner_id": "run_new", "status": "queued"}},
+        ])
+        agent = ChannelRunnerAgent(
+            source="web_c", session_id="t1_web_c_ext_lisi_sales",
+            channel_user_id="ext_lisi", channel_chat_id=None,
+            profile_id="sales", config_id="cfg1", client=client, tenant_id="t1",
+        )
+        outcome = await agent.submit(
+            user_input="继续", client_request_id="req_1", queue_on_busy=True,
+        )
+        assert outcome.queued is False
+        assert any(c["path"] == "/v1/runners/run_stuck/cancel" for c in client.calls)
+
+    @pytest.mark.asyncio
+    async def test_non_queue_channel_marks_superseded_by_other_client(self):
+        from src.channels.runner_agent import ChannelRunnerAgent
+
+        client = StubRunnerClient([
+            {
+                "success": True,
+                "active_runners": [{"runner_id": "run_pc", "status": "running", "client_id": "cli_pc"}],
+                "runners": [],
+            },
+            {"success": True, "runner": {"runner_id": "run_pc", "status": "cancelled"}},
+            {"success": True, "runner": {"runner_id": "run_mob", "status": "queued"}},
+        ])
+        agent = ChannelRunnerAgent(
+            source="wecom_kf", session_id="sess_1",
+            channel_user_id="u1", channel_chat_id=None,
+            profile_id="main", client=client, tenant_id="t1", client_id="cli_mobile",
+        )
+        await agent.submit(user_input="新问题", client_request_id="req_2", queue_on_busy=False)
+        cancel_calls = [c["body"] for c in client.calls if "/cancel" in c["path"]]
+        assert cancel_calls == [{"reason": "superseded_by_other_client"}]
+
+    @pytest.mark.asyncio
+    async def test_chat_endpoint_defers_user_message_when_queued(self):
+        from src.saas.api import web_c as web_c_mod
+
+        identity = SimpleNamespace(tenant_id="t1", config_id="cfg1", channel_user_id="ext_lisi",
+                                   mode="ext", subagent_type="sales", display_name="李四")
+        session = {"session_id": "t1_web_c_ext_lisi_sales", "subagent_id": "sales"}
+        outcome = SimpleNamespace(
+            direct_response=None,
+            row={"runner_id": "run_q2", "status": "queued"},
+            reply_wait_id=None,
+            queued=True,
+        )
+        fake_agent = MagicMock()
+        fake_agent.submit = AsyncMock(return_value=outcome)
+        mock_add_user = MagicMock()
+        body = WebCChatRequest(text="国数钱的", client_request_id="wc_" + "q" * 8, client_id="wc_cli_mob")
+
+        with patch("src.saas.api.web_c._resolve_identity", return_value=identity), \
+             patch("src.saas.api.web_c._load_web_c_config", return_value=({}, {"allow_attachment": False})), \
+             patch("src.saas.api.web_c._get_limiters", return_value={
+                 "chat_uid": SimpleNamespace(is_allowed=lambda key: True),
+                 "chat_ip": SimpleNamespace(is_allowed=lambda key: True)}), \
+             patch("src.saas.api.web_c.check_tenant_credit_blocked", return_value=None), \
+             patch("src.saas.api.web_c._validate_attachment_refs", return_value=[]), \
+             patch("src.saas.api.web_c._ensure_web_c_user", new=AsyncMock(return_value="u1")), \
+             patch("src.saas.api.web_c._ensure_user_and_session", new=AsyncMock(return_value=("u1", session))), \
+             patch("src.saas.api.web_c._align_session_profile", new=MagicMock()), \
+             patch("src.saas.api.web_c._add_user_message", new=mock_add_user), \
+             patch("src.saas.api.web_c.ChannelRunnerAgent", return_value=fake_agent) as mock_cls:
+            resp = await web_c_mod.chat("t1", "cfg1", body, request=SimpleNamespace(headers={}, client=None))
+
+        assert resp["queued"] is True
+        assert resp["runner_id"] == "run_q2"
+        mock_add_user.assert_not_called()
+        assert mock_cls.call_args.kwargs["client_id"] == "wc_cli_mob"
+        assert fake_agent.submit.call_args.kwargs["queue_on_busy"] is True
 
 
 class TestBackfillSessionRunners:

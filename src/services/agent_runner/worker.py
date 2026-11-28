@@ -163,26 +163,56 @@ def _automatic_cancel_output(checkpoint):
 
 
 # 常量已收口 contracts（public_view 白名单透出复用），此处保留别名兼容既有引用
-from .contracts import SUPERSEDED_CANCEL_REASON
+from .contracts import (
+    SUPERSEDED_BY_OTHER_CLIENT_CANCEL_REASON,
+    SUPERSEDED_CANCEL_REASON,
+    SUPERSEDED_CANCEL_REASONS,
+)
 
 
 def _project_trace_status(runner):
-    """obs_traces 状态还原（2026-11-25/26，设计 runner-interrupt-observability-design.md §2）：
+    """obs_traces 状态还原（设计 runner-interrupt-observability-design.md §2/§6）：
 
     agent_runners 终态机保持 cancelled 不动，仅观测投影还原执行事实：
     - cancel_only 收尾来源 interrupted -> 'interrupted'（系统中断，非用户取消）；
-    - cancel_reason=superseded_by_new_message（渠道新消息取代在途执行）-> 'superseded'。
+    - cancel_reason in SUPERSEDED_CANCEL_REASONS（新消息/其他端取代在途执行）-> 'superseded'。
     用户主动停止（无 reason）与 waiting/paused 取消保持 cancelled 不变。
     """
     status = runner['status']
     if status != 'cancelled':
         return status
     checkpoint = runner.get('checkpoint') or {}
-    if checkpoint.get('cancel_reason') == SUPERSEDED_CANCEL_REASON:
+    if checkpoint.get('cancel_reason') in SUPERSEDED_CANCEL_REASONS:
         return 'superseded'
     if checkpoint.get('cancel_only_from_status') == 'interrupted':
         return 'interrupted'
     return status
+
+
+def _sync_projected_trace_semantics(collector, runner, projected_status):
+    """同步修正 trace 的 termination_reason 与 tags，避免与投影后的 status 自相矛盾。
+
+    trace_collector.on_event('cancelled') 会写入 termination_reason='user_cancelled' 与
+    tag='cancelled'；当 runner 实际属于 superseded 或 interrupted 投影时，须同步改写，
+    避免 Trace 详情页出现「状态=被新消息取代，但 termination_reason=user_cancelled」。
+    """
+    if projected_status not in ('superseded', 'interrupted'):
+        return
+    checkpoint = runner.get('checkpoint') or {}
+    if projected_status == 'superseded':
+        reason = checkpoint.get('cancel_reason') or SUPERSEDED_CANCEL_REASON
+        tag_name = 'superseded'
+    else:
+        reason = 'execution_interrupted'
+        tag_name = 'interrupted'
+    metadata = getattr(collector.trace, 'metadata', None)
+    if isinstance(metadata, dict):
+        metadata['termination_reason'] = reason
+    tags = getattr(collector.trace, 'tags', None)
+    if isinstance(tags, list):
+        tags[:] = [t for t in tags if t != 'cancelled']
+        if tag_name not in tags:
+            tags.append(tag_name)
 
 
 def execution_result(state, status=None, error_code=None):
@@ -796,7 +826,9 @@ class RunnerWorker:
                 # has a distinct ID; the old finally must also avoid projecting
                 # that newer attempt's totals into its stale collector.
                 return
-            collector.trace.status = _project_trace_status(runner)
+            projected_status = _project_trace_status(runner)
+            collector.trace.status = projected_status
+            _sync_projected_trace_semantics(collector, runner, projected_status)
             result = runner.get('result') or {}
             collector.trace.output = result.get('output') or control.snapshot.get('output') or ''
             # 失败终态把 runner result.error_code（如 ITERATION_LIMIT）投影进
@@ -834,9 +866,14 @@ class RunnerWorker:
                 #   error_message CASE 走 ELSE 保留 EXECUTION_INTERRUPTED；
                 # ② 渠道新消息取代在途执行（cancel_reason=superseded_by_new_message）
                 #   还原为 superseded（被新消息取代），用户主动停止（无 reason）不变。
-                update_completion(collector.trace.trace_id,status=collector.trace.status,output=collector.trace.output,
-                    duration_ms=((runner.get('checkpoint') or {}).get('pending_finalization') or {}).get('duration_ms',0),
-                    error_message=error_code)
+                projected_tag = projected_status if projected_status in ('superseded', 'interrupted') else None
+                termination_reason = (collector.trace.metadata or {}).get('termination_reason') if projected_tag else None
+                update_completion(
+                    collector.trace.trace_id, status=collector.trace.status, output=collector.trace.output,
+                    duration_ms=((runner.get('checkpoint') or {}).get('pending_finalization') or {}).get('duration_ms', 0),
+                    error_message=error_code,
+                    termination_reason=termination_reason,
+                    projected_tag=projected_tag)
                 return
             envelope = runner.get('checkpoint') or {}
             from src.core.execution_usage import execution_token_usage

@@ -420,9 +420,27 @@ def resolve_uploaded_file_path(file_path: str) -> Optional[str]:
     Returns:
         绝对路径字符串或 None
     """
+    from src.tools.context import current_tool_execution_context
+
+    ctx = current_tool_execution_context()
+    if ctx is not None and file_path and str(file_path).startswith("file_"):
+        from src.services.files.session_file_checkout import resolve_tenant_file_record
+        resolved = resolve_tenant_file_record(str(file_path), ctx.tenant_id)
+        if resolved and resolved.get("path"):
+            return str(resolved["path"])
+        return None
+
     redis_path = resolve_path_via_redis(file_path)
     if redis_path:
         return redis_path
+    if file_path and str(file_path).startswith("file_"):
+        try:
+            from src.services.files.asset_store import get_file_asset
+            db_meta = get_file_asset(str(file_path))
+            if db_meta and db_meta.get("path") and Path(db_meta["path"]).is_file():
+                return str(Path(db_meta["path"]).resolve())
+        except Exception as e:
+            logger.warning(f"[storage] file_assets 元数据查询失败: {e}")
     info = find_uploaded_file_on_disk(file_path)
     if info:
         return info["path"]

@@ -209,10 +209,32 @@ def test_persist_trace_superseded_projects_superseded():
         worker._persist_trace(collector, "runner-1", _control(), finalization_retry=True)
 
     assert mock_update.call_args.kwargs["status"] == "superseded"
+    assert mock_update.call_args.kwargs["termination_reason"] == "superseded_by_new_message"
+    assert mock_update.call_args.kwargs["projected_tag"] == "superseded"
+
+
+def test_persist_trace_superseded_by_other_client_retry_passes_reason_and_tag():
+    """M2 回归：finalization_retry=True 跨端取代路径同步透传 termination_reason 与 projected_tag。"""
+    runner = {
+        "status": "cancelled",
+        "result": {"status": "cancelled", "output": ""},
+        "checkpoint": {"finalization_intent": "cancel_only",
+                       "cancel_only_from_status": "waiting",
+                       "cancel_reason": "superseded_by_other_client"},
+        "record_id": "record-1",
+    }
+    worker = _worker(runner)
+    collector = _collector()
+    with patch("src.core.trace_persist.update_completion") as mock_update:
+        worker._persist_trace(collector, "runner-1", _control(), finalization_retry=True)
+
+    assert mock_update.call_args.kwargs["status"] == "superseded"
+    assert mock_update.call_args.kwargs["termination_reason"] == "superseded_by_other_client"
+    assert mock_update.call_args.kwargs["projected_tag"] == "superseded"
 
 
 def test_persist_trace_superseded_engine_path_sets_collector_status():
-    """engine 优雅取消路径（非 finalization_retry）：collector.trace.status 投影 superseded。"""
+    """engine 优雅取消路径（非 finalization_retry）：同步 status、termination_reason 与 tags。"""
     runner = {
         "status": "cancelled",
         "result": {"status": "cancelled", "output": ""},
@@ -222,12 +244,39 @@ def test_persist_trace_superseded_engine_path_sets_collector_status():
     }
     worker = _worker(runner)
     collector = _collector()
+    collector.trace.metadata = {"termination_reason": "user_cancelled"}
+    collector.trace.tags = ["cancelled", "web_c"]
     with patch("src.db.models.ChatRecordDB") as mock_db:
         mock_db.get_by_id.return_value = None
         worker._persist_trace(collector, "runner-1", _control(), finalization_retry=False)
 
     assert collector.trace.status == "superseded"
+    assert collector.trace.metadata["termination_reason"] == "superseded_by_new_message"
+    assert "cancelled" not in collector.trace.tags
+    assert "superseded" in collector.trace.tags
     collector.on_complete.assert_called_once()
+
+
+def test_persist_trace_superseded_by_other_client_syncs_reason_and_tags():
+    """跨端取代：status=superseded，termination_reason=superseded_by_other_client，替换 cancelled 标签。"""
+    runner = {
+        "status": "cancelled",
+        "result": {"status": "cancelled", "output": ""},
+        "checkpoint": {"execution": {}, "cancel_reason": "superseded_by_other_client"},
+        "record_id": "record-1",
+        "attempt": 2,
+    }
+    worker = _worker(runner)
+    collector = _collector()
+    collector.trace.metadata = {"termination_reason": "user_cancelled"}
+    collector.trace.tags = ["cancelled"]
+    with patch("src.db.models.ChatRecordDB") as mock_db:
+        mock_db.get_by_id.return_value = None
+        worker._persist_trace(collector, "runner-1", _control(), finalization_retry=False)
+
+    assert collector.trace.status == "superseded"
+    assert collector.trace.metadata["termination_reason"] == "superseded_by_other_client"
+    assert collector.trace.tags == ["superseded"]
 
 
 def test_persist_trace_user_stop_without_reason_keeps_cancelled():

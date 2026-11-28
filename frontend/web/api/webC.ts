@@ -98,6 +98,24 @@ export function clearStoredSessionId(configId: string): void {
   }
 }
 
+// ============== 标签页级 client_id（跨端并发观测用，不作为安全凭证） ==============
+
+const CLIENT_ID_STORAGE_KEY = 'web_c_client_id'
+let memoryClientId = ''
+
+export function resolveClientId(): string {
+  try {
+    const existing = sessionStorage.getItem(CLIENT_ID_STORAGE_KEY) || ''
+    if (/^wc_cli_[0-9a-f-]{36}$/i.test(existing)) return existing
+    const created = `wc_cli_${generateUuid()}`
+    sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, created)
+    return created
+  } catch {
+    if (!memoryClientId) memoryClientId = `wc_cli_${generateUuid()}`
+    return memoryClientId
+  }
+}
+
 // ============== 身份凭证构建 ==============
 
 export interface IdentityQuery {
@@ -188,11 +206,12 @@ export interface ChatResponse {
   status: string
   direct_reply: string | null
   waiting_text?: string
+  queued?: boolean
 }
 
 export function postChat(
   tenantId: string, configId: string, identity: IdentityQuery,
-  body: { text: string; client_request_id: string; attachments: UploadRef[]; session_id?: string; new_session?: boolean }
+  body: { text: string; client_request_id: string; attachments: UploadRef[]; session_id?: string; new_session?: boolean; client_id?: string }
 ): Promise<ChatResponse> {
   return request(identityPath(tenantId, configId, identity, '/chat'), {
     method: 'POST',
@@ -227,9 +246,11 @@ export interface RunnerSnapshot {
   snapshot: { output?: string; progress?: string; images?: unknown[]; downloadableFiles?: { file_id: string; name?: string; file_name?: string; size?: number; mime_type?: string; download_url?: string }[]; waiting?: Record<string, unknown> }
   result?: { output?: string; images?: unknown[] } | null
   waiting_text?: string
-  /** 终态 cancelled 的取消来源（public_view 白名单透出）：superseded_by_new_message =
-   * 被其他端新消息取代；用户主动停止不透出，聊天页据此显示取代提示 */
+  /** 终态 cancelled 的取消来源（public_view 白名单透出）：superseded_by_new_message /
+   * superseded_by_other_client = 被新消息或其他端取代；用户主动停止不透出 */
   cancel_reason?: string
+  /** 发起端标签页标识（public_view 按需透出） */
+  client_id?: string
 }
 
 export function getRunner(
@@ -238,10 +259,17 @@ export function getRunner(
   return request(identityPath(tenantId, configId, identity, `/runners/${encodeURIComponent(runnerId)}`))
 }
 
-/** 会话活跃执行查询：刷新/重进后恢复观察用（无活跃执行时 runner_id 为 null） */
+export interface ActiveRunnerItem {
+  runner_id: string
+  status: string
+  client_id?: string
+  text?: string
+}
+
+/** 会话活跃/排队执行查询：刷新/重进/跨端切回后恢复观察用（无活跃执行时 runner_id 为 null） */
 export function getActiveRunner(
   tenantId: string, configId: string, identity: IdentityQuery, sessionId: string
-): Promise<{ success: boolean; runner_id: string | null; status: string | null }> {
+): Promise<{ success: boolean; runner_id: string | null; status: string | null; active_runners?: ActiveRunnerItem[] }> {
   return request(identityPath(tenantId, configId, identity,
     `/sessions/${encodeURIComponent(sessionId)}/active-runner`))
 }

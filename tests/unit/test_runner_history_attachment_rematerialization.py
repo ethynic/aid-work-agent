@@ -90,18 +90,22 @@ class TestMaterializeHistoryAttachments:
         assert context == ""
         assert not (ws / "history_files").exists()
 
-    def test_prepare_history_only_creates_workspace(self, monkeypatch, identity, tmp_path):
-        src = tmp_path / "file_hist0001.pdf"
-        src.write_bytes(_PDF_BYTES)
-        self._patch_resolve(monkeypatch, {"file_hist0001": {
-            "file_id": "file_hist0001", "name": "doc.pdf", "path": str(src), "size": len(_PDF_BYTES)}})
+    def test_prepare_history_only_injects_manifest_without_workspace(self, monkeypatch, identity, tmp_path):
+        """清单+按需检出：仅历史文件时不预建工作区、不复制文件，仅注入轻量清单（含 user+assistant）。"""
         assembler = AttachmentAssembler()
         enhanced, injection, workspace = assembler.prepare(
             "刚才那个文件继续处理", [], identity, None,
-            history_attachments=[{"file_id": "file_hist0001", "name": "doc.pdf"}])
-        assert workspace  # 当前消息无附件也创建工作区
-        assert "Historical attachments" in enhanced
-        assert Path(workspace, "history_files").exists()
+            history_attachments=[
+                {"file_id": "file_hist0001", "name": "doc.pdf", "origin": "user_upload", "size": 1024},
+                {"file_id": "file_1fba1c4a843e", "name": "诊断评估报告.pdf", "origin": "assistant_generated", "size": 524288},
+            ])
+        assert workspace is None
+        assert "本会话已有文件清单" in enhanced
+        assert "checkout_session_file" in enhanced
+        assert "file_hist0001" in enhanced
+        assert "file_1fba1c4a843e" in enhanced
+        assert "助手生成" in enhanced
+        assert "用户上传" in enhanced
 
     def test_materialize_exception_not_raised(self, monkeypatch, identity, tmp_path):
         def _boom(*args, **kwargs):
@@ -157,15 +161,73 @@ class TestReadUserAttachments:
         return captured
 
     def test_parses_json_attachments(self, monkeypatch):
-        rows = [{"attachments": json.dumps([
+        rows = [{"role": "user", "attachments": json.dumps([
             {"file_id": "file_a1b2c3d4e5f6", "name": "doc.pdf", "mime_type": "application/pdf", "size": 12}])},
-            {"attachments": None}]
+            {"role": "user", "attachments": None}]
         captured = self._patch_db(monkeypatch, rows)
         result = self._repo().read_user_attachments("session-1", 100)
         assert len(result) == 1
         assert result[0]["file_id"] == "file_a1b2c3d4e5f6"
         assert result[0]["name"] == "doc.pdf"
-        assert "role = 'user'" in captured["query"]
+        assert ["user"] in captured["parameters"]
+
+    def test_read_session_files_includes_assistant_deliverables(self, monkeypatch):
+        rows = [
+            {"role": "assistant", "attachments": json.dumps([
+                {"type": "file", "file_id": "file_1fba1c4a843e", "name": "诊断评估报告.pdf",
+                 "mime_type": "application/pdf", "size": 524288}
+            ]), "created_at": "2026-11-26 10:00:00"},
+            {"role": "user", "attachments": json.dumps([
+                {"type": "file", "file_id": "file_u11122233344", "name": "企业资料.xlsx",
+                 "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "size": 4096}
+            ]), "created_at": "2026-11-26 09:50:00"},
+        ]
+        captured = self._patch_db(monkeypatch, rows)
+        result = self._repo("channel").read_session_files("session-1")
+        # 按时间正序返回（先旧后新）
+        assert [item["file_id"] for item in result] == ["file_u11122233344", "file_1fba1c4a843e"]
+        assert result[0]["origin"] == "user_upload"
+        assert result[1]["origin"] == "assistant_generated"
+        assert ["user", "assistant"] in captured["parameters"]
+
+    def test_read_session_files_im_channel_reads_metadata_deliverables(self, monkeypatch):
+        """B3 回归：企微/企微客服/飞书/钉钉的 AI 交付文件落在 channel_messages.metadata.downloadableFiles。"""
+        rows = [
+            {"role": "assistant", "attachments": None, "metadata": {
+                "downloadableFiles": [
+                    {"file_id": "file_impdf000001", "file_name": "企微交付.pdf",
+                     "mime_type": "application/pdf", "file_size": 8192}
+                ]
+            }, "created_at": "2026-11-26 10:10:00"},
+        ]
+        captured = self._patch_db(monkeypatch, rows)
+        result = self._repo("channel").read_session_files("session-1")
+        assert "m.metadata" in captured["query"]
+        assert len(result) == 1
+        assert result[0]["file_id"] == "file_impdf000001"
+        assert result[0]["origin"] == "assistant_generated"
+
+    def test_read_session_files_web_reads_metadata_not_attachments_col(self, monkeypatch):
+        rows = [
+            {"role": "assistant", "metadata": {
+                "downloadableFiles": [
+                    {"file_id": "file_webpdf000001", "file_name": "方案.pdf",
+                     "mime_type": "application/pdf", "file_size": 2048}
+                ]
+            }, "created_at": "2026-11-26 10:05:00"},
+            {"role": "user", "metadata": {
+                "attachments": [
+                    {"file_id": "file_webusr000002", "name": "需求.docx", "size": 1024}
+                ]
+            }, "created_at": "2026-11-26 10:00:00"},
+        ]
+        captured = self._patch_db(monkeypatch, rows)
+        result = self._repo("web").read_session_files("session-1")
+        assert "m.attachments" not in captured["query"]
+        assert "m.metadata" in captured["query"]
+        assert [item["file_id"] for item in result] == ["file_webusr000002", "file_webpdf000001"]
+        assert result[1]["name"] == "方案.pdf"
+        assert result[1]["size"] == 2048
 
     def test_db_failure_fail_open(self, monkeypatch):
         @contextmanager
@@ -198,6 +260,17 @@ class TestPublicRunnerCancelReason:
     def test_superseded_exposed(self):
         value = public_runner(_minimal_row("cancelled", "superseded_by_new_message"))
         assert value["cancel_reason"] == "superseded_by_new_message"
+
+    def test_superseded_by_other_client_exposed(self):
+        value = public_runner(_minimal_row("cancelled", "superseded_by_other_client"))
+        assert value["cancel_reason"] == "superseded_by_other_client"
+
+    def test_client_id_exposed_when_present(self):
+        row = _minimal_row("running")
+        row["input"] = {"request_data": {"client_id": "wc_cli_abc"}}
+        value = public_runner(row)
+        assert value["client_id"] == "wc_cli_abc"
+        assert "client_id" not in public_runner(_minimal_row("running"))
 
     def test_user_stop_not_exposed(self):
         assert "cancel_reason" not in public_runner(_minimal_row("cancelled"))
