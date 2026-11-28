@@ -66,7 +66,7 @@ function isScreenState(value: unknown): value is ScreenState {
   if (!object(value) || !keys(value, ['session_id', 'state', 'degraded', 'started_at', 'seconds_since_renewal'])) return false
   if (!text(value.session_id) || !member(value.state, ['connecting', 'streaming', 'locked', 'renewing']) || typeof value.degraded !== 'boolean') return false
   if (value.started_at !== null && !Number.isSafeInteger(value.started_at)) return false
-  return value.seconds_since_renewal === null || (Number.isSafeInteger(value.seconds_since_renewal) && value.seconds_since_renewal >= 0)
+  return value.seconds_since_renewal === null || (typeof value.seconds_since_renewal === 'number' && Number.isSafeInteger(value.seconds_since_renewal) && value.seconds_since_renewal >= 0)
 }
 export function isPluginList(value: unknown): value is PluginList {
   return object(value) && keys(value, ['instance_id', 'revision', 'plugins']) && revision(value) && Array.isArray(value.plugins) && value.plugins.every((plugin) => object(plugin) && keys(plugin, ['installation_id', 'plugin_id', 'display_name', 'release_id', 'enabled', 'ready'], ['reason', 'version']) && ['installation_id', 'plugin_id', 'display_name', 'release_id'].every((key) => text(plugin[key])) && typeof plugin.enabled === 'boolean' && typeof plugin.ready === 'boolean' && (!Object.prototype.hasOwnProperty.call(plugin, 'version') || text(plugin.version)) && (!Object.prototype.hasOwnProperty.call(plugin, 'reason') || text(plugin.reason)))

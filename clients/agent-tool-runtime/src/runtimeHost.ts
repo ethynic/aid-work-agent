@@ -13,7 +13,7 @@ import {
   runtimeHomeDir,
 } from './config.js'
 import { loadDeviceToken } from './credentials.js'
-import { checkDesktopInteractive } from './desktopCheck.js'
+import { checkDesktopInteractive, type DesktopCheckResult } from './desktopCheck.js'
 import { deriveResourceKey } from './desktopLock.js'
 import { PollLoop } from './pollLoop.js'
 import { inspectWecomToolSchemas, ProviderCheckError, ProviderSet, type ProviderManager } from './providerManager.js'
@@ -25,7 +25,7 @@ import { readdirSync } from 'node:fs'
 
 import { ManagementError, RuntimeHost, PACKAGE_LIMITS, sha256, type ConnectionStatus, type HostAdapter, type PublisherTrust, type RuntimePlatform } from '@aid/local-tool-host-core'
 import { PluginStore } from '@aid/local-tool-host-core/plugins/store'
-import { ScreenSessionController, type ScreenShellPort } from '@aid/local-tool-host-core/screen/session'
+import { ScreenSessionController, type ScreenShellPort, type ScreenSummary } from '@aid/local-tool-host-core/screen/session'
 import type { FromPageMessage } from '@aid/local-tool-host-core/screen/messages'
 import { ScreenSignalingClient, ScreenTransportError, type ScreenTransport } from '@aid/local-tool-host-core/screen/signaling'
 import { localAddresses, resolveHost } from '@aid/local-tool-host-core/screen/hostNetwork'
@@ -92,9 +92,18 @@ export function screenTransport(api: Pick<ApiClient, 'postScreenSession' | 'post
   }
 }
 
+/** 管理界面刷新的对比键（契约 2.25）：可见状态变化才触发刷新；renewing 状态纳入没有续期的
+ *  秒数，使快照逐秒刷新、横幅秒数跳动；其余状态的秒级读数不触发 */
+export function screenSummaryKey(summary: ScreenSummary | null): string {
+  if (!summary) return ''
+  const seconds = summary.state === 'renewing' ? `|${summary.secondsSinceRenewal ?? 0}` : ''
+  return `${summary.sessionId}|${summary.state}|${summary.degraded}${seconds}`
+}
+
 /** 契约 2.25：画面端口装配——把传输层、壳通道与本机证据端口接到 core 的画面会话控制器。
- *  LegacyExecution.beginScreen 与测试共用同一装配；controller 内的异常全部自行消化 */
-export function assembleScreenPorts(transport: ScreenTransport, shell: RuntimeScreenIpc, deps: { taskRunning: () => boolean }): ScreenSessionController {
+ *  LegacyExecution.beginScreen 与测试共用同一装配；controller 内的异常全部自行消化。
+ *  desktopInteractive 缺省用现有的锁屏检测；测试注入固定结果或错误 */
+export function assembleScreenPorts(transport: ScreenTransport, shell: RuntimeScreenIpc, deps: { taskRunning: () => boolean; desktopInteractive?: () => Promise<DesktopCheckResult> }): ScreenSessionController {
   // 同机判定的端口表查询（netstat 约 30ms）按端口逐个问：UDP/TCP 各缓存约 250ms 的结果
   const portTables = new Map<PortProtocol, { at: number; ok: boolean; ports: Set<number> }>()
   const controller = new ScreenSessionController({
@@ -111,7 +120,7 @@ export function assembleScreenPorts(transport: ScreenTransport, shell: RuntimeSc
     },
     // 检测失败（带 error）按异常抛出：core 的 checkLock 按「没有变化」处理，不把失败当锁屏
     desktopInteractive: async () => {
-      const check = await checkDesktopInteractive()
+      const check = await (deps.desktopInteractive ?? checkDesktopInteractive)()
       if (check.error) throw new Error(check.error)
       return check.interactive
     },
@@ -463,10 +472,10 @@ export class LegacyExecution implements HostAdapter {
     const shell = this.screenShell!
     const controller = assembleScreenPorts(screenTransport(api), shell, { taskRunning: () => this.loop?.hasRunningInvocation === true })
     const wiring: NonNullable<LegacyExecution['screen']> = { controller, changeTimer: undefined as unknown as ReturnType<typeof setInterval>, lastSummaryKey: '' }
-    // 可见状态变化（连接/观看/锁屏/续期告急/降画质）触发管理界面刷新；秒级读数不触发
+    // 可见状态变化（连接/观看/锁屏/续期告急/降画质）触发管理界面刷新；renewing 状态的秒数
+    // 逐秒刷新（横幅秒数跳动），其余秒级读数不触发
     wiring.changeTimer = setInterval(() => {
-      const summary = controller.summary()
-      const key = summary ? `${summary.sessionId}|${summary.state}|${summary.degraded}` : ''
+      const key = screenSummaryKey(controller.summary())
       if (key === wiring.lastSummaryKey) return
       wiring.lastSummaryKey = key
       this.screenChanged?.()

@@ -6,6 +6,8 @@ import {
   createContentSecurityPolicy,
   isAllowedAgentRoute,
   isAllowedMainFrameNavigation,
+  isScreenCapturePageUrl,
+  isScreenCapturePermissionAllowed,
   isTrustedIpcSender,
   mapSchemeRequest,
   normalizeApiBaseUrl,
@@ -41,6 +43,11 @@ test('API base URL 仅允许 HTTPS 与本机开发 HTTP', () => {
 test('scheme 映射对合法 history 路由回退且拒绝 Portal/traversal', () => {
   assert.deepEqual(mapSchemeRequest('aidagent://app/t/acme/chat'), { kind: 'history-fallback', relativePath: 'index.html' })
   assert.deepEqual(mapSchemeRequest('aidagent://app/assets/app-123.js'), { kind: 'file', relativePath: 'assets/app-123.js' })
+  // 采集页（设计 6.1）：作为静态文件放行，供采集窗口 loadURL 打开；主窗口仍不可导航到它
+  assert.deepEqual(mapSchemeRequest('aidagent://app/screen.html'), { kind: 'file', relativePath: 'screen.html' })
+  assert.equal(isAllowedMainFrameNavigation('aidagent://app/screen.html'), false)
+  assert.equal(mapSchemeRequest('aidagent://app/Screen.html').kind, 'reject')
+  assert.equal(mapSchemeRequest('aidagent://app/screen.html?sid=x').kind, 'reject', 'scheme URL 不允许 query')
   for (const url of [
     'aidagent://app/portal',
     'aidagent://app/subagents',
@@ -103,4 +110,28 @@ test('Electron renderer 安全配置固定开启隔离与 Web Security', () => {
     sandbox: true,
     webSecurity: true,
   })
+})
+
+test('采集页地址判定只认 aidagent://app/screen.html', () => {
+  assert.equal(isScreenCapturePageUrl('aidagent://app/screen.html'), true)
+  assert.equal(isScreenCapturePageUrl('aidagent://app/screen.html#x'), true)
+  assert.equal(isScreenCapturePageUrl('aidagent://app/'), false)
+  assert.equal(isScreenCapturePageUrl('aidagent://app/t/acme/chat'), false)
+  assert.equal(isScreenCapturePageUrl('aidagent://evil/screen.html'), false)
+  assert.equal(isScreenCapturePageUrl('https://app/screen.html'), false)
+  assert.equal(isScreenCapturePageUrl(''), false)
+  assert.equal(isScreenCapturePageUrl('not a url'), false)
+})
+
+test('采集分区权限矩阵：只放行采集页的屏幕采集（media 且 mediaTypes 为空）', () => {
+  const base = { permission: 'media', isCapturePage: true }
+  assert.equal(isScreenCapturePermissionAllowed({ ...base }), true, '屏幕采集申请的 media 没有媒体类型')
+  assert.equal(isScreenCapturePermissionAllowed({ ...base, mediaTypes: [] }), true)
+  assert.equal(isScreenCapturePermissionAllowed({ ...base, mediaTypes: ['video'] }), false, '摄像头/麦克风一律拒绝')
+  assert.equal(isScreenCapturePermissionAllowed({ ...base, mediaTypes: ['audio'] }), false)
+  assert.equal(isScreenCapturePermissionAllowed({ ...base, mediaTypes: ['video', 'audio'] }), false)
+  assert.equal(isScreenCapturePermissionAllowed({ ...base, permission: 'geolocation' }), false, '其余 permission 一律拒绝')
+  assert.equal(isScreenCapturePermissionAllowed({ ...base, permission: 'display-capture' }), false)
+  assert.equal(isScreenCapturePermissionAllowed({ permission: 'media', isCapturePage: false }), false, '不是采集页一律拒绝')
+  assert.equal(isScreenCapturePermissionAllowed({ permission: 'media', isCapturePage: false, mediaTypes: [] }), false)
 })

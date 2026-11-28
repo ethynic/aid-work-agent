@@ -10,12 +10,12 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { RuntimeHost } from '@aid/local-tool-host-core'
-import { POLL_INTERVAL_MS, POLL_JITTER_MS } from '@aid/local-tool-host-core/screen/protocol'
+import { POLL_INTERVAL_MS, POLL_JITTER_MS, RENEWAL_LATE_SECONDS } from '@aid/local-tool-host-core/screen/protocol'
 import type { ScreenSessionController } from '@aid/local-tool-host-core/screen/session'
 import { ApiError, DeviceRevokedError, NetworkError } from '../src/apiClient.js'
 import { main } from '../src/cli.js'
 import { createScreenShellChannel } from '../src/managed-entry.js'
-import { assembleScreenPorts, classifyScreenTransportError, openRuntimeHost, screenTransport } from '../src/runtimeHost.js'
+import { assembleScreenPorts, classifyScreenTransportError, openRuntimeHost, screenSummaryKey, screenTransport } from '../src/runtimeHost.js'
 import { FakeCloud } from './helpers/fakeCloud.js'
 import { startTestStack } from './helpers/runtimeStack.js'
 
@@ -264,4 +264,106 @@ test('screen.stop 管理请求：connecting 阶段结束为 runtime_rejected，s
     else process.env.AIDWORK_RUNTIME_HOME = previousHome
     rmSync(home, { recursive: true, force: true })
   }
+})
+
+// ---- 第 C 轮补充：B 轮两个遗留 ----
+
+/** mock 时钟下驱动一个画面会话到 streaming（照租约测试的装配与推进方式） */
+async function driveToStreamingWithClock(t: import('node:test').TestContext, options: {
+  posted: Array<{ type: string; payload: unknown }>
+  check?: () => Promise<{ interactive: boolean; error?: string }>
+}) {
+  t.after(() => { t.mock.timers.reset() })
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  async function drain(rounds = 8) { for (let i = 0; i < rounds; i++) await new Promise(resolve => setImmediate(resolve)) }
+  async function advance(ms: number, step = 100) {
+    for (let done = 0; done < ms; done += step) { await t.mock.timers.tick(Math.min(step, ms - done)); await drain() }
+  }
+  const { shell, dispatch } = fakeShellIpc()
+  let queued: Array<{ seq: number; type: string; payload: unknown }> = []
+  const transport = {
+    async post(path: string, body: unknown) {
+      const params = body as Record<string, unknown>
+      if (path === '/api/local-tools/runtime/screen/session') {
+        const signals = queued; queued = []
+        return { session: { id: params['session_id'], state: 'prepared' }, signals }
+      }
+      options.posted.push({ type: String(params['type']), payload: params['payload'] })
+      return { success: true, seq: options.posted.length }
+    },
+  }
+  const controller = assembleScreenPorts(transport, shell, { taskRunning: () => false, ...(options.check ? { desktopInteractive: options.check } : {}) })
+  controller.onHeartbeatScreen({ screen_session: { id: SID, state: 'pending' } })
+  await advance(100)
+  queued.push({ seq: 1, type: 'start', payload: {} })
+  await advance(POLL_INTERVAL_MS + POLL_JITTER_MS + 100)
+  dispatch(SID, { kind: 'offer', sdp: 'v=0-round-c-offer' })
+  await advance(100)
+  dispatch(SID, { kind: 'connected' })
+  await advance(100)
+  dispatch(SID, { kind: 'streaming', path: 'lan' })
+  await advance(100)
+  return { controller, advance, drain }
+}
+
+test('B 轮遗留：renewing 状态逐秒刷新（对比键纳入秒数）；其余状态秒级读数不触发', async t => {
+  const posted: Array<{ type: string; payload: unknown }> = []
+  const { controller, advance } = await driveToStreamingWithClock(t, { posted })
+  // 照 LegacyExecution.beginScreen 的 1 秒刷新循环：键不变就不通知
+  let notified = 0
+  let lastKey = screenSummaryKey(controller.summary())
+  const wiringTimer = setInterval(() => {
+    const key = screenSummaryKey(controller.summary())
+    if (key === lastKey) return
+    lastKey = key; notified++
+  }, 1000)
+  const streamingSeconds = controller.summary()?.secondsSinceRenewal
+  assert.ok(streamingSeconds !== null && streamingSeconds !== undefined && streamingSeconds < RENEWAL_LATE_SECONDS, `传画面中且尚未告急：${streamingSeconds}`)
+  const before = notified
+  await advance(3_000)
+  assert.equal(notified, before, `streaming 状态的秒级读数不触发刷新（${streamingSeconds} 秒）`)
+  assert.equal(screenSummaryKey(controller.summary()), lastKey)
+  await advance(9_000)
+  assert.equal(controller.summary()?.state, 'renewing', `超过 ${RENEWAL_LATE_SECONDS} 秒没有续期进入 renewing`)
+  const during = notified
+  await advance(2_000)
+  assert.ok(notified - during >= 2, `renewing 逐秒触发刷新：${notified - during}`)
+  const first = controller.summary()!.secondsSinceRenewal!
+  await advance(1_000)
+  assert.equal(controller.summary()!.secondsSinceRenewal, first + 1, '快照秒数逐秒前进')
+  clearInterval(wiringTimer)
+})
+
+test('B 轮遗留：锁屏检测注入口——注入 {error} 不发 locked；{interactive:false} 发 locked、恢复发 unlocked', async t => {
+  const posted: Array<{ type: string; payload: unknown }> = []
+  let check: { interactive: boolean; error?: string } = { interactive: true }
+  const { controller, advance } = await driveToStreamingWithClock(t, { posted, check: async () => check })
+  assert.equal(posted.some(s => s.type === 'status'), true, '连接建立后已报告 status')
+  check = { interactive: false }
+  await advance(2_000)
+  assert.deepEqual(posted.filter(s => s.type === 'status').at(-1)?.payload, { state: 'locked' }, '注入非交互结果发 locked')
+  const statusCount = posted.filter(s => s.type === 'status').length
+  check = { interactive: false, error: 'fixture-check-failed' }
+  await advance(4_000)
+  assert.equal(posted.filter(s => s.type === 'status').length, statusCount, '检测失败按「没有变化」处理，不发 unlocked 也不误报锁屏')
+  check = { interactive: true }
+  await advance(2_000)
+  assert.deepEqual(posted.filter(s => s.type === 'status').at(-1)?.payload, { state: 'unlocked' }, '恢复交互发 unlocked')
+})
+
+// 第 C 轮测试补充：上面的 {error} 注入发生在已锁屏状态，error 被错误映射为 false 时同样「无变化」，
+// 用例无法区分。这里在未锁屏状态注入 {error}：按异常处理必须保持 unlocked，映射成 false 则会翻成 locked。
+test('B 轮遗留补充：未锁屏时注入 {error} 不发 locked；之后真实非交互仍能上报 locked', async t => {
+  const posted: Array<{ type: string; payload: unknown }> = []
+  let check: { interactive: boolean; error?: string } = { interactive: true }
+  const { advance } = await driveToStreamingWithClock(t, { posted, check: async () => check })
+  await advance(2_500)
+  const statusCount = posted.filter(s => s.type === 'status').length
+  check = { interactive: true, error: 'fixture-check-failed' }
+  await advance(5_000)
+  assert.equal(posted.filter(s => s.type === 'status').length, statusCount, '未锁屏时检测失败按「没有变化」处理，不发 locked')
+  assert.equal(posted.some(s => s.type === 'status' && (s.payload as { state?: string }).state === 'locked'), false, '检测失败不误报锁屏')
+  check = { interactive: false }
+  await advance(2_500)
+  assert.deepEqual(posted.filter(s => s.type === 'status').at(-1)?.payload, { state: 'locked' }, '随后真实非交互仍能正常上报')
 })

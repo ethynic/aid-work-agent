@@ -138,6 +138,11 @@ export function mapSchemeRequest(requestUrl: string): SchemeRequestTarget {
   if (url.pathname.startsWith('/assets/')) {
     return { kind: 'file', relativePath: url.pathname.slice(1) }
   }
+  // 采集页（设计 6.1）：只允许采集窗口经 loadURL 打开；它不是 history 路由，
+  // 所以 isAllowedMainFrameNavigation 对它返回 false，主窗口无法导航到这里。
+  if (url.pathname === '/screen.html') {
+    return { kind: 'file', relativePath: 'screen.html' }
+  }
   if (!isAllowedAgentRoute(url.pathname)) {
     return { kind: 'reject', reason: 'route is not available in Agent Desktop' }
   }
@@ -150,6 +155,32 @@ export function isAllowedMainFrameNavigation(url: string): boolean {
 
 export function isTrustedIpcSender(senderUrl: string, isMainFrame: boolean, isMainWindow: boolean): boolean {
   return isMainFrame && isMainWindow && isAllowedMainFrameNavigation(senderUrl)
+}
+
+/** 采集窗口加载的页面地址（设计 6.1）。采集分区里的权限判定以它为准。
+ *  aidagent 是非特例 scheme，URL.origin 为 null，所以要按协议与主机名逐项比较 */
+export function isScreenCapturePageUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === `${DESKTOP_SCHEME}:` && parsed.hostname === DESKTOP_HOST
+      && !parsed.username && !parsed.password && !parsed.port && parsed.pathname === '/screen.html'
+  } catch {
+    return false
+  }
+}
+
+/** 采集分区的权限矩阵（设计 6.1）：只放行采集页发起的屏幕采集。
+ *  Electron 43 里屏幕采集申请的权限名是 media，且 mediaTypes 为空；摄像头/麦克风
+ *  的 mediaTypes 非空，一律拒绝；其余 permission 一律拒绝 */
+export function isScreenCapturePermissionAllowed(input: {
+  permission: string
+  mediaTypes?: readonly unknown[] | undefined
+  isCapturePage: boolean
+}): boolean {
+  if (!input.isCapturePage) return false
+  if (input.permission !== 'media') return false
+  if (Array.isArray(input.mediaTypes) && input.mediaTypes.length > 0) return false
+  return true
 }
 
 export function parseAgentDeepLink(argumentsList: readonly string[]): string | null {

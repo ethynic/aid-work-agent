@@ -1,5 +1,10 @@
 ﻿; Installation uses CurrentUser callbacks even when the file-copy section elevates.
 !include "FileFunc.nsh"
+; Main executable file name is defined by electron-builder's common.nsh (PRODUCT_FILENAME.exe).
+; The isolated compile test has no builder environment; the fallback name only exists in that compile.
+!ifndef APP_EXECUTABLE_FILENAME
+  !define APP_EXECUTABLE_FILENAME "AID Work Agent.exe"
+!endif
 !ifdef BUILD_UNINSTALLER
   !define RUNTIME_GUARD_FUNCTION "un.runtimeCheckAppRunning"
 !else
@@ -283,6 +288,26 @@
         StrCpy $R0 2
       ${EndIf}
     FunctionEnd
+    ; 入站放行（设计 4.1/D14）：可提权时为 Runtime 主程序添加两条 UDP 入站允许规则——
+    ; 任意端口（内网直连的关键条件）与 5353（供系统解析器解析 mDNS 名字）。不可提权时
+    ; netsh 失败，只记安装日志、不阻断安装（管理界面提示在防火墙提示里点「允许访问」）。
+    Function runtimeAddFirewallRules
+      nsExec::ExecToStack '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="AID Runtime" dir=in action=allow protocol=udp program="$INSTDIR\${APP_EXECUTABLE_FILENAME}"'
+      Pop $R0
+      Pop $R1
+      StrCpy $R4 $R0
+      nsExec::ExecToStack '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="AID Runtime mDNS" dir=in action=allow protocol=udp localport=5353 program="$INSTDIR\${APP_EXECUTABLE_FILENAME}"'
+      Pop $R0
+      Pop $R1
+      StrCpy $R5 $R0
+      ClearErrors
+      FileOpen $R3 "$INSTDIR\firewall-setup.log" a
+      ${IfNot} ${Errors}
+        FileWrite $R3 "inbound rule AID Runtime: exit code $R4$\r$\n"
+        FileWrite $R3 "inbound rule AID Runtime mDNS: exit code $R5$\r$\n"
+        FileClose $R3
+      ${EndIf}
+    FunctionEnd
   !endif
 !macroend
 !macro customInstall
@@ -319,6 +344,9 @@
     ; payload without invoking a production-key uninstaller.
     DeleteRegValue HKCU "$runtimeUninstallRegistryKey" UninstallString
     DeleteRegValue HKCU "$runtimeUninstallRegistryKey" QuietUninstallString
+  ${EndIf}
+  ${If} $R6 == ""
+    Call runtimeAddFirewallRules
   ${EndIf}
 !macroend
 !macro customUnInstall

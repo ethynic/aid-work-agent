@@ -1,4 +1,5 @@
 import { readdir, readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -89,6 +90,11 @@ async function main(distDirectoryArgument) {
   const bundledModules = JSON.parse(await readFile(moduleManifestPath, 'utf8'))
   const html = await readFile(htmlPath, 'utf8')
   const bundleSource = await readJavaScriptBundle(distDirectory)
+  // 多入口登记（设计 6.1）：隐藏采集页必须随 desktop 构建产出，供 Runtime 壳的采集窗口加载
+  const screenEntry = manifest['screen.html']
+  if (!screenEntry || typeof screenEntry.file !== 'string' || !existsSync(path.join(distDirectory, 'screen.html'))) {
+    throw new Error('Desktop build is missing the screen capture entry (screen.html)')
+  }
   const forbiddenFound = findForbiddenDesktopModules(manifest, bundledModules)
   if (forbiddenFound.length > 0) {
     throw new Error(`Desktop build contains Portal-only modules:\n${forbiddenFound.join('\n')}`)

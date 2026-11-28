@@ -308,7 +308,7 @@ describe('Runtime screen banner', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('收到远程查看请求')
     expect(wrapper.text()).toContain('尚未采集画面')
-    expect(wrapper.get('.inline-notice.error').exists()).toBe(true)
+    expect(wrapper.find('.inline-notice.error').exists()).toBe(true)
     await button(wrapper, '拒绝').trigger('click'); await flushPromises()
     const sent = requests.find(request => request.method === 'screen.stop')
     expect(sent?.params.session_id).toBe('sess-1')

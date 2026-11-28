@@ -18,7 +18,12 @@ export default defineConfig(({ command }) => {
       manifest: true,
       cssCodeSplit: true,
       rollupOptions: {
-        input: path.resolve(__dirname, legacyDevelopmentEntry ? 'desktop.legacy.html' : 'desktop.html'),
+        // 多入口：desktop 管理界面 + screen 隐藏采集页（设计 6.1）。采集页不引用共享 API，
+        // 也不触碰 window.agentDesktop，因此不受上面 VITE_API_BASE_URL define 的影响
+        input: {
+          desktop: path.resolve(__dirname, legacyDevelopmentEntry ? 'desktop.legacy.html' : 'desktop.html'),
+          screen: path.resolve(__dirname, 'screen.html'),
+        },
         output: {
           manualChunks: {
             'vue-vendor': ['vue', 'vue-router'],

@@ -31,6 +31,7 @@
       <div v-if="view.state?.screen" :class="['inline-notice', view.state.screen.state === 'renewing' ? 'warning' : 'error']" role="alert">
         <template v-if="view.state.screen.state === 'connecting'">
           <p>收到远程查看请求，正在建立连接。此时尚未采集画面，拒绝后不会开始。</p>
+          <p>若网页无法连接，请在 Windows 防火墙提示中允许 Runtime 访问网络。</p>
           <div class="runtime-actions runtime-screen-actions"><button type="button" class="runtime-secondary" :disabled="view.busy || recovery.busy" @click="stopScreen">拒绝</button></div>
         </template>
         <template v-else>

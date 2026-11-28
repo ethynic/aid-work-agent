@@ -2,7 +2,7 @@ import { existsSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, safeStorage, screen, shell, Tray } from 'electron'
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, nativeTheme, net, protocol, safeStorage, screen, session, shell, Tray } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import electronUpdater from 'electron-updater'
 import { EncryptedCredentialStore, isAllowedCredentialKey, isAllowedCredentialValue } from './credentials.js'
@@ -10,7 +10,8 @@ import { resolveApiConfiguration } from './apiConfiguration.js'
 import { DesktopUpdater, type UpdateAdapter } from './desktopUpdater.js'
 import { resolveUpdateConfiguration } from './updateConfiguration.js'
 import { resolveProductConfiguration } from './productConfiguration.js'
-import { RuntimeSupervisor } from './runtimeSupervisor.js'
+import { RuntimeSupervisor, type RuntimeScreenHostFrame } from './runtimeSupervisor.js'
+import { ScreenCaptureSession } from './screenCaptureSession.js'
 import { RuntimeLogs } from './runtimeLogs.js'
 import { RuntimeConnectionRecovery } from './runtimeConnectionRecovery.js'
 import { RuntimeCleanConnection, readRuntimeConnectionInfo } from './runtimeCleanConnection.js'
@@ -26,6 +27,8 @@ import {
   DESKTOP_ORIGIN,
   DESKTOP_SCHEME,
   isAllowedMainFrameNavigation,
+  isScreenCapturePageUrl,
+  isScreenCapturePermissionAllowed,
   isTrustedIpcSender,
   mapSchemeRequest,
   parseAgentDeepLink,
@@ -56,6 +59,7 @@ protocol.registerSchemesAsPrivileged([
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const rendererRoot = path.resolve(dirname, '../renderer')
 const preloadPath = path.resolve(dirname, 'preload.cjs')
+const screenPreloadPath = path.resolve(dirname, 'screen-preload.cjs')
 const runtimeResources = app.isPackaged ? process.resourcesPath : path.resolve(dirname, '../../build/runtime-resources')
 const smokeMode = process.env.AID_AGENT_DESKTOP_SMOKE === '1'
 // Electron appData ignores APPDATA overrides on Windows. Explicit smoke mode
@@ -95,6 +99,9 @@ let runtimeSupervisor: RuntimeSupervisor | null = null
 let runtimeConnectionRecovery: RuntimeConnectionRecovery | RuntimeCleanConnection | null = null
 let runtimeSelections: RuntimeSelections | null = null
 let runtimeTray: Tray | null = null
+let trayStartup: RuntimeStartup | null = null
+/** 画面会话期间托盘提示「正在被远程查看」（设计 6.1）；状态由 Main 保存 */
+let screenViewerActive = false
 let quitting = false
 let exitAllowed = false
 let exitPending = false
@@ -115,12 +122,17 @@ function attachRuntimeSupervisor(home: string): void {
   runtimeSupervisor = new RuntimeSupervisor({
     nodeExecutable: product.nodeExecutable!, hostEntry: product.hostEntry!, home,
     supervisor: product.kind === 'runtime' ? 'runtime_app' : 'desktop',
+    // 契约 2.25：Runtime 产品形态带隐藏采集窗口；spawn 参数据此声明 --screen-capture=1
+    screenCapture: product.kind === 'runtime',
     takeSelectedPackage: input => {
       if (!mainWindow || mainWindow.isDestroyed() || !runtimeSelections) throw new Error('选包窗口已失效')
       return runtimeSelections.take(input, mainWindow.webContents.id)
     },
     onEvent: event => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('desktop:runtime:event', event) },
+    onScreenFrame: handleScreenFrame,
     onDisconnect: () => {
+      // Host 进程已结束，画面会话随之结束：采集窗口不再有续期来源，直接销毁（设计 4.4）
+      screenCapture.destroy()
       void runtimeSelections?.invalidate()
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('desktop:runtime:disconnected')
     },
@@ -138,6 +150,128 @@ function revealWindow(window: BrowserWindow): void {
   window.show()
   focusExistingWindow(window)
 }
+
+/** 托盘菜单唯一重建点（设计 6.1）：画面会话期间菜单顶部显示「正在被远程查看」 */
+function refreshTrayMenu(): void {
+  if (!runtimeTray) return
+  runtimeTray.setContextMenu(Menu.buildFromTemplate([
+    ...(screenViewerActive ? [{ label: '正在被远程查看', enabled: false as const }] : []),
+    { label: '打开执行节点', click: () => { if (mainWindow) revealWindow(mainWindow) } },
+    ...(trayStartup ? [{ label: '登录 Windows 后自动启动', type: 'checkbox' as const, checked: trayStartup.enabled(), click: (item: Electron.MenuItem) => {
+      try { trayStartup!.setEnabled(item.checked) } catch { logLifecycle('runtime-login-registration-failed'); if (mainWindow) revealWindow(mainWindow) }
+      refreshTrayMenu()
+    } }] : []),
+    { type: 'separator' }, { label: '退出', click: () => app.quit() },
+  ]))
+}
+
+// ---- 隐藏采集窗口（契约 2.25、设计 6.1）----
+
+const SCREEN_CAPTURE_PARTITION = 'aid-screen-capture'
+
+/** Host→Main 的 runtime_screen 帧：open 建窗、send 转发采集页、close 关窗 */
+function handleScreenFrame(frame: RuntimeScreenHostFrame): void {
+  if (frame.action === 'open') {
+    try {
+      screenCapture.open(frame.session_id, frame.stun_urls)
+    } catch (error) {
+      // 窗口没建成（core 的 beginConnect 对 shell.open 失败的约定：立即结束，不等 30 秒建连超时）
+      logLifecycle('screen-capture-open-failed', error instanceof Error ? error.name : 'unknown')
+      runtimeSupervisor?.sendScreenFrame({ event: 'runtime_screen', version: 1, session_id: frame.session_id, kind: 'window-crashed' })
+    }
+    return
+  }
+  if (frame.action === 'send') screenCapture.send(frame.session_id, frame.message)
+  else screenCapture.close(frame.session_id)
+}
+
+/** 托盘提示与菜单标题随画面会话变化：会话期间「正在被远程查看」，结束后恢复产品名 */
+function updateScreenTrayState(active: boolean): void {
+  if (screenViewerActive === active) return
+  screenViewerActive = active
+  if (!runtimeTray) return
+  runtimeTray.setToolTip(active ? '正在被远程查看' : product.productName)
+  refreshTrayMenu()
+}
+
+/** 渲染进程异常退出或采集页加载失败：发 window-crashed 帧（Host 按阶段结算）并销毁窗口。
+ *  旧窗口销毁后的迟到事件（loadURL 拒绝、崩溃上报）不作用于新会话 */
+function onScreenCaptureWindowGone(window: BrowserWindow): void {
+  if (screenCapture.current() !== window) return
+  const frame = screenCapture.windowCrashed()
+  if (frame) runtimeSupervisor?.sendScreenFrame(frame)
+}
+
+function createScreenCaptureWindow(sessionId: string, stunUrls: string[]): BrowserWindow {
+  if (!existsSync(screenPreloadPath)) throw new Error(`screen preload output missing: ${screenPreloadPath}`)
+  const window = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      ...createSecureWebPreferences(screenPreloadPath),
+      // 独立内存会话分区：权限只对这个分区放开，主窗口默认 session 的一律拒绝不变（设计 6.1）
+      partition: SCREEN_CAPTURE_PARTITION,
+      // 页面里的定时逻辑（统计采样、降画质）不能被后台节流拉长
+      backgroundThrottling: false,
+      // 会话编号与 stun_urls 走 additionalArguments（现有 main.ts 的参数风格）：scheme URL 禁止
+      // query/fragment（mapSchemeRequest），经 preload 读 argv 再经桥交给页面，URL 保持干净
+      additionalArguments: [
+        `--aid-screen-session-id=${sessionId}`,
+        `--aid-screen-stun-urls=${stunUrls.join(',')}`,
+      ],
+    },
+  })
+  installScreenCapturePermissions(window.webContents.session)
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  window.webContents.on('will-navigate', (event) => event.preventDefault())
+  window.webContents.on('will-attach-webview', (event) => event.preventDefault())
+  window.webContents.on('render-process-gone', (_event, details) => {
+    logLifecycle('screen-capture-gone', `${details.reason}-${details.exitCode}`)
+    onScreenCaptureWindowGone(window)
+  })
+  window.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedUrl, isMainFrame) => {
+    if (!isMainFrame) return
+    logLifecycle('screen-capture-load-failed', `${errorCode}-${errorDescription}`)
+    onScreenCaptureWindowGone(window)
+  })
+  void window.loadURL(`${DESKTOP_ORIGIN}/screen.html`).catch(() => onScreenCaptureWindowGone(window))
+  return window
+}
+
+/** 只对采集分区放行屏幕采集；主窗口默认 session 的「一律拒绝」不变（设计 6.1） */
+function installScreenCapturePermissions(captureSession: Electron.Session): void {
+  captureSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    // mediaTypes 只有摄像头/麦克风申请（MediaAccessPermissionRequest）才带；屏幕采集的 media 申请为空
+    const mediaTypes = 'mediaTypes' in details ? details.mediaTypes : undefined
+    callback(isScreenCapturePermissionAllowed({ permission, mediaTypes, isCapturePage: isScreenCapturePageUrl(webContents.getURL()) }))
+  })
+  captureSession.setPermissionCheckHandler((webContents, permission, _origin, details) => {
+    if (!webContents) return false
+    // 权限查询（permissions API）与实际申请不同：mediaType 单数只是查询方向，真正的门在申请与 display handler
+    return isScreenCapturePermissionAllowed({ permission, isCapturePage: isScreenCapturePageUrl(webContents.getURL()) })
+  })
+  // 必须注册并直接指定主显示器，否则 getDisplayMedia 立即报不支持；不弹系统选择框（Electron 43）
+  captureSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+    try {
+      const primary = screen.getPrimaryDisplay()
+      const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } })
+      const source = sources.find((item) => String(item.display_id) === String(primary.id)) ?? sources[0]
+      callback(source ? { video: source } : {})
+    } catch {
+      callback({})
+    }
+  })
+}
+
+const screenCapture = new ScreenCaptureSession<BrowserWindow>({
+  create: (sessionId, stunUrls) => createScreenCaptureWindow(sessionId, stunUrls),
+  destroy: window => {
+    if (!window.isDestroyed()) window.destroy()
+  },
+  forward: (window, message) => {
+    if (!window.isDestroyed()) window.webContents.send('desktop:screen:host-message', message)
+  },
+  onActiveChange: active => updateScreenTrayState(active),
+})
 
 function navigateDeepLink(argumentsList: readonly string[]): void {
   if (product.kind !== 'desktop') return
@@ -330,6 +464,15 @@ function registerDesktopIpc(): void {
     if (desktopUpdater!.getState().status !== 'downloaded') throw new Error('尚无已下载的更新包')
     await runtimeSupervisor?.stopAndExit()
     desktopUpdater!.restartAndInstall()
+  })
+  // 采集页→Main→Host 的画面帧（契约 2.25）：发送方限定为采集窗口本身，不走主窗口的
+  // assertTrustedSender（设计 6.1）。帧形状统一经 sendScreenFrame 校验，非法帧丢弃
+  ipcMain.on('desktop:screen:page-message', (event, input: unknown) => {
+    const window = screenCapture.current()
+    if (!window || window.isDestroyed() || event.sender !== window.webContents) return
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return
+    const frame = screenCapture.pageFrame(input as Record<string, unknown>)
+    if (frame) runtimeSupervisor?.sendScreenFrame(frame)
   })
 }
 
@@ -550,14 +693,7 @@ if (!hasSingleInstanceLock) {
       try { startup?.initialize() } catch { logLifecycle('runtime-login-registration-failed') }
       runtimeTray = new Tray(await app.getFileIcon(process.execPath))
       runtimeTray.setToolTip(product.productName)
-      const refreshTrayMenu = () => runtimeTray!.setContextMenu(Menu.buildFromTemplate([
-        { label: '打开执行节点', click: () => { if (mainWindow) revealWindow(mainWindow) } },
-        ...(startup ? [{ label: '登录 Windows 后自动启动', type: 'checkbox' as const, checked: startup.enabled(), click: (item: Electron.MenuItem) => {
-          try { startup.setEnabled(item.checked) } catch { logLifecycle('runtime-login-registration-failed'); if (mainWindow) revealWindow(mainWindow) }
-          refreshTrayMenu()
-        } }] : []),
-        { type: 'separator' }, { label: '退出', click: () => app.quit() },
-      ]))
+      trayStartup = startup
       refreshTrayMenu()
       runtimeTray.on('double-click', () => { if (mainWindow) revealWindow(mainWindow) })
       if (runtimeSupervisor) {
@@ -610,6 +746,8 @@ if (!hasSingleInstanceLock) {
   app.on('before-quit', (event) => {
     runtimeStartupAbort.abort()
     desktopUpdater?.stop()
+    // 退出清理（设计 6.1）：先销毁采集窗口，不等网络（画面随窗口消失）
+    screenCapture.destroy()
     if (runtimeConnectionRecovery instanceof RuntimeCleanConnection) runtimeConnectionRecovery.dispose()
     if (!runtimeSupervisor || exitAllowed) { runtimeTray?.destroy(); return }
     if (runtimeConnectionRecovery?.busy) { event.preventDefault(); if (mainWindow) revealWindow(mainWindow); return }
