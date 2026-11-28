@@ -18,6 +18,10 @@
     "./plugins/*": {
       "types": "./dist/plugins/*.d.ts",
       "import": "./dist/plugins/*.js"
+    },
+    "./screen/*": {
+      "types": "./dist/screen/*.d.ts",
+      "import": "./dist/screen/*.js"
     }
   },
   "files": [
