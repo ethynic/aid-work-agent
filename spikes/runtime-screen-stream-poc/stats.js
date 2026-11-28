@@ -26,9 +26,11 @@
   const normalize = (a) => String(a || '').replace(/^::ffff:/i, '').replace(/%.*$/, '').toLowerCase();
 
   // localAddresses：本机全部网卡地址，只用来判断对端地址是不是本机的，结果以布尔值输出。
-  async function collect(pc, localAddresses) {
+  // extra：调用方想让每个采样多带的字段（例如当前的画质档），原样放进结果。
+  async function collect(pc, localAddresses, extra) {
     const mine = localAddresses || [];
     const out = { vis: document.visibilityState };
+    if (extra) Object.assign(out, extra);
     const reports = await pc.getStats();
     reports.forEach((r) => {
       if (r.type === 'outbound-rtp' && r.kind === 'video') {
@@ -39,6 +41,11 @@
           enc: r.encoderImplementation, codec: codec && codec.mimeType,
           // 设计 4.5 的任务优先靠这个信号：编码器是否因 CPU 跟不上而受限（none / cpu / bandwidth / other）。
           qlr: r.qualityLimitationReason || null,
+          // 编码一帧平均用多少毫秒（累计编码时间 ÷ 已编码帧数）、累计编码时间（秒）、平均量化参数（越小越清晰）。
+          // 用来直接比较降低画质前后编码本身的开销，不受验证程序其他进程固定开销的影响。
+          encMsAvg: r.totalEncodeTime && r.framesEncoded ? +((r.totalEncodeTime * 1000) / r.framesEncoded).toFixed(2) : null,
+          encTime: r.totalEncodeTime || 0,
+          qpAvg: r.qpSum && r.framesEncoded ? +(r.qpSum / r.framesEncoded).toFixed(1) : null,
         };
       } else if (r.type === 'inbound-rtp' && r.kind === 'video') {
         const codec = reports.get(r.codecId);

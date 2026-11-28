@@ -27,6 +27,14 @@ const LEASE_OUT_AT_SEC = num('POC_LEASE_OUT_AT_SEC', 0); // 开始采集多少�
 const MOTION = opt('POC_MOTION', '0') === '1';
 const SAMPLE = num('POC_SAMPLE_SEC', 5);
 const CONNECT_TIMEOUT = num('POC_CONNECT_TIMEOUT_SEC', 30);
+// 降低画质的演练（设计 4.5）：开始采集 DEGRADE_AT 秒后降低画质，到 RESTORE_AT 秒时恢复；0 表示不做。
+// sender 改发送端的编码参数，track 改采集轨道的约束。
+const DEGRADE_AT = num('POC_DEGRADE_AT_SEC', 0);
+const RESTORE_AT = num('POC_RESTORE_AT_SEC', 0);
+const DEGRADE_MODE = opt('POC_DEGRADE_MODE', 'sender');
+// WMI 查询（进程 CPU 时间、GPU 占用）每次会起一个 PowerShell 子进程。用 cpu-cap.ps1 限 CPU 做实验时要关掉，
+// 否则查询本身会抢走配额，看上去像编码器受限。
+const WMI = opt('POC_WMI', 'on') === 'on';
 // 「同一台电脑」的第二种证据（POC_PEER_PORT_CHECK=1）：对端连入用的端口是不是本机的一个套接字。
 // 连接统计里对端候选不给地址，但给端口。对端和 Runtime 在同一台电脑上时，它的端口会出现在本机端口表里；
 // 在另一台电脑上时不会（偶然撞上同一个端口号的概率约 1%～2%，撞上时判为同机，只是这一次不采集，重试即可）。
@@ -65,7 +73,7 @@ if (opt('POC_LOCAL_LIST', 'all') === 'none') localAddresses.length = 0;
 
 const OUT_DIR = path.join(__dirname, 'out');
 fs.mkdirSync(OUT_DIR, { recursive: true });
-const RUN_ID = [new Date().toISOString().replace(/[:.]/g, '-'), MODE, SIGNAL_URL ? 'relay' : 'local', ORDER, CODEC, CANDIDATES, SAME_MACHINE, STUN ? 'stun' : 'nostun'].join('_');
+const RUN_ID = [new Date().toISOString().replace(/[:.]/g, '-'), MODE, SIGNAL_URL ? 'relay' : 'local', ORDER, CODEC, CANDIDATES, SAME_MACHINE, STUN ? 'stun' : 'nostun', DEGRADE_AT ? 'degrade-' + DEGRADE_MODE : 'nodegrade'].join('_');
 const LOG = path.join(OUT_DIR, RUN_ID + '.jsonl');
 app.setPath('userData', path.join(OUT_DIR, 'userdata', RUN_ID));
 
@@ -81,6 +89,7 @@ const signaling = { bytesIn: 0, bytesOut: 0, requests: 0 };
 let typeByPid = {};
 
 function ps(script) {
+  if (!WMI) return Promise.resolve(null);
   return new Promise((resolve) => {
     execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 25000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
       const text = String(stdout || '').trim();
@@ -99,9 +108,11 @@ function sumGpu(rows) {
   for (const k in by) total += by[k];
   return { total: +total.toFixed(1), by };
 }
-function appMetrics() {
+// pidRole：哪些进程号是采集页、哪些是接收页的渲染进程。分开统计，才能看出 Runtime 一侧（只有采集页这一端）自己用了多少 CPU。
+function appMetrics(pidRole) {
   typeByPid = {};
   const byType = {};
+  const byRole = {};
   const pids = [];
   let total = 0;
   for (const p of app.getAppMetrics()) {
@@ -110,9 +121,11 @@ function appMetrics() {
     typeByPid[p.pid] = type;
     pids.push(p.pid);
     byType[type] = +((byType[type] || 0) + usage).toFixed(2);
+    const role = (pidRole && pidRole[p.pid]) || type;
+    byRole[role] = +((byRole[role] || 0) + usage).toFixed(2);
     total += usage;
   }
-  return { total: +total.toFixed(2), byType, pids };
+  return { total: +total.toFixed(2), byType, byRole, pids };
 }
 
 function lookupHost(name) {
@@ -355,9 +368,14 @@ async function sample(phase) {
     collectFrom(sender, 'sender'),
     collectFrom(receiver, 'receiver'),
   ]);
-  const cpu = appMetrics();
+  const pidRole = {};
+  try {
+    if (senderAlive()) pidRole[sender.webContents.getOSProcessId()] = 'senderPage';
+    if (receiver && !receiver.isDestroyed()) pidRole[receiver.webContents.getOSProcessId()] = 'receiverPage';
+  } catch (e) { /* 取不到进程号就按进程类型统计 */ }
+  const cpu = appMetrics(pidRole);
   lastPids = cpu.pids;
-  samples.push({ t: Date.now(), phase, tx, rx, cpu: { total: cpu.total, byType: cpu.byType }, signaling: Object.assign({}, signaling) });
+  samples.push({ t: Date.now(), phase, tx, rx, cpu: { total: cpu.total, byType: cpu.byType, byRole: cpu.byRole }, signaling: Object.assign({}, signaling) });
 }
 
 function serve(req, res) {
@@ -433,6 +451,44 @@ function buildSummary(cpu0, cpu1, wallSec) {
   for (const k in baseTypeAvg) baseTypeAvg[k] = avg(baseTypeAvg[k]);
   const gpuStream = gpuRows.filter((r) => r.phase === 'stream').map((r) => r.gpu.total);
   const gpuBase = gpuRows.filter((r) => r.phase === 'baseline').map((r) => r.gpu.total);
+  // 降低画质的演练：传画面的采样按当时所处的画质档分组（normal 原样、degraded 已降低、restored 恢复后）。
+  // limited 是各采样里编码器受限原因的计数（none / cpu / bandwidth / other），用来比较降低前后编码器是否还受限。
+  // cpuByRole 是各进程角色的平均 CPU（占整机的百分比；采集页、接收页、GPU 进程等），encodeMsPerSec 是每秒画面花在编码上的毫秒数。
+  const quality = { atSec: DEGRADE_AT, restoreAtSec: RESTORE_AT, mode: DEGRADE_MODE, byState: {} };
+  for (const s of stream) {
+    const state = (s.tx && s.tx.quality) || 'unknown';
+    const o = quality.byState[state] = quality.byState[state] || { samples: 0, limited: {}, fps: [], cpu: [], frames: [], bytes: [], enc: [], encMs: [], roles: {}, t: [] };
+    const tx = s.tx && s.tx.tx;
+    o.samples += 1;
+    o.t.push(s.t);
+    o.cpu.push(s.cpu.total);
+    for (const k of Object.keys(s.cpu.byRole || {})) { o.roles[k] = o.roles[k] || []; o.roles[k].push(s.cpu.byRole[k]); }
+    if (tx) {
+      o.limited[tx.qlr || 'null'] = (o.limited[tx.qlr || 'null'] || 0) + 1;
+      o.fps.push(tx.fps); o.frames.push(tx.framesEncoded); o.bytes.push(tx.bytes); o.enc.push(tx.encTime); o.encMs.push(tx.encMsAvg);
+      o.w = tx.w; o.h = tx.h;
+    }
+  }
+  for (const k of Object.keys(quality.byState)) {
+    const o = quality.byState[k];
+    const firstT = o.t[0];
+    const lastT = o.t[o.t.length - 1];
+    const firstF = o.frames[0];
+    const lastF = o.frames[o.frames.length - 1];
+    const firstB = o.bytes[0];
+    const lastB = o.bytes[o.bytes.length - 1];
+    const span = (lastT - firstT) / 1000;
+    o.seconds = +span.toFixed(1);
+    o.cpuAvg = avg(o.cpu);
+    o.cpuByRole = {};
+    for (const r of Object.keys(o.roles)) o.cpuByRole[r] = avg(o.roles[r]);
+    o.fpsAvg = avg(o.fps);
+    o.encMsAvg = avg(o.encMs);
+    o.encodedFps = lastF !== undefined && span > 0 ? +((lastF - firstF) / span).toFixed(1) : null;
+    o.bitrateKbps = lastB !== undefined && span > 0 ? +((lastB - firstB) / span * 8 / 1000).toFixed(0) : null;
+    o.encodeMsPerSec = o.enc.length > 1 && span > 0 ? +((o.enc[o.enc.length - 1] - o.enc[0]) * 1000 / span).toFixed(0) : null;
+    delete o.fps; delete o.cpu; delete o.frames; delete o.bytes; delete o.enc; delete o.encMs; delete o.roles; delete o.t;
+  }
   return {
     runId: RUN_ID,
     versions: { electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
@@ -477,6 +533,7 @@ function buildSummary(cpu0, cpu1, wallSec) {
     signaling: { side: SIGNAL_URL ? 'runtime' : 'server', bytesIn: signaling.bytesIn, bytesOut: signaling.bytesOut, requests: signaling.requests, streamSeconds: +seconds.toFixed(1) },
     cpu: { baselineTotalAvg: avg(base.map((s) => s.cpu.total)), streamTotalAvg: avg(stream.map((s) => s.cpu.total)), streamByTypeAvg: typeAvg, processCoresPct: cores },
     gpu: { baselineTotalAvg: avg(gpuBase), streamTotalAvg: avg(gpuStream) },
+    quality,
     systemEvents,
   };
 }
@@ -503,7 +560,7 @@ async function main() {
   };
   const deadline = Date.now() + 15000;
   while (ready.size < (receiver ? 2 : 1) && Date.now() < deadline) await sleep(100);
-  const config = { codec: CODEC, policy: CANDIDATES, fps: FPS, iceServers: ICE_SERVERS, localAddresses, order: ORDER, sameMachine: SAME_MACHINE, leaseSec: LEASE_SEC, connectTimeoutSec: CONNECT_TIMEOUT, attach: opt('POC_ATTACH', 'replaceTrack'), peerPortCheck: PEER_PORT_CHECK };
+  const config = { codec: CODEC, policy: CANDIDATES, fps: FPS, iceServers: ICE_SERVERS, localAddresses, order: ORDER, sameMachine: SAME_MACHINE, leaseSec: LEASE_SEC, connectTimeoutSec: CONNECT_TIMEOUT, attach: opt('POC_ATTACH', 'replaceTrack'), peerPortCheck: PEER_PORT_CHECK, degradeAtSec: DEGRADE_AT, restoreAtSec: RESTORE_AT, degradeMode: DEGRADE_MODE };
   sender.webContents.send('poc:signal', { kind: 'config', data: config });
   if (receiver) receiver.webContents.send('poc:signal', { kind: 'config', data: { policy: CANDIDATES, iceServers: ICE_SERVERS } });
   writeLine({ ev: 'ready', windowsReady: ready.size, config: Object.assign({}, config, { localAddresses: '(' + localAddresses.length + ' 项，不记录)' }) });
@@ -546,7 +603,11 @@ async function main() {
     } else {
       // 本机信令模式：验证程序自己提供网页和信令，供同一台或同网段的电脑打开。
       server = http.createServer(serve);
-      await new Promise((r) => server.listen(HTTP_PORT, HTTP_HOST, r));
+      // 端口被占用时立刻报错退出（否则会一直等到看门狗），提示换端口。
+      await new Promise((resolve, reject) => {
+        server.once('error', (e) => reject(new Error('监听端口 ' + HTTP_PORT + ' 失败（' + ((e && e.code) || e) + '），被占用时用 POC_HTTP_PORT 换一个端口')));
+        server.listen(HTTP_PORT, HTTP_HOST, resolve);
+      });
       console.log('POC_READY http://127.0.0.1:' + HTTP_PORT + '/viewer.html');
       writeLine({ ev: 'serving', port: HTTP_PORT, host: HTTP_HOST });
     }

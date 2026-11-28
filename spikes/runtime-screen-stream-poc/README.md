@@ -94,6 +94,19 @@ node browser-test.cjs --browser=chrome --lanport=0
 
 **跨网段的内网直连（2026-11-27 实测通过）。** 不要求两台电脑在同一个网段。电脑 A 运行验证程序（经信令中转），并且 A 的防火墙放行验证程序（`electron.exe`）的入站 UDP；没有放行时要在 Windows 的防火墙提示里点「允许访问」。电脑 B 在另一个网段用浏览器打开观看页。加 `POC_PEER_PORT_CHECK=1` 开启名字解析不出时的同机判定：连接建立后看对端连入用的端口是不是本机的套接字。B 的 mDNS 名字在 A 上解析不出，不加这个开关时只能落到「无法确认」。数据见调研报告 6.1。
 
+**降低画质的演练（2026-11-28 单机实测）。** 对应设计 4.5 的任务优先。`POC_DEGRADE_AT_SEC`、`POC_RESTORE_AT_SEC` 设定开始采集多少秒后降低画质、多少秒后恢复；`POC_DEGRADE_MODE` 选做法：`sender` 改发送端的编码参数，`track` 改采集轨道的约束。摘要 `quality.byState` 按画质档（`normal`、`degraded`、`restored`）给出帧率、码率、编码器受限原因的计数、每秒花在编码上的毫秒数和各进程的 CPU（占整机的百分比；`senderPage` 是采集页，`receiverPage` 是接收页）。要贴近产品（Runtime 一侧只有发送端），用 `serve` 模式加 `browser-test.cjs`；默认端口被占用时用 `POC_HTTP_PORT` 和 `--port` 换端口。
+
+```bash
+# 终端 1（不限速）
+POC_MODE=serve POC_HTTP_PORT=8793 POC_CODEC=h264 POC_SAME_MACHINE=skip POC_DURATION_SEC=75 POC_MOTION=1 POC_WMI=off POC_SAMPLE_SEC=2 POC_DEGRADE_AT_SEC=20 POC_RESTORE_AT_SEC=40 POC_DEGRADE_MODE=track "$ELECTRON" .
+# 终端 2
+node browser-test.cjs --browser=chrome --port=8793 --lanport=0 --hold=62000
+# 模拟电脑很忙：经 cpu-load.ps1 启动，给验证程序的进程树设 CPU 上限（整机百分比 ×100；28 个逻辑处理器上 143 约等于 0.4 个核心）
+powershell -NoProfile -ExecutionPolicy Bypass -File cpu-load.ps1 -CpuRate 143 -MaxSeconds 200 -Exe "$ELECTRON" .
+```
+
+结论：降低画质要改采集轨道的约束。只改编码参数时 Runtime 一侧的 CPU 少约 30%，改采集约束少约 50%，软件编码和硬件编码一致。编码器的「因 CPU 受限」信号在 CPU 不够时不出现（设 CPU 上限的 9 次运行里一次都没有），所以设计里判断资源不足改看电脑 CPU 占用。`cpu-load.ps1` 的 `-Affinity` 加 `-Busy`（绑到同几个逻辑处理器上抢 CPU）负载很难调到合适，Electron 退出时还会卡住，不建议再用。数据见调研报告 6.1。
+
 另外两项也要在有条件时做：
 
 - 公网页面连接内网地址时是否弹「本地网络访问」权限：把 `signal-relay.cjs` 放到公网 HTTPS 入口后面，用浏览器打开后运行 `node cand-probe.cjs --port=<端口> --lanport=0`，对比本地候选有没有被拦。
@@ -123,6 +136,10 @@ node browser-test.cjs --browser=chrome --lanport=0
 | `POC_LEASE_OUT_AT_SEC` | 0 | 开始采集多少秒后不再联系服务器（模拟 Runtime 连不上服务器）；0 表示不模拟 |
 | `POC_CONNECT_TIMEOUT_SEC` | 30 | 建连超时：到点还没连上就结束会话，全程不采集；0 表示不超时 |
 | `POC_PEER_PORT_CHECK` | `0` | `1` 时，地址候选的规则没有判成同机，就在连接建立后按对端端口判定：成功候选对里对端的端口全是本机套接字是同机，有不属于本机的是另一台电脑，查不到保持原结论 |
+| `POC_DEGRADE_AT_SEC` | `0` | 开始采集多少秒后降低画质（演练设计 4.5）；0 表示不降低 |
+| `POC_RESTORE_AT_SEC` | `0` | 开始采集多少秒后恢复原画质；0 表示不恢复 |
+| `POC_DEGRADE_MODE` | `sender` | `sender`：改发送端的编码参数（帧率上限 5、编码时缩到约 480p、限制码率）；`track`：改采集轨道的约束（采集就降到 5 帧、约 480p） |
+| `POC_WMI` | `on` | `off` 时不查进程 CPU 时间和 GPU 占用。每次查询会起一个 PowerShell 子进程，经 `cpu-load.ps1` 设 CPU 上限时要关掉，否则查询本身会抢配额 |
 | `POC_FPS` | 15 | 采集帧率上限 |
 | `POC_SAMPLE_SEC` | 5 | 采样间隔 |
 | `POC_MOTION` | `0` | `1` 时在屏幕右下角显示动态窗口 |
@@ -143,13 +160,14 @@ node browser-test.cjs --browser=chrome --lanport=0
 | `p4.html` | 权限状态测试页：读取「本地网络访问」相关权限的状态，不含画面 |
 | `motion.html` / `motion.js` | 动态内容窗口 |
 | `stats.js` | 共用的统计与候选分类 |
+| `cpu-load.ps1` / `busy-loop.js` | 模拟电脑很忙：给验证程序的进程树设 CPU 硬上限（`-CpuRate`），或把它和占位进程绑到同几个逻辑处理器上抢 CPU（`-Affinity`、`-Busy`，不建议） |
 | `verdict.js` / `verdict.test.cjs` | 同机判定的规则 1～4，以及用构造的地址跑的单测；规则 5、6（按对端端口）在 `sender.js` 和 `main.js` 里 |
 | `preload.cjs` | 页面预加载脚本，只暴露收发消息和上报 |
 | `lan-server.cjs` | 让测试页能从内网地址打开的转发服务，单机验证浏览器权限时用 |
 | `browser-test.cjs` | 驱动本机已安装的 Chrome 或 Edge 观看，输出时延、路径和结束原因 |
 | `cand-probe.cjs` | 只统计本地候选，判断权限是否拦住了内网候选 |
-| `summarize.cjs` | 打印 `out/` 里的运行摘要 |
+| `summarize.cjs` | 打印 `out/` 里的运行摘要，有降低画质演练时另打印 `quality` 一行 |
 
 ## 已验证的范围
 
-2026-11-24 在一台电脑上完成：隐藏窗口采集与 10 分钟稳定性、编码与占用对照、权限与采集方式对照、真实 Chrome 157、158 与 Edge 156 的观看互通、同机判定（规则 1 实测，规则 4 在没有 STUN 时实测，规则 2 只用开关模拟，规则 3 只有单测）、先建连后采集、画面租约到期自动关闭、没有路径时 30 秒建连超时、Runtime 只主动连出、浏览器权限、防火墙提示、系统解析器解析本机浏览器的 mDNS 名字。**两台电脑之间、跨网络、经 Runtime 的真实任务并行、锁屏、公网 HTTPS 来源**没有验证；2026-11-25 用 `pair` 模式加已安装的微信插件做了一次单机模拟并行实测，结论以调研报告 6.1 节为准。2026-11-27 用第二台电脑（不同 VLAN）实测：跨网段的内网直连通过，连续 29 分钟；名字解析不出时按对端端口判定同机，本机对照 5 次全部判为同机；同一出口不支持 NAT 回环，出口是对称型 NAT（调研报告 6.1）。同网段和真实跨网络仍未验证；跨网段时用的是验证程序加临时防火墙规则，产品安装包的放行方式待 Phase 2 验证。所需条件见调研报告 6.2 节和第 7 节。
+2026-11-24 在一台电脑上完成：隐藏窗口采集与 10 分钟稳定性、编码与占用对照、权限与采集方式对照、真实 Chrome 157、158 与 Edge 156 的观看互通、同机判定（规则 1 实测，规则 4 在没有 STUN 时实测，规则 2 只用开关模拟，规则 3 只有单测）、先建连后采集、画面租约到期自动关闭、没有路径时 30 秒建连超时、Runtime 只主动连出、浏览器权限、防火墙提示、系统解析器解析本机浏览器的 mDNS 名字。**两台电脑之间、跨网络、经 Runtime 的真实任务并行、锁屏、公网 HTTPS 来源**没有验证；2026-11-25 用 `pair` 模式加已安装的微信插件做了一次单机模拟并行实测，结论以调研报告 6.1 节为准。2026-11-27 用第二台电脑（不同 VLAN）实测：跨网段的内网直连通过，连续 29 分钟；名字解析不出时按对端端口判定同机，本机对照 5 次全部判为同机；同一出口不支持 NAT 回环，出口是对称型 NAT（调研报告 6.1）。同网段和真实跨网络仍未验证；跨网段时用的是验证程序加临时防火墙规则，产品安装包的放行方式待 Phase 2 验证。2026-11-28 单机实测降低画质：改采集轨道的约束后 Runtime 一侧的 CPU 少约一半，连接不断、能恢复；编码器的「因 CPU 受限」信号在 CPU 不够时不出现，判断资源不足的阈值还没有在真实的弱机器上验证。所需条件见调研报告 6.2 节和第 7 节。

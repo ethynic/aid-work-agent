@@ -1,6 +1,6 @@
 // 发送端（对应设计里的 Runtime 采集窗口）：先建立不含画面的连接并判定观看端是不是本机，确认不是之后才采集。
 // 画面不显示、不落盘。每次收到 start 都先清理上一次的连接和采集。
-const cfg = { codec: 'default', policy: 'lan', capture: 'getDisplayMedia', sourceId: null, fps: 15, iceServers: [], localAddresses: [], order: 'connect-first', sameMachine: 'check', peerPortCheck: false, leaseSec: 30, connectTimeoutSec: 30 };
+const cfg = { codec: 'default', policy: 'lan', capture: 'getDisplayMedia', sourceId: null, fps: 15, iceServers: [], localAddresses: [], order: 'connect-first', sameMachine: 'check', peerPortCheck: false, leaseSec: 30, connectTimeoutSec: 30, degradeAtSec: 0, restoreAtSec: 0, degradeMode: 'sender' };
 let pc = null;
 let stream = null;
 let transceiver = null;
@@ -11,6 +11,11 @@ let lastRenewAt = 0;
 let leaseTimer = null;
 let finished = false;
 let resolveSeq = 0;
+// 当前画质档：normal（原样）、degraded（已降低）、restored（降低后恢复）。只用于给采样打标签。
+let quality = 'normal';
+let currentTrack = null;
+let savedConstraints = null;
+const qualityTimers = [];
 const remotes = []; // 观看端候选：{ id, kind, type, address }，address 是明文地址或解析出的地址，解析不出为 null
 const ownMapped = []; // 本机经 STUN 得到的公网映射地址
 const log = (name, data) => window.poc.event(name, data || {});
@@ -40,6 +45,11 @@ function wire(next) {
 }
 
 function cleanup() {
+  for (const id of qualityTimers) clearTimeout(id);
+  qualityTimers.length = 0;
+  quality = 'normal';
+  currentTrack = null;
+  savedConstraints = null;
   if (stream) { for (const track of stream.getTracks()) { try { track.stop(); } catch (e) { /* 已停止 */ } } }
   stream = null;
   transceiver = null;
@@ -171,6 +181,8 @@ async function startCapture(mine) {
   p.encodings[0].maxBitrate = 2500000;
   try { await sender.setParameters(p); } catch (e) { log('setparams-error', { text: String(e).slice(0, 120) }); }
   captureStartedAt = Date.now();
+  currentTrack = track;
+  savedConstraints = track.getConstraints ? track.getConstraints() : {};
   log('captured', { w: s.width, h: s.height, fps: s.frameRate, dt: captureStartedAt - t0 });
   // 画面租约：收不到续期超过 leaseSec 就自己关闭采集。
   if (cfg.leaseSec > 0) {
@@ -179,6 +191,37 @@ async function startCapture(mine) {
       if (gap > cfg.leaseSec * 1000) { log('lease-expired', { msSinceLastRenew: gap, dt: Date.now() - t0 }); closeAll('lease-expired'); }
     }, 500);
   }
+  // 降低画质与恢复的演练（设计 4.5）：开始采集 degradeAtSec 秒后降低，再过到 restoreAtSec 秒时恢复。
+  // 产品里什么时候降由 Host 按编码器是否持续受限来决定；这里只验证降低的动作本身能不能减轻编码负载。
+  if (cfg.degradeAtSec > 0) qualityTimers.push(setTimeout(() => setQuality(mine, sender, 'degraded'), cfg.degradeAtSec * 1000));
+  if (cfg.restoreAtSec > 0) qualityTimers.push(setTimeout(() => setQuality(mine, sender, 'restored'), cfg.restoreAtSec * 1000));
+}
+
+// 两种降低画质的做法：sender 改发送端的编码参数（帧率上限 5 帧、按比例缩到约 480p、限制码率），
+// track 改采集轨道的约束（同样的帧率和尺寸上限）。1280×720 缩小 1.5 倍是 853×480。
+async function setQuality(mine, sender, target) {
+  const started = Date.now();
+  const lowered = target === 'degraded';
+  let ok = true;
+  let text = null;
+  try {
+    if (mine !== pc) throw new Error('connection closed');
+    if (cfg.degradeMode === 'track' && currentTrack) {
+      await currentTrack.applyConstraints(lowered ? { frameRate: { max: 5 }, width: { max: 854 }, height: { max: 480 } } : savedConstraints);
+    } else {
+      const p = sender.getParameters();
+      if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+      p.encodings[0].maxFramerate = lowered ? 5 : cfg.fps;
+      p.encodings[0].scaleResolutionDownBy = lowered ? 1.5 : 1;
+      p.encodings[0].maxBitrate = lowered ? 600000 : 2500000;
+      await sender.setParameters(p);
+    }
+  } catch (e) {
+    ok = false;
+    text = String((e && e.message) || e).slice(0, 160);
+  }
+  quality = target;
+  log('quality', { target, mode: cfg.degradeMode, ok, text, ms: Date.now() - started, sinceCaptureMs: captureStartedAt ? Date.now() - captureStartedAt : null });
 }
 
 async function start() {
@@ -243,7 +286,7 @@ window.poc.onMessage(async (m) => {
       try { await pc.addIceCandidate(m.data); } catch (e) { log('addcand-error', { text: String((e && e.message) || e).slice(0, 80) }); }
       return;
     }
-    if (m.kind === 'collect') { log('stats', await POC.collect(pc, cfg.localAddresses)); }
+    if (m.kind === 'collect') { log('stats', await POC.collect(pc, cfg.localAddresses, { quality })); }
   } catch (e) {
     log('error', { where: m.kind, text: String((e && e.message) || e).slice(0, 200) });
   }

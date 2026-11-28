@@ -21,6 +21,7 @@ for (const name of fs.readdirSync(dir).filter((f) => f.endsWith('.summary.json')
   console.log('signaling  ' + JSON.stringify(s.signaling));
   console.log('cpu        ' + JSON.stringify({ baseAvg: s.cpu.baselineTotalAvg, streamAvg: s.cpu.streamTotalAvg, coresPct: s.cpu.processCoresPct }));
   console.log('gpu        ' + JSON.stringify({ baseAvg: s.gpu.baselineTotalAvg, streamAvg: s.gpu.streamTotalAvg }));
+  if (s.quality && Object.keys(s.quality.byState).length) console.log('quality    ' + JSON.stringify(s.quality));
   console.log('sysEvents  ' + JSON.stringify(s.systemEvents));
   const log = path.join(dir, name.replace('.summary.json', '.jsonl'));
   if (fs.existsSync(log)) {
