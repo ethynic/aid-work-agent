@@ -496,7 +496,8 @@ class RuntimeExecution:
                 registry=self.resources.skill_registry, plan_manager=self.resources.plan_manager,
                 clarification_store=self.clarification, context=tool_context,
                 user_input=text, task_record=task_record,
-                durable_owner=getattr(self.control, "durable_owner", False))
+                durable_owner=getattr(self.control, "durable_owner", False),
+                attachments=self.assembler.attachments)
             local_adapter = LocalToolAdapter(session_id=self.identity.session_id,
                     execution_id=self.state.execution_id, subagent_config=self.resources.subagent_config,
                     llm=self.resources.llm, tool_executor=self.resources.tool_executor,

@@ -555,6 +555,7 @@ class WebCChatRequest(BaseModel):
     attachments: List[dict] = Field(default_factory=list, max_length=10, description="上传 ref 数组")
     session_id: str = Field(default="", max_length=200, description="续聊目标会话（空=默认会话）")
     new_session: bool = Field(default=False, description="开新会话（首条消息时惰性创建）")
+    client_id: str = Field(default="", max_length=128, description="客户端标签页标识（跨端观测用，旧客户端可不传）")
 
     class Config:
         extra = "forbid"
@@ -563,7 +564,7 @@ class WebCChatRequest(BaseModel):
 @router.post("/{tenant_id}/{config_id}/chat")
 @_guard
 async def chat(tenant_id: str, config_id: str, body: WebCChatRequest, request: Request):
-    """提交消息：验签 -> 限流 -> 积分拦截 -> 落用户消息 -> submit 受理 -> 返回 runner_id。"""
+    """提交消息：验签 -> 限流 -> 积分拦截 -> submit 受理（忙时 FIFO 排队）-> 按需落用户消息 -> 返回 runner_id。"""
     identity = _resolve_identity(request, tenant_id, config_id)
     cfg, conf = _load_web_c_config(tenant_id, config_id)
     if not _CLIENT_REQUEST_ID_RE.match(body.client_request_id):
@@ -608,7 +609,6 @@ async def chat(tenant_id: str, config_id: str, body: WebCChatRequest, request: R
     # 否则 Runner 授权按旧值严格比对会永久 403 CHANNEL_PROFILE_MISMATCH
     await asyncio.to_thread(_align_session_profile, identity, session)
 
-    # 用户消息落库（幂等）；附件元数据不含内容，Runner 侧按 file_id 租户域解析。
     # 纯附件消息与 agent 输入同文案，保证历史渲染与执行输入一致。
     user_content = text or "（见附件）"
     att_meta = [
@@ -616,15 +616,21 @@ async def chat(tenant_id: str, config_id: str, body: WebCChatRequest, request: R
          "mime_type": r.get("mime_type"), "size": r.get("size")}
         for r in refs
     ]
-    await asyncio.to_thread(
-        _add_user_message, session_id, tenant_id, user_content, att_meta, body.client_request_id)
 
     agent = ChannelRunnerAgent(
         source="web_c", session_id=session_id, channel_user_id=identity.channel_user_id,
         channel_chat_id=None, profile_id=identity.subagent_type or "main",
-        config_id=config_id, tenant_id=tenant_id)
+        config_id=config_id, tenant_id=tenant_id, client_id=body.client_id.strip() or None)
     outcome = await agent.submit(user_input=user_content, attachments=refs,
-                                 client_request_id=body.client_request_id)
+                                 client_request_id=body.client_request_id, queue_on_busy=True)
+
+    # 非排队提交（空闲新轮 / 追问回复 / 直接回复）立即落库用户消息；
+    # 排队提交（同会话有在途执行）延迟到 Runner finalize 事务中与回复按序原子落库，
+    # 避免出现 [user1, user2, assistant1] 的轮次错位污染下一轮上下文与聊天展示。
+    is_queued = bool(getattr(outcome, "queued", False))
+    if outcome.direct_response is not None or not is_queued:
+        await asyncio.to_thread(
+            _add_user_message, session_id, tenant_id, user_content, att_meta, body.client_request_id)
 
     # 纠正提示 / 重发分段等直接回复：不进入轮询，代理层直接落库并回显
     if outcome.direct_response is not None:
@@ -634,12 +640,13 @@ async def chat(tenant_id: str, config_id: str, body: WebCChatRequest, request: R
                 _persist_assistant_message, tenant_id, session_id, "", reply, [],
                 "direct_reply", body.client_request_id)
         return {"success": True, "session_id": session_id, "runner_id": None,
-                "status": "completed", "direct_reply": reply}
+                "status": "completed", "direct_reply": reply, "queued": False}
 
     row = outcome.row
     runner_id = row.get("runner_id")
     response = {"success": True, "session_id": session_id, "runner_id": runner_id,
-                "status": row.get("status"), "direct_reply": None}
+                "status": row.get("status"), "direct_reply": None,
+                "queued": is_queued}
     if row.get("status") == "waiting":
         question, wait_id = _clarification_question(row)
         # 追问回复受理后，runner 行快照可能仍是 control 消费前的陈旧 waiting
@@ -678,24 +685,52 @@ async def get_runner(tenant_id: str, config_id: str, runner_id: str, request: Re
 @router.get("/{tenant_id}/{config_id}/sessions/{session_id}/active-runner")
 @_guard
 async def get_session_active_runner(tenant_id: str, config_id: str, session_id: str, request: Request):
-    """会话当前活跃执行查询（刷新/重进后前端恢复观察用）。
+    """会话当前活跃/排队执行查询（刷新/重进/跨端切回后前端恢复观察用）。
 
-    场景：页面刷新/微信切后台回收后重进，前端丢失在途执行感知（submitting 复位、
-    输入框可用、看不到进度），用户误以为卡住再发新消息会触发渠道侧 supersede
-    取消在途执行。本端点返回可接管的活跃 runner；waiting 不返回——反问已落
-    历史消息，回复走新消息 reply 通道，接管反而会挡住输入框。
+    返回可接管的活跃及排队 runner（running/finalizing/queued），按先后顺序排列；
+    waiting 不返回——反问已落历史消息，回复走新消息 reply 通道，接管反而挡住输入框。
     归属校验：本端 DB 会话归属 + Runner 侧渠道身份过滤双重约束。
     """
     identity = _resolve_identity(request, tenant_id, config_id)
-    _assert_session_owned(identity, session_id)
+    session = _assert_session_owned(identity, session_id)
+    profile_id = session.get("subagent_id") or identity.subagent_type or "main"
     page = await _runner_client().request(
-        "GET", "/v1/sessions/channel/" + quote(session_id, safe=""), authorization=None,
-        channel_source="web_c", channel_user=identity.channel_user_id,
-        params={"source": "web_c"})
-    for row in page.get("active_runners") or []:
-        if row.get("status") in ("running", "finalizing", "queued"):
-            return {"success": True, "runner_id": row.get("runner_id"), "status": row.get("status")}
-    return {"success": True, "runner_id": None, "status": None}
+        "GET", "/v1/sessions/channel/" + quote(session_id, safe="") + "/runners",
+        authorization=None, channel_source="web_c", channel_user=identity.channel_user_id,
+        params={
+            "source": "web_c",
+            "profile_id": profile_id,
+            "channel_user_id": identity.channel_user_id,
+        })
+    running_items = [
+        row for row in reversed(page.get("active_runners") or [])
+        if row.get("status") in ("running", "finalizing")
+    ]
+    seen_ids = {row.get("runner_id") for row in running_items if row.get("runner_id")}
+    queued_items = [
+        row for row in reversed(page.get("runners") or [])
+        if row.get("status") == "queued" and row.get("runner_id") not in seen_ids
+    ]
+    ordered = running_items + queued_items
+    summary = [
+        {
+            "runner_id": row.get("runner_id"),
+            "status": row.get("status"),
+            "client_id": row.get("client_id"),
+            "text": ((row.get("snapshot") or {}).get("input") or {}).get("text") or "",
+        }
+        for row in ordered
+        if row.get("runner_id")
+    ]
+    if summary:
+        primary = summary[0]
+        return {
+            "success": True,
+            "runner_id": primary["runner_id"],
+            "status": primary["status"],
+            "active_runners": summary,
+        }
+    return {"success": True, "runner_id": None, "status": None, "active_runners": []}
 
 
 @router.get("/{tenant_id}/{config_id}/runners/{runner_id}/events")

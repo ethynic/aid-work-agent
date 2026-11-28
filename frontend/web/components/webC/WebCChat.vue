@@ -197,7 +197,7 @@ import { useRoute } from 'vue-router'
 import {
   buildIdentityQuery, getBootstrap, postChat, uploadFile, cancelRunner,
   getRunner, getActiveRunner, getSessionMessages, listSessions, webCFileUrl, runnerEventsUrl,
-  readStoredSessionId, writeStoredSessionId, clearStoredSessionId,
+  readStoredSessionId, writeStoredSessionId, clearStoredSessionId, resolveClientId,
   type IdentityQuery, type UploadRef, type RunnerSnapshot, type SessionSummary,
   type ChannelMessage
 } from '@/api/webC'
@@ -256,6 +256,11 @@ const waitingWaitId = ref('')
  * 观察期间快照里出现同 wait_id 的等待属陈旧快照，忽略并继续观察。 */
 const repliedWaitId = ref('')
 const progressText = ref('')
+const runnerStatus = ref('')
+/** 标签页级 client_id（跨端并发观测用） */
+const clientId = resolveClientId()
+/** 跨端切回节流时间戳（ms） */
+let lastVisibilitySyncAt = 0
 /** 上次已打印的 snapshot.progress 原文（值变化才打印日志，长期保留勿删） */
 let lastSnapshotProgressLog: string | undefined
 const streamFailed = ref(false)
@@ -341,18 +346,34 @@ let observeAbort = new AbortController()
 const supersededNoticePending = ref(false)
 const activeRunnerId = ref('')
 
+/** 跨端/切回页面状态同步：标签页重新可见或聚焦时刷新历史并接管同会话在途/排队执行（节流 2s） */
+async function syncOnPageVisible() {
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+  if (!currentSessionId.value || submitting.value || streamingActive.value) return
+  const now = Date.now()
+  if (now - lastVisibilitySyncAt < 2000) return
+  lastVisibilitySyncAt = now
+  await reloadMessages()
+  await adoptActiveRunner(currentSessionId.value)
+}
+
+function onVisibilityOrFocus() {
+  void syncOnPageVisible()
+}
+
 onBeforeUnmount(() => {
   // 组件卸载：中止进行中的 SSE/轮询连接与刷新循环（防泄漏）
   observeAbort.abort()
   submitting.value = false
   streamingActive.value = false
   rootEl.value?.removeEventListener('pointerdown', onPageTap)
+  document.removeEventListener('visibilitychange', onVisibilityOrFocus)
+  window.removeEventListener('focus', onVisibilityOrFocus)
 })
 
 const canSubmit = computed(() => (inputText.value.trim().length > 0 || pendingAttachments.value.length > 0))
 // 状态行兜底判定实现见 utils/webCStatusLine.ts 的 resolveWebCStatusLine（可单测）；
-// 覆盖两个空窗：发送后受理返回前（无任何 progress）；工具完成后 progress 被清空
-// 到下一个 progress/正文出现前（2026-11-26 反馈：过程行显示十几秒后凭空消失）。
+// 覆盖排队中以及工具空窗两个场景。
 const statusLine = computed(() => resolveWebCStatusLine({
   streamingActive: streamingActive.value,
   isTerminal: isTerminal.value,
@@ -360,6 +381,7 @@ const statusLine = computed(() => resolveWebCStatusLine({
   waitingText: waitingText.value,
   streamFailed: streamFailed.value,
   progressText: progressText.value,
+  runnerStatus: runnerStatus.value,
 }))
 // uid 模式（仅 userid 链接）：会话 id 由 sessionStorage 持有，无历史入口（设计 §3.5）
 const isUidMode = computed(() => identityMode.value === 'uid')
@@ -372,6 +394,8 @@ onMounted(async () => {
   // 用 pointerdown 计数：iOS WKWebView 上快速连点会被 double-tap-to-zoom 手势
   // 判定吞掉合成 click（10 下物理点击只有部分到达），pointerdown 按下即触发不受影响
   rootEl.value?.addEventListener('pointerdown', onPageTap)
+  document.addEventListener('visibilitychange', onVisibilityOrFocus)
+  window.addEventListener('focus', onVisibilityOrFocus)
   identity.value = buildIdentityQuery(configId.value, route.query as Record<string, unknown>)
   try {
     const data = await getBootstrap(tenantId.value, configId.value, identity.value)
@@ -414,7 +438,7 @@ async function restoreStoredSession() {
   currentSessionId.value = stored
   try {
     const data = await getSessionMessages(tenantId.value, configId.value, identity.value, stored, 1, 200)
-    messages.value = (data.messages || []).map(toChatMessage)
+    messages.value = (data.messages || []).slice().reverse().map(toChatMessage)
       .sort((a, b) => msgTimeValue(a) - msgTimeValue(b))
     await nextTick()
     scrollToBottom()
@@ -478,8 +502,13 @@ async function adoptActiveRunner(sessionId: string): Promise<void> {
   if (submitting.value || streamingActive.value) return
   try {
     const data = await getActiveRunner(tenantId.value, configId.value, identity.value, sessionId)
-    if (!data.runner_id) return
+    // await 期间用户可能已提交新消息或切换/新建会话，复检防止并发双观察者或跨会话串流
+    if (!data.runner_id || submitting.value || streamingActive.value || currentSessionId.value !== sessionId) return
+    // 重建 AbortController：先前 ask_user 停车可能已中止旧 observeAbort，不重建会导致接管秒退
+    observeAbort.abort()
+    observeAbort = new AbortController()
     activeRunnerId.value = data.runner_id
+    runnerStatus.value = data.status || ''
     submitting.value = true
     streamingActive.value = true
     isTerminal.value = false
@@ -533,6 +562,7 @@ function resetStreamState() {
   waitingText.value = ''
   waitingWaitId.value = ''
   progressText.value = ''
+  runnerStatus.value = ''
   streamFailed.value = false
   isTerminal.value = true
   streamingActive.value = false
@@ -543,8 +573,8 @@ async function reloadMessages() {
   if (!currentSessionId.value) return
   try {
     const data = await getSessionMessages(tenantId.value, configId.value, identity.value, currentSessionId.value, 1, 200)
-    // 后端按 id 倒序返回，这里统一按时间升序渲染（与主流聊天软件一致）
-    messages.value = (data.messages || []).map(toChatMessage)
+    // 后端按 id 倒序返回，先逆序为 id 升序再按时间稳定排序，同时间戳时保持 user 在 assistant 之前
+    messages.value = (data.messages || []).slice().reverse().map(toChatMessage)
       .sort((a, b) => msgTimeValue(a) - msgTimeValue(b))
   } catch {
     /* 历史加载失败不阻断输入 */
@@ -674,7 +704,8 @@ async function submit() {
       client_request_id: newClientId(),
       attachments,
       session_id: currentSessionId.value || undefined,
-      new_session: isNewSession || undefined
+      new_session: isNewSession || undefined,
+      client_id: clientId
     })
     currentSessionId.value = reply.session_id
     if (isUidMode.value) writeStoredSessionId(configId.value, reply.session_id)
@@ -683,6 +714,7 @@ async function submit() {
     console.log(`${new Date().toLocaleTimeString()} [webC submit]`, {
       mode: identityMode.value, session_id: reply.session_id, runner_id: reply.runner_id,
       direct_reply: !!reply.direct_reply, waiting_text: reply.waiting_text || '',
+      queued: !!reply.queued,
     })
     if (reply.direct_reply) {
       messages.value.push({ role: 'assistant', content: reply.direct_reply, created_at: nowIso(), attachments: [], images: [], files: [] })
@@ -695,6 +727,7 @@ async function submit() {
     }
     if (reply.runner_id) {
       activeRunnerId.value = reply.runner_id
+      runnerStatus.value = reply.queued || reply.status === 'queued' ? 'queued' : (reply.status || '')
       waitingText.value = reply.waiting_text || ''
       await observeRunner(reply.runner_id)
     } else {
@@ -752,6 +785,7 @@ function logWebCEvent(kind: string, data: unknown): void {
 }
 
 function applySnapshot(runner: RunnerSnapshot) {
+  runnerStatus.value = runner.status || ''
   const snapshotWaitId = String((runner.snapshot?.waiting as { wait_id?: unknown } | undefined)?.wait_id ?? '')
   if (runner.waiting_text) {
     // 追问回复受理后 control 消费是异步的，短窗口内快照仍是旧 waiting（同 wait_id）。
@@ -791,13 +825,13 @@ async function refreshOnce(runnerId: string, signal?: AbortSignal): Promise<'run
   applySnapshot(runner)
   if (['completed', 'failed', 'cancelled'].includes(runner.status)) {
     isTerminal.value = true
-    if (runner.status !== 'completed') streamFailed.value = true
-    // 被其他端新消息取代（public_view 白名单透出 cancel_reason）：仅本次观察未被
-    // 中止时记挂起标记。同端提交新消息会先 resetStreamState abort 旧观察，
-    // in-flight 刷新借此排除，避免同端误显示「其他设备」提示。
-    if (runner.status === 'cancelled'
-        && runner.cancel_reason === 'superseded_by_new_message'
-        && signal && !signal.aborted) {
+    const isSuperseded = runner.status === 'cancelled'
+      && (runner.cancel_reason === 'superseded_by_new_message'
+          || runner.cancel_reason === 'superseded_by_other_client')
+    if (runner.status !== 'completed' && !isSuperseded) streamFailed.value = true
+    // 被新消息或其他端取代（public_view 白名单透出 cancel_reason）：仅本次观察未被
+    // 中止时记挂起标记，不设置 streamFailed（避免同时显示「本轮对话未完成，请重试」）。
+    if (isSuperseded && signal && !signal.aborted) {
       supersededNoticePending.value = true
     }
     return 'terminal'
@@ -914,9 +948,11 @@ async function observeRunner(runnerId: string) {
       // ask_user 反问作为 assistant 消息入列（服务端按 wait_id 幂等落库，reload 权威校准去重）
       messages.value.push({ role: 'assistant', content: waitingText.value, created_at: nowIso(), kind: 'clarification', attachments: [], images: [], files: [] })
     }
+    const hadWaiting = Boolean(waitingText.value)
     streamingText.value = ''
     waitingText.value = ''
     progressText.value = ''
+    runnerStatus.value = ''
     streamingActive.value = false
     submitting.value = false
     // 服务端权威校准（同时触发终态补写）
@@ -934,6 +970,9 @@ async function observeRunner(runnerId: string) {
         files: []
       })
       void scrollToBottomAfterRender()
+    } else if (!signal.aborted && !hadWaiting && currentSessionId.value) {
+      // 同会话仍有其他端排队/在途任务时自动续接观察，保持双端视图同步
+      await adoptActiveRunner(currentSessionId.value)
     }
     void focusInput()
   }

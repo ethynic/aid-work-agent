@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { resolveWebCStatusLine, WEB_C_WORKING_FALLBACK_TEXT } from '@/utils/webCStatusLine'
+import {
+  resolveWebCStatusLine,
+  WEB_C_QUEUED_TEXT,
+  WEB_C_WORKING_FALLBACK_TEXT,
+} from '@/utils/webCStatusLine'
 
 const base = {
   streamingActive: true,
@@ -40,5 +44,9 @@ describe('resolveWebCStatusLine', () => {
 
   it('失败态不显示兜底（由「本轮对话未完成」提示承担）', () => {
     expect(resolveWebCStatusLine({ ...base, streamFailed: true })).toBe('')
+  })
+
+  it('排队态显示排队等待提示（优先级高于兜底文案）', () => {
+    expect(resolveWebCStatusLine({ ...base, runnerStatus: 'queued' })).toBe(WEB_C_QUEUED_TEXT)
   })
 })

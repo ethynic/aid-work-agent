@@ -45,10 +45,11 @@ class SubmitOutcome:
 
     direct_response 非 None 时为「不提交、直接回显」的追问纠正/重发场景，
     调用方不进入轮询，直接把该响应交给用户。
+    queued 为 True 表示受理时同会话已有在途/排队执行，本条已进入 FIFO 队列等待。
     """
 
     def __init__(self, row, waiting, reply_wait_id, reply_control_id, progress_seen, verbose_seen,
-                 direct_response=None):
+                 direct_response=None, queued=False):
         self.row = row
         self.waiting = waiting
         self.reply_wait_id = reply_wait_id
@@ -56,16 +57,18 @@ class SubmitOutcome:
         self.progress_seen = progress_seen
         self.verbose_seen = verbose_seen
         self.direct_response = direct_response
+        self.queued = bool(queued)
 
 
 class ChannelRunnerAgent:
     def __init__(self, *, source, session_id, channel_user_id, channel_chat_id,
-                 profile_id='main', config_id=None, client=None, tenant_id=None):
+                 profile_id='main', config_id=None, client=None, tenant_id=None, client_id=None):
         from src.config.settings import settings
         self.source, self.session_id = source, session_id
         self.channel_user_id, self.channel_chat_id = channel_user_id, channel_chat_id
         self.profile_id, self.config_id = profile_id or 'main', config_id
         self.tenant_id = tenant_id
+        self.client_id = str(client_id).strip() if client_id else None
         self.client = client or RunnerServiceClient(settings.agent_runner)
 
     @property
@@ -120,13 +123,23 @@ class ChannelRunnerAgent:
             from loguru import logger
             logger.error('Channel Runner cancellation unconfirmed: {}', type(error).__name__)
 
+    def _superseded_reason(self, previous):
+        prev_client = str((previous or {}).get('client_id') or '').strip()
+        if self.client_id and prev_client and self.client_id != prev_client:
+            return 'superseded_by_other_client'
+        return 'superseded_by_new_message'
+
     async def submit(self, *, user_input, attachments=None, extra_system_prompt=None,
-                     client_request_id=None, **kwargs):
+                     client_request_id=None, queue_on_busy=False, **kwargs):
         """受理新消息：活跃 runner 处理 + 追问 reply/controls + 新执行受理（设计 §4.3 拆分）。
 
-        既有 process_message_sync 的提交段原样抽 出；web_c 等流式渠道经此方法
-        受理后自行透传 Runner events，不再走同步轮询段。语义不变：waiting 追问
-        经 reply control 接车、普通新消息取消旧 runner 后受理。
+        既有 process_message_sync 的提交段原样抽出；web_c 等流式渠道经此方法
+        受理后自行透传 Runner events，不再走同步轮询段。
+        - queue_on_busy=False（默认，企微/飞书/钉钉等）：waiting 追问经 reply control 接车，
+          普通新消息取消旧 runner 后受理（跨端标记 superseded_by_other_client）。
+        - queue_on_busy=True（web_c 排队模式）：若同会话有 running/finalizing/queued
+          执行，不取消在途任务，直接提交新 runner 由 agent_runner 按 FIFO 顺序串行执行，
+          仅清理卡在 paused/interrupted/非澄清 waiting 的阻塞任务。
 
         返回 SubmitOutcome；追问「纠正提示/重发分段」等直接回复场景以
         AgentResponse 形式在 outcome.direct_response 中返回（非 None 时调用方
@@ -138,6 +151,7 @@ class ChannelRunnerAgent:
                   'channel_user_id':self.channel_user_id, 'channel_chat_id':self.channel_chat_id}
         page = await self._request('GET', '/v1/sessions/channel/' + quote(session_id, safe='') + '/runners', params=params)
         active = page.get('active_runners') or []
+        queued_rows = [row for row in (page.get('runners') or []) if row.get('status') == 'queued']
         waiting = next((row for row in active if row['status']=='waiting'), None)
         refs = [{key:value for key,value in item.items() if key in
                  {'file_id','name','type','mime_type','content','size'}} for item in attachments or []]
@@ -148,6 +162,7 @@ class ChannelRunnerAgent:
         reply_wait_id = None
         reply_control_id = None
         reply_form = None
+        is_queued = False
         if waiting:
             wait = _clarification_wait((waiting.get('snapshot') or {}).get('waiting')) or {}
             # 回复已停车的追问；普通新消息不留着旧会话 claim 无期限排队。
@@ -190,18 +205,31 @@ class ChannelRunnerAgent:
                     ask_delivery.record_submission(self.session_id, reply_wait_id, reply_control_id)
             else:
                 await self._cancel_and_wait(waiting['runner_id'],
-                                            reason='superseded_by_new_message')
+                                            reason=self._superseded_reason(waiting))
                 waiting = None
         if not waiting:
-            for previous in active:
-                if previous['status'] not in {'completed','failed','cancelled'}:
-                    await self._cancel_and_wait(previous['runner_id'],
-                                                reason='superseded_by_new_message')
+            if queue_on_busy:
+                for previous in active:
+                    if previous['status'] in {'paused', 'interrupted', 'waiting'}:
+                        await self._cancel_and_wait(previous['runner_id'],
+                                                    reason=self._superseded_reason(previous))
+                is_queued = (
+                    any(row.get('status') in {'running', 'finalizing'} for row in active)
+                    or bool(queued_rows)
+                )
+            else:
+                for previous in active:
+                    if previous['status'] not in {'completed','failed','cancelled'}:
+                        await self._cancel_and_wait(previous['runner_id'],
+                                                    reason=self._superseded_reason(previous))
+            request_data = {'channel_config_id':self.config_id}
+            if self.client_id:
+                request_data['client_id'] = self.client_id
             body = {'source':self.source, 'session':{'kind':'channel','session_id':session_id},
                 'channel_user_id':self.channel_user_id, 'channel_chat_id':self.channel_chat_id,
                 'profile_id':self.profile_id, 'client_request_id':request_id, 'text':user_input,
                 'attachments':refs, 'prompt_augmentations':[extra_system_prompt] if extra_system_prompt else [],
-                'request_data':{'channel_config_id':self.config_id}}
+                'request_data':request_data}
             if self.source == 'wecom_kf':
                 from src.channels.wecom_kf.context import get_kf_context
                 ctx = get_kf_context() or {}
@@ -214,7 +242,8 @@ class ChannelRunnerAgent:
             row = (await self._accept('/v1/runners', body))['runner']
         progress_seen = len((waiting.get('snapshot') or {}).get('progressMessages') or []) if waiting else 0
         verbose_seen = {item.get('eventId') for item in (waiting.get('snapshot') or {}).get('verboseMessages') or []} if waiting else set()
-        return SubmitOutcome(row, waiting, reply_wait_id, reply_control_id, progress_seen, verbose_seen, None)
+        return SubmitOutcome(row, waiting, reply_wait_id, reply_control_id, progress_seen, verbose_seen, None,
+                             queued=is_queued)
 
     async def process_message_sync(self, *, user_input, session_id, attachments=None,
                                    extra_system_prompt=None, progress_callback=None,

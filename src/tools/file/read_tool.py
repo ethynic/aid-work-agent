@@ -139,7 +139,8 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
             return "文件路径不能为空"
 
         try:
-            path = self._resolve_path(file_path)
+            # 路径解析含 file_id DB/Redis/磁盘查询与共享知识库授权查询，放到线程避免阻塞事件循环
+            path = await asyncio.to_thread(self._resolve_path, file_path)
 
             # Word/Excel/PPT 路由
             if is_word_document(str(path)):
@@ -164,10 +165,10 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
             return result
 
         except Exception as e:
-            # 文件不存在/路径越界多为 LLM 猜错路径导致，模型会依据报错自纠，
+            # 文件不存在/路径越界/权限拒绝多为 LLM 猜错路径导致，模型会依据报错自纠，
             # 降级为 warning 避免刷屏 log_error 表；真正的内部异常保留 error
-            if isinstance(e, (FileNotFoundError, ValueError)):
-                logger.warning(f"读取文件失败（可自愈，模型可能传错路径）: {e}")
+            if isinstance(e, (FileNotFoundError, ValueError, PermissionError)):
+                logger.warning(f"读取文件失败（可自愈，模型可能传错路径或无权访问）: {e}")
             else:
                 logger.opt(exception=True).error(f"读取文件失败: {e}")
             return f"读取文件失败: {e}"
@@ -195,6 +196,47 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
     # 路径解析
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _is_authorized_shared_knowledge(path: Path, context: Optional[Any]) -> bool:
+        """核对跨租户路径是否命中当前租户+子智能体的共享知识库授权（与 cp_tool 同口径）。"""
+        if not (context and context.tenant_id and context.subagent_id):
+            return False
+        from src.core.storage import normalize_tenant_id
+        from src.core.tenant_path_guard import (
+            extract_flat_knowledge_ref,
+            extract_knowledge_refs,
+        )
+        from src.knowledge.retriever.tenant_range import (
+            load_shared_ranges,
+            resolve_source_types_by_file,
+        )
+
+        allowed = {
+            (normalize_tenant_id(owner), source_type)
+            for owner, source_type in load_shared_ranges(
+                context.tenant_id, context.subagent_id
+            )
+        }
+        if not allowed:
+            return False
+
+        refs = extract_knowledge_refs(path)
+        flat_used = False
+        if not refs:
+            flat = extract_flat_knowledge_ref(path)
+            if flat is None:
+                return False
+            source_types = resolve_source_types_by_file(flat[0], flat[1])
+            if not source_types:
+                return False
+            refs = [(flat[0], st) for st in source_types]
+            flat_used = True
+
+        normalized = [(normalize_tenant_id(o), st) for o, st in refs]
+        if flat_used:
+            return any(ref in allowed for ref in normalized)
+        return all(ref in allowed for ref in normalized)
+
     def _resolve_path(self, file_path: str) -> Path:
         """
         解析文件路径：相对路径基于项目根目录，绝对路径直接使用。
@@ -218,7 +260,28 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
 
         path = path.resolve()
 
-        # 安全校验：路径必须在项目根目录或临时目录内
+        # file_id 兜底：与 cp_tool / skill_executor 同口径，支持直接传本租户 file_xxx 读取
+        resolved_by_file_id = False
+        if not path.exists() and str(file_path).startswith("file_"):
+            try:
+                from src.core.storage import resolve_uploaded_file_path
+                resolved = resolve_uploaded_file_path(str(file_path))
+                if resolved:
+                    path = Path(resolved).resolve()
+                    resolved_by_file_id = True
+            except Exception as resolve_err:
+                logger.warning(f"read file_id 解析异常: {resolve_err}")
+
+        # 租户存储边界校验（避免跨租户读取；已授权的共享知识库文档与 cp_tool 同口径放行）
+        from src.core.tenant_path_guard import find_foreign_tenant_owner
+        from src.tools.context import current_tool_execution_context
+        ctx = current_tool_execution_context()
+        owner = (ctx.tenant_id or "_anonymous") if ctx is not None else None
+        if find_foreign_tenant_owner(path, owner):
+            if not self._is_authorized_shared_knowledge(path, ctx):
+                raise PermissionError("目标文件位于其他租户存储目录，禁止读取")
+
+        # 安全校验：路径必须在项目根目录、临时目录或已配置存储根内
         project_root = Path(__file__).resolve().parent.parent.parent.parent
         tmp_dir = Path(tempfile.gettempdir()).resolve()
         try:
@@ -227,6 +290,15 @@ Word/Excel/PPT 文档自动走专用解析器，不需要单独的工具。
                 if not path.is_file():
                     raise FileNotFoundError(f"文件不存在: {file_path}")
                 return path
+            if resolved_by_file_id:
+                from src.core.storage import configured_storage_root
+                try:
+                    path.relative_to(configured_storage_root())
+                    if not path.is_file():
+                        raise FileNotFoundError(f"文件不存在: {file_path}")
+                    return path
+                except ValueError:
+                    pass
             path.relative_to(project_root)
         except ValueError:
             # 不在项目根目录内，检查是否在临时目录内

@@ -11,11 +11,12 @@ from src.tools.context import tool_execution_scope
 
 class ControlToolAdapter:
     def __init__(self, *, controls, skills, registry, plan_manager, clarification_store,
-                 context, user_input, task_record=None, durable_owner=False):
+                 context, user_input, task_record=None, durable_owner=False, attachments=None):
         self.controls, self.skills, self.registry = controls, skills, registry
         self.plan_manager, self.clarification_store = plan_manager, clarification_store
         self.context, self.user_input, self.task_record = context, user_input, task_record
         self.durable_owner = durable_owner
+        self.attachments = attachments
 
     async def execute(self, state, call):
         args = json.loads(json.dumps(call.arguments))
@@ -72,6 +73,24 @@ class ControlToolAdapter:
             args["session_id"] = state.identity.session_id
             args["user_id"] = state.identity.user_id
             args["command"] = args.get("command") or None
+        elif name == "checkout_session_file":
+            # 按需惰性创建执行工作区：检出文件落在 state.resources["workspace"] 下，
+            # 随 worker._cleanup_completed_resources 自动清理，后续 skill_execute 自动共享该 workdir。
+            ws = state.resources.get("workspace")
+            if not ws:
+                if self.attachments is not None:
+                    ws_path = await asyncio.to_thread(
+                        self.attachments._create_session_workspace, state.identity
+                    )
+                else:
+                    from .attachments import AttachmentAssembler
+                    ws_path = await asyncio.to_thread(
+                        AttachmentAssembler()._create_session_workspace, state.identity
+                    )
+                ws = str(ws_path)
+                state.resources["workspace"] = ws
+            args["_workspace_dir"] = ws
+            args["_session_kind"] = state.identity.session_kind
         elif name == "delegate_to_subagent":
             args.update(session_id=state.identity.session_id, user_id=state.identity.user_id)
             yield make_event("progress", data=f"🚀 正在调用{args.get('subagent_name', '')}子智能体处理任务...")
@@ -148,6 +167,9 @@ class ControlToolAdapter:
                             'form_id': form['form_id'], 'question_id': 'q1', 'positive_key': 'q1o1'}
                     yield DispatchResult(result, wait=wait)
                     return
+        elif name == "checkout_session_file":
+            preview = result.get("file_name") if success and isinstance(result, dict) else (result.get("error") if isinstance(result, dict) else "检出失败")
+            yield make_event("progress", data=f"{'📎' if success else '❌'} 检出会话文件: {str(preview)[:80]}")
         elif name == "delegate_to_subagent":
             execution_id = result.get("execution_id")
             if execution_id:
