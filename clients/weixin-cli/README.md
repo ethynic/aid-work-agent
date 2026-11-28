@@ -67,6 +67,8 @@ aid-weixin doctor --restore-window --json
 aid-weixin add --domain friend --identifier "<手机号或微信号>" --verify-message "你好，我想添加你为好友" --json
 ```
 
-请在微信已登录、桌面未锁屏时执行。每次处理一个标识，省略 `--verify-message` 时使用微信预填的验证语。此命令的视觉定位使用上述服务端计费配置。
+请在微信已登录、桌面未锁屏时执行。每次处理一个标识，省略 `--verify-message` 时使用微信预填的验证语。受信插件在已配对 Runtime 中使用设备凭证访问服务端视觉定位。独立终端沿用既有服务端计费配置。
+
+用 --search-only 在微信搜索结果处停止，保留搜索窗口，返回查找状态。此模式只执行搜索动作，和 --verify-message 互斥。
 
 `request_sent` 表示已提交申请，`friend_added` 表示微信直接添加为好友，`already_friend` 和 `already_requested` 表示本次未发送。遇到 `effect=unknown` 时先在微信中核对申请状态。

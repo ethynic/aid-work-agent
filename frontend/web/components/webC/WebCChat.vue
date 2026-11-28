@@ -1,15 +1,16 @@
 <template>
-  <div ref="rootEl" class="h-screen chat-root flex flex-col bg-canvas" :class="{ 'embed-mode': isEmbed }">
+  <div ref="rootEl" class="h-screen chat-root flex flex-col bg-canvas touch-manipulation" :class="{ 'embed-mode': isEmbed }">
     <!-- 页头（iframe embed 模式隐藏，设计 §4.5） -->
     <header v-if="!isEmbed" class="flex items-center gap-3 px-4 py-3 bg-surface border-b border-default">
-      <div class="w-9 h-9 rounded-full bg-primary-50 text-primary-600 flex items-center justify-center shrink-0">
+      <img v-if="logoUrl" :src="logoUrl" alt="Logo" class="w-9 h-9 rounded-full object-cover shrink-0 border border-default" />
+      <div v-else class="w-9 h-9 rounded-full bg-primary-50 text-primary-600 flex items-center justify-center shrink-0">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="w-5 h-5">
           <path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
       <div class="min-w-0 flex-1">
         <div class="text-sm font-semibold text-default truncate">{{ headerTitle }}</div>
-        <div class="text-xs text-muted">智能助手 · 官网客服</div>
+        <div class="text-xs text-muted">{{ subtitle }}</div>
       </div>
       <button
         v-if="isUidMode"
@@ -78,14 +79,26 @@
                 <div v-if="msg.created_at" class="text-xs text-muted mt-1 mr-2 text-right tabular-nums">{{ formatMsgTime(msg.created_at) }}</div>
               </div>
             </div>
+            <!-- 被其他端新消息取代提示：居中轻提示，不用对话气泡 -->
+            <div v-else-if="msg.kind === 'superseded'" class="flex justify-center py-1">
+              <div class="text-xs text-muted bg-surface-hover border border-default rounded-lg px-3 py-1.5 text-center max-w-[85%]">
+                {{ msg.content }}
+              </div>
+            </div>
             <!-- AI 消息 -->
             <div v-else class="flex justify-start">
-              <div class="max-w-[85%] space-y-2">
+              <div class="max-w-[85%] has-[table]:max-w-full space-y-2">
                 <div v-if="msg.images && msg.images.length" class="max-w-md">
                   <ImageGallery :images="msg.images" />
                 </div>
+                <!-- ask_user 澄清文本是渠道纯文本（\n 分行），按 pre-wrap 渲染；
+                     走 markdown 会把单个换行折叠成同一段落导致题目挤成一坨 -->
                 <div
-                  v-if="msg.content"
+                  v-if="msg.content && msg.kind === 'clarification'"
+                  class="bg-surface border border-default rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words"
+                >{{ msg.content }}</div>
+                <div
+                  v-else-if="msg.content"
                   class="bg-surface border border-default rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm leading-relaxed markdown-body"
                   v-html="renderMarkdown(msg.content)"
                 ></div>
@@ -99,8 +112,8 @@
           </template>
 
           <!-- 流式 AI 回复 -->
-          <div v-if="streamingText || waitingText || streamFailed" class="flex justify-start">
-            <div class="max-w-[85%] space-y-2">
+          <div v-if="streamingText || waitingText || statusLine || streamFailed" class="flex justify-start">
+            <div class="max-w-[85%] has-[table]:max-w-full space-y-2">
               <div
                 v-if="streamingText"
                 class="bg-surface border border-default rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm leading-relaxed markdown-body"
@@ -111,8 +124,21 @@
                 <div class="mt-2 text-xs text-muted">请直接回复文字继续</div>
               </div>
               <div v-else-if="streamFailed" class="text-xs text-muted">本轮对话未完成，请重试</div>
+              <!-- 过程状态位：正文未出现前的单行状态，替代式更新不留痕迹。
+                   无工具进度时兜底显示「正在思考…」（PM 要求 2026-11-26：结果出来前
+                   恒有一句工作状态 + 转圈，避免用户分不清在工作还是出错） -->
+              <div v-else-if="statusLine" class="flex items-center gap-1.5 px-1 text-xs text-muted">
+                <svg class="w-3 h-3 animate-spin text-primary-500 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-20" />
+                  <path d="M12 2a10 10 0 0 1 9.54 7" stroke="currentColor" stroke-width="4" stroke-linecap="round" />
+                </svg>
+                <span class="truncate">{{ statusLine }}</span>
+              </div>
               <div v-if="streamingText && !isTerminal" class="flex items-center gap-1 text-primary-500">
-                <span class="w-1.5 h-1.5 rounded-full bg-primary-500 animate-pulse"></span>
+                <svg class="w-3 h-3 animate-spin shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-20" />
+                  <path d="M12 2a10 10 0 0 1 9.54 7" stroke="currentColor" stroke-width="4" stroke-linecap="round" />
+                </svg>
                 <span class="text-xs text-muted">正在输入…</span>
               </div>
             </div>
@@ -170,12 +196,14 @@ import { computed, onMounted, onBeforeUnmount, ref, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   buildIdentityQuery, getBootstrap, postChat, uploadFile, cancelRunner,
-  getRunner, getSessionMessages, listSessions, webCFileUrl, runnerEventsUrl,
+  getRunner, getActiveRunner, getSessionMessages, listSessions, webCFileUrl, runnerEventsUrl,
   readStoredSessionId, writeStoredSessionId, clearStoredSessionId,
   type IdentityQuery, type UploadRef, type RunnerSnapshot, type SessionSummary,
   type ChannelMessage
 } from '@/api/webC'
 import { renderMarkdown } from '@/utils/markdown'
+import { restrainedProgress } from '@/utils/webCProgress'
+import { resolveWebCStatusLine } from '@/utils/webCStatusLine'
 import { generateUuid } from '@/utils/uuid'
 import ImageGallery from '@/components/ui/ImageGallery.vue'
 import DownloadFileCard from '@/components/DownloadFileCard.vue'
@@ -189,6 +217,8 @@ interface ChatMessage {
   attachments: Record<string, unknown>[]
   images: import('@/types').ImageRef[]
   files: import('@/types').DownloadableFile[]
+  /** 消息种类：clarification = ask_user 澄清反问（渠道纯文本，按 pre-wrap 渲染） */
+  kind?: string
 }
 
 const route = useRoute()
@@ -201,6 +231,9 @@ const identityMode = ref('')
 const identityName = ref('')
 const greeting = ref('')
 const headerTitle = ref('官网客服')
+// 副标题（渠道 config，空串兜底「智能助手」）与自定义 Logo（data URL，空串=系统默认图标）
+const subtitle = ref('智能助手')
+const logoUrl = ref('')
 const subagentName = ref('')
 const allowAttachment = ref(false)
 const showHistoryEnabled = ref(false)
@@ -216,6 +249,15 @@ const pendingAttachments = ref<UploadRef[]>([])
 const submitting = ref(false)
 const streamingText = ref('')
 const waitingText = ref('')
+/** 当前等待反问的 wait_id（与 waitingText 同步维护，供回复提交后识别陈旧等待） */
+const waitingWaitId = ref('')
+/** 刚提交回复所对应的 wait_id：control 消费是异步的，受理后短时间内快照
+ * 仍可能读到旧 waiting 状态（agent2 2026-11-25 追问回复无响应事故根因）。
+ * 观察期间快照里出现同 wait_id 的等待属陈旧快照，忽略并继续观察。 */
+const repliedWaitId = ref('')
+const progressText = ref('')
+/** 上次已打印的 snapshot.progress 原文（值变化才打印日志，长期保留勿删） */
+let lastSnapshotProgressLog: string | undefined
 const streamFailed = ref(false)
 const isTerminal = ref(true)
 const streamingActive = ref(false)
@@ -242,11 +284,18 @@ function enableDiagnostics() {
   tapHint.value = ''
   if (tapHintTimer) { clearTimeout(tapHintTimer); tapHintTimer = null }
   try { sessionStorage.setItem(DIAG_STORAGE_KEY, '1') } catch { /* 隐私模式等场景忽略 */ }
-  void import('@/utils/webCDiagnostics').then(m =>
-    m.setupWebCDiagnostics({
-      getTextarea: () => inputEl.value,
-      getScrollContainer: () => scrollContainer.value,
-    }))
+  void import('@/utils/webCDiagnostics')
+    .then(m =>
+      m.setupWebCDiagnostics({
+        getTextarea: () => inputEl.value,
+        getScrollContainer: () => scrollContainer.value,
+      }))
+    .catch((e) => {
+      // 加载失败必须用户可见（真机上没有 console 可看）
+      tapHint.value = '诊断加载失败'
+      setTimeout(() => { tapHint.value = '' }, 3000)
+      console.warn('[webC诊断] 启用失败', e)
+    })
 }
 
 function onPageTap() {
@@ -272,7 +321,24 @@ async function focusInput() {
   inputEl.value?.focus()
 }
 
+// ============== 过程状态克制呈现（2026-11-25，小屏单行状态位） ==============
+// 数据来源：Runner 快照 snapshot.progress（durable_control 只保留最新一条 progress
+// 事件文本）。呈现原则：单行替代式更新、正文出现即让位、失败不外显（保持中性）。
+
+// 克制化过滤实现见 utils/webCProgress.ts 的 restrainedProgress（可单测）
+
+/** 用户是否处于消息底部附近（80px 容差）：流式期间仅在此为 true 时跟随滚动，
+ * 避免访客上翻查看历史/过程时被每一帧快照刷新强行拉回底部 */
+function isNearBottom(): boolean {
+  const el = scrollContainer.value
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 80
+}
+
 let observeAbort = new AbortController()
+/** 终态为「被新消息取代」的挂起标记：终态收尾 reload 后插入提示气泡
+ * （reload 会整体替换 messages，提示必须在 reload 之后 push） */
+const supersededNoticePending = ref(false)
 const activeRunnerId = ref('')
 
 onBeforeUnmount(() => {
@@ -280,10 +346,21 @@ onBeforeUnmount(() => {
   observeAbort.abort()
   submitting.value = false
   streamingActive.value = false
-  rootEl.value?.removeEventListener('click', onPageTap)
+  rootEl.value?.removeEventListener('pointerdown', onPageTap)
 })
 
 const canSubmit = computed(() => (inputText.value.trim().length > 0 || pendingAttachments.value.length > 0))
+// 状态行兜底判定实现见 utils/webCStatusLine.ts 的 resolveWebCStatusLine（可单测）；
+// 覆盖两个空窗：发送后受理返回前（无任何 progress）；工具完成后 progress 被清空
+// 到下一个 progress/正文出现前（2026-11-26 反馈：过程行显示十几秒后凭空消失）。
+const statusLine = computed(() => resolveWebCStatusLine({
+  streamingActive: streamingActive.value,
+  isTerminal: isTerminal.value,
+  streamingText: streamingText.value,
+  waitingText: waitingText.value,
+  streamFailed: streamFailed.value,
+  progressText: progressText.value,
+}))
 // uid 模式（仅 userid 链接）：会话 id 由 sessionStorage 持有，无历史入口（设计 §3.5）
 const isUidMode = computed(() => identityMode.value === 'uid')
 
@@ -292,7 +369,9 @@ onMounted(async () => {
   try {
     if (sessionStorage.getItem(DIAG_STORAGE_KEY) === '1') enableDiagnostics()
   } catch { /* sessionStorage 不可用忽略 */ }
-  rootEl.value?.addEventListener('click', onPageTap)
+  // 用 pointerdown 计数：iOS WKWebView 上快速连点会被 double-tap-to-zoom 手势
+  // 判定吞掉合成 click（10 下物理点击只有部分到达），pointerdown 按下即触发不受影响
+  rootEl.value?.addEventListener('pointerdown', onPageTap)
   identity.value = buildIdentityQuery(configId.value, route.query as Record<string, unknown>)
   try {
     const data = await getBootstrap(tenantId.value, configId.value, identity.value)
@@ -303,6 +382,11 @@ onMounted(async () => {
     allowAttachment.value = data.allow_attachment === true
     showHistoryEnabled.value = data.show_history === true
     headerTitle.value = subagentName.value ? `${subagentName.value}` : '官网客服'
+    // 渠道配置的副标题与 Logo：空值兜底系统默认
+    subtitle.value = (data.subtitle || '').trim() || '智能助手'
+    logoUrl.value = data.logo || ''
+    // 渠道配置的页面标题：覆盖 document.title（小程序 web-view 等容器导航栏读取它）
+    if (data.title) document.title = data.title
     sessions.value = data.sessions || []
     if (isUidMode.value) {
       await restoreStoredSession()
@@ -339,8 +423,11 @@ async function restoreStoredSession() {
     clearStoredSessionId(configId.value)
     currentSessionId.value = ''
     messages.value = []
+    isLoading.value = false
+    return
   }
   isLoading.value = false
+  await adoptActiveRunner(stored)
 }
 
 function sessionTitle(s: SessionSummary): string {
@@ -379,6 +466,28 @@ function nowIso(): string {
 async function openSession(sessionId: string) {
   currentSessionId.value = sessionId
   await reloadMessages()
+  await adoptActiveRunner(sessionId)
+}
+
+/** 刷新/重进后接管在途执行：查询会话活跃 runner（running/finalizing/queued）并恢复
+ * 观察态（输入框禁用、停止按钮可见）。背景：页面刷新/微信切后台回收重进后 submitting
+ * 复位，前端丢失执行中感知，用户误以为卡住再发新消息会触发渠道侧取消在途执行
+ * （supersede，2026-11-26 聊易 trace tr_runner_2f41da/356b58 事故）。waiting 不接管：
+ * 反问已落历史消息，回复走新消息通道。查询失败静默跳过（输入可用，由下次提交兜底）。 */
+async function adoptActiveRunner(sessionId: string): Promise<void> {
+  if (submitting.value || streamingActive.value) return
+  try {
+    const data = await getActiveRunner(tenantId.value, configId.value, identity.value, sessionId)
+    if (!data.runner_id) return
+    activeRunnerId.value = data.runner_id
+    submitting.value = true
+    streamingActive.value = true
+    isTerminal.value = false
+    streamFailed.value = false
+    void observeRunner(data.runner_id)
+  } catch {
+    /* 查询失败保持现状：输入可用，提交后走既有受理/取消链路 */
+  }
 }
 
 async function switchSession(sessionId: string) {
@@ -419,8 +528,11 @@ async function refreshSessions() {
 function resetStreamState() {
   observeAbort.abort()
   observeAbort = new AbortController()
+  supersededNoticePending.value = false
   streamingText.value = ''
   waitingText.value = ''
+  waitingWaitId.value = ''
+  progressText.value = ''
   streamFailed.value = false
   isTerminal.value = true
   streamingActive.value = false
@@ -458,6 +570,7 @@ function toChatMessage(m: ChannelMessage): ChatMessage {
     role: m.role === 'user' ? 'user' : 'assistant',
     content: m.content || '',
     created_at: m.created_at,
+    kind: String((m.metadata as Record<string, unknown> | null | undefined)?.kind || ''),
     attachments: attachments.filter(a => (a as Record<string, unknown>).type !== 'image'),
     images,
     files
@@ -478,6 +591,15 @@ function toDownloadable(att: Record<string, unknown>): import('@/types').Downloa
 function scrollToBottom() {
   const el = scrollContainer.value
   if (el) el.scrollTop = el.scrollHeight
+}
+
+/** 等本轮 Vue 渲染完成后再滚到底部：push 消息后同步调用会在 DOM 更新前滚动，
+ * 滚到的还是旧底部，新消息（用户问题/状态行）留在视口下方不可见
+ * （2026-11-26 测试反馈：发送后看不到自己刚发的问题，只有停止按钮可感知）。
+ * 此后 applySnapshot 的 isNearBottom 跟随守卫基于真实底部，流式帧可正常跟随。 */
+async function scrollToBottomAfterRender() {
+  await nextTick()
+  scrollToBottom()
 }
 
 function onScroll() {
@@ -527,6 +649,8 @@ async function submit() {
   inputText.value = ''
   pendingAttachments.value = []
   errorMessage.value = ''
+  // 回复追问时先记下所应答的 wait_id，供观察期间识别 control 消费前的陈旧 waiting 快照
+  repliedWaitId.value = waitingWaitId.value
   resetStreamState()
 
   // 本地先渲染用户消息（服务端落库后由 reload 校准）
@@ -538,7 +662,7 @@ async function submit() {
     images: [],
     files: []
   })
-  scrollToBottom()
+  await scrollToBottomAfterRender()
   submitting.value = true
   streamingActive.value = true
   isTerminal.value = false
@@ -555,8 +679,14 @@ async function submit() {
     currentSessionId.value = reply.session_id
     if (isUidMode.value) writeStoredSessionId(configId.value, reply.session_id)
     if (isNewSession) void refreshSessions()
+    // 长期保留（勿删）：提交受理结果（身份模式/会话/runner 直答与反问），真机排查渠道链路用
+    console.log(`${new Date().toLocaleTimeString()} [webC submit]`, {
+      mode: identityMode.value, session_id: reply.session_id, runner_id: reply.runner_id,
+      direct_reply: !!reply.direct_reply, waiting_text: reply.waiting_text || '',
+    })
     if (reply.direct_reply) {
       messages.value.push({ role: 'assistant', content: reply.direct_reply, created_at: nowIso(), attachments: [], images: [], files: [] })
+      void scrollToBottomAfterRender()
       submitting.value = false
       streamingActive.value = false
       isTerminal.value = true
@@ -597,30 +727,79 @@ async function cancel() {
   }
 }
 
+// ============== SSE 事件与快照过程日志（长期保留，勿删） ==============
+// 作用：webC 渠道的工具/技能调用起止、执行结果成功/失败、过程状态在此输出到
+// console，供真机 vConsole 长期排查（如签名链接无过程状态类问题）。
+// 写法参照 /chat 页 useAgent.ts addProgress 的 console 风格：时间戳 + [webC xxx]
+// 标签；与 /chat 页 [Agent tool_*] 日志同属「豁免清理：保留观察」范畴，不属于
+// frontend_dev.md 中「临时调试日志（bug 修复后删除）」，后续清理 console 时勿删本节。
+/** 流式正文分块/复位帧：逐帧打印会刷屏，静默跳过 */
+const SSE_MUTED_KINDS = new Set(['response', 'reset'])
+
+/** SSE 事件分级打印：错误 warn；工具/技能/过程 info（与 /chat 页 [Agent tool_*] 同口径）；其余 log */
+function logWebCEvent(kind: string, data: unknown): void {
+  if (SSE_MUTED_KINDS.has(kind)) return
+  const ts = new Date().toLocaleTimeString()
+  if (kind === 'error' || kind === 'iteration_limit') {
+    console.warn(`${ts} [webC ${kind}]`, data)
+  } else if (kind === 'tool_start' || kind === 'tool_result' || kind === 'progress'
+    || kind === 'tool_messages' || kind === 'llm_call') {
+    // 豁免清理：工具/技能调用起止与结果输出，长期保留观察（同 /chat 页 [Agent tool_*]）
+    console.info(`${ts} [webC ${kind}]`, data)
+  } else {
+    console.log(`${ts} [webC ${kind}]`, data)
+  }
+}
+
 function applySnapshot(runner: RunnerSnapshot) {
+  const snapshotWaitId = String((runner.snapshot?.waiting as { wait_id?: unknown } | undefined)?.wait_id ?? '')
   if (runner.waiting_text) {
+    // 追问回复受理后 control 消费是异步的，短窗口内快照仍是旧 waiting（同 wait_id）。
+    // 视为陈旧快照：忽略并继续观察，等恢复后的新一轮反问（新 wait_id）或终态。
+    if (snapshotWaitId && repliedWaitId.value && snapshotWaitId === repliedWaitId.value) return
     // ask_user 停车等用户回复：主动结束本轮观察。SSE 事件流对 waiting（非终态）
     // 不关闭，不主动断开将令 submitting 恒为 true、输入框永久禁用（测试反馈 2026-11-19）。
     // 反问经 finally 落入消息流，用户回复走新一轮 /chat，由后端应答等待中的澄清
     waitingText.value = runner.waiting_text
+    waitingWaitId.value = snapshotWaitId
     streamingText.value = ''
+    progressText.value = ''
     isTerminal.value = true
     streamFailed.value = false
     observeAbort.abort()
     return
   }
   waitingText.value = ''
+  // 过程状态单行呈现：正文未出现前显示，正文出现后由 streamingText 气泡让位（克制原则）
+  progressText.value = restrainedProgress(runner.snapshot?.progress)
+  // 长期保留（勿删）：快照 progress 原文与克制化结果对比，值变化时才打印（防刷屏）。
+  // 用于排查「有 progress 事件但页面不显示」——raw 有值而 display 为空即被克制化过滤
+  if (runner.snapshot?.progress !== lastSnapshotProgressLog) {
+    lastSnapshotProgressLog = runner.snapshot?.progress
+    console.info(`${new Date().toLocaleTimeString()} [webC snapshot.progress]`, {
+      raw: runner.snapshot?.progress, display: progressText.value, status: runner.status,
+    })
+  }
   const output = runner.result?.output || runner.snapshot?.output || ''
   streamingText.value = output
-  scrollToBottom()
+  // 仅当用户本就在底部才跟随滚动，避免每帧快照刷新强拉回底部打断回看
+  if (isNearBottom()) scrollToBottom()
 }
 
-async function refreshOnce(runnerId: string): Promise<'running' | 'terminal'> {
+async function refreshOnce(runnerId: string, signal?: AbortSignal): Promise<'running' | 'terminal'> {
   const { runner } = await getRunner(tenantId.value, configId.value, identity.value, runnerId)
   applySnapshot(runner)
   if (['completed', 'failed', 'cancelled'].includes(runner.status)) {
     isTerminal.value = true
     if (runner.status !== 'completed') streamFailed.value = true
+    // 被其他端新消息取代（public_view 白名单透出 cancel_reason）：仅本次观察未被
+    // 中止时记挂起标记。同端提交新消息会先 resetStreamState abort 旧观察，
+    // in-flight 刷新借此排除，避免同端误显示「其他设备」提示。
+    if (runner.status === 'cancelled'
+        && runner.cancel_reason === 'superseded_by_new_message'
+        && signal && !signal.aborted) {
+      supersededNoticePending.value = true
+    }
     return 'terminal'
   }
   return 'running'
@@ -641,7 +820,7 @@ async function consumeEvents(runnerId: string, signal: AbortSignal, cursorRef: {
       if (refreshTimer || terminalHit) return
       refreshTimer = setTimeout(() => {
         refreshTimer = null
-        void refreshOnce(runnerId)
+        void refreshOnce(runnerId, signal)
           .then(state => { if (state === 'terminal') terminalHit = true })
           .catch(() => { /* 单次刷新失败容忍，等下一帧 */ })
       }, 120)
@@ -657,6 +836,16 @@ async function consumeEvents(runnerId: string, signal: AbortSignal, cursorRef: {
           buffer = buffer.slice(idx + 2)
           const seqMatch = frame.match(/^id:\s*(\d+)/m)
           if (seqMatch) cursorRef.seq = Math.max(cursorRef.seq, parseInt(seqMatch[1], 10))
+          // 长期保留：解析帧内事件类型与载荷打印（data 为单行 JSON；正文分块类已在 logWebCEvent 内静默）
+          const kindMatch = frame.match(/^event:\s*(\S+)/m)
+          if (kindMatch) {
+            const dataMatch = frame.match(/^data:\s*(.*)$/m)
+            let payload: unknown = undefined
+            if (dataMatch) {
+              try { payload = JSON.parse(dataMatch[1]) } catch { payload = dataMatch[1] }
+            }
+            logWebCEvent(kindMatch[1], payload)
+          }
           if (frame.includes('event:')) scheduleRefresh()
         }
         if (terminalHit) break
@@ -666,8 +855,16 @@ async function consumeEvents(runnerId: string, signal: AbortSignal, cursorRef: {
       void reader.cancel().catch(() => {})
     }
     if (terminalHit || signal.aborted) return
-    // 流正常结束（上游在终态结算后关闭）
-    return
+    // 流干净关闭但未见终态：上游观察连接有 120s 硬寿命上限（event_stream
+    // LIFETIME_SECONDS），长任务会在非终态时被服务端断流，必须凭 cursor 续传
+    // 重连；把干净关闭一律当已结算会让观察在 120s 处被静默截断，终态无人接收
+    // （agent2 2026-11-25 tr_runner_bc18 事故：回复落库后页面不显示）。
+    let state: 'running' | 'terminal' = 'running'
+    try {
+      if (await refreshOnce(runnerId, signal) === 'terminal') state = 'terminal'
+    } catch { /* 刷新失败按 running 继续重连 */ }
+    if (state === 'terminal' || signal.aborted) return
+    await new Promise(resolve => setTimeout(resolve, 1000))
   }
 }
 
@@ -676,7 +873,7 @@ async function pollUntilTerminal(runnerId: string, signal: AbortSignal) {
   for (let i = 0; i < 600; i++) {
     if (signal.aborted) return
     try {
-      if (await refreshOnce(runnerId) === 'terminal') return
+      if (await refreshOnce(runnerId, signal) === 'terminal') return
     } catch {
       /* 网络抖动容忍 */
     }
@@ -692,7 +889,7 @@ async function observeRunner(runnerId: string) {
     while (!signal.aborted) {
       try {
         await consumeEvents(runnerId, signal, cursorRef)
-        break // 流结束 = 已结算
+        break // consumeEvents 仅在终态结算或中止后返回（非终态断流已内部续传）
       } catch {
         if (signal.aborted) return
         failures++
@@ -706,7 +903,7 @@ async function observeRunner(runnerId: string) {
   } finally {
     if (!signal.aborted) {
       try {
-        await refreshOnce(runnerId)
+        await refreshOnce(runnerId, signal)
       } catch {
         /* 终态刷新失败时由 reload 校准 */
       }
@@ -715,14 +912,29 @@ async function observeRunner(runnerId: string) {
       messages.value.push({ role: 'assistant', content: streamingText.value, created_at: nowIso(), attachments: [], images: [], files: [] })
     } else if (waitingText.value) {
       // ask_user 反问作为 assistant 消息入列（服务端按 wait_id 幂等落库，reload 权威校准去重）
-      messages.value.push({ role: 'assistant', content: waitingText.value, created_at: nowIso(), attachments: [], images: [], files: [] })
+      messages.value.push({ role: 'assistant', content: waitingText.value, created_at: nowIso(), kind: 'clarification', attachments: [], images: [], files: [] })
     }
     streamingText.value = ''
     waitingText.value = ''
+    progressText.value = ''
     streamingActive.value = false
     submitting.value = false
     // 服务端权威校准（同时触发终态补写）
     await reloadMessages()
+    // 被其他端新消息取代：reload 会整体替换 messages，提示必须在 reload 后插入
+    if (supersededNoticePending.value) {
+      supersededNoticePending.value = false
+      messages.value.push({
+        role: 'assistant',
+        content: '您在其他设备发送了新消息，此处的问题已被新消息取代，未生成回答',
+        created_at: nowIso(),
+        kind: 'superseded',
+        attachments: [],
+        images: [],
+        files: []
+      })
+      void scrollToBottomAfterRender()
+    }
     void focusInput()
   }
 }
@@ -758,6 +970,14 @@ async function observeRunner(runnerId: string) {
     font-size: 14px;
   }
 }
+.markdown-body :deep(a) {
+  color: var(--color-primary-600);
+  text-decoration: underline;
+  word-break: break-all;
+}
+.markdown-body :deep(a:hover) {
+  color: var(--color-primary-700);
+}
 .markdown-body :deep(p) {
   margin: 0.25rem 0;
 }
@@ -771,5 +991,30 @@ async function observeRunner(runnerId: string) {
 .markdown-body :deep(img) {
   max-width: 100%;
   border-radius: 8px;
+}
+/* 窄气泡内 Markdown 表格防挤压（2026-11-25）：外盒变 block 后表格总宽由内容
+   决定，超出气泡宽度出横向滚动条，列不再被压成 2~3 字竖条 */
+.markdown-body :deep(table) {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 13px;
+  -webkit-overflow-scrolling: touch;
+}
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  border: 1px solid var(--border-default);
+  padding: 6px 10px;
+  text-align: left;
+  overflow-wrap: normal; /* 覆盖 .markdown-body 继承的 anywhere，价格等短内容不被逐字切断 */
+  min-width: 4em; /* 每列至少 4 字宽，杜绝竖条挤压 */
+}
+.markdown-body :deep(thead th) {
+  background: var(--bg-canvas, #f5f6f8);
+  font-weight: 600;
+  white-space: nowrap; /* 表头不折行 */
 }
 </style>

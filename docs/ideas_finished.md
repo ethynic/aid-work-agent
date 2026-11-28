@@ -7,6 +7,9 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|---------|---------|
+| 20261127-1116 | Runtime 上线后后台检查插件 | ✅ 已完成开发，签名包联调通过。 | [设计](system/runtime-plugin-host-architecture-design.md#首次在线后的后台插件检查) | [计划](plans/plan-runtime-plugin-host.md#181-首次在线后的后台插件检查) |
+| 20261127-runtime-lazy-startup | Runtime 先连接与插件首用验证 | ✅ 已完成开发，1.6.1 已通过 agent2 上线和微信首用实测。 | [设计](system/runtime-plugin-host-architecture-design.md#启动连接与首次使用检查) | [计划](plans/plan-runtime-plugin-host.md#18-启动连接与首次使用检查2026-11-27) |
+| 20261127-runtime-startup | 已配对 Runtime 启动性能 | ✅ 已完成开发，1.5.0 实装确认重复检查已减少。 | [设计](system/runtime-plugin-host-architecture-design.md#134-能力列表与错误恢复) | [计划](plans/plan-runtime-plugin-host.md#17-已配对-runtime-启动性能2026-11-27) |
 | 20261112-1235 | BOSS 筛选容错与本机操作恢复 | ✅ 已完成开发，待 Windows 实机验收与发版。 | [筛选设计](design/recruiting/resume-job-matching-design.md#boss-筛选参数容错)、[恢复设计](system/agent-application-architecture-design.md#boss-本机操作恢复) | — |
 | 20261109-1314 | 企业微信代理旧失败批不再阻断监控 | ✅ 已完成开发；独立测试通过，待部署真机验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#95-接口兼容与验收边界) | [计划](plans/plan-wecom-proxy-event-driven.md#p11-旧失败批不再阻断合法后续监控2026-11-09) |
 | 20261109-1230 | 企业微信代理不同 Runtime 独立调度 | ✅ 已完成开发；独立测试通过，待部署真机验收。 | [设计](design/wecom/wecom-conversation-operations-design.md#9-企业微信代理任务新消息触发回答2026-11-08设计待开发) | [计划](plans/plan-wecom-proxy-event-driven.md#p10-不同-runtime-的代理调度独立2026-11-09) |
@@ -20,7 +23,7 @@
 | 20261023-1226 | wecom CLI 三工具与持续恢复 | ✅ 已完成开发；打包兼容复核完成，旧包验签/MCP、长路径及CR通过。 | [设计](design/wecom/wecom-cli-design.md#12-持续监控端到端收敛2026-10-27) | [开发计划](plans/plan-wecom-cli-group-chat-experiment.md) |
 | 20261013-1434 | 结构化提问交互（ask_user 提问卡片） | ✅ 已完成开发；选项焦点白屏已修，独立48项/CR、构建及原卡片实测通过。 | [设计](system/design-ask-user-interactive-question.md) | — |
 | 20261030-1710 | 追踪库保留清理调度化（obs_* 表保留 30 天） | ✅ 已完成并部署 243：每日 01:30 分批删 30 天前 obs_* 数据 + 周日 VACUUM（82ea04b2），生产实测连续 3 天正常执行，存量已收敛。 | [设计 §8](infrastructure/observability-design.md) | — |
-| 20261030-1644 | 每周例行巡检（计费/存储/日志/tool_error/tlog） | ✅ 已完成：每周五项巡检，11-19 起改手动触发（cron 已取消）；11-19 轮发现 P1 web_c SSE 握手必败。 | [巡检规范](audit/weekly-inspection.md)（[11-05 报告](audit/weekly-2026-11-05.md)、[11-12 报告](audit/weekly-2026-11-12.md)、[11-19 报告](audit/weekly-2026-11-19.md)） | — |
+| 20261030-1644 | 每周例行巡检（计费/存储/日志/tool_error/tlog） | ✅ 已完成：每周五项巡检，11-19 起改手动触发（cron 已取消）。 | [巡检规范](audit/weekly-inspection.md)（[11-05](audit/weekly-2026-11-05.md)、[11-12](audit/weekly-2026-11-12.md)、[11-19](audit/weekly-2026-11-19.md)、[11-26 报告](audit/weekly-2026-11-26.md)） | — |
 | 20261029-1800 | agent3 在线开发环境拆库启用 | ✅ 已完成：agent3 独立库 aid_work_agent3/logs3（自 agent2 复制）+ runner 容器名参数化 + background3 + test2dev.sh 整库单向同步（d928fc4b），部署验证通过。 | [部署现状 §5.2](deploy/服务器部署现状.md) | — |
 | 20261026-1744 | 测试入口隔离与 Runtime 断言 | ✅ 已完成开发，支持一键复用本地专用 PostgreSQL 运行 SQL 测试。 | [设计](design/devtools/test-database-isolation-design.md) | — |
 | 20261026-1130 | 调度器幽灵锁自愈修复（发版强杀后后台调度器永久罢工） | ✅ 已完成并发布 243：三调度器与 manager 抢锁失败改循环重试自愈（f3410aa1），47 用例+1649 回归通过，CR 无 P0/P1。 | [事故复盘](incidents/scheduler-ghost-lock-stall-20261021.md) | — |
@@ -70,6 +73,9 @@
 
 | 编号 | 功能 | 说明 | 设计文档 | 开发计划 |
 |------|------|------|---------|---------|
+| 20261127-1304 | 微信好友流程使用系统鼠标输入 | ✅ 已完成开发，保留坐标缓存和逐条关窗，真机只查通过。 | [设计](design/weixin/weixin-cli-design.md#12-本机添加好友) | [计划](plans/plan-weixin-agent-friend-requests.md#phase-6-好友流程使用-windows-系统鼠标输入) |
+| 20261127-wecom-desktop-readiness | 企业微信插件交互桌面判定 | ✅ 已完成开发，企微 1.3.0 真机自动检查已就绪。 | [设计](design/wecom/wecom-cli-design.md#windows-交互桌面检查2026-11-27) | [计划](plans/plan-wecom-cli-group-chat-experiment.md#w33-企微交互桌面误判修复2026-11-27) |
+| 20261126-1039 | 微信 Agent 批量提交好友申请 | ✅ 已完成开发，真机批次暴露的配对与回执问题已修，待新版验收。 | [设计](system/connection-center-design.md#批量提交好友申请) | [计划](plans/plan-weixin-agent-friend-requests.md) |
 | 20261124-1012 | 微信 Agent 多群跟踪与近七天总结 | ✅ 已完成开发（已验收每日和站内通知），支持保存群聊、跨日总结、Markdown 摘要与批次回看。 | [设计](system/connection-center-design.md#多群跟踪与近七天总结) | [计划](plans/plan-weixin-agent-group-tracking.md) |
 | 20261123-0850 | 连接中心微信 Agent | ✅ 已完成开发，支持手动群聊今日总结，待真机验收。 | [设计](system/connection-center-design.md#211-微信-agent) | [计划](plans/plan-weixin-agent.md) |
 | 20261113-1443 | Runner 检查点恢复 | ✅ 已完成开发（待发版验收），按原检查点续跑并支持会话内补传及核对。 | [设计](system/agent-application-architecture-design.md#58-runner-按检查点继续执行2026-11-13已实现) | [开发计划](plans/plan-runner-server-skill-interruption-recovery.md) |

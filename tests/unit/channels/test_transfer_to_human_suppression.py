@@ -2,7 +2,9 @@
 
 场景：wecom_kf 会话中 LLM 成功调用 transfer_to_human 后，微信客服接口会拒收
 该会话后续所有机器人消息（errcode=95018）。渠道层 prepare_response/send_response
-依赖 _has_successful_transfer_to_human 判定本轮是否已成功转人工，命中则跳过发送。
+与 process_and_persist 的空响应降级判定依赖 has_successful_transfer_to_human，
+命中则跳过发送 / 空响应不记 mark_error（2026-11-26 判定函数上移至
+src/channels/session.py，供渠道层与持久化层共用）。
 
 该轮计费与 trace 由 Runner 侧结算（finalizer.settle_record + worker._persist_trace），
 与渠道层是否抑制发送无关；本测试锁定抑制判定契约本身。
@@ -12,7 +14,7 @@ import json
 
 import pytest
 
-from src.saas.api.channel_routes import _has_successful_transfer_to_human
+from src.channels.session import has_successful_transfer_to_human as _has_successful_transfer_to_human
 
 pytestmark = pytest.mark.agent
 

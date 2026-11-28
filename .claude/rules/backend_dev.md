@@ -1,89 +1,53 @@
 # 后端开发规范
 
 ## 日志规范
-**本项目后端统一使用 `loguru` 作为日志库，禁止使用标准库 `logging`。**
+
+**统一使用 `loguru`，禁止标准库 `logging`**（`src/` 内 `import logging` 清零，唯一例外 `src/config/logging.py` 的 InterceptHandler——把标准库 logging 含第三方库统一转发进 loguru）。
 
 ```python
 from loguru import logger
 
-# 后端日志：复杂业务逻辑长期保留
-logger.info('后端日志：开始处理用户请求')
-
-# 后端日志：异常捕获（必须用 opt(exception=True) 或 logger.exception，才能把堆栈写入错误日志库）
+# 异常捕获必须用 opt(exception=True) 或 logger.exception，堆栈才能进 log_error 表
 logger.opt(exception=True).error(f'后端日志：数据库连接失败: {e}')
 
-# 注意：loguru 不识别标准库 logging 的 exc_info=True 参数！
-# ❌ logger.error(f'...: {e}', exc_info=True) 不会捕获堆栈，
-#    exc_info 只是普通 kwarg 被塞进 extra，record['exception'] 恒为 None，
-#    log_error 表的 traceback 列永远为空。正确写法见上。
+# ❌ loguru 不识别 exc_info=True：它只被塞进 extra，record['exception'] 恒为 None，
+#    log_error 表 traceback 列永远为空
+logger.error(f'...: {e}', exc_info=True)
 
 # 临时调试日志（bug 修复后删除）
 logger.debug(f'临时调试：请求参数 {params}')
 ```
 
-**`import logging` 清零（2026-10-13 起）**：`src/` 内禁止 `import logging`，唯一例外 `src/config/logging.py` 的 InterceptHandler（把标准库 logging 含第三方库统一转发进 loguru，在 `setup_logging()` 注册）。第三方库（uvicorn/apscheduler/psycopg2 等）的日志由拦截器兜底，业务代码不得再引入标准库 logging。
-
 ### 临时主题日志（tlog）
 
-主日志文件单日可达数千上万条，针对某个具体问题（如「语音合并」「会话取消」）排查时，在主日志中筛选非常低效。**调试某一主题时，使用 `tlog` 把日志单独写到独立文件**，与主日志完全隔离。
+主日志单日上万条，排查具体主题（如「语音合并」「会话取消」）时用 `tlog` 写独立文件，与主日志完全隔离：
 
 ```python
 from src.core.temp_logger import tlog
 
-# 基本用法：日志写入 log/temp/语音合并.log
 tlog("语音合并", f"合并 {a} + {b} -> {c}")
-
-# 支持命名占位符（推荐，避免拼接 f-string 时的字段冗余）
-tlog(
-    "语音合并",
-    "处理 session={sid}..., original_len={o_len}, merged={merged}",
-    sid=session_id[:20],
-    o_len=len(original),
-    merged=was_merged,
-)
-
-# 指定日志级别
+# 命名占位符（推荐）
+tlog("语音合并", "处理 session={sid}..., merged={merged}", sid=session_id[:20], merged=was_merged)
 tlog("语音合并", "处理失败: {err}", err=e, level="ERROR")
 ```
 
-**特点**：
-- 日志文件位于 `log/temp/{topic}.log`，与主日志完全隔离，不在控制台和 `aid-work-agent.log` 中出现
-- 文件名即主题名，中英文均可（非法字符自动替换为 `_`）
-- 主题名按调试场景命名（如 `语音合并`、`会话取消`、`工具超时`），一个主题对应一个文件
-- 多线程写同一主题文件时加锁，避免日志交错
-
-**使用规范**：
-- **仅用于临时调试**，bug 修复后必须删除 `tlog` 调用
-- 主题名应明确指向具体问题，避免 `debug`、`test` 等模糊命名
-- 服务器排查时，直接下载 `log/temp/{topic}.log` 即可，无需在主日志中过滤
-- 整个 `log/temp/` 目录可随时清空，不影响主流程
+- 文件位于 `log/temp/{topic}.log`，服务器排查直接下载即可；多线程写同主题自动加锁
+- **仅用于临时调试**，bug 修复后必须删除调用；主题名指向具体问题，禁止 `debug`/`test`
+- 整个 `log/temp/` 可随时清空
 
 ## Runtime / CLI 服务端升级兼容
 
-已有客户使用已交付的 Runtime＋CLI，服务端升级必须保留旧客户端的原有功能。客户不使用新功能时，没有必要跟随服务端升级客户端。
+已交付客户的 Runtime＋CLI 不强制跟随服务端升级，服务端升级必须保留其原有功能：
 
-- 保持旧 Device API 参数/响应、能力上报、原工具发现与调用、回执/重投及计费语义兼容；旧任务及原调用应能跨服务端发布恢复，不能仅因新版配置指纹或装配方式变化被拒绝。
-- 新功能通过现有能力上报和协商按需启用；旧客户端缺少能力时，只给对应新功能明确、可恢复的说明，不隐藏其原有工具、不强制所有客户升级，不新造全局版本门禁。确实不能兼容的变更先说明影响与迁移方案，不能静默破坏存量能力。
-- 验证使用实际已交付的旧客户端组合，覆盖服务端单独升级及受影响的旧任务恢复/回执幂等边界。模拟版本字段不等于旧二进制验收；复用有效旧包证据，只补变化影响的验证，不逐代穷举所有历史版本或测试不可能的状态。
+- 保持旧 Device API 参数/响应、能力上报、工具发现与调用、回执/重投及计费语义兼容；旧任务应能跨服务端发布恢复，不能仅因配置指纹或装配方式变化被拒绝
+- 新功能经能力上报协商按需启用；旧客户端缺能力时只给明确、可恢复的说明，不隐藏原有工具、不强制升级、不新造全局版本门禁。确实不能兼容的变更先说明影响与迁移方案
+- 验证用实际已交付的旧客户端组合，复用有效旧包证据，只补变化影响的验证；模拟版本字段不等于旧二进制验收
 
 ## 错误处理规范
-所有 API 错误响应必须包含 `debug` 字段，且必须过滤敏感信息：
+
+所有 API 错误响应必须含 `debug` 字段，且过滤敏感信息（`sanitize_error_info` 脱敏 password/api-key/token 等模式后返回）：
 
 ```python
-import re
-
-SENSITIVE_PATTERNS = [
-    r'password["\s:=]+\S+',
-    r'api[_-]?key["\s:=]+\S+',
-    r'token["\s:=]+\S+',
-]
-
-def sanitize_error_info(error_msg: str) -> str:
-    for pattern in SENSITIVE_PATTERNS:
-        error_msg = re.sub(pattern, lambda m: m.group(0).split('=')[0] + '=***', error_msg, flags=re.IGNORECASE)
-    return error_msg
-
-# 错误响应格式
 return {
     "success": False,
     "error": "操作失败，请稍后重试",
@@ -91,127 +55,44 @@ return {
 }
 ```
 
-## 异步/同步开发规范
-**避免 `await` 调用同步方法导致的 `TypeError`**：
+## 假异步（Fake Async）规范
 
-| 类型 | 定义 | 调用 |
-|------|------|------|
-| 同步 | `def method()` | `obj.method()` |
-| 异步 | `async def method()` | `await obj.method()` |
+**核心规则**：`async def` 里调用同步阻塞函数（`subprocess.run`、`requests.post`、`time.sleep`、Pandoc/LibreOffice 等子进程调用、CPU 密集计算）**必须** `asyncio.to_thread()` 包裹，否则阻塞 UvicornWorker 事件循环，该 worker 上所有并发请求无法调度。
 
-异步路由调用同步服务时，使用 `asyncio.to_thread()`：
-```python
-import asyncio
-
-@router.get("/data")
-async def get_data():
-    service = MyService()
-    result = await asyncio.to_thread(service.sync_method)  # ✅ 正确
-    return result
-```
-
-### 假异步（Fake Async）规范
-
-**核心规则**：在 `async def` 函数中调用同步阻塞函数（`subprocess.run`、`requests.post`、`time.sleep`、Pandoc/LibreOffice/ripgrep 等子进程调用、CPU 密集计算）**必须**通过 `asyncio.to_thread()` 包裹，否则会阻塞 UvicornWorker 的 asyncio 事件循环，使该 worker 上的所有其他并发请求在阻塞期间无法调度。
-
-**关键定位原则**：修复点在 **async 入口层**，不是底层同步模块。
-
-- 底层同步模块（如 `pdf_renderer._render_with_poppler`、`md_to_word._pandoc_convert`、`ppt.renderer.NodePptRenderer.render`）保持 `def` 同步，**不要**在同步函数里写 `await asyncio.to_thread(...)`（语法错误）
-- 在调用它们的 `async def` 入口（如 `*_process_tool.py` 的 `_handle_*` handler、`convert_async`、`BaseTool.execute`）里用 `await asyncio.to_thread(sync_func, *args, **kwargs)` 包裹
-
-**正确示例**：
+**修复点在 async 入口层**：底层同步模块保持 `def`（在同步函数里写 `await` 是语法错误），在调用它们的 `async def` 入口里包裹：
 
 ```python
 # ✅ 底层保持同步
 def render_pages(file_path: str, ...) -> Dict[str, Any]:
-    result = subprocess.run(cmd, ...)  # 同步函数里直接调，没问题
+    result = subprocess.run(cmd, ...)
     return ...
 
 # ✅ async 入口用 to_thread 包裹
 async def _handle_render_pages(self, ctx, params) -> Dict:
-    file_path = self._resolve_file(ctx.file_paths[0])
-    return await asyncio.to_thread(
-        render_pages, file_path,
-        pages=params.get("pages"),
-        dpi=params.get("dpi", 150),
-    )
+    return await asyncio.to_thread(render_pages, file_path, pages=params.get("pages"), dpi=params.get("dpi", 150))
 ```
 
-**错误示例**：
+- `to_thread(func, *args, **kwargs)` 第一参数是函数对象；`to_thread(func())` 会先同步执行、失去异步化意义
 
-```python
-# ❌ async 函数里直接调同步阻塞函数（假异步）
-async def _handle_render_pages(self, ctx, params) -> Dict:
-    file_path = self._resolve_file(ctx.file_paths[0])
-    return render_pages(file_path, ...)  # 阻塞事件循环
-
-# ❌ 在同步函数里写 await（语法错误）
-def _render_with_poppler(path, ...) -> Dict:
-    result = await asyncio.to_thread(subprocess.run, cmd, ...)  # SyntaxError
-```
-
-**`to_thread` 参数传递**：`asyncio.to_thread(func, *args, **kwargs)`，第一个参数是函数对象（不要加括号调用），后续参数传给该函数。`to_thread(func())` 会在主线程同步执行后把返回值传给 `to_thread`，失去异步化意义。
-
-**判断标准**：
-
-| 场景 | 是否需要 `to_thread` |
-|------|---------------------|
-| `async def` 里调 `subprocess.run` / `requests.post` / `time.sleep` | ✅ 必须 |
-| `async def` 里调底层同步函数（底层内部有 subprocess/网络/磁盘 IO） | ✅ 必须 |
-| `async def` 里调纯内存计算（<1ms） | ❌ 不需要 |
-| 同步 `def` 函数里调 `subprocess.run` | ❌ 不需要（同步函数本就跑在调用方的线程里） |
-| 守护线程 / APScheduler worker 线程里的 `time.sleep` | ❌ 不需要（不在事件循环里） |
-
-**已修复的假异步案例**（2026-07）：
-
-| 文件 | 修复点 |
-|------|--------|
-| `src/tools/file/grep_tool.py` | `execute` 里 `subprocess.run(rg)` 用 `to_thread` 包裹 |
-| `src/tools/pdf/pdf_process_tool.py` | `_handle_render_pages` / `_handle_validate` 用 `to_thread` 包裹 `render_pages` / `validate_pdf` |
-| `src/tools/word/md_to_word.py` | `convert_async` 内部 `_convert_sync`（Pandoc 转换）用 `to_thread` 包裹 |
-| `src/tools/ppt/ppt_process_tool.py` | `_handle_html` / `_handle_spec` / `_generate_ppt` / `execute` 中调 `_render_node_spec` / `_apply_quality_validation` / `_check_node_renderer_ready` 用 `to_thread` 包裹 |
-
-**检测方法**：
+| 场景 | `to_thread` |
+|------|-------------|
+| `async def` 里调 subprocess / requests / time.sleep / 有 IO 的底层同步函数 | ✅ 必须 |
+| 纯内存计算（<1ms）、同步 `def` 函数里调 subprocess、守护线程/APScheduler 线程里的 sleep | ❌ 不需要 |
 
 ```bash
-# 查找 async def 函数里直接调 subprocess.run 但未 to_thread 包裹的位置
+# 检测：逐个检查命中函数是否 async def
 grep -rn "subprocess\.run" src/ --include="*.py" | grep -v "to_thread"
-# 逐个检查对应函数是否是 async def，若是则需要 to_thread 包裹
 ```
 
 ## 包初始化副作用规范（Python `__init__.py` 反模式）
 
-**核心规则**：包的 `__init__.py` 和模块顶层**禁止**执行重计算或创建单例对象。包初始化应该是惰性的——任何对包内任意子模块的 import 都不应触发副作用。
+**核心规则**：包的 `__init__.py` 和模块顶层**禁止**执行重计算或创建单例——任何对包内子模块的 import 都不应触发副作用。曾有一个渠道子模块的 ctypes 封装 import 因此被迫拉起 100+ 个 src 模块、构造 Agent + 27 工具。
 
-### 反模式（禁止）
-
-```python
-# ❌ src/core/__init__.py
-from .agent import master_agent   # 顶层 import 立即触发 Agent 构造
-                                    # → 注册 27 个工具、加载 skills/subagents
-                                    # → 任何对 src.core.* 的间接 import 都被迫拉起整套环境
-
-# ❌ src/core/agent.py（模块底部）
-master_agent = Agent(is_master=True)   # 模块级实例化，import 该模块即执行
-
-# ❌ src/config/__init__.py
-from .logging import setup_logging     # logging 内部 import src.core.log_retention
-                                        # → 触发 src.core/__init__.py → 全套 Agent 启动
-```
-
-**真实事故**：曾经一个渠道子模块的纯 ctypes 封装 import（经 `src.channels.*.archive` 包）被迫拉起 100+ 个 src 模块、构造 Agent + 27 工具 + 8 子智能体，根因就是 `src.core/__init__.py` 在顶层 import `master_agent`（该渠道已清退，此处保留案例脱敏描述）。
-
-### 正确做法：模块级 `__getattr__` 懒加载
-
-Python 3.7+ 支持模块级 `__getattr__`，属性访问时才执行：
+**单例改延迟构造**：模块级 `__getattr__` 懒加载（Python 3.7+）：
 
 ```python
 # ✅ src/core/__init__.py
-from typing import Any
-
-
 def __getattr__(name: str) -> Any:
-    """按需导出，避免顶层 import 触发 Agent 构造"""
     if name in ("Agent", "AgentMode"):
         from src.core.agent import Agent, AgentMode
         return {"Agent": Agent, "AgentMode": AgentMode}[name]
@@ -220,426 +101,119 @@ def __getattr__(name: str) -> Any:
         return get_master_agent()
     raise AttributeError(f"module 'src.core' has no attribute {name!r}")
 
-
-__all__ = ["Agent", "master_agent"]
+# ✅ src/core/agent.py：get_master_agent() 首次调用才构造，
+#    模块 __getattr__ 让 `from src.core.agent import master_agent` 仍可用
 ```
+
+| 代码 | 副作用 |
+|------|--------|
+| 顶层 `class Foo: ...`、`from .xxx import` 类/函数 | ✅ 安全 |
+| 顶层 `foo = Foo()`（重计算/单例）、`db_engine = create_engine(...)` | ❌ 禁止 |
+| 顶层 `RedisClient()` 等构造 | ⚠️ 检查是否建立连接 |
 
 ```python
-# ✅ src/core/agent.py（单例改为延迟构造函数）
-_master_agent_instance: Optional["Agent"] = None
-
-
-def get_master_agent() -> "Agent":
-    """返回 master_agent 单例，第一次调用时构造"""
-    global _master_agent_instance
-    if _master_agent_instance is None:
-        _master_agent_instance = Agent(is_master=True)
-    return _master_agent_instance
-
-
-def __getattr__(name: str):
-    """让 `from src.core.agent import master_agent` 仍能工作，但延迟到首次访问"""
-    if name in ("master_agent", "agent"):
-        return get_master_agent()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+# 排查：轻量 import 拉起几十个 src 模块 → 逐层向上找 __init__.py 或顶层单例
+before = set(sys.modules.keys()); from src.xxx import yyy
+print([m for m in set(sys.modules) - before if m.startswith('src.')])
 ```
 
-### 判断标准
+## 全局运行时变更的下游消费方盘点（2026-11-26 教训）
 
-| 代码 | 是否有副作用 |
-|------|------------|
-| 模块顶层 `class Foo: ...` | ✅ 安全（类定义不实例化） |
-| 模块顶层 `foo = Foo()` | ⚠️ **重计算/单例创建**则禁止 |
-| `__init__.py` 顶层 `from .xxx import yyy`（yyy 是类/函数） | ✅ 安全 |
-| `__init__.py` 顶层 `from .xxx import yyy`（yyy 是单例对象） | ❌ 禁止，改用 `__getattr__` |
-| 模块顶层 `db_engine = create_engine(...)` | ❌ 禁止（建立连接池） |
-| 模块顶层 `redis_client = RedisClient()` | ⚠️ 检查构造是否建立连接 |
+改**全局运行时基础设施**（子进程生命周期、DB 池初始化时机、环境注入、bootstrap/sitecustomize、连接池参数）时，必须盘点所有下游消费方并附进 PR 描述——动机不涉及的模块最易漏。
 
-### 排查方法
+**事故**：08e40836 惰性化 skill 子进程 DB 池后，非 LLM 技能脚本经服务层间接读 DB 失败且静默降级，`load_api_config` 的「读取失败」与「租户未配置」不可区分，API 类技能新会话全挂。
 
-```python
-import sys
-before = set(sys.modules.keys())
-from src.xxx import yyy        # 被怀疑的 import
-after = set(sys.modules.keys())
-new = sorted([m for m in (after - before) if m.startswith('src.')])
-print(f'拉起 {len(new)} 个 src 模块')
-print('是否拉起 agent:', any('src.core.agent' in m for m in new))
+```bash
+# 技能脚本 DB 访问盘点（直接 + 间接经服务层），每个命中点确认有惰性 init 兜底
+grep -rln "get_db_connection\|get_pooled_connection\|tenant_api_doc\|SubagentDefinitionDB\|SubagentEnvVarDB\|TenantAgentInstanceDB" \
+  src/skills/*/scripts/*.py subagents/*/scripts/*.py
 ```
 
-如果一个看似轻量的 import 拉起几十个模块，必然存在包初始化副作用。逐层向上找 `__init__.py` 或模块顶层单例即可定位元凶。
+- 脚本直接 `get_db_connection` → 脚本内惰性 init 兜底（参照 `sms_cli.py`）；经服务层间接读 → 服务层入口兜底（参照 `tenant_api_doc._ensure_db_pool`），不指望脚本作者知道服务层有 DB 读
+- 新增/修改降级路径 → 降级结果必须与合法业务态可区分（如 `reason: db_unavailable` vs `no_doc`），禁止共用文案静默吞掉
 
-## Gunicorn 多 Worker 进程内存隔离
-**核心问题**：Gunicorn 启动多个 worker 进程时，每个 worker 拥有独立的 Python 内存空间。
+## Gunicorn 多 Worker 内存隔离
 
-| 方案 | 适用场景 |
-|------|---------|
-| 磁盘刷新 | 低频读操作（如管理后台配置读取） |
-| Redis 共享缓存 | 高频读操作 |
-| 数据库 | 持久化数据 |
-| 单 worker | 开发/调试（`gunicorn --workers 1`） |
+磁盘/数据库是共享的，**内存是隔离的**：跨请求状态**禁止**用进程内变量（`dict`/`set`/`list`）存储，必须用 Redis 或数据库。共享方案选型：高频读走 Redis、持久化走 DB、低频读可磁盘刷新、开发调试单 worker。
 
-> **磁盘/数据库是共享的，内存是隔离的。** 任何依赖内存状态且跨请求的读写操作，都必须考虑多 worker 一致性。
-
-### 禁止依赖内存变量存储跨请求状态
-
-**原则**：所有需要在多个 HTTP 请求之间保持的状态，**禁止**使用进程内变量（如 `dict`、`set`、`list`）存储。
-
-| ❌ 禁止（内存变量） | ✅ 正确（共享存储） |
-|-------------------|-------------------|
-| `self._pending_clarifications: dict = {}` | `redis_client.hset("pending_clarification:{sid}", ...)` |
-| `self.cancelled_sessions: set = set()` | `redis_client.sadd("cancelled_session:{sid}", ...)` |
-| `uploaded_files: dict = {}` | `redis_client.hset("uploaded_file:{fid}", ...)` |
-| `self._plans: dict = {}` | `redis_client.set("execution_plan:{sid}", ...)` |
-| `self._task_records: dict = {}` | `redis_client.hset("task_record:{eid}", ...)` |
-
-**判断标准**：如果该变量在代码注释中被描述为"跨请求共享"、"全局缓存"或"内存缓存"，则必须使用 Redis 或数据库替代。
-
-**降级策略**：使用 `src.core.redis_client.RedisClient`，在 Redis 不可用时自动降级到内存，并记录 `logger.warning`。
+- 判断标准：变量在注释中被描述为「跨请求共享」「全局缓存」「内存缓存」即必须改共享存储（如 `self._pending_clarifications: dict` → `redis_client.hset("pending_clarification:{sid}", ...)`）
+- 降级策略：用 `src.core.redis_client.RedisClient`，Redis 不可用时自动降级内存并 `logger.warning`
 
 ## 下载接口规范（限速 + 原生下载）
 
-服务器公网出带宽仅 5Mbps（约 625KB/s），大文件下载会长时间占满带宽并拖垮其他用户。所有文件下载接口必须遵守本节规范。
+公网出带宽仅 5Mbps，大文件下载必须遵守本节。
 
-### 1. nginx 下载限速（新增下载点必做）
+**1. nginx 限速**：`deploy/agent{,2,3}.aidingyi.cn.conf` 三份配置各有「文件下载接口（单独限速）」正则 location（单连接 1Mbps、前 1MB 全速、单 IP 并发 2）。**新增下载点必须把路由加入三份 conf 正则**。已纳入：对话附件 `/api/files/{file_id}/download`、知识库文档、外部客户附件、配置文件、travel-quote 导出/模板。例外：`/api/files/{file_id}`（inline 预览）不纳入——聊天图片并发批量加载，`limit_conn` 会导致第 3 个请求 503。
 
-`deploy/agent.aidingyi.cn.conf`、`agent2.aidingyi.cn.conf`、`agent3.aidingyi.cn.conf` 三份配置中有一个「文件下载接口（单独限速）」的正则 location（单连接 `limit_rate 128k`（1Mbps）、前 1MB 全速 `limit_rate_after 1m`、单 IP 并发 `limit_conn 2`），**新增下载点必须把路由加入三份 conf 的正则**，否则不受限速保护。
+**2. 前端下载策略**（统一走 `frontend/web/utils/download.ts`，禁止绕过策略函数直接拼 `<a>` 或 `window.location.href`）：
 
-当前已纳入限速的下载点：
+- `resolveDownloadStrategy(sizeBytes)` 分发：
+  - `wechat_guide`：微信/企微内置浏览器（UA 含 MicroMessenger）——无论大小一律引导「··· 在浏览器打开后下载」（WKWebView 无下载管道，2026-10-27 事故：服务端 200 完整传输但 iOS 微信静默丢弃）
+  - `blob`：非微信移动端且 <10MB（大小未知也按 blob）——`downloadViaBlob(url, filename, headers?)`
+  - `native`：PC 端、移动端 ≥10MB——`triggerNativeDownload(url, filename)`
+- 需认证的下载点用 `downloadViaTicket(downloadPath, filename)`：先 POST `{downloadPath}_ticket` 换短期 HMAC 票据（5 分钟、绑定路径+租户+用户+角色、无状态不落库，密钥 `DOWNLOAD_TICKET_SECRET` 缺省由 `DATABASE_URL` 派生），再原生下载 `?ticket=xxx`。`TenantContextMiddleware` 的 `_TICKET_DOWNLOAD_PATHS` 白名单与 `require_admin` 的 `_require_admin_or_ticket` 兜底需同步新增下载点
+- 已接入入口：`DownloadFileCard.vue`、`AttachmentPreviewPanel.vue`；前端实现参考 `api/knowledge.ts` / `api/saasPermissions.ts` / `api/travelQuote.ts`
 
-| 路由 | 用途 |
-|------|------|
-| `/api/files/{file_id}/download` | 对话附件/图片下载 |
-| `/api/knowledge/documents/{doc_id}/download` | 知识库文档下载 |
-| `/api/saas/external-customers/attachments/download` | 外部客户附件下载 |
-| `/api/saas/tenant/config-file/{subagent_name}` | 子智能体配置文件下载 |
-| `/api/v1/travel-quote/{vehicles,meals,guides,fees,seasons,kb/attractions,kb/hotels}/export` | 旅游报价 Excel 导出 |
-| `/api/v1/travel-quote/import/template` | 导入模板下载 |
-
-**例外**：`/api/files/{file_id}`（inline 预览）不纳入限速 location，因为聊天图片会并发批量加载，`limit_conn` 并发限制会导致第 3 个请求直接 503、图片挂掉。小文件也基本不受 `limit_rate_after 1m` 影响。
-
-### 2. 前端下载策略：PC / 大文件走「原生下载」，移动端小文件走 fetch + blob，微信内一律引导「用浏览器打开」
-
-`fetch + blob` 会把整个文件下载到内存后才弹保存框，期间用户零反馈（50MB 文件浏览器转圈超过 1 分钟），因此**大文件与 PC 端禁止 fetch + blob**。但移动端存在另一面：原生下载依赖浏览器自愿实现「attachment 响应 → 下载管理器」的移交，移动端各壳实现残缺（2026-10-27 分享页 Excel 下载事故：服务端全部 200 完整传输，iOS 微信 WKWebView 收到后静默丢弃、iOS Safari 成功但无任何提示进下载管理器、国产安卓内核解析 filename* 失败放弃下载）。前端统一使用 `frontend/web/utils/download.ts` 的策略函数：
-
-- `resolveDownloadStrategy(sizeBytes)`：返回下载策略，调用方按策略分发
-  - `wechat_guide`：微信/企业微信内置浏览器（UA 含 MicroMessenger）——无论文件大小一律引导用户「右上角 ··· 在浏览器打开后下载」（WKWebView 无下载管道，任何技术方案都不可靠）
-  - `blob`：非微信移动端且文件 < `MOBILE_BLOB_DOWNLOAD_MAX_BYTES`（10MB，分享附件有 Office 预览门槛 10MB/20MB，超限文件极少）；大小未知也按 blob 处理（业务数据里 size 几乎总有值）→ `downloadViaBlob(url, filename, headers?)`
-  - `native`：PC 端、移动端 ≥10MB → `triggerNativeDownload(url, filename)` 直链下载（常规移动浏览器原生下载可用）
-- `triggerNativeDownload(url, filename)`：直链原生下载（免认证下载点，如 `/api/files/{file_id}/download`）
-- `downloadViaTicket(downloadPath, filename)`：先 `POST {downloadPath}_ticket`（带认证 header，毫秒级）换取短期 HMAC 票据，再原生下载 `{downloadPath}?ticket=xxx`
-- `downloadViaBlob(url, filename, headers?)`：移动端小文件专用 fetch + blob 下载，可带认证 header；仅限 <10MB，禁止用于大文件
-
-已接入策略的入口：分享页文件卡片 `DownloadFileCard.vue`、预览面板 `AttachmentPreviewPanel.vue`（分享上下文与普通对话上下文共用）。新增下载触发点时按同样方式接入，不要绕过策略函数直接拼 `<a>` 或 `window.location.href`。
-
-票据机制（`src/core/download_ticket.py`）：5 分钟有效、绑定下载路径 + tenant_id + user_id + role、无状态不落库（密钥取 `DOWNLOAD_TICKET_SECRET` 环境变量，缺省由 `DATABASE_URL` 派生）。`TenantContextMiddleware` 对带 `ticket` 的下载请求在认证 header 缺失时验签还原租户上下文（`_TICKET_DOWNLOAD_PATHS` 白名单，新增下载点需同步）；`require_admin` 类端点用 `_require_admin_or_ticket` 做票据兜底（参考 `src/api/tenant_config_file.py`）。
-
-各下载点的前端实现参考：知识库 `api/knowledge.ts` 的 `downloadDocument`、配置文件 `api/saasPermissions.ts` 的 `downloadConfigFile`、travel-quote 导出 `api/travelQuote.ts` 的 `downloadExport`。
-
-### 3. 后端返回文件统一用 FileResponse / StreamingResponse
-
-流式返回，不要 `open(...).read()` 一次性读入内存再返回。
-
-**Content-Disposition 必须带 ASCII filename fallback**：Starlette 的 `FileResponse(filename=中文名)` 只发 `filename*=utf-8''...`（RFC 5987），部分国产移动内核解析不出文件名会直接放弃下载。非 ASCII 文件名需自构 disposition 头同时携带 `filename="ascii兜底"` + `filename*=utf-8''...`，参考 `src/api/message_share.py` 的 `content_disposition_header()`。
+**3. 后端返回**统一 FileResponse / StreamingResponse（禁止 `open(...).read()` 一次性读入内存）。**Content-Disposition 必须带 ASCII filename fallback**：Starlette 只发 `filename*=utf-8''...`，部分国产移动内核解析不出会放弃下载；自构 disposition 头同时携带 `filename="ascii兜底"` + `filename*=utf-8''...`，参考 `src/api/message_share.py` 的 `content_disposition_header()`。
 
 ## API 接口命名规范
-接口名称应与 Python 方法名保持一致，使用具体、有明确指向性的命名：
 
-```python
-# ✅ 正确
-@router.post("/search_documents")
-async def search_documents(request: SearchRequest):
-
-# ❌ 错误
-@router.post("/search")
-async def search_documents(request: SearchRequest):
-```
+接口名与 Python 方法名一致、具体明确：`@router.post("/search_documents")` + `async def search_documents(...)`，禁止 `/search` 这类泛化路由名。
 
 ## 枚举值定义规范
-**涉及到字段枚举值的判断代码，必须以 `src/saas/models/enums.py` 为准。**
 
-所有 SaaS 相关表字段的枚举值（如租户状态、订阅状态、支付状态等）统一在 `src/saas/models/enums.py` 中定义。
+字段枚举值判断代码必须以 `src/saas/models/enums.py`（后端）/ `frontend/web/api/enums.ts`（前端）为准，禁止硬编码；修改枚举值时**前后端协调同步**两处。
 
-```python
-# ✅ 正确：使用枚举类
-from src.saas.models import TenantStatus
-
-if tenant.status == TenantStatus.ACTIVE:
-    ...
-
-# ❌ 错误：硬编码数字或字符串
-if tenant.status == 1:
-    ...
-if tenant.status == "active":
-    ...
-```
-
-### 枚举值设计原则
-
-1. **数据库字段类型尽量使用 TEXT**：这样管理员在检查数据时无需查找枚举定义即可理解字段含义。
-
-2. **前后端枚举值尽量与数据库存储值一致**：减少 mapping 翻译，提高代码可读性。
-
-```python
-# ✅ 推荐：枚举值 = 数据库存储值
-class TenantStatus(str, Enum):
-    ACTIVE = "active"       # 数据库存 "active"
-    SUSPENDED = "suspended" # 数据库存 "suspended"
-
-# ❌ 不推荐：枚举值需额外映射
-class TenantStatus(IntEnum):
-    ACTIVE = 1       # 数据库存 1，需翻译为 "active"
-    SUSPENDED = 0    # 数据库存 0，需翻译为 "suspended"
-```
-
-3. **前端显示值不受此限制**：显示值通常为中文，通过映射表实现（如 `TenantStatusMap`）。
-
-**如需修改字段枚举值，注意前后端协调修改**：同时更新 `src/saas/models/enums.py`（后端）和 `frontend/web/api/enums.ts`（前端）。
+设计原则：数据库字段用 TEXT（管理员直读无需查定义）；**枚举值 = 数据库存储值**（`class TenantStatus(str, Enum): ACTIVE = "active"`，不用 IntEnum 免一层映射）；前端显示值用映射表（如 `TenantStatusMap`），不受此限。
 
 ## 业务数据表（bs_）CRUD 规范
 
-所有业务数据表（`bs_` 开头）的增删改查接口必须遵循以下规范：
-
-### 创建数据
-
-在能确定创建用户时，必须附带 `user_id` 字段的值：
-
-```python
-# ✅ 正确：附带 user_id
-cursor.execute(
-    "INSERT INTO bs_example (tenant_id, user_id, name, created_at) VALUES (%s, %s, %s, NOW())",
-    (tenant_id, user_id, name)
-)
-
-# ❌ 错误：遗漏 user_id
-cursor.execute(
-    "INSERT INTO bs_example (tenant_id, name) VALUES (%s, %s)",
-    (tenant_id, name)
-)
-```
-
-`created_at` 字段有数据库默认值 `DEFAULT CURRENT_TIMESTAMP`，后端代码可以不显式指定，数据库会自动填充。
-
-### 列表查询
-
-列表页接口默认按 `created_at DESC` 排序，确保用户一眼看到最新数据：
-
-```python
-# ✅ 正确：按创建时间倒序
-cursor.execute(
-    "SELECT * FROM bs_example WHERE tenant_id = %s ORDER BY created_at DESC",
-    (tenant_id,)
-)
-
-# ❌ 错误：无排序或默认升序
-cursor.execute(
-    "SELECT * FROM bs_example WHERE tenant_id = %s",
-    (tenant_id,)
-)
-```
-
-### 表结构要求
-
-详见 [database_dev.md](./database_dev.md)「业务数据表必需字段」章节。
+- **创建**：能确定创建用户时必须带 `user_id`；`created_at` 有 DB 默认值，无需显式指定
+- **列表查询**：默认 `ORDER BY created_at DESC`（最新在前）
+- 表结构必需字段见 [database_dev.md](./database_dev.md)「业务数据表必需字段」
 
 ## SaaS 租户隔离规范
 
-### 核心规则
+1. 租户 ID 由 `TenantContextMiddleware` 统一解析到 `request.state.tenant_id` 与 ContextVar `current_tenant_id`
+2. 优先级：`X-Tenant-Id` header（平台管理员代租户操作，管理员本身无租户属性）> 用户 token 中的 tenant_id；租户用户禁止越权访问其他租户
+3. **数据库查询必须带租户过滤**：`WHERE tenant_id = %s`，禁止仅按 id 查（跨租户泄露）
 
-所有需要租户隔离的 API 必须遵循以下规则：
-
-1. **租户 ID 解析**：由 `TenantContextMiddleware` 统一解析 `tenant_id` 并设置到：
-   - `request.state.tenant_id`
-   - ContextVar `current_tenant_id`
-
-2. **优先级规则**：
-   ```
-   X-Tenant-Id Header（平台管理员代租户操作） > 用户 token 中的 tenant_id
-   ```
-   - 平台管理员（role=platform_admin）本身没有租户属性，通过 `X-Tenant-Id` header 指定目标租户
-   - 租户管理员和普通用户使用账号本身的 `tenant_id`，禁止越权访问其他租户
-
-3. **数据库查询必须加租户过滤**：
-   ```python
-   # ✅ 正确：必须带 tenant_id 过滤
-   cursor.execute("SELECT * FROM documents WHERE tenant_id = %s", (tenant_id,))
-
-   # ❌ 错误：不带租户过滤会导致跨租户数据泄露
-   cursor.execute("SELECT * FROM documents WHERE id = %s", (doc_id,))
-   ```
-
-### X-Tenant-Id Header 处理逻辑
-
-| 路由前缀 | 解析方法 | 是否处理 X-Tenant-Id |
-|---------|----------|----------------------|
-| `/api/saas/*` | `_resolve_admin_tenant` | ✅ 是 |
-| `/api/sessions/*` | `_resolve_session_tenant` | ✅ 是 |
-| `/api/chat/*` | `_resolve_user_tenant` | ✅ 是 |
-| 其他 `/api/*` | `_resolve_user_tenant` | ✅ 是 |
-
-**所有 `/api/*` 路径都支持 `X-Tenant-Id`，无需自己手动解析。**
-
-### 注意事项
-
-- 业务数据表（`bs_` 开头）必须包含 `tenant_id` 字段，详见 [database_dev.md](./database_dev.md)
-- 平台管理员访问租户前台 (`/t/{tenant_id}`) 时，前端必须在所有 API 请求中添加 `X-Tenant-Id` header
-- 租户管理员只能访问自己租户的数据，`require_admin` 会验证 `X-Tenant-Id` 与用户自身 `tenant_id` 是否一致
+所有 `/api/*` 路径都支持 `X-Tenant-Id`（`/api/saas/*`、`/api/sessions/*`、`/api/chat/*`、其他分别经 `_resolve_admin_tenant` / `_resolve_session_tenant` / `_resolve_user_tenant`），无需自己手动解析。`require_admin` 会校验 `X-Tenant-Id` 与用户自身 tenant_id 一致；平台管理员访问租户前台时前端必须携带 `X-Tenant-Id`。
 
 ## 租户附件存储规范
 
-**核心规则**：所有租户产生的附件（上传文件、生成文件、导出文件等），**必须**统一存放到 `storage/tenants/{tenant_id}/` 目录下，并按业务场景建立子目录分类存放。
+**核心规则**：租户产生的所有附件（上传/生成/导出文件等）必须经 `src/core/storage.py` 工具函数存入 `storage/tenants/{tenant_id}/{scene}/`，**禁止**自行拼路径、写入 `storage/` 或 `storage/uploads/` 根目录、跳过场景子目录直接存放（如 `storage/tenants/{id}/xxx.pdf`）。
 
-### 目录结构
-
-```
-storage/
-└── tenants/
-    ├── {tenant_id_a}/
-    │   ├── conversation/         # 对话中产生的附件
-    │   ├── knowledge/            # 知识库附件
-    │   ├── export/               # 业务导出文件
-    │   ├── report/               # 报表/统计文件
-    │   ├── memory/               # 用户长期记忆（LongTermMemory）
-    │   └── ...                   # 其他业务场景
-    └── {tenant_id_b}/
-        └── ...
+```python
+from src.core.storage import get_tenant_storage_path
+file_path = get_tenant_storage_path(tenant_id=tenant_id, scene="conversation", filename=filename)
+# storage/tenants/{tenant_id}/conversation/{filename}；写入前 os.makedirs(dirname, exist_ok=True)
 ```
 
-### 常见业务场景子目录
+场景子目录：`conversation`（对话附件）/ `knowledge` / `export` / `report` / `memory`（长期记忆）/ `avatar` / `temp`（必须有清理机制）。
 
-| 子目录 | 用途 |
-|--------|------|
-| `conversation/` | 对话过程中用户上传/Agent 生成的附件 |
-| `knowledge/` | 知识库文档、向量化文件 |
-| `export/` | 业务数据导出（Excel、CSV 等） |
-| `report/` | 统计报表、运营报告（含数据分析工具的图表/导出表） |
-| `memory/` | 用户长期记忆文件（LongTermMemory） |
-| `avatar/` | 用户/企业头像、Logo |
-| `temp/` | 临时文件（必须有清理机制） |
-
-### 实现要点
-
-1. **统一路径工具**：禁止在业务代码中直接拼路径字符串，必须通过统一的工具函数或配置项获取：
-
-   ```python
-   # ✅ 正确：使用工具函数
-   from src.core.storage import get_tenant_storage_path
-
-   file_path = get_tenant_storage_path(
-       tenant_id=tenant_id,
-       scene="conversation",
-       filename=filename
-   )
-   # 返回：storage/tenants/{tenant_id}/conversation/{filename}
-
-   # ❌ 错误：硬编码或随意拼路径
-   file_path = f"storage/uploads/tenant_{tenant_id}/files/{filename}"
-   ```
-
-2. **tenant_id 来源**：必须从 `request.state.tenant_id` 或 `TenantContext` 获取，禁止从用户输入或 URL 参数中直接拼接。
-
-3. **目录自动创建**：写入文件前必须确保目标目录存在：
-
-   ```python
-   import os
-   os.makedirs(os.path.dirname(file_path), exist_ok=True)
-   ```
-
-4. **历史目录迁移**：旧的 `storage/uploads/tenant_xxx/` 目录应逐步迁移到新结构，禁止新老结构并存产生歧义。
-
-### 优点
-
-- **备份友好**：备份整个 `storage/tenants/` 即可备份所有租户文件；按租户打包也只需打包对应子目录
-- **统计友好**：按租户维度统计附件数量、占用空间时，遍历一个目录即可
-- **隔离清晰**：删除某个租户时，只需删除其子目录，不会误删其他租户数据
-- **权限清晰**：可针对整个租户目录设置文件系统级别的访问权限
-
-### 注意事项
-
-- 禁止将附件存放到 `storage/` 根目录或 `storage/uploads/` 根目录
-- 禁止在租户目录下跳过场景子目录直接存放文件（如 `storage/tenants/{id}/xxx.pdf`）
-- 文件名必须保证唯一性，建议使用 `{prefix}_{uuid}.{ext}` 格式（如 `file_af08155fe5d9.docx`）
+- `tenant_id` 从 `request.state.tenant_id` 或 `TenantContext` 获取，禁止从用户输入或 URL 参数拼接
+- 文件名唯一：`{prefix}_{uuid12}.{ext}`（如 `file_af08155fe5d9.docx`）
+- 旧 `storage/uploads/tenant_xxx/` 暂不迁移、禁止新代码写入；读取兼容桥接见 [file_usage.md](../../docs/system/file_usage.md) 第 5.2 节
+- **新增文件存储时更新** [file_usage.md](../../docs/system/file_usage.md)（存储位置、类型、命名、调用方）
 
 ## 缓存使用规范
 
-**核心文档**：系统缓存使用全景见 [cache_usage.md](../../docs/system/cache_usage.md)，包含所有缓存的类型、存储方式、键模式、TTL 和失效策略。
+系统缓存全景见 [cache_usage.md](../../docs/system/cache_usage.md)。新增缓存必做：更新 `cache_usage.md`、键前缀注册进 `cache_utils.py` 的 `CacheKeys`、定义主动失效入口（不能只有 TTL）、键格式 `{cache_prefix}:{identifier}`。
 
-### 新增缓存时必须做的事
-
-1. **更新 `cache_usage.md`**：在对应分类下记录缓存名称、存储类型、键模式、TTL、失效时机和源文件
-2. **在 `cache_utils.py` 中注册前缀**：如需新键前缀，在 `CacheKeys` 类中添加
-3. **定义明确的失效策略**：不能只有 TTL 过期，必须有主动失效入口（如权限变更时清除相关缓存）
-4. **键命名遵循规范**：`{cache_prefix}:{identifier}`，使用 `cache_utils.py` 中的 `CacheKeys` 常量，禁止硬编码字符串
-
-### 禁止项
-
-- **禁止绕过 `redis_client`**：所有缓存操作必须通过 `src/core/redis_client.py`，禁止直接使用 `redis-py`
-- **禁止硬编码键前缀**：必须使用 `CacheKeys` 类定义的常量
-- **禁止无 TTL 的缓存**：所有缓存必须设置合理的 TTL，防止内存无限增长
-- **禁止跨租户缓存污染**：涉及租户的缓存键必须包含 `tenant_id`，使用复合键隔离
-
-## 文件存储使用规范
-
-**核心文档**：系统文件存储全景见 [file_usage.md](../../docs/system/file_usage.md)，包含目录结构、新旧双轨路径、文件命名规范、清理策略等。
-
-### 租户附件存储
-
-所有由租户产生的附件（上传文件、生成文件、导出文件等），**必须**使用 `src/core/storage.py` 中的工具函数存入 `storage/tenants/{tenant_id}/` 的子目录下：
-
-```python
-from src.core.storage import get_tenant_storage_path, ensure_tenant_storage_dir
-
-# ✅ 正确：使用工具函数
-file_path = get_tenant_storage_path(
-    tenant_id=tenant_id,
-    scene="conversation",  # conversation / knowledge / export / report / avatar / temp
-    filename=filename
-)
-
-# ❌ 错误：自行拼路径
-file_path = f"storage/uploads/tenant_{tenant_id}/files/{filename}"
-```
-
-### 新增文件存储时必须做的事
-
-1. **更新 `file_usage.md`**：在对应分类下记录存储位置、文件类型、命名规范和调用方
-2. **使用标准工具函数**：租户附件必须使用 `src/core/storage.py` 中的 `get_tenant_storage_path` 等函数
-3. **遵循文件命名规范**：使用 `{prefix}_{uuid12}.{ext}` 格式，确保文件名唯一性
-
-### 禁止项
-
-- **禁止写入 `uploads/` 旧路径**：新代码必须写入 `tenants/` 新路径，禁止继续使用 `storage/uploads/{tenant_id}/` 模式
-- **禁止自行拼路径**：必须使用 `src/core/storage.py` 中的工具函数，禁止直接拼接路径字符串
-- **禁止跳过场景子目录**：禁止在租户目录下直接存放文件（如 `storage/tenants/{id}/xxx.pdf`）
-- **禁止写入 `storage/` 根目录或 `storage/uploads/` 根目录**
-
-### 迁移说明
-
-现有 `uploads/` 中的文件暂不迁移，后续择机统一迁移到 `tenants/` 新目录结构。新代码无需考虑旧文件兼容，但读取时可参考 `file_usage.md` 第 5.2 节的兼容桥接模式。
+禁止项：绕过 `src/core/redis_client.py` 直接用 redis-py；硬编码键前缀；无 TTL 缓存；跨租户键不含 `tenant_id`。
 
 ## 图片资产使用规范
 
-**核心规则**：所有图片资产的注册、寻址、传递必须通过 `src/core/image_asset.py` 的 `ImageRegistry` 与 `ImageRef`。
+所有图片资产的注册、寻址、传递必须通过 `src/core/image_asset.py` 的 `ImageRegistry` 与 `ImageRef`（设计见 [image-asset-pipeline-design.md](../../docs/system/image-asset-pipeline-design.md)）。
 
-**关联文档**：架构设计见 [image-asset-pipeline-design.md](../../docs/system/image-asset-pipeline-design.md)，开发计划见 [plan-image-asset-pipeline.md](../../docs/plans/plan-image-asset-pipeline.md)。
-
-### 强制要求
-
-任何在工具结果、SSE 事件、API 响应中传递图片的字段，**必须**使用 `ImageRef`（`List[ImageRef]` 或 `Optional[ImageRef]`），**禁止**：
-- 业务代码直接拼 `storage/` 路径写图片
-- 接口之间传 `file_path` / `url` / `base64` 裸字段
-- 知识库图片使用外部 URL（必须落地租户目录，防止链接腐烂 + 审计 + 租户隔离）
-
-### 注册入口
+任何在工具结果、SSE 事件、API 响应中传递图片的字段**必须**用 `ImageRef`，**禁止**：直接拼 `storage/` 路径、传 `file_path`/`url`/`base64` 裸字段、知识库图片用外部 URL（必须落地租户目录）。
 
 ```python
 from src.core.image_asset import get_image_registry, ImageRef
 
-registry = get_image_registry()
-ref: ImageRef = await registry.register(
-    source_path="/tmp/generated_image.png",
-    tenant_id=tenant_id,
-    user_id=user_id,
+ref: ImageRef = await get_image_registry().register(
+    source_path="/tmp/generated_image.png", tenant_id=tenant_id, user_id=user_id,
     display_name="生成的图表.png",
     source="tool_generated",  # knowledge_base / tool_generated / user_upload / web_fetch / screenshot
     usage="inline",           # inline / attachment / embedded / thumbnail
@@ -647,19 +221,7 @@ ref: ImageRef = await registry.register(
 # ref.file_id 与 cp 同命名空间，ref.download_url = /api/files/{file_id}/download
 ```
 
-### TTL 与清理
-
-| source | 默认 TTL | 清理策略 |
-|--------|---------|---------|
-| `knowledge_base` | 永久（不调 expire） | 文档删除时级联清理 |
-| `tool_generated` / `web_fetch` / `user_upload` / `screenshot` | 86400s（24h） | `cleanup_temp` 仅清理 `usage ∈ (inline, embedded)` 的过期图 |
-
-### Web 图片抓取
-
-`ImageRegistry.fetch_to_local(url, tenant_id, ...)` 自动通过 `image_fetch_url:{sha256(url)}` 做 URL 去重缓存（TTL 7 天），同 URL 不重复下载；单文件超过 10MB 拒绝下载；超时 15s。
-
-### 注意事项
-
-- `PERMANENT_TTL(-1)` 不调用 `redis_client.expire`（内存降级版 seconds≤0 立即删键）；只有正数 TTL 才调 expire
-- Redis key 与 `cp_tool._register_download` 完全同命名空间（`uploaded_file:{file_id}`），现有 `/api/files/{file_id}/download` 路由可直接下载
-- ImageRegistry 是惰性单例（`get_image_registry()`），模块顶层**无**实例化副作用，import 该模块不会拉起 master_agent
+- TTL：`knowledge_base` 永久（文档删除级联清理）；其余 source 24h（`cleanup_temp` 仅清 `usage ∈ (inline, embedded)`）。`PERMANENT_TTL(-1)` 不调 expire；只有正数 TTL 才调
+- `fetch_to_local(url, ...)`：URL 去重缓存 TTL 7 天、单文件 >10MB 拒绝、超时 15s
+- Redis key 与 `cp_tool._register_download` 同命名空间（`uploaded_file:{file_id}`）
+- ImageRegistry 是惰性单例，import 该模块无副作用、不会拉起 master_agent

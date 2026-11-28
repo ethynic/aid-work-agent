@@ -317,10 +317,23 @@ class ExternalPushHumanAdapter:
 
         meta = parse_api_meta(doc, topic)
         if meta is None:
-            logger.warning(
-                f"[external_push_human] 租户文档 api-meta 解析失败，放弃推送 tenant={payload.tenant_id}"
-            )
-            _trace_summary(payload, "skipped", "租户文档 api-meta 解析失败")
+            # 与 external_push 同口径：login_url 残留 ${VAR}（租户未配置推送环境变量）
+            # 是 fail-closed 预期 no-op，降级 info；其余解析失败保持 warning
+            from src.services.tenant_api_doc import find_unresolved_placeholders
+
+            unresolved = find_unresolved_placeholders(doc)
+            if unresolved:
+                logger.info(
+                    f"[external_push_human] 租户未配置推送环境变量 {unresolved}，按未开通外部推送处理 "
+                    f"tenant={payload.tenant_id}, subagent={subagent_name}"
+                )
+                _trace_summary(payload, "skipped", f"租户未配置推送环境变量 {','.join(unresolved)}")
+            else:
+                logger.warning(
+                    f"[external_push_human] 租户文档 api-meta 解析失败，放弃推送 "
+                    f"tenant={payload.tenant_id}, subagent={subagent_name}"
+                )
+                _trace_summary(payload, "skipped", "租户文档 api-meta 解析失败")
             return
 
         doc = _strip_excluded_sections(doc, meta, topic)

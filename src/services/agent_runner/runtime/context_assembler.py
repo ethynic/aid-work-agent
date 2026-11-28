@@ -5,6 +5,7 @@ import json
 import shutil
 import uuid
 from datetime import datetime
+from loguru import logger
 from src.core.agent_engine.contracts import AgentMode, ExecutionState
 from src.core.agent_engine.context import reorder_history
 
@@ -66,8 +67,22 @@ class ContextAssembler:
             else:
                 now = datetime.now()
                 timestamp = f"[当前时间: {now.strftime('%Y年%m月%d日 %H:%M:%S')}, {now.strftime('%A')}, 今年是{now.year}年]\n\n"
+                # 跨执行历史附件重物化（2026-11-27）：读历史窗口内 user 消息的附件
+                # 元数据（file_id），供 prepare 把先前轮次（含被取代的中断轮）附件
+                # 重新物化到当前工作区，防跨端/跨轮引用旧附件时「找不到文件」。
+                # reader 内部 fail-open（异常返回 []），此处仅兜底进程级异常。
+                history_attachments = None
+                if self.role != AgentMode.SUBAGENT and not zero_history:
+                    try:
+                        history_attachments = await asyncio.to_thread(
+                            self.history.reader.read_user_attachments,
+                            self.identity.session_id, self.history.memory.short_term.max_messages)
+                    except Exception:
+                        logger.opt(exception=True).warning(
+                            "[context_assembler] 历史附件元数据读取失败，跳过重物化")
                 enhanced, injection, workspace = await asyncio.to_thread(
-                    self.attachments.prepare, timestamp + text, attachments, self.identity, self.skills.skill_registry)
+                    self.attachments.prepare, timestamp + text, attachments, self.identity,
+                    self.skills.skill_registry, history_attachments=history_attachments)
                 content, image_artifacts = await asyncio.to_thread(
                     self.attachments.build_image_reference_content, enhanced, image_paths)
                 if content is None:

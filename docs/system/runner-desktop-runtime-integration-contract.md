@@ -8,9 +8,15 @@ Device 心跳处理是服务端同步结果的唯一写入者。验签后按认�
 
 自动同步的工具在模型装配时绑定本次清单摘要，入队事务核对当前设备摘要。Runtime 原领取请求可附带 `plugin_manifest_digests`，与当前执行实例使用同一插件快照。通用插件调用只交给摘要匹配的领取请求，工具权限以实际领取时的设备声明为准。心跳更新当前插件快照时，同一事务结束因停用、卸载、换包或缺少绑定摘要而失效的待领调用，通过既有失败回执说明未执行。已领取的调用沿用原执行和回执。旧静态工具沿用原领取规则。
 
+2026-11-27 启动计时与重复检查优化。唯一实现写入者为本轮 Runtime 开发角色，独立测试与评审按高风险流程执行。Core 插件仓库仍以签名安装和现场完整性复验生成可执行声明，前置校验结果只在同一 Host 内复用。H1、H3、Device、插件清单、库存文件、设备绑定与权限沿用现有版本。日志记录本机阶段用时和受信插件标识，首次成功心跳以既有 Device 响应为准。旧客户端及服务端无迁移要求。[设计](runtime-plugin-host-architecture-design.md#134-能力列表与错误恢复) · [计划](../plans/plan-runtime-plugin-host.md#17-已配对-runtime-启动性能2026-11-27)
+
+2026-11-27 1.6.0 启动连接检查点。Core 与 Runtime Host 唯一实现写入者为本轮开发角色。验签的库存与清单元数据可用于心跳和派发，实际代码边界仍由对应 Host 的首次完整验包、现场文件核对与版本探测控制。单插件不能验证时撤回其可用声明与摘要，终态走原无副作用路径。H1、H3、Device、Provider、权限和本地库存保持原版本，旧插件库存、旧 Runtime 与旧服务端无需迁移。[设计](runtime-plugin-host-architecture-design.md#启动连接与首次使用检查) · [计划](../plans/plan-runtime-plugin-host.md#18-启动连接与首次使用检查2026-11-27)
+
+2026-11-27 后台检查增量。Runtime 开发角色唯一写入 Core 与 Runtime Host 的本机调度，沿原 Device 成功心跳开启一次逐插件完整检查。实际调用与后台检查共享每插件的完整校验，沿现有安全排空和派发撤回逻辑。H1、H3、Device、Provider、清单版本、库存与权限保持原约定。[设计](runtime-plugin-host-architecture-design.md#首次在线后的后台插件检查) · [计划](../plans/plan-runtime-plugin-host.md#181-首次在线后的后台插件检查)
+
 ### Runtime 桌面实时画面共同检查点
 
-2026-11-25 · 契约 2.25，加性能力与加性接口，编码前约定，未实施。用户在网页上查看某台 Runtime 电脑的实时桌面画面：WebRTC 点对点传输，服务器只转交建连信令，不做画面中转。依据[设计](runtime-screen-stream-design.md)与[计划](../plans/plan-runtime-screen-stream.md)，唯一进度来源为该计划。本段不宣称接口已实现，也不宣称测试或真机通过。
+2026-11-25 · 契约 2.25，加性能力与加性接口，编码前约定。用户在网页上查看某台 Runtime 电脑的实时桌面画面：WebRTC 点对点传输，服务器只转交建连信令，不做画面中转。依据[设计](runtime-screen-stream-design.md)与[计划](../plans/plan-runtime-screen-stream.md)，唯一进度来源为该计划。服务端部分已实现并通过单元与真实数据库测试，未部署，未与 Runtime、网页联调；Runtime 和网页部分未实施。跨网段的内网直连已用验证程序在两台电脑上实测通过（2026-11-27），其余未验证的事实见下文。
 
 - **与 C01～C12 的关系。** 实时画面不是插件业务调用：不创建 invocation、不占桌面锁、不产生工具调用和计费，不经 Runner 派发，也不新增调度或授权体系（C01、C03）。它由配对该设备的账号本人经用户侧接口发起，Runtime 经设备通道获知并执行（C02）；租户、用户、设备全部取自服务端记录（C08）。采集页没有网络访问，只读，不接收任何输入。
 - **代码现状（事实）。** 设备心跳 `POST /api/local-tools/runtime/heartbeat` 目前更新最近在线时间、版本、能力和清单摘要，响应原有 `success`、`selected`、`server_time`、`parallel_claim`。服务端的处理是一个整体，任一步出错返回 500；Runtime 只在心跳成功后补传旧回执，心跳失败就标记离线并退避（`clients/shared/local-tool-host-core/src/legacy/pollLoop.ts` 的 `heartbeatLoop`）。H1 候选 0.3 的 `host-state` 与管理请求 schema 顶层 `additionalProperties: false`，管理方法是固定枚举。上文「Runtime 插件签名清单同步」也给心跳加了可选字段，与本检查点并存，双方不读取对方的字段。
@@ -18,14 +24,14 @@ Device 心跳处理是服务端同步结果的唯一写入者。验签后按认�
 - **心跳响应**（生产端：服务端；消费端：新版 Runtime）。新增可选 `screen_stream: {"version": 1}` 表示服务端支持；新增可选 `screen_session: {"id", "state"}`，`pending` 表示有新会话，传画面期间每次心跳都带（这就是 Runtime 画面租约的续期，连续 30 秒拿不到就自行关闭采集），`ended` 表示服务端已结束该会话。**共同语义：心跳成功与否只取决于心跳原有的处理**（设备更新，以及插件签名清单同步）。画面会话的查询放在这些之后单独执行并限时：应用层 0.5 秒，数据库层对锁等待和单条语句各设 400 毫秒上限，等锁的语句由 PostgreSQL 取消、连接立即归还，画面查询不会长时间占用连接。**画面请求不使用业务连接池**：鉴权、画面事务和心跳里的画面查询都走专用的小连接池（环境变量 `SCREEN_DB_POOL_MAX`，缺省 3；第一次用到画面时才创建并一次建满，之后复用；部署时计入 PostgreSQL 连接数预算）。能力里没有 `screen_stream_v1` 的设备不可能有画面会话，服务端不为它查询会话，心跳响应里只有 `screen_stream` 标记。占用闸挂在最外层（租户中间件之前），名额等于画面连接池的上限；拿不到名额立即让出，不碰数据库（接口返回 503，心跳里这一次不带会话通知）。有没有人看画面，业务连接池的容量都相同。出错或超时只记告警，响应里不带会话通知 `screen_session`（表示服务端支持的 `screen_stream` 照常返回）。消费端把缺失或类型不对的画面字段按没有通知处理，唯一的后果是这一次不续期；它不参与心跳成败判断，不改退避，不把设备标成离线，不挡回执补传。旧 Runtime 忽略新字段。
 - **Device API**（生产端：服务端；消费端：Runtime Host）。新增两个设备接口，沿既有设备 Bearer 令牌鉴权：`POST /api/local-tools/runtime/screen/session`（请求 `{session_id, after_seq}`，返回会话状态和编号大于 `after_seq` 的网页信令）与 `POST /api/local-tools/runtime/screen/signal`（请求 `{session_id, type, payload}`，追加一条 Runtime 信令）。Runtime 只处理服务器经设备通道告知的会话，不接收网页直连。不改 claim、permit、result、write-authorize 的任何字段，不改任务领取与任务租约。
 - **用户侧接口**（生产端：服务端；消费端：网页）。四个登录态接口，都校验设备归属：创建会话 `POST /api/local-tools/devices/{id}/screen-sessions`，冲突时 409 并带 `code`（`DEVICE_OFFLINE`、`SCREEN_STREAM_UNSUPPORTED`、`SCREEN_SESSION_ACTIVE`）；读取 `GET /api/local-tools/devices/{id}/screen-sessions/{sid}?after_seq=N`；网页信令 `POST /api/local-tools/devices/{id}/screen-sessions/{sid}/signals`；结束 `POST /api/local-tools/devices/{id}/screen-sessions/{sid}/end`。同一设备同一时间只允许一个未结束的会话。
-- **信令**（Runtime 与网页之间，服务器只转交，按到达顺序编号，会话结束即清空）。Runtime → 网页：`prepared`、`offer`、`candidate`、`status`、`end`；网页 → Runtime：`start`、`answer`、`candidate`、`end`。`status` 的 `state` 取 `connected`、`streaming`、`locked`、`unlocked`、`degraded`、`restored`，`path` 取 `lan` 或 `p2p`。各 `payload` 的精确形状由 Runtime 开发角色（Phase 2）和 Web 开发角色（Phase 3）在接口样例中冻结，并经独立测试核对。只下发 STUN 服务器地址（配置里协议不是 `stun` 或 `stuns` 的条目被忽略，不记地址只记条数），不签发任何中转凭据。创建、读取、追加信令等锁超过 1 秒或拿不到占用名额，都返回 503 `SCREEN_STREAM_BUSY`，调用方下次轮询重试。配置节里留空的值按缺省处理，不影响服务启动。握手描述只下发给该会话的双方；日志不记信令内容和来源地址。
+- **信令**（Runtime 与网页之间，服务器只转交，按到达顺序编号，会话结束即清空）。Runtime → 网页：`prepared`、`offer`、`candidate`、`status`、`end`；网页 → Runtime：`start`、`answer`、`candidate`、`end`。`status` 的 `state` 取 `connected`、`streaming`、`locked`、`unlocked`、`degraded`、`restored`，`path` 取 `lan` 或 `p2p`。各 `payload` 的精确形状由 Runtime 开发角色（Phase 2）和 Web 开发角色（Phase 3）在接口样例中冻结，并经独立测试核对。**到达顺序**：每条信令是单独的请求，服务器只按到达顺序编号，不保证发送顺序；地址候选先于连接请求到达时，接收方的浏览器因为没有远端描述会拒收（2026-11-27 验证程序实测，新打开的页面因此连不上）。Runtime 发往网页的信令按顺序发，上一条请求返回后才发下一条，`prepared`、`offer` 先于 `candidate`；网页仍须把早到的候选缓存到连接请求处理完再按顺序加入。两端都要做。只下发 STUN 服务器地址（配置里协议不是 `stun` 或 `stuns` 的条目被忽略，不记地址只记条数），不签发任何中转凭据。创建、读取、追加信令等锁超过 1 秒或拿不到占用名额，都返回 503 `SCREEN_STREAM_BUSY`，调用方下次轮询重试。配置节里留空的值按缺省处理，不影响服务启动。握手描述只下发给该会话的双方；日志不记信令内容和来源地址。
 - **H1 管理接口**（生产端：Host；消费端：Runtime 管理界面）。`host-state` 新增可选 `screen`（会话编号、状态、是否已降低画质、开始时间、多少秒没有收到服务器确认），只在有画面会话时出现。管理方法新增 `screen.stop`，参数为会话编号，可重复调用。现有 schema 顶层不允许未知字段、方法是固定枚举，所以这两项必须升 wire 候选版本，同批更新 schema、生产与消费样例、消费 fake、`check.py` 和消费测试。旧严格消费端收到带 `screen` 的状态会被拒绝；`screen` 只在会话期间出现，平时不影响旧消费端。旧界面连接新 Host 且恰逢画面会话时的实际表现，Phase 2 验证后登记。
-- **共享入口的写入者。** 本批要改公共壳和服务端公共模型，文件范围与唯一写入者如下，同一批里其他会话不并行写这些文件。Runtime 开发角色：`contracts/runtime-host/v1`、`clients/shared/local-tool-host-core`、`clients/agent-tool-runtime`、`clients/agent-desktop/electron`（新增隐藏采集窗口、专用 preload 和私有 IPC 消息类型，主窗口权限处理器不变）、`frontend/desktop/features/runtime`。服务端开发角色：`src/local_tools`、新增系统表 `local_tool_screen_sessions`、`src/config/settings.py` 与 `configs/config.yaml` 的 `screen_stream` 节；Phase 1 第三次复审后另有 `src/db/database.py`（画面专用连接池与作用域内的借连接路由）和 `src/main.py`（占用闸中间件注册），这两处是启动链路上的共享入口，改动限于这两件事。Web 开发角色：`frontend/web`。契约与 schema 由本任务主控维护，独立测试与代码审查只读。
+- **共享入口的写入者。** 本批要改公共壳和服务端公共模型，文件范围与唯一写入者如下，同一批里其他会话不并行写这些文件。Runtime 开发角色：`contracts/runtime-host/v1`、`clients/shared/local-tool-host-core`、`clients/agent-tool-runtime`、`clients/agent-desktop/electron`（新增隐藏采集窗口、专用 preload 和私有 IPC 消息类型，主窗口权限处理器不变）、`clients/agent-desktop` 的安装器配置（可提权时添加放行 Runtime 程序入站 UDP 的规则，含 UDP 5353；内网直连的前提，2026-11-27 实测）、`frontend/desktop/features/runtime`。服务端开发角色：`src/local_tools`、新增系统表 `local_tool_screen_sessions`、`src/config/settings.py` 与 `configs/config.yaml` 的 `screen_stream` 节；Phase 1 第三次复审后另有 `src/db/database.py`（画面专用连接池与作用域内的借连接路由）和 `src/main.py`（占用闸中间件注册），这两处是启动链路上的共享入口，改动限于这两件事。Web 开发角色：`frontend/web`。契约与 schema 由本任务主控维护，独立测试与代码审查只读。
 - **画面这一路与任务、心跳的共同语义。** 画面会话是 Host 里一段独立的异步流程，异常全部在模块内消化，不向主循环抛出。`screen.stop`、采集窗口崩溃、连接失败、租约到期、因资源不足停止，都只关闭画面会话和采集窗口，不触碰插件进程、任务租约和结果补传。只有设备凭据失效和 Host 退出会停掉全部流程，那是原有行为。资源不足时任务优先：先由编码器自动降载；任务运行中持续受限就降低画质继续观看，降低后仍受限才停止（结束原因 `resource_busy`），任务结束后恢复。整机断网或服务端停止时，任务按原有断网规则处理，画面按租约自行停止。
 - **安全与隐私的共同要求。** 采集只在「确认观看端不是本机」之后开始；确认是本机、无法确认、无法直连时全程不采集。Runtime 的窗口和托盘持续显示正在被远程查看，本机可以拒绝或随时停止。会话表是审计记录，不保存任何画面内容。
 - **兼容矩阵。** 旧 Runtime＋新服务端：不上报能力，入口禁用并提示升级，心跳响应的新字段被忽略，原有工具、任务恢复、回执和计费不变。新 Runtime＋旧服务端：能力照常上报并被原样存储，心跳没有会话通知，永不进入会话。旧网页＋新服务端：忽略新字段。新网页＋旧服务端：没有 `screen_stream` 字段，视为不支持，不显示入口。只升级插件、Runtime 不升级：同第一行。未部署 STUN：只有局域网直连可用。
 - **须交付的证据。** 服务端：旧设备的设备列表响应和心跳响应除新增字段外逐字段不变（对照测试）；画面会话查询报错或超时时心跳仍返回成功且不带会话通知（故障注入）；画面会话行被锁住期间其他设备仍能心跳、接单、提交回执（真实数据库回归）；多场建连同时轮询期间其他设备仍能心跳、接单、提交回执（真实数据库回归）；多台旧 Runtime 同时心跳、接单、提交回执，有无画面轮询结果一致，画面轮询期间业务连接池不被画面请求借用（真实数据库对照回归）；设备归属与租户隔离；同一设备并发创建只成功一个。Runtime：旧服务端下行为不变；命令行方式启动不上报能力；主窗口权限处理器不变，摄像头和麦克风请求被拒；画面模块抛错，或心跳响应缺少、错带画面字段时，主循环照常运行；采集只在确认非同机之后开始；H1 的 schema、样例与消费测试。发布验收项：观看时仍能接单（用真实插件任务，按原有串行、并行规则各验一次）；画面这一路出问题不拖累设备心跳；只升级服务端时，已交付的旧 Runtime 加旧插件组合不变。
-- **尚未验证的事实。** 同网段和跨网络分别靠什么证据放行，需要真实设备；降低画质的接口能否减轻编码负载；与任务并行的真实链路。单机结果和未验证项见[调研报告第 6 节](../research/runtime-screen-stream-feasibility-research.md)。
+- **已实测与尚未验证的事实。** 内网直连不要求两台电脑在同一个网段：浏览器主动连 Runtime 公布的内网地址，前提是 Runtime 所在电脑放行它的入站 UDP；名字解析不出时，按连接建立后对端的端口判定是否同机（两台电脑跨网段实测，2026-11-27）。尚未验证：同网段和跨网络分别靠什么证据放行（需要真实设备）；产品安装器的放行规则；降低画质的接口能否减轻编码负载；与任务并行的真实链路。单机结果和未验证项见[调研报告第 6 节](../research/runtime-screen-stream-feasibility-research.md)。
 - **回滚。** 服务端把 `screen_stream.enabled` 设为 `false`，接口返回 503、入口隐藏，会话表保留。Runtime 不升级就不上报能力。三端可以单独回退。
 
 ### 企业微信定时消息发送共同检查点
@@ -57,6 +63,20 @@ Device 心跳处理是服务端同步结果的唯一写入者。验签后按认�
 2026-11-24 · 契约 2.24，多群时间段摘要实施前共同检查点。微信 CLI 增加签名声明 `weixin_group_range_summary`，为串行只读、连接中心专用工具。服务端按当前租户与用户、已确认设备、精确群名、固定时间区间及签名清单摘要创建每群调用。调用示例为 `{target_name, start_at, end_at, tenant_id, grant}`，起止为 UTC RFC 3339 日期时间，范围采用 `[start_at, end_at)`，最长 168 小时。手动请求在生成按钮提交时确定时段，定时任务按计划时刻确定时段。首次手动与定时调用均须通过原生群聊搜索核对唯一目标，即使当前打开同名群。仅用户显式单群重试时，由服务端在签名工具参数中追加可选 `allow_open_group: true`，允许使用用户已打开且通过原生身份核对的目标群。默认仍要求唯一搜索，无法核对时停止读取。一次执行下的各群调用同设备串行领取，失败独立记录。设备心跳和领取格式沿用既有声明机制，旧插件保留当日工具和原调用。新时间段工具需要可信清单声明，不进入通用 Agent 工具集。
 
 微信 CLI 核对唯一群聊后，通过现有配对地址的专属总结端点上传 `{tenant_id, start_at, end_at, messages}`，一次性凭证放 Authorization。服务端绑定运行中调用的设备归属、固定时段与一次性凭证，原子消费后才访问模型。旧端点的 `business_date` 消费形态保持兼容。原文不得写入调用参数、回执、结果历史或日志。回执沿用摘要、消息数和部分覆盖状态，区间模式可附已证实的覆盖起点。仅当时间证据足够时提交消息。服务端持久化群配置、批次身份与排程，摘要沿用逐群调用结果。定时结果通知统一带登录后可访问的批次链接。服务端是批次与凭证的唯一写入者，CLI 是原文的唯一生产者。用户界面及兼容验证见[多群开发计划](../plans/plan-weixin-agent-group-tracking.md)。
+
+### 微信好友申请共同检查点
+
+2026-11-26 · 加性工具接入。微信 CLI 从 0.1.4 的签名清单声明串行写工具 `weixin_friend_add`，参数为 `{identifier: string, verify_message?: string}`，标识沿本机校验，验证语可选，省略时保留微信预填。该能力仅供用户在连接中心手动提交的批次使用。CLI 是微信操作证据唯一生产者，复用本机好友添加和窗口核对。可信成功数据沿用 `request_sent`、`friend_added`、`already_requested`、`already_friend`，且须与原有 `effect` 相符。未确认是否送出用 `effect=unknown`；启动后没有确定回执也按未知处理。
+
+服务端由已认证租户和当前用户绑定选定设备，仅在设备在线且当前受信签名清单明确提供该串行写能力时创建调用。使用独立业务类型 `weixin_friend_batch`、当前签名摘要和逐目标唯一调用标识，绑定同一设备；领取、启动与回执使用原有 Device API。每次点击按幂等键和归属创建批次及逐条调用，设备串行执行。用户主动提交是写入授权，签名工具不进入通用 Agent 工具集。已明确发起、在途、已直接添加或结果未知的相同目标不重复派发；写入结果不明时该目标保留待核对，同一请求不自动重放。业务记录由服务端唯一写入，最终状态按现有可信调用回执归一。上传文件、聊天内容和截图不写入批次历史；验证语仅用于执行。
+
+Device API、全局最低客户端版本和现有运行能力不变。未声明或无法证明当前签名清单的设备只禁用新入口的提交。提供签名清单和单条回执的生产与消费用例，验证首次提交、重复提交、回执丢失、签名摘要变化及旧 Runtime/旧插件仍可使用原能力。实施与验证见[开发计划](../plans/plan-weixin-agent-friend-requests.md)。
+
+### 微信视觉使用设备配对
+
+2026-11-26 · Device API v1 加性接入。微信好友定位使用专用 POST /api/local-tools/runtime/weixin/visual-locate，接受已配对设备凭证；Runtime 仅向受信签名的微信 Provider 注入现有配对身份。服务端核对设备、活跃租户和用户，并由设备记录确定计费归属。端点只接收当前业务窗口裁剪与好友定位输入，固定 GLM-5.3-Flash，调用原模型网关和客户端用量计费。服务端是鉴权、计费用量及租户归属的唯一写入者。上传的截图和定位输入只供该次定位使用。
+
+微信 CLI 从 0.1.5 起优先使用 Runtime 设备调用。缺少配对上下文时维持旧终端客户端绑定。配对调用失败应报告实际错误，避免重复调用或跨租户降级。已经安装的旧 CLI 与旧接口保持原行为。仅升级服务端不改变旧设备、配对、队列、结果和扣费。新版 CLI 的好友查找可用终端参数 --search-only 停在分类结果，不执行添加或提交。现有 MCP 写工具 schema 和申请回执保持原样。兼容矩阵与验收见[开发计划](../plans/plan-weixin-agent-friend-requests.md#phase-3-设备配对视觉与本机只查验收)。
 
 ### BOSS 筛选容错与本机操作恢复共同检查点
 

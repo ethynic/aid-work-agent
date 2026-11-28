@@ -15,7 +15,7 @@ import uuid as _uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, UploadFile
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
 
@@ -26,7 +26,7 @@ from src.db.models import UserDB
 from src.desktop_automation import audit, payload_resolver
 from src.desktop_automation.adapters import AdapterNotFoundError
 from src.desktop_automation.constants import BUSINESS_KIND_DESKTOP_AUTOMATION, OPERATION_PROTOCOL_V2
-from src.local_tools import catalog, operation_result, pairing, permits, repository, screen_stream, weixin_summary, weixin_tracking, weixin_tracking_schedule
+from src.local_tools import catalog, operation_result, pairing, permits, repository, screen_stream, weixin_friends, weixin_summary, weixin_tracking, weixin_tracking_schedule, weixin_visual
 from src.local_tools.models import (
     ClaimRequest,
     HeartbeatRequest,
@@ -296,6 +296,55 @@ async def update_weixin_schedule(schedule_id: _uuid.UUID, body: weixin_tracking_
 @router.patch('/weixin-agent/schedules/{schedule_id}')
 async def change_weixin_schedule_state(schedule_id: _uuid.UUID, body: weixin_tracking_schedule.ScheduleState, request: Request):
     return await _weixin_tracking_call(request, weixin_tracking_schedule.set_paused, str(schedule_id), body.paused)
+
+
+_WEIXIN_FRIEND_ERRORS = {
+    'INVALID_FILE': (400, '请上传有效的 XLSX 或 UTF-8 CSV 文件。'),
+    'FILE_TOO_LARGE': (400, '文件过大，请使用小于 2 MB 的清单。'),
+    'MISSING_HEADER': (400, '清单缺少「手机号或微信号」列。'),
+    'DUPLICATE_HEADER': (400, '清单含重复列名，请保留一列同名字段。'),
+    'EMPTY_FILE': (400, '清单没有联系人。'),
+    'TOO_MANY_CONTACTS': (400, f'每份清单最多 {weixin_friends.MAX_ROWS} 位联系人。'),
+    'INVALID_VERIFICATION': (400, '验证语应为不超过 60 字的单行文字。'),
+    'WEIXIN_FRIEND_PLUGIN_UNAVAILABLE': (409, '运行设备未启用支持好友申请的签名微信插件。'),
+    'FRIEND_BATCH_NOT_FOUND': (404, '好友申请批次不存在。'),
+    'NO_CREDIT': (403, '积分余额已耗尽，无法提交好友申请。'),
+}
+
+
+async def _weixin_friends_call(request, operation, *args):
+    user, tenant_id = await _current_user_and_tenant(request)
+    try:
+        return await asyncio.to_thread(operation, tenant_id, user['user_id'], *args)
+    except weixin_friends.Unavailable as error:
+        code = str(error)
+        status, message = (_WEIXIN_FRIEND_ERRORS.get(code) or _WEIXIN_TRACKING_ERRORS[code])
+        raise HTTPException(status_code=status, detail={'error': message, 'code': code}) from None
+    except repository.DeviceOperationUnresolved:
+        raise HTTPException(status_code=409, detail={
+            'error': '运行设备当前有待核对的操作', 'code': 'DEVICE_OPERATION_UNRESOLVED',
+        }) from None
+
+
+@router.post('/weixin-agent/friends/preview')
+async def preview_weixin_friends(request: Request, file: UploadFile):
+    content = await file.read(weixin_friends.MAX_FILE_BYTES + 1)
+    return await _weixin_friends_call(request, weixin_friends.preview, file.filename or '', content)
+
+
+@router.post('/weixin-agent/friends/batches')
+async def start_weixin_friend_batch(body: weixin_friends.BatchRequest, request: Request):
+    return await _weixin_friends_call(request, weixin_friends.create_batch, body)
+
+
+@router.get('/weixin-agent/friends/batches')
+async def list_weixin_friend_batches(request: Request, offset: int = Query(0, ge=0)):
+    return await _weixin_friends_call(request, weixin_friends.list_batches, offset)
+
+
+@router.get('/weixin-agent/friends/batches/{batch_id}')
+async def get_weixin_friend_batch(batch_id: _uuid.UUID, request: Request):
+    return await _weixin_friends_call(request, weixin_friends.get_batch, str(batch_id))
 
 
 @router.post("/pairing-tickets")
@@ -760,7 +809,7 @@ async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dic
                 invocation_provider = row_provider_key or default_provider_key
                 ref = (invocation.get('business_ref') or {}) if invocation.get('business_kind') == 'agent_runner' else {}
                 is_plugin = (ref.get('branch') == PLUGIN_PHASE
-                             or invocation.get('business_kind') == catalog.WEIXIN_DAILY_SUMMARY_KIND)
+                             or invocation.get('business_kind') in catalog.WEIXIN_SIGNED_KINDS)
                 capabilities = (invocation.get('device_capabilities') if is_plugin
                                 else device.get('capabilities_json'))
                 if not catalog.is_tool_allowed_for_device(
@@ -779,6 +828,7 @@ async def runtime_claim(wait: int = 20, parallel_only: bool = False, device: Dic
                         False,
                         "TOOL_NOT_ALLOWED",
                         "工具不在设备 Provider 批准清单内",
+                        **({"effect": "none"} if invocation.get('business_kind') == catalog.WEIXIN_FRIEND_BATCH_KIND else {}),
                     )
                 else:
                     logger.info(
@@ -910,13 +960,7 @@ async def runtime_result(
         raise _http_error(500, "写入结果失败，请稍后重试", e)
 
 
-@router.post("/runtime/boss/visual-diagnose")
-async def runtime_boss_visual_diagnose(
-    body: BossVisualRequestBody, device: Dict = Depends(_require_device)
-):
-    """复用配对设备身份诊断；新请求按实际用量×20，旧费率和回执保持冻结。"""
-    from fastapi.responses import JSONResponse
-
+async def _active_runtime_owner(device: Dict) -> Dict:
     tenant_id, user_id = device["tenant_id"], device["user_id"]
     tenant, user = await asyncio.gather(
         asyncio.to_thread(TenantDB.get_by_id, tenant_id),
@@ -929,11 +973,32 @@ async def runtime_boss_visual_diagnose(
     if (not user or user.get("status") != "active"
             or user.get("role") != "platform_admin" and user.get("tenant_id") != tenant_id):
         raise _http_error(403, "设备用户不存在、已停用或不属于当前租户")
-    caller = RuntimeVisualCaller(tenant_id=tenant_id, device_id=str(device["id"]), user_id=user_id)
+    return tenant
+
+
+@router.post("/runtime/boss/visual-diagnose")
+async def runtime_boss_visual_diagnose(
+    body: BossVisualRequestBody, device: Dict = Depends(_require_device)
+):
+    """复用配对设备身份诊断；新请求按实际用量×20，旧费率和回执保持冻结。"""
+    from fastapi.responses import JSONResponse
+
+    await _active_runtime_owner(device)
+    caller = RuntimeVisualCaller(tenant_id=device["tenant_id"], device_id=str(device["id"]), user_id=device["user_id"])
     result = await diagnose_visual(body, caller)
     if result["state"] in {"reserved", "dispatched"}:
         return JSONResponse(result, status_code=202, headers={"Retry-After": "2"})
     return result
+
+
+@router.post("/runtime/weixin/visual-locate")
+async def runtime_weixin_visual_locate(
+    body: weixin_visual.LocateRequest, device: Dict = Depends(_require_device)
+):
+    tenant = await _active_runtime_owner(device)
+    if float(tenant.get("credit_balance") or 0) <= 0:
+        raise _http_error(402, "积分余额不足")
+    return await weixin_visual.locate(body, device)
 
 
 @router.post("/runtime/wecom/calibrate")

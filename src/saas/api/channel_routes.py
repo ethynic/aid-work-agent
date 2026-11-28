@@ -31,7 +31,7 @@ from src.saas.services.channel_factory import (
     ChannelFactory,
     DEFAULT_MEDIA_SWITCHES,
 )
-from src.channels.session import channel_session_manager
+from src.channels.session import channel_session_manager, has_successful_transfer_to_human
 from src.channels.verbose_dispatcher import resolve_verbose_feedback_config
 from src.channels.wecom_kf.budget import WeComKfReplyBudget
 from src.channels.idempotency import MessageDeduplicator
@@ -226,44 +226,6 @@ async def recover_wecom_kf_pull_state() -> None:
         )
 
 
-def _has_successful_transfer_to_human(tool_messages: list) -> bool:
-    """检查本轮 tool 消息序列中是否包含成功的 transfer_to_human 调用。
-
-    转人工成功后微信客服会话切到人工状态，任何后续机器人消息会被
-    微信客服接口拒绝（errcode=95018）。此判定用于拦截 LLM 在
-    transfer_to_human 之后追加的多余文字回复。
-    """
-    if not tool_messages:
-        return False
-    transfer_call_ids = set()
-    for tm in tool_messages:
-        if tm.get("role") == "assistant" and tm.get("tool_calls"):
-            for tc in tm["tool_calls"]:
-                fn = tc.get("function") or {}
-                if fn.get("name") == "transfer_to_human":
-                    call_id = tc.get("id")
-                    if call_id:
-                        transfer_call_ids.add(call_id)
-    if not transfer_call_ids:
-        return False
-    for tm in tool_messages:
-        if tm.get("role") != "tool":
-            continue
-        if tm.get("tool_call_id") not in transfer_call_ids:
-            continue
-        content = tm.get("content")
-        if isinstance(content, str):
-            try:
-                data = json.loads(content)
-            except Exception:
-                continue
-        elif isinstance(content, dict):
-            data = content
-        else:
-            continue
-        if data.get("success") is True:
-            return True
-    return False
 from src.core.session_queue import session_queue
 
 router = APIRouter(tags=["租户渠道回调"])
@@ -3270,7 +3232,7 @@ async def _process_tenant_wecom_kf_messages(
                 )
 
                 async def prepare_response(response_text, downloadable_files):
-                    if _has_successful_transfer_to_human(tool_messages_collected):
+                    if has_successful_transfer_to_human(tool_messages_collected):
                         return {}
                     from src.channels.wecom_kf.reply_delivery import prepare_reply
 
@@ -3292,7 +3254,7 @@ async def _process_tenant_wecom_kf_messages(
                 async def send_response(response_text, downloadable_files, images=None):
                     # 若本轮 LLM 已成功调用 transfer_to_human，会话已切到人工状态，
                     # 微信客服接口会拒收后续消息（errcode=95018），跳过发送
-                    if _has_successful_transfer_to_human(tool_messages_collected):
+                    if has_successful_transfer_to_human(tool_messages_collected):
                         logger.info(
                             f"[wecom_kf] 检测到本轮已成功转人工，跳过 LLM 追加回复: "
                             f"session_id={session_id}, "

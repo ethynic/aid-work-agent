@@ -148,7 +148,7 @@ export function deviceCapabilities(config?: RuntimeConfig | null, wecomBusinessR
   const entries = resolveProviderEntries(cfg)
   const storeManifests = store?.manifests ?? {}
   const available = [...new Set([...Object.keys(TRUSTED_MANIFESTS), ...Object.keys(storeManifests)])]
-    .filter((key) => Boolean(entries[key] && existsSync(entries[key]!)))
+    .filter((key) => Boolean(entries[key] && (storeManifests[key] || existsSync(entries[key]!))))
     // 键序契约：boss 恒首位（provider_id 兼容字段来源），其余字典序稳定
     .sort((a, b) => {
       if (a === 'boss-recruiting') return b === 'boss-recruiting' ? 0 : -1

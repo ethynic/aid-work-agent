@@ -1,20 +1,12 @@
 <template>
   <div class="h-screen flex flex-col bg-gray-50">
     <main class="flex-1 flex overflow-hidden">
-      <MenuSidebar
-        v-if="!isNestedRoute"
-        :is-collapsed="isSidebarCollapsed"
-        :current-subagent-id="currentSubagentId"
-        :available-subagents="availableSubagents"
-        @collapse="isSidebarCollapsed = true"
-      />
-
       <div class="flex-1 flex flex-col min-w-0">
         <AppHeader
           title="知识库"
           :is-logged-in="effectiveIsLoggedIn"
           :user="effectiveUser"
-          @toggle-sidebar="isSidebarCollapsed = !isSidebarCollapsed"
+          @toggle-sidebar="handleToggleSidebar"
           @logout="handleLogout"
         />
 
@@ -623,11 +615,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, inject } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'vue-toastification'
 import AppHeader from './AppHeader.vue'
-import MenuSidebar from './MenuSidebar.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
@@ -644,8 +635,6 @@ interface CategoryTreeNode extends CategoryResponse {
 }
 import { usePageContext } from '@/composables/usePageContext'
 import { useTableSelection } from '@/composables/useTableSelection'
-import { type SubagentListItem } from '@/api/subagent'
-import { getMyAllowedAgents } from '@/api/saasPermissions'
 import {
   listDocuments, deleteDocument, uploadDocument, searchDocuments, downloadDocument,
   moveDocuments, setDocumentDisabled,
@@ -662,7 +651,7 @@ const router = useRouter()
 const route = useRoute()
 const { admin: tenantAdmin, isLoggedIn: tenantIsLoggedIn, logout: tenantLogout } = useTenantAuth()
 
-const isTenantMode = computed(() => route.path.startsWith('/t/'))
+// 本页面仅注册在租户前台 /t/:tenant_id/knowledge（演示模式独立路由已废弃删除）
 
 const effectiveIsLoggedIn = computed(() => tenantIsLoggedIn.value)
 
@@ -874,42 +863,11 @@ const MAX_FILE_SIZE_MB = Math.round(MAX_FILE_SIZE / 1024 / 1024)
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
-const isSidebarCollapsed = ref(typeof window !== 'undefined' && window.innerWidth < 768)
-const isNestedRoute = computed(() => route.path.startsWith('/t/'))
-const availableSubagents = ref<SubagentListItem[]>([])
+// 租户前台（TenantLayout）持有真实侧栏状态
+const toggleSidebarFn = inject<() => void>('toggleSidebar')
 
-const currentSubagentId = computed(() => {
-  const segments = route.path.split('/').filter(p => p)
-  if (segments[0] === 't' && segments.length >= 3) {
-    if (segments[2] === 'chat' && segments.length >= 4) {
-      return segments[3]
-    }
-    return segments[2]
-  }
-  if (segments.length >= 1) {
-    if (segments[0] === 'chat' && segments.length >= 2) {
-      return segments[1]
-    }
-    return segments[0]
-  }
-  return undefined
-})
-
-async function loadAvailableSubagents() {
-  try {
-    let res
-    if (isTenantMode.value) {
-      res = await getMyAllowedAgents()
-    } else {
-      const { listSubagents } = await import('@/api/subagent')
-      res = await listSubagents()
-    }
-    if (res.success && res.data) {
-      availableSubagents.value = res.data as SubagentListItem[]
-    }
-  } catch (e) {
-    console.error('加载数字员工列表失败:', e)
-  }
+function handleToggleSidebar() {
+  toggleSidebarFn?.()
 }
 
 const totalDocuments = ref(0)
@@ -1753,11 +1711,10 @@ function truncateVector(vecText: string | null): string {
 
 async function handleLogout() {
   await tenantLogout()
-  router.push(isTenantMode.value ? route.path.replace(/\/knowledge.*/, '') : '/')
+  router.push(route.path.replace(/\/knowledge.*/, ''))
 }
 
 onMounted(() => {
-  loadAvailableSubagents()
   loadCategories()
   loadDocuments()
 })

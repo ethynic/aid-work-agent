@@ -125,6 +125,24 @@ class TestExternalPushHumanAdapter:
             mock_redis.acquire_lock.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_unresolved_env_placeholder_downgrades_to_info(self):
+        """login_url 残留 ${APP_ID}（租户未配置推送环境变量）：fail-closed 预期 no-op，
+        降级 info 不进 WARNING 巡检清单，与 external_push 同口径"""
+        payload = _make_payload()
+        doc = _FAKE_DOC.replace(
+            "login_url: https://erp.example.com/api/delegate-login",
+            "login_url: https://erp${APP_ID}.aidingyi.cn/api/delegate-login",
+        )
+        with patch(f"{_TOPIC_NS}._collect_context", return_value=_make_ctx()), \
+                patch(f"{_TOPIC_NS}._load_tenant_doc", return_value=doc), \
+                patch(f"{_TOPIC_NS}.logger") as mock_logger, \
+                patch(f"{_TOPIC_NS}.redis_client") as mock_redis:
+            await ExternalPushHumanAdapter.execute(payload)
+            mock_logger.info.assert_called_once()
+            mock_logger.warning.assert_not_called()
+            mock_redis.acquire_lock.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_noop_when_agent_token_missing(self):
         """租户未配置 AGENT_TOKEN：no-op"""
         payload = _make_payload()

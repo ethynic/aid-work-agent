@@ -242,6 +242,40 @@ def _resolve_identity(request: Request, tenant_id: str, config_id: str) -> WebCI
 _UID_SESSION_SUFFIX_RE = re.compile(r"_s[0-9a-f]{8,}$", re.IGNORECASE)
 
 
+def _align_session_profile(identity: "WebCIdentity", session: dict) -> None:
+    """渠道改绑数字员工后对齐存量会话（2026-11-25 CHANNEL_PROFILE_MISMATCH 修复）。
+
+    chat() 提交的 profile_id 取当前渠道配置绑定（identity.subagent_type），而
+    channel_sessions.subagent_id 只在会话创建时写入一次；管理员改绑后两者不等，
+    Runner 授权 _channel_in_tx 严格比对（session.subagent_id != request.profile_id）
+    会永久 403 CHANNEL_PROFILE_MISMATCH——旧页面反复报错无法对话，新会话正常。
+
+    web_c 渠道级绑定语义下配置是接待者的唯一事实源：本会话提交前把 subagent_id
+    迁移为当前绑定（幂等；仅在该会话有消息提交时懒迁移，不批量改写其他会话，
+    未再被使用的旧会话保持原状）。session_id 内嵌的旧 subagent 段无解析消费方
+    （归属校验只用不含 subagent 的 session_prefix），迁移后沿用旧 id 无副作用。
+    """
+    current = identity.subagent_type or ""
+    if (session.get("subagent_id") or "") == current:
+        return
+    from datetime import datetime
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE channel_sessions SET subagent_id = %s, updated_at = %s "
+            "WHERE session_id = %s AND tenant_id = %s",
+            (current, now, session["session_id"], identity.tenant_id),
+        )
+        conn.commit()
+    session["subagent_id"] = current
+    logger.info(
+        f"web_c 渠道改绑跟随：会话 {session['session_id']} subagent_id "
+        f"迁移为当前绑定 '{current or 'main'}'（tenant={identity.tenant_id}）"
+    )
+
+
 def _assert_session_owned(identity: WebCIdentity, session_id: str) -> dict:
     """session_id 归属校验：前缀（租户+渠道+身份）+ DB 租户双重过滤。
 
@@ -293,7 +327,8 @@ def _waiting_text(row: dict) -> str:
     return _clarification_question(row)[0]
 
 
-# ============== SSE 透传（事件流在 terminal+settled 时由上游关闭） ==============
+# ============== SSE 透传（事件流在 terminal+settled 或观察寿命上限 120s 时由上游关闭，
+# 非终态断流依赖前端凭 cursor 重连续传） ==============
 
 
 class WebCEventResponse(ObserverResponse):
@@ -490,6 +525,12 @@ async def bootstrap(tenant_id: str, config_id: str, request: Request):
         # 历史会话入口开关（渠道 config，默认 False：不显示右上角「历史会话」按钮；
         # 仅 ext 模式生效，uid/anon 服务端强制 False，见 §3.5）
         "show_history": show_history,
+        # 页面标题（渠道 config，缺省空串：C 端保持系统默认标题不覆盖）
+        "title": str(conf.get("title") or "").strip(),
+        # 副标题（渠道 config，缺省空串：C 端兜底显示「智能助手」）
+        "subtitle": str(conf.get("subtitle") or "").strip(),
+        # 自定义 Logo（渠道 config，data URL；空串：C 端使用系统默认图标）
+        "logo": str(conf.get("logo") or "").strip(),
         "identity": {
             "mode": identity.mode,
             "channel_user_id": identity.channel_user_id,
@@ -563,6 +604,10 @@ async def chat(tenant_id: str, config_id: str, body: WebCChatRequest, request: R
         _, session = await _ensure_user_and_session(identity)
     session_id = session["session_id"]
 
+    # 渠道改绑跟随：管理员改绑数字员工后，存量会话提交前先对齐 subagent_id，
+    # 否则 Runner 授权按旧值严格比对会永久 403 CHANNEL_PROFILE_MISMATCH
+    await asyncio.to_thread(_align_session_profile, identity, session)
+
     # 用户消息落库（幂等）；附件元数据不含内容，Runner 侧按 file_id 租户域解析。
     # 纯附件消息与 agent 输入同文案，保证历史渲染与执行输入一致。
     user_content = text or "（见附件）"
@@ -597,6 +642,11 @@ async def chat(tenant_id: str, config_id: str, body: WebCChatRequest, request: R
                 "status": row.get("status"), "direct_reply": None}
     if row.get("status") == "waiting":
         question, wait_id = _clarification_question(row)
+        # 追问回复受理后，runner 行快照可能仍是 control 消费前的陈旧 waiting
+        # （wait_id 与刚应答的相同）。此时不能把旧反问当新等待回给前端，
+        # 否则前端会误判停车并停止观察，恢复后的新一轮反问将无人接收。
+        if question and wait_id and wait_id == outcome.reply_wait_id:
+            return response
         if question:
             await asyncio.to_thread(
                 _persist_clarification_message, tenant_id, session_id,
@@ -625,6 +675,29 @@ async def get_runner(tenant_id: str, config_id: str, runner_id: str, request: Re
     return {"success": True, "runner": row}
 
 
+@router.get("/{tenant_id}/{config_id}/sessions/{session_id}/active-runner")
+@_guard
+async def get_session_active_runner(tenant_id: str, config_id: str, session_id: str, request: Request):
+    """会话当前活跃执行查询（刷新/重进后前端恢复观察用）。
+
+    场景：页面刷新/微信切后台回收后重进，前端丢失在途执行感知（submitting 复位、
+    输入框可用、看不到进度），用户误以为卡住再发新消息会触发渠道侧 supersede
+    取消在途执行。本端点返回可接管的活跃 runner；waiting 不返回——反问已落
+    历史消息，回复走新消息 reply 通道，接管反而会挡住输入框。
+    归属校验：本端 DB 会话归属 + Runner 侧渠道身份过滤双重约束。
+    """
+    identity = _resolve_identity(request, tenant_id, config_id)
+    _assert_session_owned(identity, session_id)
+    page = await _runner_client().request(
+        "GET", "/v1/sessions/channel/" + quote(session_id, safe=""), authorization=None,
+        channel_source="web_c", channel_user=identity.channel_user_id,
+        params={"source": "web_c"})
+    for row in page.get("active_runners") or []:
+        if row.get("status") in ("running", "finalizing", "queued"):
+            return {"success": True, "runner_id": row.get("runner_id"), "status": row.get("status")}
+    return {"success": True, "runner_id": None, "status": None}
+
+
 @router.get("/{tenant_id}/{config_id}/runners/{runner_id}/events")
 @_guard
 async def runner_events(tenant_id: str, config_id: str, runner_id: str, request: Request,
@@ -650,7 +723,11 @@ async def runner_events(tenant_id: str, config_id: str, runner_id: str, request:
         async def finalize():
             try:
                 row = await _get_owned_runner(identity, runner_id, client)
-                await _persist_runner_result(
+                # persist_runner_result 是同步 DB 函数，必须 to_thread 包裹；
+                # 直接 await 其返回值 None 会抛 TypeError（agent2 2026-11-25
+                # tr_runner_bc18 事故：SSE 收尾落库 100% 失败，全靠扫描器兜底）
+                await asyncio.to_thread(
+                    _persist_runner_result,
                     identity.tenant_id, row["session"]["session_id"], row)
             except HTTPException:
                 pass

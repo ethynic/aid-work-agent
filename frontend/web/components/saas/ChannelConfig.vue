@@ -263,6 +263,28 @@
             </div>
           </div>
 
+          <!-- 聊天页 Logo（2026-11-26）：data URL 直存 config、随聊天页 bootstrap 下发；
+               空串 = 系统默认图标 -->
+          <div>
+            <label class="text-sm text-muted mb-1 block">聊天页 Logo</label>
+            <div class="flex items-center gap-3">
+              <img v-if="form.config.logo" :src="form.config.logo" alt="Logo 预览" class="w-9 h-9 rounded-full object-cover shrink-0 border border-default" />
+              <div v-else class="w-9 h-9 rounded-full bg-primary-50 text-primary-600 flex items-center justify-center shrink-0">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="w-5 h-5">
+                  <path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                @change="onWebCLogoChange"
+                class="block text-sm text-default file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100 cursor-pointer"
+              />
+              <BaseButton v-if="form.config.logo" size="sm" intent="danger-ghost" @click="form.config.logo = ''">恢复默认</BaseButton>
+            </div>
+            <p class="mt-1 text-xs text-muted">显示在聊天页标题左侧，默认为系统图标；支持 png/jpg/webp/svg，100KB 以内</p>
+          </div>
+
           <!-- 留资归属员工（2026-11-20 方案 2）：留资线索 assigned_to + 留资通知
                「线索归属员工」接收人来源；官网客服无客服账号体系，按渠道配置 -->
           <div>
@@ -343,11 +365,12 @@
             </summary>
             <div class="mt-2 text-xs text-muted space-y-2">
               <p>签名必须在<b class="text-default">官网服务端</b>生成（官网有登录体系即有服务端；前端 JS 内嵌密钥等于没有签名，任何人都可伪造身份读取他人会话）。无法做服务端签名的官网请使用匿名模式。</p>
-              <p>链接形态：<code class="font-mono">/c/{tenant_id}/{config_id}?u={userid}&amp;name={urlencode(可选显示名称)}&amp;ts={unix秒}&amp;sig={签名}</code></p>
+              <p>链接形态：<code class="font-mono">{BASE_URL}/c/{tenant_id}/{config_id}?u={userid}&amp;name={urlencode(可选显示名称)}&amp;ts={unix秒}&amp;sig={签名}</code>（<code class="font-mono">{BASE_URL}</code> = 聊天页站点地址 <code class="font-mono">{{ siteOrigin }}</code>）</p>
               <p>签名算法：<code class="font-mono">sig = HMAC-SHA256(key=channel_secret, message="{userid}.{ts}.{name}")</code> hex 小写；name 可缺省（缺省时签名串用空串）；ts 与服务端时间差 ≤ 24 小时。</p>
               <div class="bg-surface border border-default rounded p-2">
                 <p class="font-medium text-default mb-1">本渠道占位符实际取值（替换后即可使用）：</p>
                 <ul class="list-disc list-inside space-y-0.5">
+                  <li><code class="font-mono">{BASE_URL}</code> = 聊天页站点地址 <code class="font-mono text-default">{{ siteOrigin }}</code>（与本管理后台同站点）</li>
                   <li><code class="font-mono">{tenant_id}</code> = 当前租户 <code class="font-mono text-default">{{ tenantId }}</code></li>
                   <li><code class="font-mono">{config_id}</code> = 当前渠道 <code class="font-mono text-default">{{ editingId }}</code></li>
                   <li><code class="font-mono">channel_secret</code>（即上方「签名密钥」字段）= <code class="font-mono break-all whitespace-normal">{{ form.config.channel_secret || '保存配置后由服务端生成' }}</code></li>
@@ -1348,6 +1371,8 @@ const channelFieldMap: Record<string, { key: string; label: string; placeholder:
   // 集成代码在下方 web_c 专属面板维护（channel_secret 由服务端自动生成）
   web_c: [
     { key: 'greeting', label: '开场白', placeholder: '您好，我是本公司的智能助手，有什么可以帮您？', hint: '访客打开聊天页时展示的开场欢迎语', location: '' },
+    { key: 'title', label: '页面标题', placeholder: 'AID Work Agent（系统默认）', hint: '嵌入微信小程序 web-view 等容器时顶部导航栏显示的标题；留空使用系统默认', location: '' },
+    { key: 'subtitle', label: '副标题', placeholder: '智能助手（系统默认）', hint: '聊天页标题下方的说明小字；留空使用默认「智能助手」', location: '' },
   ],
 }
 
@@ -1389,6 +1414,17 @@ function applyMediaSwitchDefaults() {
   // web_c 留资归属员工（2026-11-20）：存量配置不含键时补空串初值（空串=未配置）
   if (form.value.channel_type === 'web_c' && form.value.config.lead_assignee_user_id === undefined) {
     form.value.config.lead_assignee_user_id = ''
+  }
+  // web_c 页面标题（2026-11-25）：存量配置不含键时补空串初值（空串=系统默认标题）
+  if (form.value.channel_type === 'web_c' && form.value.config.title === undefined) {
+    form.value.config.title = ''
+  }
+  // web_c 副标题/Logo（2026-11-26）：存量配置不含键时补空串初值（空串=系统默认）
+  if (form.value.channel_type === 'web_c' && form.value.config.subtitle === undefined) {
+    form.value.config.subtitle = ''
+  }
+  if (form.value.channel_type === 'web_c' && form.value.config.logo === undefined) {
+    form.value.config.logo = ''
   }
 }
 
@@ -1432,6 +1468,11 @@ function selectChannelType(type: string) {
     if (form.value.config.allow_attachment === undefined) form.value.config.allow_attachment = false
     // 历史会话入口开关：checkbox 绑定需显式初值（默认关）
     if (form.value.config.show_history === undefined) form.value.config.show_history = false
+    // 页面标题：缺省空串（空串=系统默认标题）
+    if (form.value.config.title === undefined) form.value.config.title = ''
+    // 副标题：缺省空串（空串=默认「智能助手」）；Logo：空串=系统默认图标
+    if (form.value.config.subtitle === undefined) form.value.config.subtitle = ''
+    if (form.value.config.logo === undefined) form.value.config.logo = ''
   }
   // WP13：切到公众号类型时加载清单源绑定状态（v1 每租户仅一个扫码绑定，
   // 新建弹窗同样展示既有绑定）
@@ -1983,6 +2024,9 @@ function editChannel(ch: any) {
 
 // ==================== 官网客服（web_c）：签名密钥与集成代码 ====================
 
+// 聊天页站点地址（签名说明 MD 与页面展示共用；/c/ 聊天页与本管理后台同源部署）
+const siteOrigin = window.location.origin
+
 // 集成代码随身份模式变化：anon 为纯链接；uid 拼接 userid 参数；ext 拼接签名参数（占位符，
 // 实际值由官网服务端按签名算法生成，见下方签名说明）
 const webCChatUrl = computed(() => {
@@ -2015,6 +2059,32 @@ function copyWebCSecret() {
     return
   }
   copyText(secret, '签名密钥')
+}
+
+// ==================== web_c 聊天页自定义 Logo（2026-11-26） ====================
+// 读为 data URL 直存 config（后端 _validate_web_c_logo 同口径校验：png/jpg/webp/svg、
+// 100KB 以内）；空串 = 系统默认图标
+const WEB_C_LOGO_MAX_BYTES = 100 * 1024
+const WEB_C_LOGO_ACCEPT_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml']
+
+function onWebCLogoChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = '' // 允许重复选择同一文件：先清空 value 再校验
+  if (!file) return
+  if (!WEB_C_LOGO_ACCEPT_TYPES.includes(file.type)) {
+    alert('Logo 仅支持 png/jpg/webp/svg 格式的图片')
+    return
+  }
+  if (file.size > WEB_C_LOGO_MAX_BYTES) {
+    alert('Logo 图片过大，请上传 100KB 以内的图片')
+    return
+  }
+  const reader = new FileReader()
+  reader.onload = () => {
+    form.value.config.logo = String(reader.result || '')
+  }
+  reader.readAsDataURL(file)
 }
 
 // 官网客服 demo 页面下载（anon/uid 模式可用；ext 模式链接由官网服务端签名生成，不提供 demo）
@@ -2055,6 +2125,7 @@ async function downloadWebCDemo() {
 // web_c 签名说明：示例代码（页面展示与「复制MD」共用一份，占位符统一为 {userid} / channel_secret）
 const webCSignSamples = `Python:
 import hmac, hashlib, time, urllib.parse
+# base = BASE_URL（聊天页站点地址，见上方占位符取值）
 def sign_url(base, tenant_id, config_id, channel_secret, userid, name=""):
     ts = int(time.time())
     sig = hmac.new(channel_secret.encode(), f"{userid}.{ts}.{name}".encode(), hashlib.sha256).hexdigest()
@@ -2081,10 +2152,11 @@ function copyWebCSignDoc() {
     '',
     '## 链接形态',
     '',
-    '`/c/{tenant_id}/{config_id}?u={userid}&name={urlencode(可选显示名称)}&ts={unix秒}&sig={签名}`',
+    '`{BASE_URL}/c/{tenant_id}/{config_id}?u={userid}&name={urlencode(可选显示名称)}&ts={unix秒}&sig={签名}`',
     '',
     '## 占位符实际取值（本渠道）',
     '',
+    `- \`{BASE_URL}\` = 聊天页站点地址 \`${window.location.origin}\`（与本管理后台同站点）`,
     `- \`{tenant_id}\` = 当前租户 \`${tenantId.value}\``,
     `- \`{config_id}\` = 当前渠道 \`${cfg}\``,
     `- \`channel_secret\`（签名密钥）= \`${secret}\``,

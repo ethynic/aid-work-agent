@@ -95,7 +95,9 @@ services:
     # 健康检查
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
+      # 10s 而非 30s：发布脚本 up --wait 的健康等待延迟主要由 interval 对齐
+      # 决定，30s 平均多等 15~30s（2026-11-26 发布提速）
+      interval: 10s
       timeout: 10s
       retries: 3
       start_period: 60s
@@ -162,7 +164,8 @@ services:
     # 心跳文件法判活：runner 每 30s 写 storage/.bg_runner_alive，2 分钟内有更新即健康
     healthcheck:
       test: ["CMD-SHELL", "test -n \"$$(find /app/storage/.bg_runner_alive -mmin -2 2>/dev/null)\""]
-      interval: 30s
+      # 10s 而非 30s：同 api，缩短发布 up --wait 的健康等待延迟
+      interval: 10s
       timeout: 5s
       retries: 3
       start_period: 90s

@@ -139,19 +139,24 @@ function buildCopyText(refs: DiagRefs): string {
 
 /** 入口：动态加载 vConsole、注册「复制诊断」按钮、挂监听（聚焦/缩放/转向） */
 export async function setupWebCDiagnostics(refs: DiagRefs): Promise<void> {
-  // @ts-expect-error 第三方 UMD 包无类型声明，副作用挂 window.VConsole
-  await import('../vendor/vconsole.min.js')
-  const VC = (window as unknown as { VConsole?: new () => { addPlugin: (p: unknown) => void } }).VConsole
+  // v3.15.0 UMD 在 Vite 构建下被 CJS 包装（走 module.exports 分支），window.VConsole
+  // 恒为 undefined——必须从动态 import 的 default 导出取构造器（2026-11-25 真机修复）
+  interface VConsoleCtor {
+    new (): { addPlugin: (p: unknown) => void }
+    VConsolePlugin: new (id: string, name: string) => {
+      on: (event: string, cb: (...args: never[]) => void) => void
+    }
+  }
+  // @ts-expect-error 第三方 UMD 包无类型声明
+  const mod = (await import('../vendor/vconsole.min.js')) as { default?: VConsoleCtor }
+  const VC = mod.default ?? (window as unknown as { VConsole?: VConsoleCtor }).VConsole
   if (!VC) {
-    console.warn('[webC诊断] vConsole 加载失败')
-    return
+    throw new Error('vConsole 构造器缺失（vendor 加载异常）')
   }
   const vConsole = new VC()
 
   // 「复制诊断」工具按钮：注册到 vConsole 面板（API 用法同 qb2.0/smart-mall VconsoleCopy）
-  const plugin = new (VC as unknown as { VConsolePlugin: new (id: string, name: string) => {
-    on: (event: string, cb: (...args: never[]) => void) => void
-  } }).VConsolePlugin('webc_diag', '诊断')
+  const plugin = new VC.VConsolePlugin('webc_diag', '诊断')
   plugin.on('addTool', (cb: (tools: unknown[]) => void) => {
     cb([{
       name: '复制诊断',

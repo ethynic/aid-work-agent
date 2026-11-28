@@ -99,7 +99,7 @@ class RunnerManager:
                     messages.append(value)
         return {'success':True, 'runner':public_runner(row), 'messages':messages}
 
-    def cancel(self, runner_id, credentials):
+    def cancel(self, runner_id, credentials, reason=None):
         self.authorizer.verify_service(credentials["service_id"], credentials["service_token"], None)
         row = self.repository.get(runner_id)
         principal = self._authorize_row(row, credentials)
@@ -108,7 +108,7 @@ class RunnerManager:
             # 当前执行"）；调度服务身份只有无补充输入的 resume（恢复驱动
             # 不做时间取消），不得经通用 cancel 端点取消
             raise RunnerError('SCHEDULED_CONTROL_FORBIDDEN', 403)
-        return public_runner(self.repository.cancel(principal, runner_id))
+        return public_runner(self.repository.cancel(principal, runner_id, reason=reason))
 
     def admin_cancel(self, runner_id, credentials):
         """平台管理员运维停止（系统健康页告警处置）：仅校验服务对等凭据。

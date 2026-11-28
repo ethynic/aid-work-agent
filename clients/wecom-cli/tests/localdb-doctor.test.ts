@@ -863,7 +863,7 @@ function captureConsole(fn: () => Promise<number>): Promise<{ code: number; out:
   )
 }
 
-const CLI_ENV = { platform: 'win32' as const, sessionName: 'Console', execFileFn: async () => ({ stdout: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' }) }
+const CLI_ENV = { platform: 'win32' as const, desktopProbeFn: async () => 'interactive' as const, execFileFn: async () => ({ stdout: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' }) }
 
 test('CLI doctor --localdb：输出双就绪块 + 步骤列表 + 模式结论；--json 含 localdb 全字段', async () => {
   const h = makeHarness()

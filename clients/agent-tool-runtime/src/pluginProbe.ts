@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { join, toNamespacedPath } from 'node:path'
 import { ManagementError, canonicalJson, type RuntimeManifest } from '@aid/local-tool-host-core'
+import type { PluginProbeContext } from '@aid/local-tool-host-core/plugins/store'
 
 function readOnlyCommand(node: string, root: string, entry: string, args: string[], env: Record<string, string>): Promise<{ code: number; value: Record<string, unknown> }> {
   return new Promise((resolve, reject) => execFile(node, [join(root, entry), ...args],
@@ -16,21 +17,27 @@ function readOnlyCommand(node: string, root: string, entry: string, args: string
 }
 
 /** Runs signed, already verified entrypoints only; never invokes MCP business tools. */
-export async function probePlugin(node: string, root: string, manifest: RuntimeManifest, env: Record<string, string>): Promise<{ ready: boolean; reason?: string }> {
-  const version = await readOnlyCommand(node, root, manifest.entrypoint[0]!, ['version', '--json'], env)
-  for (const key of ['provider_id', 'provider_version', 'protocol', 'transport', 'platforms', 'entrypoint', 'tools', 'schema_digest', 'execution_target']) {
-    if (version.code !== 0 || version.value[key] === undefined || canonicalJson(version.value[key]) !== canonicalJson(manifest[key])) {
-      throw new ManagementError(8, '插件实际版本与完整manifest不一致')
+export async function probePlugin(node: string, root: string, manifest: RuntimeManifest, env: Record<string, string>, context?: PluginProbeContext): Promise<{ ready: boolean; reason?: string }> {
+  if (!context?.versionVerified) {
+    const verifyVersion = async () => {
+      const version = await readOnlyCommand(node, root, manifest.entrypoint[0]!, ['version', '--json'], env)
+      for (const key of ['provider_id', 'provider_version', 'protocol', 'transport', 'platforms', 'entrypoint', 'tools', 'schema_digest', 'execution_target']) {
+        if (version.code !== 0 || version.value[key] === undefined || canonicalJson(version.value[key]) !== canonicalJson(manifest[key])) {
+          throw new ManagementError(8, '插件实际版本与完整manifest不一致')
+        }
+      }
     }
+    await (context ? context.measure('version', verifyVersion) : verifyVersion())
   }
-  let doctor: Awaited<ReturnType<typeof readOnlyCommand>>
-  try { doctor = await readOnlyCommand(node, root, manifest.entrypoint[0]!, ['doctor', '--json'], env) }
-  catch (error) {
+  const diagnose = async () => {
+    const doctor = await readOnlyCommand(node, root, manifest.entrypoint[0]!, ['doctor', '--json'], env)
+    const readiness = doctor.value.runtime_readiness as { ready?: unknown; reason?: unknown } | undefined
+    if (!readiness || typeof readiness.ready !== 'boolean') throw new ManagementError(8, '插件缺少机器可读就绪诊断')
+    const ready = doctor.code === 0 && doctor.value.success === true && readiness.ready
+    return ready ? { ready: true } : { ready: false, reason: typeof readiness.reason === 'string' && readiness.reason ? readiness.reason.slice(0, 200) : '请检查桌面环境并启动、登录业务应用' }
+  }
+  try { return await (context ? context.measure('doctor', diagnose) : diagnose()) } catch (error) {
     if (error instanceof ManagementError && error.code === 9) return { ready: false, reason: error.message }
     throw error
   }
-  const readiness = doctor.value.runtime_readiness as { ready?: unknown; reason?: unknown } | undefined
-  if (!readiness || typeof readiness.ready !== 'boolean') throw new ManagementError(8, '插件缺少机器可读就绪诊断')
-  const ready = doctor.code === 0 && doctor.value.success === true && readiness.ready
-  return ready ? { ready: true } : { ready: false, reason: typeof readiness.reason === 'string' && readiness.reason ? readiness.reason.slice(0, 200) : '请检查桌面环境并启动、登录业务应用' }
 }

@@ -36,6 +36,8 @@
 
 | 编号 | 功能 | 状态 | 说明 | 设计文档 | 开发计划 |
 |---|------|------|------|---------|---------|
+| 20261125-1600 | Runner 中断执行可观测性（中断/取代 trace 投影 + 失败轮落库 + web_c 刷新接管） | ✅ 已完成开发（已合并 master，待部署） | 聊易 trace 调查两轮：中断误标「用户取消」投影 interrupted（11-25）；新消息取代在途执行投影 superseded + cancel reason 链路 + web_c 刷新后接管在途 runner（11-26）。详情见设计文档 §2/§6。 | [设计](system/runner-interrupt-observability-design.md) | — |
+| 20261127-0900 | 多端并发提问边缘场景修补（被取消端取代提示 + 历史附件跨执行重物化） | 🔧 部分完成（代码+单测完成，待部署） | superseded 终态白名单透出 cancel_reason，被取代端聊天页显示「已被其他设备新消息取代」；历史附件按 file_id 重物化到新工作区，跨端引用 PDF 不再「找不到」。详见设计文档 §6.6。 | [设计](system/runner-interrupt-observability-design.md) | — |
 | 20261124-1600 | 租户环境变量按智能体隔离（external_push 串推修复） | 🔧 部分完成（代码+单测完成待部署） | 去除「租户任意智能体兜底」，env 仅按智能体（副本继承父定义）精确读取，未配置即放弃推送；根因三 trace 串推 qbweb。 | — | — |
 | 20261124-1359 | 连接中心 · 连接邮箱（个人与企业邮箱品牌快速连接） | ✅ 已完成开发（已合并 master，待 agent2 验证） | 个人邮箱配置搬到连接中心，QQ、163、腾讯和网易企业邮箱快速连接，Outlook、iCloud 预留；旧「企业设置→租户邮箱」入口已删除。 | [设计](system/design-connect-mailbox-design.md) / [交互设计稿](prototypes/connect-mailbox/index.html) | [计划](plans/plan-connect-mailbox.md) |
 | 20261123-2314 | Runtime 桌面实时画面（网页远程查看） | 🔧 部分完成（Phase 1 服务端已完成） | WebRTC 点对点传画面、服务器只转信令；Phase 1 服务端已完成，未部署。 | [设计](system/runtime-screen-stream-design.md) / [调研](research/runtime-screen-stream-feasibility-research.md) / [原型](design/prototypes/runtime-screen-stream-prototype.html) | [计划](plans/plan-runtime-screen-stream.md) |

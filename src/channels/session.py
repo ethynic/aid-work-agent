@@ -113,6 +113,50 @@ def _invoke_pre_send(pre_send: Callable[..., Any], delivery_id: str) -> None:
         pre_send()
 
 
+def has_successful_transfer_to_human(tool_messages: Optional[List[Dict[str, Any]]]) -> bool:
+    """检查本轮 tool 消息序列中是否包含成功的 transfer_to_human 调用。
+
+    转人工成功后微信客服会话切到人工状态，任何后续机器人消息会被
+    微信客服接口拒绝（errcode=95018）。此判定有两个消费方：
+    - 渠道层（channel_routes）：拦截 LLM 在 transfer_to_human 之后
+      追加的多余文字回复；
+    - process_and_persist：response_text 为空时区分「转人工成功后的
+      设计性抑制」（降级 info、不 mark_error）与「agent 内部异常
+      吞错返回空串」（保持 WARNING + mark_error）。
+    """
+    if not tool_messages:
+        return False
+    transfer_call_ids = set()
+    for tm in tool_messages:
+        if tm.get("role") == "assistant" and tm.get("tool_calls"):
+            for tc in tm["tool_calls"]:
+                fn = tc.get("function") or {}
+                if fn.get("name") == "transfer_to_human":
+                    call_id = tc.get("id")
+                    if call_id:
+                        transfer_call_ids.add(call_id)
+    if not transfer_call_ids:
+        return False
+    for tm in tool_messages:
+        if tm.get("role") != "tool":
+            continue
+        if tm.get("tool_call_id") not in transfer_call_ids:
+            continue
+        content = tm.get("content")
+        if isinstance(content, str):
+            try:
+                data = json.loads(content)
+            except Exception:
+                continue
+        elif isinstance(content, dict):
+            data = content
+        else:
+            continue
+        if data.get("success") is True:
+            return True
+    return False
+
+
 class ChannelSessionManager:
     """
     渠道会话管理器
@@ -1297,6 +1341,57 @@ class ChannelSessionManager:
                     logger.warning(
                         f"后端日志：error 路径 record_service.mark_error 异常 session={session_id}: {mark_err}"
                     )
+            # 失败轮用户消息补落库（2026-11-25，设计 runner-interrupt-observability-design.md §3）：
+            # user 写入随 success 批量写推迟到此，processor 异常时若直接 return，
+            # 用户消息在接待页历史永久缺失（聊易 trace 1c300ad9 事故：客户问过
+            # 「重新出一版」无据可查）。与成功路径同构落库 user + 失败占位
+            # assistant（原子事务），占位口径与 _ensure_last_not_orphan_user 一致，
+            # 避免末尾孤立 user；写库失败只记日志，不影响兜底话术发送。
+            # 仅受理后失败轮落库（runner_accepted 由 ChannelRunnerAgent 轮询段打标）：
+            # 受理前拒绝（CHANNEL_ACTOR_FORBIDDEN / CHANNEL_SESSION_MISMATCH 等）
+            # 不得写入会话历史，否则他渠道用户的消息会污染会话上下文。
+            try:
+                _error_user_content = (
+                    result.merged_input if result.was_merged else user_content
+                )
+                if _error_user_content and getattr(result, 'runner_accepted', False):
+                    if result.was_merged and result.merged_from_msgids:
+                        _error_user_metadata = {
+                            "open_kfid": (user_metadata or {}).get("open_kfid", "")
+                            if isinstance(user_metadata, dict) else "",
+                            "merged_from_msgids": result.merged_from_msgids,
+                            "merged_segments": result.merged_segments or [],
+                        }
+                    else:
+                        _error_user_metadata = user_metadata
+                    _error_attachments = (
+                        result.merged_attachments_meta
+                        if result.was_merged and result.merged_attachments_meta is not None
+                        else user_attachments_meta
+                    )
+                    _error_write_ok = self.add_messages_batch_transactional(session_id, tenant_id, [
+                        {
+                            "role": "user",
+                            "content": _error_user_content,
+                            "message_type": message_type,
+                            "attachments": _error_attachments or None,
+                            "metadata": _error_user_metadata,
+                            "created_at": user_received_at,
+                        },
+                        {
+                            "role": "assistant",
+                            "content": "[本次回复生成失败]",
+                            "message_type": "text",
+                        },
+                    ])
+                    if _error_write_ok is None:
+                        logger.warning(
+                            f"后端日志：error 路径用户消息补落库失败（事务回滚）session={session_id}"
+                        )
+            except Exception as persist_err:
+                logger.opt(exception=True).error(
+                    f"后端日志：error 路径用户消息补落库异常 session={session_id}: {persist_err}",
+                )
             # 发送非空失败提示（与渠道入口外层兜底文案一致）；adapter 自身故障时
             # 不能再抛，避免掩盖原始错误
             try:
@@ -1577,18 +1672,28 @@ class ChannelSessionManager:
                     f"后端日志：trace user_message_id 回填失败 session={session_id}: {e}"
                 )
 
-            # response_text 为空（agent 内部异常被吞掉返回空字符串）→ 标记错误状态
+            # response_text 为空：区分两种来源——
+            # 1) 本轮已成功转人工：回复按设计抑制为空（微信客服接口拒收
+            #    后续机器人消息），属预期行为，降级 info 且不 mark_error
+            #    （2026-11-26 巡检：该 WARNING 曾把正常转人工轮误报为
+            #    「agent 返回空响应」并污染错误记录，见 weekly-2026-11-26）；
+            # 2) agent 内部异常被吞掉返回空字符串 → 标记错误状态
             if not response_text:
-                logger.warning(
-                    f"后端日志：agent 返回空响应 session={session_id}，可能内部异常"
-                )
-                if record_service is not None:
-                    try:
-                        record_service.mark_error("agent 返回空响应")
-                    except Exception as mark_err:
-                        logger.warning(
-                            f"后端日志：空响应后 record_service.mark_error 异常: {mark_err}"
-                        )
+                if has_successful_transfer_to_human(tool_messages_collected):
+                    logger.info(
+                        f"后端日志：本轮已成功转人工，回复按设计抑制 session={session_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"后端日志：agent 返回空响应 session={session_id}，可能内部异常"
+                    )
+                    if record_service is not None:
+                        try:
+                            record_service.mark_error("agent 返回空响应")
+                        except Exception as mark_err:
+                            logger.warning(
+                                f"后端日志：空响应后 record_service.mark_error 异常: {mark_err}"
+                            )
 
             # 批量写入成功 → 记录完成
             if record_service is not None:

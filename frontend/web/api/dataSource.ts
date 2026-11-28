@@ -376,6 +376,7 @@ export function confirmUploadStream(
   payload: {
     file_id: string
     sheets: { sheet_name: string; header_row: number; selected: boolean }[]
+    filename?: string  // 用户原始文件名（needs_confirmation 事件回传），用于来源列展示
   },
   callbacks: UploadStreamCallbacks
 ): { cancel: () => void } {

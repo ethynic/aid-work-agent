@@ -1,0 +1,16 @@
+# /etc/systemd/system/web-c-sig-demo.service
+# 官网客服签名链接 demo 登录后端（agent2 测试环境 agent2.aidingyi.cn）
+[Unit]
+Description=web_c signed-link demo login backend (agent2)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/var/www/agent2/www_static
+ExecStart=/usr/bin/python3 /var/www/agent2/www_static/web_c_sig_demo_server.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

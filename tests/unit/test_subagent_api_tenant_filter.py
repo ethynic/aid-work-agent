@@ -77,8 +77,8 @@ async def test_list_subagents_filters_by_target_tenant_for_platform_admin():
 
 
 @pytest.mark.asyncio
-async def test_list_subagents_no_tenant_context_returns_all_unfiltered():
-    """无租户上下文（tenant_id 为 None，如 platform_admin 全局/后台调用）时，
+async def test_list_subagents_no_tenant_context_platform_admin_returns_all():
+    """无租户上下文且为 platform_admin（/portal 全局视图）时，
     返回注册表全部条目，不做权限过滤、也不再追加 main（demo 分支已删，
     main 是否出现取决于注册表数据本身）"""
     all_items = [
@@ -92,7 +92,8 @@ async def test_list_subagents_no_tenant_context_returns_all_unfiltered():
 
     with patch.object(subagent_module, "master_agent") as mock_master, \
          patch.object(subagent_module, "get_current_tenant_id", return_value=None), \
-         patch.object(subagent_module, "get_allowed_agent_ids_for_user") as mock_allowed:
+         patch.object(subagent_module, "get_allowed_agent_ids_for_user") as mock_allowed, \
+         patch("src.api.auth.get_current_user", return_value=_make_platform_admin_user()):
         mock_master.subagent_registry = mock_registry
 
         request = MagicMock()
@@ -107,6 +108,88 @@ async def test_list_subagents_no_tenant_context_returns_all_unfiltered():
     assert "main" not in returned_ids, "demo 分支已删，无租户上下文不再强制追加 main"
     assert "travel-consultant" in returned_ids
     assert "ai-lead-gen" in returned_ids
+
+
+@pytest.mark.asyncio
+async def test_list_subagents_no_tenant_context_unauthenticated_fails_closed():
+    """无租户上下文且用户身份无法解析（token 失效/中间件解析失败）时，
+    必须 fail-closed 返回错误，绝不退化为全量内置列表（2026-11-26 聊易
+    满屏数字员工事故：fail-open 导致租户用户偶发看到全部内置员工）"""
+    all_items = [
+        _make_item("travel-consultant", "旅游咨询顾问"),
+        _make_item("ai-lead-gen", "外贸获客智能体"),
+    ]
+
+    mock_registry = MagicMock()
+    mock_registry.load_from_db = MagicMock()
+    mock_registry.get_all_subagents_with_type = MagicMock(return_value=all_items)
+
+    with patch.object(subagent_module, "master_agent") as mock_master, \
+         patch.object(subagent_module, "get_current_tenant_id", return_value=None), \
+         patch("src.api.auth.get_current_user", return_value=None):
+        mock_master.subagent_registry = mock_registry
+
+        request = MagicMock()
+        result = await subagent_module.list_subagents(request)
+
+    assert result["success"] is False, "未认证且无租户上下文应拒绝，不应返回全量列表"
+    assert not result.get("data"), "fail-closed 时不携带任何列表数据"
+
+
+@pytest.mark.asyncio
+async def test_list_subagents_no_tenant_context_tenant_user_fails_closed():
+    """无租户上下文但用户是租户角色（本应由中间件解析出租户，解析失败属异常）：
+    fail-closed 拒绝，不返回全量列表"""
+    all_items = [_make_item("travel-consultant", "旅游咨询顾问")]
+
+    mock_registry = MagicMock()
+    mock_registry.load_from_db = MagicMock()
+    mock_registry.get_all_subagents_with_type = MagicMock(return_value=all_items)
+
+    tenant_user = {
+        "user_id": "user_001",
+        "username": "tenant_admin",
+        "role": "tenant_admin",
+        "tenant_id": "tenant_abc",
+    }
+
+    with patch.object(subagent_module, "master_agent") as mock_master, \
+         patch.object(subagent_module, "get_current_tenant_id", return_value=None), \
+         patch("src.api.auth.get_current_user", return_value=tenant_user):
+        mock_master.subagent_registry = mock_registry
+
+        request = MagicMock()
+        result = await subagent_module.list_subagents(request)
+
+    assert result["success"] is False, "租户角色无租户上下文应拒绝，不应返回全量列表"
+    assert not result.get("data"), "fail-closed 时不携带任何列表数据"
+
+
+@pytest.mark.asyncio
+async def test_list_subagents_tenant_context_user_unresolved_fails_closed():
+    """有租户上下文但用户身份失效（token 无效）时：fail-closed 拒绝，
+    不返回全量内置列表（旧行为：保持只有内置 subagent，即全量泄漏）"""
+    all_items = [
+        _make_item("travel-consultant", "旅游咨询顾问"),
+        _make_item("ai-lead-gen", "外贸获客智能体"),
+    ]
+
+    mock_registry = MagicMock()
+    mock_registry.load_from_db = MagicMock()
+    mock_registry.get_all_subagents_with_type = MagicMock(return_value=all_items)
+
+    with patch.object(subagent_module, "master_agent") as mock_master, \
+         patch.object(subagent_module, "get_current_tenant_id", return_value="tenant_abc"), \
+         patch.object(subagent_module, "get_allowed_agent_ids_for_user") as mock_allowed, \
+         patch("src.api.auth.get_current_user", return_value=None):
+        mock_master.subagent_registry = mock_registry
+
+        request = MagicMock()
+        result = await subagent_module.list_subagents(request)
+
+    assert result["success"] is False, "token 失效应拒绝，不应返回全量内置列表"
+    assert not result.get("data"), "fail-closed 时不携带任何列表数据"
+    mock_allowed.assert_not_called()
 
 
 @pytest.mark.asyncio

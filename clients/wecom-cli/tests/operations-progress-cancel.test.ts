@@ -26,7 +26,8 @@ function fakeProbeEnv() {
   return (opts: Parameters<typeof probeEnvironment>[0]) =>
     probeEnvironment({
       ...opts,
-      sessionName: 'Console',
+      platform: 'win32',
+      desktopProbeFn: async () => 'interactive' as const,
       execFileFn: async (file) => ({
         stdout: file.includes('where') ? 'C:\\powershell.exe\r\n' : '信息: 没有运行的任务匹配指定标准。',
       }),

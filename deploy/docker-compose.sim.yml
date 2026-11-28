@@ -56,7 +56,8 @@ services:
     cpus: 1.5
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
+      # 10s 而非 30s：缩短发布 up --wait 的健康等待延迟（2026-11-26 发布提速）
+      interval: 10s
       retries: 3
       start_period: 60s
     networks:

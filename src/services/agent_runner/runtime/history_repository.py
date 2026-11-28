@@ -1,6 +1,7 @@
 """History storage only; no ingress/session processing or platform delivery."""
 
 import json
+from loguru import logger
 from src.db.database import get_db_connection
 
 
@@ -73,6 +74,73 @@ class HistoryRepository:
                     except ValueError:
                         message[field] = {} if field == "metadata" else []
         return messages
+
+    def read_user_attachments(self, session_id, limit=100):
+        """读取历史窗口内 user 消息的附件元数据（2026-11-27 跨执行附件重物化）。
+
+        历史重建（_reload_memory_from_db）只保留 content 文本，附件元数据（含
+        file_id）被丢弃，导致下一执行（含被取代后的新执行）拿不到先前轮次的
+        附件实体，模型只能答「找不到」。本方法供 context_assembler 在装配时
+        单独读取附件元数据，配合 attachments.prepare 重物化副本到新工作区。
+
+        过滤口径与 read_web / read_channel 完全一致（压缩窗口、租户归属、
+        渠道 status/is_recalled），保证只物化仍在 LLM 上下文里的消息附件。
+        返回 [{file_id,name,mime_type,type,size}]；无附件/异常返回 []（fail-open，
+        重物化为增强能力，不得阻断执行装配）。
+        """
+        try:
+            if self.identity.session_kind == "web":
+                query = """
+                    SELECT attachments FROM chat_messages m
+                    JOIN chat_sessions s ON s.session_id = m.session_id
+                    WHERE m.session_id = %s AND s.tenant_id IS NOT DISTINCT FROM %s
+                      AND s.user_id IS NOT DISTINCT FROM %s
+                      AND m.role = 'user'
+                      AND (m.compacted = FALSE OR m.compacted IS NULL)
+                    ORDER BY m.id DESC LIMIT %s
+                """
+                parameters = [session_id, self.identity.tenant_id, self.identity.user_id, limit]
+            else:
+                query = """
+                    SELECT attachments FROM channel_messages m
+                    JOIN channel_sessions s ON s.session_id = m.session_id
+                    WHERE m.session_id = %s AND s.tenant_id IS NOT DISTINCT FROM %s
+                      AND (m.tenant_id IS NOT DISTINCT FROM s.tenant_id OR m.tenant_id IS NULL)
+                      AND m.role = 'user'
+                      AND (m.compacted = FALSE OR m.compacted IS NULL)
+                      AND (m.is_recalled = FALSE OR m.is_recalled IS NULL)
+                      AND (m.status = 'active' OR m.status IS NULL)
+                    ORDER BY m.id DESC LIMIT %s
+                """
+                parameters = [session_id, self.identity.tenant_id, limit]
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, tuple(parameters))
+                rows = cursor.fetchall()
+        except Exception:
+            logger.opt(exception=True).warning(
+                "[history_repository] 历史附件元数据读取失败，跳过重物化")
+            return []
+        result = []
+        for row in rows:
+            value = row.get("attachments") if isinstance(row, dict) else None
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except ValueError:
+                    value = []
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if isinstance(item, dict) and item.get("file_id"):
+                    result.append({
+                        "file_id": str(item["file_id"]),
+                        "name": str(item.get("name") or item["file_id"]),
+                        "mime_type": str(item.get("mime_type") or ""),
+                        "type": str(item.get("type") or "file"),
+                        "size": item.get("size"),
+                    })
+        return result
 
     def active_summary(self, session_id, source_type):
         self._check_compression_scope(session_id, source_type)

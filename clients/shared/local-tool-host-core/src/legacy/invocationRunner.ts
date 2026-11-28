@@ -22,7 +22,7 @@ import type { ApiClient, ClaimedInvocation, InvocationResultPayload, OperationRe
 import { ApiError, DeviceRevokedError, isRetryableTransportError } from './apiClient.js'
 import { getProviderManifest, isToolAllowedFor, isWriteToolFor, type ProviderManifest } from './providers.js'
 import type { ProviderSet, ProviderManager } from './providerManager.js'
-import { ProviderCrashError } from './providerManager.js'
+import { ProviderCheckError, ProviderCrashError } from './providerManager.js'
 import { DesktopLockTimeoutError, desktopLockName, withDesktopLock } from './desktopLock.js'
 import { appendJournalEntry, JournalWriteError } from './journal.js'
 import { backoffSleep, deliverOutboxEntry, type OutboxEntry, ResultOutbox, resultOutboxDir } from './resultOutbox.js'
@@ -443,7 +443,7 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
   }
 
   // 4. Provider 调用（进度转发 + 取消 + shutdown 中止 + 桌面资源仲裁）
-  const provider: Pick<ProviderManager, 'callTool'> = isRecoveryObservation ? deps.recoveryObservation! : deps.providers.get(providerKey)
+  const provider: Pick<ProviderManager, 'callTool'> & Partial<Pick<ProviderManager, 'prepareExecution'>> = isRecoveryObservation ? deps.recoveryObservation! : deps.providers.get(providerKey)
   const lockName = desktopLockName(deps.desktopResourceKey)
   const abortController = new AbortController()
   if (deps.shutdownSignal?.aborted) abortController.abort()
@@ -478,8 +478,12 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
   let callError: Error | null = null
   let lockBusy = false
   let providerStarted = false
-  const lockEnterMs = Date.now()
+  let lockEnterMs = Date.now()
   try {
+    // started has been accepted and the forwarder renews the lease during slow disk reads.
+    // Plugin integrity is established before acquiring the desktop or requesting a write permit.
+    await provider.prepareExecution?.()
+    lockEnterMs = Date.now()
     // 桌面资源仲裁入口：全部 Provider（含旧 boss 链路）的 tool call 都持锁执行，不改 MCP 契约；
     // 等待超时按未提交处理回 DESKTOP_RESOURCE_BUSY（绝不复用旧 'BUSY' 码，避免误触发云端旧弹层自愈）。
     // v2 写动作的许可/journal 全部移入锁内（R20）：锁等待最长 120s 会耗尽 90s 本地许可有效期，
@@ -490,7 +494,10 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
       ? (body: () => Promise<Record<string, unknown> | null>) => body()
       : (body: () => Promise<Record<string, unknown> | null>) =>
         withDesktopLock(lockName, body, { timeoutMs: deps.desktopLockTimeoutMs, signal: abortController.signal })
-    settled = await enterLock(
+    if (abortController.signal.aborted) {
+      lockPreabort = preabortFinal({ success: false, code: forwarder.authorityLost ? 'EXECUTION_AUTHORITY_LOST' : 'CANCELLED',
+        message: '执行已停止，未开始 Provider 调用', retryable: false, safe_to_retry: false })
+    } else settled = await enterLock(
       async () => {
         const lockAcquiredMs = Date.now()
         phase.lockWaitMs = lockAcquiredMs - lockEnterMs
@@ -732,6 +739,12 @@ export async function runInvocation(inv: ClaimedInvocation, deps: RunnerDeps): P
   // 锁内前置失败（取消复验/许可/防御检查/journal）优先于执行结果映射：未开始输入，effect none
   if (lockPreabort) {
     await sendFinalResult(lockPreabort)
+    return
+  }
+
+  if (callError instanceof ProviderCheckError) {
+    await sendFinalResult(preabortFinal({ success: false, code: 'PROVIDER_NOT_AVAILABLE', message: callError.message,
+      retryable: false, safe_to_retry: false }))
     return
   }
 

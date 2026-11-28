@@ -2,7 +2,7 @@
  * OperationResult 字段契约 / effect 枚举 / 错误映射 / probe 参数校验与环境判定
  * （E5：need_login 附 qr_image_base64/qr_status_hint/login_window 的透传与防御性归一）。
  *
- * 用注入替身（platform/sessionName/execFileFn）模拟环境，不依赖真机企微：
+ * 用注入替身（platform/desktopProbeFn/execFileFn）模拟环境，不依赖真机企微：
  * 参数校验失败时不得触达任何系统命令；环境违规映射为稳定错误码。
  */
 import assert from 'node:assert/strict'
@@ -17,7 +17,7 @@ import {
   type OpContext,
 } from '../src/operations/types.js'
 import { createWecomProbeOperation } from '../src/operations/probe.js'
-import { countWecomProcesses, isInteractiveSession, probeEnvironment } from '../src/platform/environment.js'
+import { countWecomProcesses, probeEnvironment } from '../src/platform/environment.js'
 
 function silentCtx(): OpContext {
   return { signal: new AbortController().signal, progress: () => {} }
@@ -78,14 +78,6 @@ test('errorMapping：系统命令缺失与兜底 → INTERNAL_ERROR', () => {
 
 // ---------- 环境判定原语 ----------
 
-test('isInteractiveSession：Console/RDP-Tcp 交互；Services/缺失非交互', () => {
-  assert.equal(isInteractiveSession('Console'), true)
-  assert.equal(isInteractiveSession('RDP-Tcp#0'), true)
-  assert.equal(isInteractiveSession('Services'), false)
-  assert.equal(isInteractiveSession(undefined), false)
-  assert.equal(isInteractiveSession(''), false)
-})
-
 test('countWecomProcesses：按 CSV 行统计，未运行时（GBK 提示行）为 0', () => {
   assert.equal(countWecomProcesses('"WXWork.exe","12345","Console","1","100,000 K"\r\n'), 1)
   assert.equal(
@@ -132,7 +124,7 @@ test('probe：非 win32 → WINDOWS_REQUIRED，effect=none，不触达任何系�
 test('probe：服务会话 → INTERACTIVE_SESSION_REQUIRED', async () => {
   const { fn } = fakeExec({ 'where.exe': 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\r\n' })
   const op = createWecomProbeOperation({
-    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, sessionName: 'Services', execFileFn: fn }),
+    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, platform: 'win32', desktopProbeFn: async () => 'session-inactive' as const, execFileFn: fn }),
   })
   const r = await op.execute({}, silentCtx())
   assert.equal(r.code, 'INTERACTIVE_SESSION_REQUIRED')
@@ -146,7 +138,7 @@ test('probe：正常环境 → OK + 能力矩阵 data（企微未运行不是失
   })
   let driverCalled = 0
   const op = createWecomProbeOperation({
-    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, sessionName: 'Console', execFileFn: fn }),
+    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, platform: 'win32', desktopProbeFn: async () => 'interactive' as const, execFileFn: fn }),
     runDriverFn: async () => {
       driverCalled++
       return {}
@@ -171,7 +163,7 @@ test('probe：企微进程在运行 → 走驱动（mock）带回窗口/登录�
     tasklist: '"WXWork.exe","12345","Console","1","100,000 K"\r\n',
   })
   const op = createWecomProbeOperation({
-    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, sessionName: 'Console', execFileFn: fn }),
+    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, platform: 'win32', desktopProbeFn: async () => 'interactive' as const, execFileFn: fn }),
     runDriverFn: async () => ({
       login_state: 'online',
       main_window: { hwnd: 69334, x: 1466, y: 331, w: 1089, h: 828 },
@@ -196,7 +188,7 @@ test('probe：登录窗可识别时返回扫码截图与登录态，二维码细
     tasklist: '"WXWork.exe","12345","Console","1","100,000 K"\r\n',
   })
   const op = createWecomProbeOperation({
-    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, sessionName: 'Console', execFileFn: fn }),
+    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, platform: 'win32', desktopProbeFn: async () => 'interactive' as const, execFileFn: fn }),
     runDriverFn: async () => ({
       login_state: 'need_login',
       main_window: null,
@@ -222,7 +214,7 @@ test('probe：online → 无 qr/login_window 字段（二维码仅 need_login �
     tasklist: '"WXWork.exe","12345","Console","1","100,000 K"\r\n',
   })
   const op = createWecomProbeOperation({
-    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, sessionName: 'Console', execFileFn: fn }),
+    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, platform: 'win32', desktopProbeFn: async () => 'interactive' as const, execFileFn: fn }),
     runDriverFn: async () => ({
       login_state: 'online',
       main_window: { hwnd: 69334, x: 1466, y: 331, w: 1089, h: 828 },
@@ -243,7 +235,7 @@ test('probe：offline（进程在但无窗口）→ login_state=offline，无 qr
     tasklist: '"WXWork.exe","12345","Console","1","100,000 K"\r\n',
   })
   const op = createWecomProbeOperation({
-    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, sessionName: 'Console', execFileFn: fn }),
+    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, platform: 'win32', desktopProbeFn: async () => 'interactive' as const, execFileFn: fn }),
     runDriverFn: async () => ({
       login_state: 'offline',
       main_window: null,
@@ -263,7 +255,7 @@ test('probe：need_login 但驱动返回非法 hint/qr/login_window → 防御�
     tasklist: '"WXWork.exe","12345","Console","1","100,000 K"\r\n',
   })
   const op = createWecomProbeOperation({
-    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, sessionName: 'Console', execFileFn: fn }),
+    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, platform: 'win32', desktopProbeFn: async () => 'interactive' as const, execFileFn: fn }),
     runDriverFn: async () => ({
       login_state: 'need_login',
       main_window: null,
@@ -287,7 +279,7 @@ test('probe：驱动失败（mock 抛 CodedOperationError）→ 错误码透传�
     tasklist: '"WXWork.exe","12345","Console","1","100,000 K"\r\n',
   })
   const op = createWecomProbeOperation({
-    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, sessionName: 'Console', execFileFn: fn }),
+    probeEnvironmentFn: (opts) => probeEnvironment({ ...opts, platform: 'win32', desktopProbeFn: async () => 'interactive' as const, execFileFn: fn }),
     runDriverFn: async () => {
       throw new CodedOperationError('WINDOW_AMBIGUOUS', '多个主窗口候选')
     },

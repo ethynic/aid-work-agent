@@ -98,7 +98,13 @@ const effectiveTraceCount = computed(() => traces.value.filter(trace =>
 ).length)
 
 function goBack() {
-  router.push('/portal/monitoring')
+  // 有应用内来源页面则原路回退一层（列表页状态在 URL query 中，页码/筛选得以保留）；
+  // 直接打开 URL 无应用内历史时兜底回列表
+  if (window.history.state?.back) {
+    router.back()
+  } else {
+    router.push('/portal/monitoring')
+  }
 }
 
 function goToDetail(traceId: string) {
@@ -108,13 +114,13 @@ function goToDetail(traceId: string) {
 function statusClass(status: string): string {
   if (status === 'completed') return 'bg-success-100 text-success-700'
   if (status === 'failed') return 'bg-danger-100 text-danger-700'
-  if (status === 'cancelled') return 'bg-warning-100 text-warning-700'
+  if (status === 'cancelled' || status === 'interrupted' || status === 'superseded') return 'bg-warning-100 text-warning-700'
   return 'bg-info-100 text-info-700'
 }
 
 function statusLabel(status: string): string {
-  const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '用户取消', running: '运行中',
-    waiting: '等待用户回复' }
+  const map: Record<string, string> = { completed: '已完成', failed: '失败', cancelled: '用户取消', interrupted: '执行中断',
+    superseded: '被新消息取代', running: '运行中', waiting: '等待用户回复' }
   return map[status] || status
 }
 

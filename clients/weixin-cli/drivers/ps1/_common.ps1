@@ -79,10 +79,14 @@ function Invoke-KimiVision {
         [Parameter(Mandatory)][string]$SystemPrompt,
         [Parameter(Mandatory)][string]$UserText,
         [string]$ArtifactPrefix = 'weixin-driver-vision',
-        [switch]$ProxyOnly
+        [switch]$ProxyOnly,
+        [string]$RuntimeFriendStep
     )
+    $runtimeServer = ([string]$env:AIDWORK_RUNTIME_SERVER).Trim().TrimEnd('/')
+    $runtimeToken = ([string]$env:AIDWORK_RUNTIME_DEVICE_TOKEN).Trim()
+    $runtimeFriend = $RuntimeFriendStep -and ($runtimeServer -or $runtimeToken)
     # TS 层激活/绑定了服务端但拿不到 token 时，通过 AID_WEIXIN_PROXY_ERROR 传入原因
-    if (-not [string]::IsNullOrWhiteSpace($env:AID_WEIXIN_PROXY_ERROR)) {
+    if (-not $runtimeFriend -and -not [string]::IsNullOrWhiteSpace($env:AID_WEIXIN_PROXY_ERROR)) {
         Throw-DriverError 'CONFIG_MISSING' ('服务端代理凭据不可用：' + $env:AID_WEIXIN_PROXY_ERROR)
     }
 
@@ -93,10 +97,15 @@ function Invoke-KimiVision {
     $moonDirect = @{ ApiUrl = $script:KimiApiBase; Token = $script:KimiApiKey; Model = $script:KimiModel; Mode = 'direct'; Tag = 'moonshot-direct' }
     $serverUrl = ([string]$env:AID_WEIXIN_SERVER_URL).TrimEnd('/')
     $billingProxy = $null
-    if (-not [string]::IsNullOrWhiteSpace($serverUrl)) {
+    if (-not $runtimeFriend -and -not [string]::IsNullOrWhiteSpace($serverUrl)) {
         $billingProxy = @{ ApiUrl = ($serverUrl + '/api/client/v1/llm/chat'); Token = [string]$env:AID_WEIXIN_ACCESS_TOKEN; Model = $script:ZhipuModel; Mode = 'proxy'; Tag = 'glm-proxy' }
     }
-    if ($ProxyOnly) {
+    if ($runtimeFriend) {
+        if (-not $ProxyOnly -or -not $runtimeServer -or -not $runtimeToken) {
+            Throw-DriverError 'CONFIG_MISSING' '已配对 Runtime 的微信视觉凭证不完整'
+        }
+        $candidates += @{ ApiUrl = ($runtimeServer + '/api/local-tools/runtime/weixin/visual-locate'); Token = $runtimeToken; Model = $script:ZhipuModel; Mode = 'proxy'; Tag = 'glm-runtime' }
+    } elseif ($ProxyOnly) {
         if ($null -eq $billingProxy -or [string]::IsNullOrWhiteSpace([string]$billingProxy.Token)) {
             Throw-DriverError 'CONFIG_MISSING' '需要启用微信 CLI 服务端计费代理，请配置服务端地址并完成客户端激活'
         }
@@ -138,7 +147,11 @@ function Invoke-KimiVision {
             )
             max_tokens = 4096
         }
-        if ($cand.Mode -eq 'proxy') { $payloadObj.purpose = 'weixin-vision-' + $ArtifactPrefix }
+        if ($runtimeFriend) {
+            $payloadObj = @{ image_url = $dataUrl; step = $RuntimeFriendStep }
+        } elseif ($cand.Mode -eq 'proxy') {
+            $payloadObj.purpose = 'weixin-vision-' + $ArtifactPrefix
+        }
         $payload = $payloadObj | ConvertTo-Json -Depth 8
         if (-not $ProxyOnly) {
             $reqPath = Join-Path $env:TEMP ($ArtifactPrefix + '-req.json')
@@ -175,8 +188,14 @@ function Invoke-KimiVision {
             if ($http -eq '200') { $fatal = $null; break }
             # 服务端代理计费的业务性拒绝：402 余额不足 / 401 凭据失效，重试和降级都无意义
             if ($http -eq '402') { Throw-DriverError 'INSUFFICIENT_CREDIT' '积分余额不足，请充值后重试（视觉调用走服务端代理计费）' }
+            if ($runtimeFriend -and $http -in @('401', '403')) {
+                Throw-DriverError 'CONFIG_MISSING' '已配对 Runtime 的设备或租户无权调用微信好友视觉'
+            }
+            if ($runtimeFriend -and $http -eq '404') {
+                Throw-DriverError 'CONFIG_MISSING' '当前服务端未提供 Runtime 微信好友视觉入口'
+            }
             if ($http -eq '401') { Throw-DriverError 'CONFIG_MISSING' '服务端 access_token 无效或已吊销：请删除 %APPDATA%\aid-weixin\binding.json 并重新设置 AID_WEIXIN_ACTIVATION_CODE 激活' }
-            if ($http -eq '429' -and $attempt -lt 4) {
+            if (-not $runtimeFriend -and $http -eq '429' -and $attempt -lt 4) {
                 Write-Host ("[vision] HTTP 429 (attempt {0}/4), retrying in 25s..." -f $attempt)
                 Start-Sleep -Seconds 25
                 continue
@@ -185,6 +204,7 @@ function Invoke-KimiVision {
             break
         }
         if ($null -ne $fatal) {
+            if ($runtimeFriend) { Throw-DriverError 'INTERNAL_ERROR' ('Runtime 微信好友视觉请求失败：' + $fatal) }
             Write-Host ("[vision] 通道 {0} 失败：{1}，尝试下一通道" -f $cand.Tag, $fatal)
             $lastErr = $fatal
             continue
@@ -205,6 +225,7 @@ function Invoke-KimiVision {
         $stripped = $content -replace '(?s)^```(?:json)?\s*', '' -replace '(?s)\s*```$', ''
         $m = [regex]::Match($stripped, '(?s)\{[\s\S]*\}')
         if (-not $m.Success) {
+            if ($runtimeFriend) { Throw-DriverError 'UI_CHANGED' 'Runtime 微信好友视觉响应格式无效' }
             Write-Host ("[vision] 通道 {0} 响应无 JSON，尝试下一通道" -f $cand.Tag)
             $lastErr = if ($ProxyOnly) { '响应无 JSON' } else {
                 '响应无 JSON：' + $content.Substring(0, [Math]::Min(200, $content.Length))

@@ -10,7 +10,7 @@ import { ApiClient } from '../../src/apiClient.js'
 import type { ProviderManifest } from '../../src/providers.js'
 import { deriveResourceKey } from '../../src/desktopLock.js'
 import { PollLoop } from '../../src/pollLoop.js'
-import { ProviderManager, ProviderSet, type ProviderOptions } from '../../src/providerManager.js'
+import { ProviderManager, ProviderSet, type ProviderSetOptions } from '../../src/providerManager.js'
 import { ResultOutbox, resultOutboxDir } from '../../src/resultOutbox.js'
 import { FakeCloud } from './fakeCloud.js'
 
@@ -27,7 +27,7 @@ export function fakeV2ProviderEntry(): string {
 
 export interface TestStackOptions {
   /** Trusted local transport settings, used only by isolated transport regressions. */
-  providerOptions?: ProviderOptions
+  providerOptions?: ProviderSetOptions
   heartbeatIntervalMs?: number
   claimWaitSeconds?: number
   backoffBaseMs?: number

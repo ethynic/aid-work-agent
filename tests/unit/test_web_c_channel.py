@@ -5,10 +5,12 @@
 """
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import time
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -22,6 +24,7 @@ from src.saas.api.web_c import (
     _sanitize_filename,
     _validate_attachment_refs,
     _verify_ext_signature,
+    WebCChatRequest,
 )
 from src.saas.services.credit_gate import check_tenant_credit_blocked
 
@@ -237,6 +240,38 @@ class TestSubmitSplit:
         assert outcome.row is accepted_row
         cancel_call = client.calls[1]
         assert cancel_call["path"].endswith("/runners/run_old/cancel")
+        # supersede 取消带观测标记：obs_traces 投影为 superseded（非用户取消）
+        assert cancel_call["body"] == {"reason": "superseded_by_new_message"}
+
+    @pytest.mark.asyncio
+    async def test_submit_waiting_cancel_also_marks_superseded(self):
+        waiting = _valid_runner_row(runner_id="run_wait", status="waiting")
+        accepted_row = _valid_runner_row(runner_id="run_new", status="queued")
+        # 非 clarification 的 waiting：waiting else 分支取消一次 + active 循环幂等取消一次
+        cancelled = _valid_runner_row(runner_id="run_wait", status="cancelled")
+        client = StubRunnerClient([
+            {"success": True, "runners": [], "active_runners": [waiting], "has_more": False, "next_cursor": None},
+            {"success": True, "runner": cancelled},
+            {"success": True, "runner": cancelled},
+            {"success": True, "runner": accepted_row},
+        ])
+        agent = self._make_agent(client)
+        outcome = await agent.submit(user_input="第二条")
+        assert outcome.row is accepted_row
+        cancel_calls = [call for call in client.calls if call["path"].endswith("/cancel")]
+        assert cancel_calls and all(
+            call["body"] == {"reason": "superseded_by_new_message"} for call in cancel_calls)
+
+    @pytest.mark.asyncio
+    async def test_submit_no_active_runner_sends_cancel_without_body(self):
+        client = StubRunnerClient([
+            {"success": True, "runners": [], "active_runners": [], "has_more": False, "next_cursor": None},
+            {"success": True, "runner": _valid_runner_row()},
+        ])
+        agent = self._make_agent(client)
+        await agent.submit(user_input="hi")
+        assert all(call["method"] != "POST" or not call["path"].endswith("/cancel")
+                   for call in client.calls), "无活跃执行不应发起取消"
 
     @pytest.mark.asyncio
     async def test_submit_generates_request_id_when_absent(self):
@@ -655,6 +690,170 @@ class TestClarificationPersistence:
         assert args[3] == "请补充你的城市？" and args[4] == "wait_1"
 
 
+class TestChatStaleWaitingGuard:
+    """追问回复受理后的陈旧 waiting 快照回归（agent2 2026-11-25 事故）。
+
+    control 消费是异步的：/controls 受理返回的 runner 行可能仍是消费前的
+    旧 waiting（同 wait_id）。chat 端点不得把旧反问当新等待返回，否则前端
+    会误判停车并停止观察，恢复后的新一轮反问无人接收。"""
+
+    @staticmethod
+    def _stale_row(wait_id="wait_9"):
+        return {
+            "runner_id": "run_w",
+            "status": "waiting",
+            "snapshot": {"waiting": {"kind": "clarification", "wait_id": wait_id,
+                                     "question": "请补充出行人数？"}},
+        }
+
+    @staticmethod
+    def _patch_chat_common(outcome_row, reply_wait_id):
+        identity = SimpleNamespace(tenant_id="t1", config_id="cfg1", channel_user_id="u0011", mode="uid", subagent_type="x", display_name="")
+        session = {"session_id": "t1_web_c_uid_0011_x_sab"}
+        outcome = SimpleNamespace(direct_response=None, row=outcome_row,
+                                  reply_wait_id=reply_wait_id)
+        fake_agent = MagicMock()
+        fake_agent.submit = AsyncMock(return_value=outcome)
+
+        return patch("src.saas.api.web_c._resolve_identity", return_value=identity), \
+            patch("src.saas.api.web_c._load_web_c_config",
+                  return_value=({}, {"allow_attachment": False})), \
+            patch("src.saas.api.web_c._get_limiters", return_value={
+                "chat_uid": SimpleNamespace(is_allowed=lambda key: True),
+                "chat_ip": SimpleNamespace(is_allowed=lambda key: True)}), \
+            patch("src.saas.api.web_c.check_tenant_credit_blocked", return_value=None), \
+            patch("src.saas.api.web_c._validate_attachment_refs", return_value=[]), \
+            patch("src.saas.api.web_c._ensure_web_c_user", new=AsyncMock(return_value="u1")), \
+            patch("src.saas.api.web_c._assert_session_owned", return_value=session), \
+            patch("src.saas.api.web_c._create_extra_session_sync", return_value=session), \
+            patch("src.saas.api.web_c._align_session_profile", new=MagicMock()), \
+            patch("src.saas.api.web_c._add_user_message", new=MagicMock()), \
+            patch("src.saas.api.web_c.ChannelRunnerAgent", return_value=fake_agent), \
+            patch("src.saas.api.web_c._persist_clarification_message", new=MagicMock())
+
+    @pytest.mark.asyncio
+    async def test_reply_same_wait_id_returns_without_waiting_text(self):
+        from src.saas.api import web_c as web_c_mod
+        chat = web_c_mod.chat
+        _persist_clarification_message = web_c_mod._persist_clarification_message
+
+        body = WebCChatRequest(text="1600w", client_request_id="wc_" + "a" * 8)
+        patches = self._patch_chat_common(self._stale_row("wait_9"), "wait_9")
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await chat("t1", "cfg1", body, request=SimpleNamespace(headers={}, client=None))
+            # 陈旧等待：不回 waiting_text、不重复落库
+            assert "waiting_text" not in response
+            assert response["status"] == "waiting" and response["runner_id"] == "run_w"
+            web_c_mod._persist_clarification_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reply_new_wait_id_returns_waiting_text(self):
+        from src.saas.api import web_c as web_c_mod
+        chat = web_c_mod.chat
+        _persist_clarification_message = web_c_mod._persist_clarification_message
+
+        body = WebCChatRequest(text="1600w", client_request_id="wc_" + "a" * 8)
+        patches = self._patch_chat_common(self._stale_row("wait_new"), "wait_9")
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await chat("t1", "cfg1", body, request=SimpleNamespace(headers={}, client=None))
+            # 新一轮等待（新 wait_id）：正常返回反问并落库
+            assert response["waiting_text"] == "请补充出行人数？"
+            web_c_mod._persist_clarification_message.assert_called_once()
+            assert web_c_mod._persist_clarification_message.call_args.args[4] == "wait_new"
+
+    @pytest.mark.asyncio
+    async def test_new_run_waiting_still_returns_waiting_text(self):
+        from src.saas.api import web_c as web_c_mod
+        chat = web_c_mod.chat
+        _persist_clarification_message = web_c_mod._persist_clarification_message
+
+        body = WebCChatRequest(text="出报告", client_request_id="wc_" + "b" * 8)
+        patches = self._patch_chat_common(self._stale_row("wait_1"), None)
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await chat("t1", "cfg1", body, request=SimpleNamespace(headers={}, client=None))
+            # 新受理（reply_wait_id 为空）：等待正常返回
+            assert response["waiting_text"] == "请补充出行人数？"
+            web_c_mod._persist_clarification_message.assert_called_once()
+
+
+class TestSessionActiveRunner:
+    """会话活跃执行查询（刷新/重进后前端恢复观察，2026-11-26 supersede 事故回归）。
+
+    场景：页面刷新后前端丢失执行中感知，用户误以为卡住再发新消息触发渠道侧
+    supersede 取消在途执行。端点返回可接管的 running/finalizing/queued runner；
+    waiting 不返回（反问已落历史，回复走新消息 reply 通道）。"""
+
+    @staticmethod
+    def _patch_endpoint(active_runners):
+        identity = SimpleNamespace(tenant_id="t1", config_id="cfg1", channel_user_id="u0011",
+                                   mode="uid", subagent_type="x", display_name="")
+        client = StubRunnerClient([
+            {"success": True, "runners": [], "active_runners": active_runners,
+             "has_more": False, "next_cursor": None}])
+        return patch("src.saas.api.web_c._resolve_identity", return_value=identity), \
+            patch("src.saas.api.web_c._assert_session_owned",
+                  return_value={"session_id": "t1_web_c_uid_0011_x_sab"}), \
+            patch("src.saas.api.web_c._runner_client", return_value=client)
+
+    @pytest.mark.asyncio
+    async def test_running_runner_returned_for_adoption(self):
+        from src.saas.api import web_c as web_c_mod
+
+        row = {"runner_id": "run_live", "status": "running"}
+        patches = self._patch_endpoint([row])
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await web_c_mod.get_session_active_runner(
+                "t1", "cfg1", "t1_web_c_uid_0011_x_sab", request=SimpleNamespace(headers={}))
+        assert response["runner_id"] == "run_live" and response["status"] == "running"
+
+    @pytest.mark.asyncio
+    async def test_waiting_runner_not_returned(self):
+        from src.saas.api import web_c as web_c_mod
+
+        row = {"runner_id": "run_wait", "status": "waiting"}
+        patches = self._patch_endpoint([row])
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await web_c_mod.get_session_active_runner(
+                "t1", "cfg1", "t1_web_c_uid_0011_x_sab", request=SimpleNamespace(headers={}))
+        assert response["runner_id"] is None, "waiting 接管会挡住输入框，反问回复须走新消息通道"
+
+    @pytest.mark.asyncio
+    async def test_finalizing_and_queued_returned(self):
+        from src.saas.api import web_c as web_c_mod
+
+        rows = [{"runner_id": "run_fin", "status": "finalizing"},
+                {"runner_id": "run_q", "status": "queued"}]
+        patches = self._patch_endpoint(rows)
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await web_c_mod.get_session_active_runner(
+                "t1", "cfg1", "t1_web_c_uid_0011_x_sab", request=SimpleNamespace(headers={}))
+        assert response["runner_id"] in {"run_fin", "run_q"}
+
+    @pytest.mark.asyncio
+    async def test_no_active_runner_returns_null(self):
+        from src.saas.api import web_c as web_c_mod
+
+        patches = self._patch_endpoint([])
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            response = await web_c_mod.get_session_active_runner(
+                "t1", "cfg1", "t1_web_c_uid_0011_x_sab", request=SimpleNamespace(headers={}))
+        assert response["runner_id"] is None and response["status"] is None
+
+
 class TestBackfillSessionRunners:
     """会话级终态补写（2026-11-23 事故回归：落库仅由访客行为触发，访客关页
     后回复含文件永不落库；现实现 DB 直读 agent_runners，不依赖 Runner API）。"""
@@ -845,3 +1044,210 @@ class TestWebCRunnerPersistSweeper:
             assert not task.done()  # 首轮异常后仍存活
             await sweeper.stop()
 
+
+
+class TestAlignSessionProfile:
+    """渠道改绑数字员工后的存量会话对齐（CHANNEL_PROFILE_MISMATCH 修复）。"""
+
+    def _identity(self, subagent="sales-assistant"):
+        from src.saas.api.web_c import WebCIdentity
+
+        return WebCIdentity("tenant_x", "chan_1", "anon", "anon_uid1", "访客", subagent)
+
+    def _make_conn(self):
+        conn = MagicMock()
+        cursor = MagicMock()
+        conn.cursor.return_value = cursor
+        conn.__enter__ = MagicMock(return_value=conn)
+        conn.__exit__ = MagicMock(return_value=False)
+        return conn, cursor
+
+    def test_same_binding_no_db_write(self):
+        """subagent_id 与当前绑定一致时不写库。"""
+        from src.saas.api.web_c import _align_session_profile
+
+        session = {"session_id": "tenant_x_web_c_anon_uid1_sales-assistant_sabc", "subagent_id": "sales-assistant"}
+        with patch("src.saas.api.web_c.get_db_connection") as mock_db:
+            _align_session_profile(self._identity("sales-assistant"), dict(session))
+            mock_db.assert_not_called()
+
+    def test_empty_binding_matches_empty(self):
+        """双方均为空（未绑定员工）时不写库。"""
+        from src.saas.api.web_c import _align_session_profile
+
+        with patch("src.saas.api.web_c.get_db_connection") as mock_db:
+            _align_session_profile(self._identity(""), {"session_id": "s1", "subagent_id": ""})
+            mock_db.assert_not_called()
+
+    def test_rebind_migrates_session_row(self):
+        """改绑后提交前把会话 subagent_id 迁移为当前绑定（幂等 UPDATE + 内存同步）。"""
+        from src.saas.api.web_c import _align_session_profile
+
+        conn, cursor = self._make_conn()
+        session = {"session_id": "tenant_x_web_c_anon_uid1_old-agent_sabc123",
+                   "subagent_id": "sales-assistant-tenant-e9b2fab93a2f-ubnn"}
+        with patch("src.saas.api.web_c.get_db_connection", return_value=conn):
+            _align_session_profile(self._identity("sales-assistant"), session)
+        sql = cursor.execute.call_args[0][0]
+        assert "UPDATE channel_sessions SET subagent_id" in sql
+        assert "AND tenant_id = %s" in sql
+        params = cursor.execute.call_args[0][1]
+        assert params[0] == "sales-assistant"  # 迁移为当前绑定
+        assert params[2] == "tenant_x_web_c_anon_uid1_old-agent_sabc123"
+        assert params[3] == "tenant_x"
+        assert session["subagent_id"] == "sales-assistant"  # 内存同步
+        conn.commit.assert_called_once()
+
+    def test_wipe_binding_migrates_to_empty(self):
+        """绑定被清空（None）时会话迁移为空串，提交口径回落 main。"""
+        from src.saas.api.web_c import _align_session_profile
+
+        conn, cursor = self._make_conn()
+        session = {"session_id": "s1", "subagent_id": "old-agent"}
+        with patch("src.saas.api.web_c.get_db_connection", return_value=conn):
+            _align_session_profile(self._identity(None), session)
+        assert cursor.execute.call_args[0][1][0] == ""
+        assert session["subagent_id"] == ""
+
+
+class TestWebCConfigTitle:
+    """页面标题（title）规整：2026-11-25 渠道配置新增，嵌入 webview 时导航栏标题。"""
+
+    def test_title_stripped_and_kept(self):
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"title": "  科创惠企咨询  ", "channel_secret": SECRET}
+        _normalize_web_c_config(config)
+        assert config["title"] == "科创惠企咨询"
+
+    def test_title_missing_defaults_empty(self):
+        """缺省/空串 = 未配置（C 端保持系统默认标题），且存量键回填空串。"""
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"channel_secret": SECRET}
+        _normalize_web_c_config(config)
+        assert config["title"] == ""
+
+        config2 = {"title": "   ", "channel_secret": SECRET}
+        _normalize_web_c_config(config2)
+        assert config2["title"] == ""
+
+    def test_title_whitespace_only_treated_as_unset(self):
+        """纯空白覆盖旧值：update 场景传空白视为清空（与其他文本字段同口径）。"""
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"title": "  ", "channel_secret": SECRET}
+        _normalize_web_c_config(config, existing={"title": "旧标题", "channel_secret": SECRET})
+        assert config["title"] == ""
+
+
+class TestWebCConfigSubtitleLogo:
+    """副标题与自定义 Logo 规整：2026-11-26 渠道配置新增，C 端聊天页头部展示。"""
+
+    def test_subtitle_stripped_and_kept(self):
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"subtitle": " 在线客服 ", "channel_secret": SECRET}
+        _normalize_web_c_config(config)
+        assert config["subtitle"] == "在线客服"
+
+    def test_subtitle_missing_defaults_empty(self):
+        """缺省/空白 = 未配置（C 端兜底显示「智能助手」）。"""
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"channel_secret": SECRET}
+        _normalize_web_c_config(config)
+        assert config["subtitle"] == ""
+
+        config2 = {"subtitle": "  ", "channel_secret": SECRET}
+        _normalize_web_c_config(config2)
+        assert config2["subtitle"] == ""
+
+    def test_logo_missing_defaults_empty(self):
+        """缺省/空串 = 未配置（C 端使用系统默认图标）。"""
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"channel_secret": SECRET}
+        _normalize_web_c_config(config)
+        assert config["logo"] == ""
+
+    def test_logo_valid_data_url_kept(self):
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        png_b64 = "iVBORw0KGgoAAAANSUhEUg=="
+        config = {"logo": f"data:image/png;base64,{png_b64}", "channel_secret": SECRET}
+        _normalize_web_c_config(config)
+        assert config["logo"] == f"data:image/png;base64,{png_b64}"
+
+    def test_logo_unsupported_type_rejected(self):
+        """非 data:image 前缀（如外链 URL / data:text）与不支持的图片格式均 400。"""
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        with pytest.raises(HTTPException) as exc:
+            _normalize_web_c_config({"logo": "https://example.com/logo.png", "channel_secret": SECRET})
+        assert exc.value.status_code == 400
+
+        with pytest.raises(HTTPException):
+            _normalize_web_c_config({"logo": "data:text/html;base64,PHN2Zz48L3N2Zz4=", "channel_secret": SECRET})
+
+    def test_logo_oversize_rejected(self):
+        """base64 串超 140_000 字符（约 100KB 原图）时 400。"""
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        big_b64 = "A" * 140_001
+        with pytest.raises(HTTPException) as exc:
+            _normalize_web_c_config({"logo": f"data:image/png;base64,{big_b64}", "channel_secret": SECRET})
+        assert exc.value.status_code == 400
+
+    def test_logo_whitespace_treated_as_unset(self):
+        """空白覆盖旧值视为清空 Logo（恢复默认图标）。"""
+        from src.saas.api.channel_config import _normalize_web_c_config
+
+        config = {"logo": "  ", "channel_secret": SECRET}
+        _normalize_web_c_config(config, existing={"logo": "data:image/png;base64,AAAA", "channel_secret": SECRET})
+        assert config["logo"] == ""
+
+
+class TestRunnerEventsFinalize:
+    """SSE 收尾终态落库回归（agent2 2026-11-25 tr_runner_bc18 事故）。
+
+    persist_runner_result 是同步 DB 函数，finalize 必须经 to_thread 调用；
+    直接 await 其 None 返回值会抛 TypeError，导致 SSE 收尾落库 100% 失败、
+    全靠 120s 扫描器兜底（消息晚约一分钟落库）。"""
+
+    @pytest.mark.asyncio
+    async def test_events_endpoint_finalize_persists_without_error(self):
+        """走真实 runner_events 路由拿到 finalize 闭包：同步落库经 to_thread，
+        调用不再抛 TypeError。"""
+        from src.saas.api import web_c as web_c_mod
+
+        identity = SimpleNamespace(
+            tenant_id="t1", config_id="cfg1", channel_user_id="u0011",
+            mode="uid", subagent_type="x", display_name="",
+            session_prefix="t1_web_c_uid_0011_x_")
+        row = {"runner_id": "run_f", "status": "completed",
+               "session": {"session_id": "t1_web_c_uid_0011_x_sab"}}
+        client = MagicMock()
+        client.request = AsyncMock(return_value={"runner": row})
+        client.open_events = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        mock_persist = MagicMock()
+
+        with patch.object(web_c_mod, "_resolve_identity", return_value=identity), \
+             patch.object(web_c_mod, "_runner_client", return_value=client), \
+             patch.object(web_c_mod, "_persist_runner_result", new=mock_persist):
+            observer = await web_c_mod.runner_events(
+                "t1", "cfg1", "run_f", SimpleNamespace(headers={}),
+                after_seq=None)
+            # 路由返回 WebCEventResponse，finalize 挂在其 _finalize 上
+            await observer._finalize()
+
+        mock_persist.assert_called_once_with("t1", "t1_web_c_uid_0011_x_sab", row)
+
+    @pytest.mark.asyncio
+    async def test_persist_runner_result_is_sync(self):
+        """persist_runner_result 必须保持同步签名——finalize 依赖 to_thread 包装。"""
+        import inspect
+
+        from src.saas.services.web_c_runner_persist import persist_runner_result
+
+        assert not inspect.iscoroutinefunction(persist_runner_result)

@@ -237,6 +237,13 @@ def public_runner(row):
             if projected:
                 value["scheduled"] = projected
     checkpoint = row.get('checkpoint') or {}
+    # 终态 cancelled 的取消来源白名单透出（2026-11-27）：仅 superseded_by_new_message
+    # （渠道新消息取代在途执行，与 contracts.SUPERSEDED_CANCEL_REASON 同值；本模块
+    # 保持零依赖不 import），供 web_c 聊天页区分「用户主动停止」与「被其他端取代」。
+    # 其余取消原因不透出，防内部枚举泄漏。
+    if row["status"] == "cancelled" \
+            and checkpoint.get('cancel_reason') == 'superseded_by_new_message':
+        value['cancel_reason'] = 'superseded_by_new_message'
     verification = checkpoint.get('local_verification')
     from .continuous import enabled
     if enabled(checkpoint,row.get('input')):
