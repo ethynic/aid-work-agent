@@ -29,6 +29,8 @@ export interface LocalToolDevice {
   selected: boolean
   status: string | null
   online: boolean
+  /** 设备 Runtime 是否支持实时画面；旧服务端没有该字段（视为不支持），listDevices 会补齐为布尔值 */
+  screen_stream?: boolean
   last_seen_at: string | null
   created_at: string | null
 }
@@ -81,7 +83,11 @@ export async function listDevices(): Promise<LocalToolDevice[]> {
     headers: { ...getAuthHeader() }
   })
   const body = await ensureSuccess(res, '查询设备列表失败，请稍后重试')
-  return body.devices || []
+  // screen_stream 是新增字段：旧服务端不返回，缺省按不支持处理
+  return (body.devices || []).map((device: Record<string, any>) => ({
+    ...device,
+    screen_stream: device?.screen_stream === true,
+  }))
 }
 
 /**

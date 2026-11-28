@@ -12,7 +12,8 @@
 
     <!-- Main Content -->
     <div class="flex-1 overflow-y-auto p-6">
-      <div class="max-w-4xl space-y-6">
+      <!-- 放宽到 max-w-6xl 容纳第四个操作按钮（设计 D12），窄屏沿用表格横向滚动 -->
+      <div class="max-w-6xl space-y-6">
 
         <!-- 使用引导卡 -->
         <BaseCard title="使用引导">
@@ -106,6 +107,12 @@
                   <BaseButton intent="secondary" size="sm" class="whitespace-nowrap text-xs"
                     :disabled="generatingTicket" @click="handleReplace(row)">更换此设备</BaseButton>
                   <BaseButton
+                    intent="secondary" size="sm" class="whitespace-nowrap text-xs"
+                    :disabled="screenViewDisabled(row)"
+                    :title="screenViewDisabledReason(row)"
+                    @click="handleViewScreen(row)"
+                  >实时画面</BaseButton>
+                  <BaseButton
                     intent="danger-ghost" size="sm" class="whitespace-nowrap text-xs"
                     :disabled="revokingDevice"
                     @click="handleRevoke(row)"
@@ -118,6 +125,9 @@
 
       </div>
     </div>
+
+    <!-- 实时画面观看弹框：打开即建会话，关闭（X / Esc / 结束查看）立即补发 end -->
+    <ScreenViewerModal v-model="viewerOpen" :device="viewingDevice" />
   </div>
 </template>
 
@@ -130,6 +140,7 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseTable from '@/components/ui/BaseTable.vue'
 import type { TableColumn } from '@/components/ui/BaseTable.vue'
+import ScreenViewerModal from '@/components/saas/ScreenViewerModal.vue'
 import { useTenantAuth } from '@/composables/useTenantAuth'
 import {
   listDevices,
@@ -200,7 +211,7 @@ const columns: TableColumn[] = [
   { key: 'selected', label: '当前设备', width: '90px' },
   { key: 'last_seen_at', label: '最近在线时间', width: '170px', tooltip: (row) => formatTime(row.last_seen_at) },
   { key: 'runtime_version', label: '版本', width: '100px' },
-  { key: 'actions', label: '操作', width: '230px', thAlign: 'center', tooltip: () => undefined },
+  { key: 'actions', label: '操作', width: '320px', thAlign: 'center', tooltip: () => undefined },
 ]
 
 async function loadDevices() {
@@ -239,6 +250,34 @@ async function handleRevoke(row: Record<string, any>) {
   } finally {
     revokingDevice.value = false
   }
+}
+
+// ==================== 实时画面 ====================
+
+// 禁用条件：已撤销 / 离线 / Runtime 不支持（screen_stream 缺省 false，旧服务端视为不支持）
+function screenViewDisabled(row: Record<string, any>): boolean {
+  const device = row as LocalToolDevice
+  return device.status !== 'active' || !device.online || !device.screen_stream
+}
+
+function screenViewDisabledReason(row: Record<string, any>): string {
+  const device = row as LocalToolDevice
+  if (device.status !== 'active') return '设备已撤销，无法观看实时画面'
+  if (!device.online) return '设备离线，无法观看实时画面'
+  if (!device.screen_stream) return '当前 Runtime 版本不支持实时画面'
+  return '实时画面'
+}
+
+const viewingDevice = ref<LocalToolDevice | null>(null)
+const viewerOpen = computed({
+  get: () => viewingDevice.value !== null,
+  set: (open: boolean) => { if (!open) viewingDevice.value = null },
+})
+
+function handleViewScreen(row: Record<string, any>) {
+  const device = row as LocalToolDevice
+  if (screenViewDisabled(row)) return
+  viewingDevice.value = device
 }
 
 // 后端返回本地时间字符串（无 Z 后缀），直接按本地时间解析，禁止拼接 Z
