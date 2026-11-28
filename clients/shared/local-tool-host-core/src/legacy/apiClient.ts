@@ -7,6 +7,7 @@
  */
 
 import type { SignedPluginManifest } from '../plugins/package.js'
+import { SCREEN_SESSION_PATH, SCREEN_SIGNAL_PATH } from '../screen/protocol.js'
 
 export class NetworkError extends Error {
   constructor(message: string, readonly failureKind: 'dns' | 'tls' | 'network' = 'network') {
@@ -81,6 +82,10 @@ export interface HeartbeatResponse {
   /** 契约 2.20 支持协商：服务端实现 parallel_only 领取时返回 true；旧服务端缺省 → 视为不支持 */
   parallel_claim?: boolean
   missing_plugin_manifests?: string[]
+  /** 契约 2.25：服务端支持画面时回带；缺省 = 旧服务端或查询失败（设计 4.4 按缺失处理） */
+  screen_stream?: { version: number }
+  /** 契约 2.25：画面会话通知（pending/streaming/ended）；可能缺失，解析与校验在 screen/protocol */
+  screen_session?: { id: string; state: string }
 }
 
 export interface ClaimedInvocation {
@@ -335,11 +340,16 @@ export class ApiClient {
     plugin_manifests?: Record<string, SignedPluginManifest> }, signal?: AbortSignal): Promise<HeartbeatResponse> {
     const res = (await this.post('/api/local-tools/runtime/heartbeat', req, { signal })) as Record<string, unknown>
     const missing = res['missing_plugin_manifests']
+    // 画面字段只做对象形态透传（契约 2.25），深层校验在 screen/protocol；旧服务端/查询失败缺省
+    const screenStream = res['screen_stream']
+    const screenSession = res['screen_session']
     return {
       selected: Boolean(res['selected']),
       server_time: res['server_time'] as string | undefined,
       parallel_claim: res['parallel_claim'] === true,
       ...(Array.isArray(missing) ? { missing_plugin_manifests: missing.filter((key): key is string => typeof key === 'string') } : {}),
+      ...(screenStream !== null && typeof screenStream === 'object' && !Array.isArray(screenStream) ? { screen_stream: screenStream as { version: number } } : {}),
+      ...(screenSession !== null && typeof screenSession === 'object' && !Array.isArray(screenSession) ? { screen_session: screenSession as { id: string; state: string } } : {}),
     }
   }
 
@@ -348,6 +358,18 @@ export class ApiClient {
     const res = await this.post('/api/local-tools/runtime/heartbeat', {}) as Record<string, unknown>
     if (!res || typeof res !== 'object' || Array.isArray(res) || res.success !== true || typeof res.selected !== 'boolean') throw new ApiError(502, 'Runtime连接验证响应不兼容')
     return { selected: res.selected }
+  }
+
+  // ----- 设备侧画面接口（设计 5.3，契约 2.25）：错误如实抛出，分类在画面适配层 -----
+
+  /** 取画面会话状态与编号大于 afterSeq 的网页信令 */
+  async postScreenSession(sessionId: string, afterSeq: number, signal?: AbortSignal): Promise<unknown> {
+    return await this.post(SCREEN_SESSION_PATH, { session_id: sessionId, after_seq: afterSeq }, { signal })
+  }
+
+  /** 追加一条 Runtime 信令（成功响应含 seq） */
+  async postScreenSignal(sessionId: string, type: string, payload: unknown, signal?: AbortSignal): Promise<unknown> {
+    return await this.post(SCREEN_SIGNAL_PATH, { session_id: sessionId, type, payload }, { signal })
   }
 
   /** 长轮询领取 invocation（服务端最长 wait 秒；超时返回 null）。

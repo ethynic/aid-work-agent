@@ -2,6 +2,7 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { RuntimePlatformRequest, RuntimePlatformResponse, SelectedPackageSnapshot } from '@aid/local-tool-host-core'
+import type { ToPageMessage } from '@aid/local-tool-host-core/screen/messages'
 import { validRecoveryInspection, type RecoveryInspection } from './runtimeConnectionRecovery.js'
 
 interface Request { request_id: string; method: string; params: Record<string, string> }
@@ -12,6 +13,7 @@ const methods: Record<string, string[]> = {
   start: ['request_key'], stop: ['request_key'], pair: ['request_key', 'server', 'device_name', 'pairing_code'],
   'plugins.import': ['request_key', 'selection_ref'], 'plugins.enable': ['request_key', 'installation_id'],
   'plugins.disable': ['request_key', 'installation_id'], 'plugins.uninstall': ['request_key', 'installation_id'],
+  'screen.stop': ['request_key', 'session_id'],
 }
 export function parseRuntimeRequest(value: unknown): Request {
   if (!object(value) || Object.keys(value).sort().join(',') !== 'method,params,request_id'
@@ -21,12 +23,55 @@ export function parseRuntimeRequest(value: unknown): Request {
   if (Object.keys(value.params).length !== fields.length || fields.some(key => typeof (value.params as Record<string, unknown>)[key] !== 'string' || !(value.params as Record<string, string>)[key] || (value.params as Record<string, string>)[key]!.length > 4096)) throw new Error('Runtime管理参数无效')
   return value as unknown as Request
 }
+
+// ---- runtime_screen 私有帧（契约 2.25）。不受管理通道 4096 字符限制：SDP 与地址候选按帧转发 ----
+
+/** Host→Main：让壳建窗 / 转交采集页消息 / 关窗 */
+export type RuntimeScreenHostFrame =
+  | { event: 'runtime_screen'; version: 1; action: 'open'; session_id: string; stun_urls: string[] }
+  | { event: 'runtime_screen'; version: 1; action: 'send'; session_id: string; message: ToPageMessage }
+  | { event: 'runtime_screen'; version: 1; action: 'close'; session_id: string }
+
+const TO_PAGE_KINDS = ['answer', 'candidate', 'resolved', 'verdict', 'degrade', 'restore']
+export function parseRuntimeScreenHostFrame(value: unknown): RuntimeScreenHostFrame | null {
+  if (!object(value) || value.event !== 'runtime_screen' || value.version !== 1
+    || typeof value.session_id !== 'string' || !value.session_id || value.session_id.length > 200) return null
+  if (value.action === 'open') {
+    if (Object.keys(value).sort().join(',') !== 'action,event,session_id,stun_urls,version'
+      || !Array.isArray(value.stun_urls) || !value.stun_urls.every(url => typeof url === 'string' && url)) return null
+    return { event: 'runtime_screen', version: 1, action: 'open', session_id: value.session_id, stun_urls: value.stun_urls }
+  }
+  if (value.action === 'send') {
+    const message = value.message
+    if (Object.keys(value).sort().join(',') !== 'action,event,message,session_id,version'
+      || !object(message) || typeof message.kind !== 'string' || !TO_PAGE_KINDS.includes(message.kind)) return null
+    return { event: 'runtime_screen', version: 1, action: 'send', session_id: value.session_id, message: message as unknown as ToPageMessage }
+  }
+  if (value.action === 'close' && Object.keys(value).sort().join(',') === 'action,event,session_id,version') {
+    return { event: 'runtime_screen', version: 1, action: 'close', session_id: value.session_id }
+  }
+  return null
+}
+
+const FROM_PAGE_KINDS = ['offer', 'candidate', 'mapped', 'remote-candidate', 'connected', 'peer-ports', 'streaming', 'closed', 'cpu-limited']
+/** 采集窗口（C 轮接线）→ Host 的画面帧：kind 是采集页消息或窗口崩溃通知；字段深校验在 Host 画面会话 */
+export function parseRuntimeScreenPageFrame(value: unknown): Record<string, unknown> | null {
+  if (!object(value) || value.event !== 'runtime_screen' || value.version !== 1
+    || typeof value.session_id !== 'string' || !value.session_id || value.session_id.length > 200
+    || typeof value.kind !== 'string'
+    || (value.kind !== 'window-crashed' && !FROM_PAGE_KINDS.includes(value.kind))) return null
+  return value
+}
 interface Pending { method: string; shutdownInstance?: string; connectionInstance?: string; resolve(reply: Reply): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
 export interface RuntimeSupervisorOptions {
   nodeExecutable: string; hostEntry: string; home: string; supervisor: 'desktop' | 'runtime_app'
   takeSelectedPackage(request: RuntimePlatformRequest['params']): Promise<SelectedPackageSnapshot>
   onEvent(event: unknown): void; onDisconnect(): void
   requestTimeoutMs?: number; drainTimeoutMs?: number
+  /** 契约 2.25：本产品形态带采集窗口时为 true，spawn 参数据此声明 --screen-capture=1 */
+  screenCapture?: boolean
+  /** Host→Main 画面帧的 B 轮去处：校验通过后交付（C 轮接采集窗口）；缺省校验后丢弃 */
+  onScreenFrame?: (frame: RuntimeScreenHostFrame) => void
   /** Test seam; production always starts the trusted absolute Node/entry. */
   spawnChild?: (node: string, args: string[], options: Parameters<typeof spawn>[2]) => ChildProcess
 }
@@ -56,7 +101,9 @@ export class RuntimeSupervisor {
     for (const key of ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'USERNAME', 'SESSIONNAME', 'PROCESSOR_ARCHITECTURE', 'AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN']) if (process.env[key] !== undefined) env[key] = process.env[key]
     env.AIDWORK_RUNTIME_HOME = this.options.home
     if (this.options.supervisor === 'runtime_app') env.AIDWORK_RUNTIME_CLEAN_GENERATION = '1'
-    const child = (this.options.spawnChild ?? spawn)(this.options.nodeExecutable, [this.options.hostEntry, `--supervisor=${this.options.supervisor}`], { env, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
+    const child = (this.options.spawnChild ?? spawn)(this.options.nodeExecutable,
+      [this.options.hostEntry, `--supervisor=${this.options.supervisor}`, ...(this.options.screenCapture ? ['--screen-capture=1'] : [])],
+      { env, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
     this.child = child
     // Consume diagnostics without retaining package paths, pairing data or arbitrary logs.
     child.stdout?.resume(); child.stderr?.resume()
@@ -88,6 +135,13 @@ export class RuntimeSupervisor {
         return
       }
       if (object(message) && message.kind === 'runtime_platform_request') { void this.platformRequest(message, child, generation); return }
+      if (object(message) && message.event === 'runtime_screen') {
+        // Host→Main 画面帧（契约 2.25）：校验后交给 onScreenFrame（C 轮接采集窗口），收到不了的忽略。
+        // 私有帧不受管理通道 4096 字符限制，SDP 与地址候选按帧转发
+        const frame = parseRuntimeScreenHostFrame(message)
+        if (frame && generation === this.generation && !this.childExited) this.options.onScreenFrame?.(frame)
+        return
+      }
       if (object(message) && message.event === 'state_changed') { this.options.onEvent(message); return }
       if (!object(message) || typeof message.request_id !== 'string') return
       const pending = this.pending.get(message.request_id)
@@ -167,6 +221,15 @@ export class RuntimeSupervisor {
   private failPending(message: string): void {
     for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(new Error(message)) }
     this.pending.clear()
+  }
+
+  /** 采集窗口（C 轮接线）→ Host 的画面帧转发：统一校验，非法帧丢弃；Host 未连接时返回 false */
+  sendScreenFrame(frame: unknown): boolean {
+    const parsed = parseRuntimeScreenPageFrame(frame)
+    const child = this.child
+    if (!parsed || !child?.connected || this.childExited) return false
+    child.send(parsed, () => {})
+    return true
   }
 
   suspend(value: boolean): void { this.accepting = !value }

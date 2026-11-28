@@ -58,6 +58,10 @@ export interface TestStackOptions {
   capabilities?: () => Record<string, unknown>
   /** 契约 2.20：本设备已上报的并行工具映射（PollLoop 串行/并行判定；缺省全部串行=现状） */
   parallelTools?: Record<string, readonly string[]>
+  /** 契约 2.25：心跳成功后交给画面会话（画面与心跳隔离测试用） */
+  onScreenHeartbeat?: (response: unknown) => void
+  /** 连接状态观测（在线/离线断言用） */
+  onConnection?: (state: 'online' | 'offline' | 'revoked') => void
 }
 
 export interface TestStack {
@@ -117,6 +121,8 @@ export async function startTestStack(opts: TestStackOptions = {}): Promise<TestS
     onEvent: opts.onEvent,
     capabilities: opts.capabilities,
     parallelTools: opts.parallelTools,
+    onScreenHeartbeat: opts.onScreenHeartbeat,
+    onConnection: opts.onConnection,
   })
   const runPromise = loop.run()
   const stop = async () => {

@@ -26,7 +26,8 @@
         "plugins.enable",
         "plugins.disable",
         "plugins.uninstall",
-        "operations.get"
+        "operations.get",
+        "screen.stop"
       ]
     },
     "params": {
@@ -261,6 +262,31 @@
           ],
           "properties": {
             "operation_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "screen.stop"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_key",
+            "session_id"
+          ],
+          "properties": {
+            "request_key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "session_id": {
               "type": "string",
               "minLength": 1
             }

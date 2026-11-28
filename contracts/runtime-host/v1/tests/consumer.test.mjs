@@ -245,3 +245,41 @@ test('an earlier list request with a higher revision advances the watermark desp
   assert.equal(consumer.receive(listReply('pending-second', 11)).ignored, true)
   assert.equal(consumer.pluginsSnapshot.revision, 12)
 })
+
+// 契约 2.25（候选 0.4）：管理方法 screen.stop 与 host-state 可选 screen
+
+test('screen.stop replies consume like other mutation operations and screen appears in the host state', () => {
+  const consumer = connected()
+  consumer.expect(sample('screen_stop_request'))
+  const received = consumer.receive(sample('screen_stop_response'))
+  assert.equal(received.result.operation, 'screen.stop')
+  assert.equal(received.result.status, 'running')
+  consumer.expect({ request_id: 'screen-state', method: 'getState', params: {} })
+  consumer.receive({ request_id: 'screen-state', method: 'getState', code: 0, error: '', result: sample('screen_streaming_host') })
+  assert.equal(consumer.snapshot.screen.session_id, 'sess-1')
+  assert.equal(consumer.snapshot.screen.state, 'streaming')
+  consumer.expect({ request_id: 'screen-renewing', method: 'getState', params: {} })
+  consumer.receive({ request_id: 'screen-renewing', method: 'getState', code: 0, error: '', result: sample('screen_renewing_host') })
+  assert.equal(consumer.snapshot.screen.state, 'renewing')
+  assert.equal(consumer.snapshot.screen.degraded, true)
+})
+
+// 冻结的候选 0.3 键集合判断：旧界面按这套规则解码 host-state。
+// 新快照带 screen 字段时返回 false——旧消费端解码失败、停留在最后一份好的快照并持续重试刷新
+// （候选 0.3 迁移到 0.4 的已知行为，见 README）。
+function isHostStateCandidate03(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const required = ['instance_id', 'revision', 'supervisor', 'state', 'connection']
+  const optional = ['device', 'blocked_reason']
+  const keys = Object.keys(value)
+  if (!required.every(key => Object.prototype.hasOwnProperty.call(value, key))
+    || keys.some(key => !required.includes(key) && !optional.includes(key))) return false
+  return typeof value.instance_id === 'string' && value.instance_id.length > 0
+    && Number.isSafeInteger(value.revision) && value.revision >= 0
+}
+
+test('a frozen candidate 0.3 consumer cannot decode a host-state that carries screen', () => {
+  assert.equal(isHostStateCandidate03(sample('state_response').result), true)
+  assert.equal(isHostStateCandidate03(sample('screen_streaming_host')), false)
+  assert.equal(isHostStateCandidate03(sample('screen_renewing_host')), false)
+})

@@ -66,6 +66,50 @@
     "blocked_reason": {
       "type": "string",
       "minLength": 1
+    },
+    "screen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "state",
+        "degraded",
+        "started_at",
+        "seconds_since_renewal"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "description": "connecting 覆盖 prepared/connecting/verifying；renewing 表示传画面中已多秒没有收到服务器确认",
+          "enum": [
+            "connecting",
+            "streaming",
+            "locked",
+            "renewing"
+          ]
+        },
+        "degraded": {
+          "type": "boolean"
+        },
+        "started_at": {
+          "description": "开始出画面的 epoch 毫秒；尚未出画面为 null",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "seconds_since_renewal": {
+          "description": "传画面中多少秒没有收到服务器确认；其他阶段为 null",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
     }
   }
 }

@@ -39,6 +39,9 @@ export interface PollLoopOptions {
   pluginManifests?: Record<string, SignedPluginManifest> | (() => Record<string, SignedPluginManifest>)
   canClaim?: () => boolean
   onConnection?: (state: 'online' | 'offline' | 'revoked') => void
+  /** 契约 2.25：心跳成功后把原始响应交给画面会话（设计 4.4 画面与心跳隔离）。
+   *  回调必须自行消化异常；这里再用 try/catch 兜底并记日志，回调异常不影响心跳成败判定。 */
+  onScreenHeartbeat?: (response: unknown) => void
   /** 契约 2.20：本设备心跳已上报的并行工具映射（provider_key → tool 名单），与能力上报
    *  同源（runtimeHost 装配传入）。用于判定领到的作业是否可后台并行执行；缺省/空 =
    *  全部按串行执行（现状，无声明插件路径行为不变）。 */
@@ -199,6 +202,15 @@ export class PollLoop {
           ...(requested.length ? { plugin_manifests: Object.fromEntries(requested) } : {}),
         }, this.controller.signal)
         missingPlugins = hb.missing_plugin_manifests ?? []
+        // 画面会话通知挂在心跳成功之后（设计 4.4）：只读取响应里的可选字段，不参与成败判断，
+        // 回调异常只记日志，不改变退避、不把设备标成离线
+        if (this.opts.onScreenHeartbeat) {
+          try {
+            this.opts.onScreenHeartbeat(hb)
+          } catch (err) {
+            logError(`画面心跳处理异常（不影响心跳）: ${err instanceof Error ? err.name : String(err)}`)
+          }
+        }
         backoff = backoffBaseMs
         this.opts.onConnection?.('online')
         // 契约 2.20 支持协商：服务端心跳声明支持 parallel_only 才启用并行领取参数；

@@ -523,5 +523,54 @@
         "plugins": []
       }
     }
+  },
+  {
+    "name": "screen_stop_requires_session",
+    "schema": "management-request.schema.json",
+    "valid": false,
+    "value": {
+      "request_id": "bad-screen-1",
+      "method": "screen.stop",
+      "params": {
+        "request_key": "screen-once-2"
+      }
+    }
+  },
+  {
+    "name": "screen_state_unknown",
+    "schema": "host-state.schema.json",
+    "valid": false,
+    "value": {
+      "instance_id": "host-B-1",
+      "revision": 7,
+      "supervisor": "runtime_app",
+      "state": "running",
+      "connection": "online",
+      "screen": {
+        "session_id": "sess-1",
+        "state": "paused",
+        "degraded": false,
+        "started_at": null,
+        "seconds_since_renewal": null
+      }
+    }
+  },
+  {
+    "name": "screen_operation_name_mismatch",
+    "schema": "management-response.schema.json",
+    "valid": false,
+    "value": {
+      "request_id": "screen-1",
+      "method": "screen.stop",
+      "result": {
+        "operation_id": "screen-op-2",
+        "operation": "stop",
+        "status": "succeeded",
+        "code": 0,
+        "error": ""
+      },
+      "code": 0,
+      "error": ""
+    }
   }
 ]

@@ -1,7 +1,7 @@
 /** Trusted direct Node child entry for H3; no TCP listener or CLI side effects. */
 import { randomUUID } from 'node:crypto'
 import { ManagementError, type RuntimeHost, type RuntimePlatform, type RuntimePlatformResponse } from '@aid/local-tool-host-core'
-import { openRuntimeHost } from './runtimeHost.js'
+import { openRuntimeHost, type RuntimeScreenIpc } from './runtimeHost.js'
 import { runtimeHomeDir } from './config.js'
 import { inspectConnectionRecovery, type RecoveryAction } from './connectionRecoveryInspection.js'
 
@@ -12,7 +12,38 @@ export interface ManagementIpc {
   onDisconnect(listener: () => void): void
 }
 
-export function attachManagementIpc(host: RuntimeHost, channel: ManagementIpc): void {
+/** 受管画面通道（契约 2.25）：Host↔Main 的 runtime_screen 私有帧。SDP 与地址候选走这条
+ *  私有帧，不受管理通道 4096 字符限制；私有帧带固定键集合校验，不进 H1 管理解析。 */
+export interface ScreenShellChannel extends RuntimeScreenIpc {
+  /** 校验并分发一条 Main→Host 的画面帧（采集页消息或窗口崩溃通知）；返回是否为本通道的帧 */
+  handleFrame(frame: unknown): boolean
+}
+
+export function createScreenShellChannel(channel: ManagementIpc): ScreenShellChannel {
+  const shellMessages = new Set<(sessionId: string, message: unknown) => void>()
+  const crashes = new Set<(sessionId: string) => void>()
+  return {
+    open({ sessionId, stunUrls }) { channel.send({ event: 'runtime_screen', version: 1, action: 'open', session_id: sessionId, stun_urls: [...stunUrls] }) },
+    send(sessionId, message) { channel.send({ event: 'runtime_screen', version: 1, action: 'send', session_id: sessionId, message }) },
+    close(sessionId) { channel.send({ event: 'runtime_screen', version: 1, action: 'close', session_id: sessionId }) },
+    onShellMessage(listener) { shellMessages.add(listener) },
+    onWindowCrashed(listener) { crashes.add(listener) },
+    handleFrame(frame) {
+      if (!frame || typeof frame !== 'object' || Array.isArray(frame)) return false
+      const value = frame as Record<string, unknown>
+      if (value.event !== 'runtime_screen' || value.version !== 1 || typeof value.session_id !== 'string'
+        || !value.session_id || value.session_id.length > 200) return false
+      if (value.kind === 'window-crashed') { for (const listener of crashes) listener(value.session_id); return true }
+      // FromPageMessage 形态（kind + 字段平铺）：字段类型由画面会话逐条校验，不认识的 kind 忽略
+      const { event: _event, version: _version, session_id, ...message } = value
+      if (typeof message.kind !== 'string') return false
+      for (const listener of shellMessages) listener(session_id, message)
+      return true
+    },
+  }
+}
+
+export function attachManagementIpc(host: RuntimeHost, channel: ManagementIpc, screen?: ScreenShellChannel): void {
   let disconnected = false
   let closing = false
   const send = (message: Record<string, unknown>) => {
@@ -21,6 +52,8 @@ export function attachManagementIpc(host: RuntimeHost, channel: ManagementIpc): 
   const unsubscribe = host.observe(send)
   channel.onMessage(message => {
     const frame = message as Record<string, unknown> | null
+    // 私有画面帧（契约 2.25）不进 H1 管理解析；Main→Host 方向由画面通道分发
+    if (frame?.event === 'runtime_screen') { screen?.handleFrame(message); return }
     if (frame?.kind === 'runtime_connection_request') {
       if (frame.version !== 1 || Object.keys(frame).sort().join(',') !== 'action,instance_id,kind,request_id,version'
         || frame.instance_id !== host.instanceId || typeof frame.request_id !== 'string' || !frame.request_id || frame.request_id.length > 200
@@ -78,6 +111,8 @@ async function main(): Promise<void> {
     onMessage(listener) { messages.add(listener) },
     onDisconnect(listener) { disconnects.add(listener) },
   }
+  // 契约 2.25：壳在 spawn 参数里声明采集窗口能力；CLI 路径不传、不上报画面能力
+  const screen = process.argv.includes('--screen-capture=1') ? createScreenShellChannel(channel) : undefined
   const platform = createRuntimePlatformIpc(channel)
   const describes: Record<string, unknown>[] = []
   let host: RuntimeHost | undefined
@@ -106,8 +141,9 @@ async function main(): Promise<void> {
   process.once('disconnect', () => { connected = false; for (const listener of disconnects) listener() })
   try {
     host = await openRuntimeHost({ nodeExecutable: process.execPath, supervisor, platform,
-      cleanGeneration: supervisor === 'runtime_app' && process.env.AIDWORK_RUNTIME_CLEAN_GENERATION === '1' })
-    attachManagementIpc(host, channel)
+      cleanGeneration: supervisor === 'runtime_app' && process.env.AIDWORK_RUNTIME_CLEAN_GENERATION === '1',
+      ...(screen ? { screen } : {}) })
+    attachManagementIpc(host, channel, screen)
     channel.send({ kind: 'runtime_lifecycle', instance_id: host.instanceId, idle_exit: true, version: 1 })
     if (host.recoveredAfterInterruption) channel.send({ kind: 'runtime_recovery', instance_id: host.instanceId, processes_stopped: true })
     if (!connected) { await host.dispose(); return }

@@ -1,7 +1,7 @@
 import { recoveryObservation } from './recoveryObservation.js'
 import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { ApiClient } from './apiClient.js'
+import { ApiClient, ApiError, NetworkError } from './apiClient.js'
 import { registrationBlocksExecution } from './connectionRegistration.js'
 import {
   deviceCapabilities,
@@ -25,6 +25,13 @@ import { readdirSync } from 'node:fs'
 
 import { ManagementError, RuntimeHost, PACKAGE_LIMITS, sha256, type ConnectionStatus, type HostAdapter, type PublisherTrust, type RuntimePlatform } from '@aid/local-tool-host-core'
 import { PluginStore } from '@aid/local-tool-host-core/plugins/store'
+import { ScreenSessionController, type ScreenShellPort } from '@aid/local-tool-host-core/screen/session'
+import type { FromPageMessage } from '@aid/local-tool-host-core/screen/messages'
+import { ScreenSignalingClient, ScreenTransportError, type ScreenTransport } from '@aid/local-tool-host-core/screen/signaling'
+import { localAddresses, resolveHost } from '@aid/local-tool-host-core/screen/hostNetwork'
+import { readLocalPorts } from '@aid/local-tool-host-core/screen/localPorts'
+import { createCpuBusyReader } from '@aid/local-tool-host-core/screen/cpuUsage'
+import { SCREEN_SESSION_PATH, SCREEN_STREAM_CAPABILITY, SCREEN_STREAM_VERSION, type PortProtocol } from '@aid/local-tool-host-core/screen/protocol'
 import { configureRuntimeHome, type RuntimeConfig } from './config.js'
 import { join } from 'node:path'
 import { dirname, posix, resolve } from 'node:path'
@@ -49,9 +56,81 @@ function providerEnvironment(): Record<string, string> {
   return env
 }
 
+/** 受管画面通道（契约 2.25）：一个对象同时承担 Host→Main 的 shell 端口与 Main→Host 的帧入口 */
+export interface RuntimeScreenIpc extends ScreenShellPort {
+  /** Main→Host：采集页消息（kind + 字段平铺；字段类型由画面会话逐条校验） */
+  onShellMessage(listener: (sessionId: string, message: unknown) => void): void
+  /** Main→Host：采集窗口渲染进程异常退出 */
+  onWindowCrashed(listener: (sessionId: string) => void): void
+}
+
+/** 画面接口的错误分类（设计 5.4）：503 SCREEN_STREAM_BUSY→busy、409 SCREEN_SESSION_ENDED→ended、
+ *  404→not_found、其余 ApiError→rejected、网络错误→network。鉴权失败同样归为被拒：
+ *  画面这一路不能触发设备撤销停机（设计 4.4） */
+export function classifyScreenTransportError(error: unknown): ScreenTransportError {
+  if (error instanceof ScreenTransportError) return error
+  if (error instanceof ApiError) {
+    if (error.status === 503 && error.code === 'SCREEN_STREAM_BUSY') return new ScreenTransportError('busy')
+    if (error.status === 409 && error.code === 'SCREEN_SESSION_ENDED') return new ScreenTransportError('ended')
+    if (error.status === 404) return new ScreenTransportError('not_found')
+    return new ScreenTransportError('rejected')
+  }
+  if (error instanceof NetworkError) return new ScreenTransportError('network')
+  return new ScreenTransportError('rejected')
+}
+
+/** ApiClient 的两个画面方法 → core 的画面传输层（错误在此分类） */
+export function screenTransport(api: Pick<ApiClient, 'postScreenSession' | 'postScreenSignal'>): ScreenTransport {
+  return {
+    post: async (path, body) => {
+      const params = body as Record<string, unknown>
+      try {
+        if (path === SCREEN_SESSION_PATH) return await api.postScreenSession(String(params['session_id']), Number(params['after_seq']))
+        return await api.postScreenSignal(String(params['session_id']), String(params['type']), params['payload'])
+      } catch (error) { throw classifyScreenTransportError(error) }
+    },
+  }
+}
+
+/** 契约 2.25：画面端口装配——把传输层、壳通道与本机证据端口接到 core 的画面会话控制器。
+ *  LegacyExecution.beginScreen 与测试共用同一装配；controller 内的异常全部自行消化 */
+export function assembleScreenPorts(transport: ScreenTransport, shell: RuntimeScreenIpc, deps: { taskRunning: () => boolean }): ScreenSessionController {
+  // 同机判定的端口表查询（netstat 约 30ms）按端口逐个问：UDP/TCP 各缓存约 250ms 的结果
+  const portTables = new Map<PortProtocol, { at: number; ok: boolean; ports: Set<number> }>()
+  const controller = new ScreenSessionController({
+    signaling: new ScreenSignalingClient(transport),
+    shell,
+    network: { localAddresses: () => localAddresses(), resolveHost },
+    isLocalPort: async (port, protocol) => {
+      if (process.platform !== 'win32') return null
+      const cached = portTables.get(protocol)
+      if (cached && Date.now() - cached.at < 250) return cached.ok ? cached.ports.has(port) : null
+      const table = await readLocalPorts(protocol)
+      portTables.set(protocol, { at: Date.now(), ok: table.ok, ports: table.ports })
+      return table.ok ? table.ports.has(port) : null
+    },
+    // 检测失败（带 error）按异常抛出：core 的 checkLock 按「没有变化」处理，不把失败当锁屏
+    desktopInteractive: async () => {
+      const check = await checkDesktopInteractive()
+      if (check.error) throw new Error(check.error)
+      return check.interactive
+    },
+    cpuBusyPercent: createCpuBusyReader(),
+    taskRunning: deps.taskRunning,
+    stunUrls: [],
+    // 一行一条 [screen] 日志；字段只有 core 给的白名单（会话编号、状态、计数、毫秒）
+    log: (event, fields) => logInfo(`[screen] ${event} ${JSON.stringify(fields)}`),
+  })
+  // 帧里的消息是未知形状：controller.onShellMessage 首行就按 isRecord 校验并忽略坏消息
+  shell.onShellMessage((sessionId, message) => controller.onShellMessage(sessionId, message as FromPageMessage))
+  shell.onWindowCrashed(sessionId => controller.windowCrashed(sessionId))
+  return controller
+}
+
 export class LegacyExecution implements HostAdapter {
   private pluginStore: PluginStore | null = null
   private pluginsChanged: (() => void) | undefined
+  private screenChanged: (() => void) | undefined
   mutatePlugin?: HostAdapter['mutatePlugin']
   preparePluginImport?: HostAdapter['preparePluginImport']
   private loop: PollLoop | null = null
@@ -61,7 +140,9 @@ export class LegacyExecution implements HostAdapter {
   private runFailure: unknown = null
   private stopping = false
   private supervision: ProcessSupervision
-  constructor(private nodeExecutable: string, private home: string = runtimeHomeDir(), private pluginOptions?: { trust: PublisherTrust[]; platform?: RuntimePlatform }, private cleanGeneration = false) {
+  /** 契约 2.25：画面会话装配。start 时创建；注入即代表本形态支持采集窗口（上报画面能力） */
+  private screen: { controller: ScreenSessionController; changeTimer: ReturnType<typeof setInterval>; lastSummaryKey: string } | null = null
+  constructor(private nodeExecutable: string, private home: string = runtimeHomeDir(), private pluginOptions?: { trust: PublisherTrust[]; platform?: RuntimePlatform }, private cleanGeneration = false, private readonly screenShell?: RuntimeScreenIpc) {
     this.supervision = new ProcessSupervision(home, nodeExecutable)
     if (pluginOptions?.platform) {
       this.preparePluginImport = async (params, context) => {
@@ -109,6 +190,17 @@ export class LegacyExecution implements HostAdapter {
     }
   }
   observePlugins(listener: () => void): void { this.pluginsChanged = listener }
+  observeScreen(listener: () => void): void { this.screenChanged = listener }
+  /** host-state 的可选 screen 对象（wire 候选 0.4，snake_case）；无会话返回 null */
+  screenSummary(): Record<string, unknown> | null {
+    const summary = this.screen?.controller.summary()
+    if (!summary) return null
+    return { session_id: summary.sessionId, state: summary.state, degraded: summary.degraded,
+      started_at: summary.startedAt, seconds_since_renewal: summary.secondsSinceRenewal }
+  }
+  /** 本机用户停止/拒绝查看（screen.stop）：出画面前按拒绝、出画面后按停止。可重复调用；
+   *  对不存在或不匹配的会话编号没有效果 */
+  screenStop(sessionId: string): void { this.screen?.controller.reject(sessionId) }
   beforeManagementInit = async () => {
     await resumeConnectionRecovery(this.home, this.nodeExecutable)
     if (process.platform === 'win32' && readdirSync(this.home).length === 0) await recordFreshConnectionEpoch(this.home, this.nodeExecutable)
@@ -237,6 +329,7 @@ export class LegacyExecution implements HostAdapter {
     const { manifests: storeManifests, parallelTools } = store
     const entries = Object.fromEntries(Object.entries(this.resolveEntries(config)).filter(([key, entry]) => Boolean(storeManifests[key]) || existsSync(entry)))
     const api = new ApiClient(server, token)
+    if (this.screenShell) this.beginScreen(api)
     const wecomLegacyEnv: Record<string, string> = {}
     for (const key of ['AID_WECOM_SERVER_URL', 'AID_WECOM_SERVER_TOKEN']) {
       if (process.env[key] !== undefined) wecomLegacyEnv[key] = process.env[key]!
@@ -296,6 +389,11 @@ export class LegacyExecution implements HostAdapter {
       if (recoveryReady && this.supervision.enabled) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_stop_v1']
       if (wecomRecoveryReady) value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_wecom_v1']
       if (recoveryReady) { value.providers = [...(value.providers as string[]), 'runtime-recovery']; value.capabilities = [...(value.capabilities as string[]), 'runtime_recovery_observe_v2'] }
+      // 契约 2.25：只有带采集窗口的受管形态（注入了画面通道）才上报画面能力；CLI 路径不上报
+      if (this.screen) {
+        value.capabilities = [...(value.capabilities as string[]), SCREEN_STREAM_CAPABILITY]
+        value.screen_stream = { version: SCREEN_STREAM_VERSION }
+      }
       return value
     }
     let firstHeartbeat = true
@@ -324,6 +422,8 @@ export class LegacyExecution implements HostAdapter {
       // logInfo = stderr + %APPDATA% 文件双写，前缀格式不变。
       onEvent: (msg) => logInfo(msg),
       capabilities,
+      // 契约 2.25：心跳成功后把响应交给画面会话（设计 4.4 隔离；回调异常由 PollLoop 消化）
+      onScreenHeartbeat: hb => { this.screen?.controller.onHeartbeatScreen(hb) },
       pluginManifests: () => Object.fromEntries(declared().map(({ provider_key, envelope, manifest }) => [provider_key, { envelope, manifest }])),
       canClaim: () => Object.entries(this.resolveEntries(config)).some(([key, entry]) => Boolean(storeManifests[key]) || existsSync(entry)),
       onConnection: value => {
@@ -357,8 +457,28 @@ export class LegacyExecution implements HostAdapter {
       if (!this.stopping) executionEnded()
     })
   }
+  /** 契约 2.25：画面会话装配（设计 4.4、6.1）。画面是心跳成败之外的一段独立异步流程：
+   *  模块内异常全部自行消化，不改变在线离线状态与退避，也不挡回执补传 */
+  private beginScreen(api: ApiClient): void {
+    const shell = this.screenShell!
+    const controller = assembleScreenPorts(screenTransport(api), shell, { taskRunning: () => this.loop?.hasRunningInvocation === true })
+    const wiring: NonNullable<LegacyExecution['screen']> = { controller, changeTimer: undefined as unknown as ReturnType<typeof setInterval>, lastSummaryKey: '' }
+    // 可见状态变化（连接/观看/锁屏/续期告急/降画质）触发管理界面刷新；秒级读数不触发
+    wiring.changeTimer = setInterval(() => {
+      const summary = controller.summary()
+      const key = summary ? `${summary.sessionId}|${summary.state}|${summary.degraded}` : ''
+      if (key === wiring.lastSummaryKey) return
+      wiring.lastSummaryKey = key
+      this.screenChanged?.()
+    }, 1000)
+    wiring.changeTimer.unref()
+    this.screen = wiring
+  }
+
   async stop(): Promise<void> {
     this.stopping = true
+    // Host 停止执行：先关采集窗口并结束画面会话（设计 6.1 停止时机），不等任务收尾
+    if (this.screen) { this.screen.controller.dispose(); clearInterval(this.screen.changeTimer); this.screen = null }
     this.backgroundChecks?.controller.abort()
     this.loop?.stopClaiming()
     await this.loop?.drain()
@@ -388,7 +508,7 @@ export class LegacyExecution implements HostAdapter {
 }
 
 let compositionOpen = false
-export async function openRuntimeHost(options: { home?: string; nodeExecutable?: string; supervisor?: 'cli' | 'desktop' | 'runtime_app'; platform?: RuntimePlatform; trust?: PublisherTrust[]; cleanGeneration?: boolean } = {}) {
+export async function openRuntimeHost(options: { home?: string; nodeExecutable?: string; supervisor?: 'cli' | 'desktop' | 'runtime_app'; platform?: RuntimePlatform; trust?: PublisherTrust[]; cleanGeneration?: boolean; screen?: RuntimeScreenIpc } = {}) {
   // Legacy helpers have process-wide home state; a Node child owns one composition.
   if (compositionOpen) throw new ManagementError(4, '本进程已有Runtime Host')
   compositionOpen = true
@@ -401,7 +521,7 @@ export async function openRuntimeHost(options: { home?: string; nodeExecutable?:
     const trust = options.trust ?? loadPackagedTrust(dirname(fileURLToPath(import.meta.url)))
     const host = await RuntimeHost.open({ home, version: RUNTIME_VERSION, supervisor: options.supervisor ?? 'cli', readOnlyOnFailure: options.supervisor === 'runtime_app',
       adapter: new LegacyExecution(options.nodeExecutable ?? process.execPath, home, trust ? { platform: options.platform, trust } : undefined,
-        options.supervisor === 'runtime_app' && options.cleanGeneration === true) })
+        options.supervisor === 'runtime_app' && options.cleanGeneration === true, options.screen) })
     logInfo(`[runtime-startup] phase=host_open elapsed_ms=${Math.round(performance.now() - started)}`)
     return host
   } catch (error) {

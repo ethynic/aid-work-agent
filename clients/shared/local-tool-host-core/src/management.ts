@@ -35,6 +35,12 @@ export interface HostAdapter {
   plugins?(): PluginSummary[]
   refreshPlugins?(): Promise<void>
   observePlugins?(listener: () => void): void
+  /** 契约 2.25（wire 候选 0.4）：画面会话可见状态变化时触发界面刷新 */
+  observeScreen?(listener: () => void): void
+  /** 契约 2.25：当前画面会话摘要（host-state 的可选 screen 对象，snake_case）；无会话返回 null */
+  screenSummary?(): Record<string, unknown> | null
+  /** 契约 2.25：本机用户停止/拒绝查看。可重复调用；对不存在或不匹配的会话编号没有效果 */
+  screenStop?(sessionId: string): void
   preparePluginImport?(params: Record<string, string>, context: { instance_id: string }): Promise<PreparedPluginImport>
   cleanupPluginImports?(retained: readonly string[]): Promise<void> | void
   canChangePlugins?(method?: string): Promise<boolean>
@@ -58,7 +64,7 @@ function readOperations(file: string): Record<string, StoredOperation> {
     const op = entry?.operation
     if (!key || !entry || typeof entry.digest !== 'string' || !/^[0-9a-f]{64}$/.test(entry.digest)
       || !op || typeof op.operation_id !== 'string' || !op.operation_id
-      || !['start', 'stop', 'pair', 'import', 'enable', 'disable', 'uninstall'].includes(op.operation)
+      || !['start', 'stop', 'pair', 'import', 'enable', 'disable', 'uninstall', 'screen.stop'].includes(op.operation)
       || !['running', 'succeeded', 'failed', 'reconciling'].includes(op.status)
       || !Number.isSafeInteger(op.code) || typeof op.error !== 'string'
       || Object.keys(op).some(field => !['operation_id', 'operation', 'status', 'code', 'error', 'message'].includes(field))
@@ -104,6 +110,8 @@ function parseRequest(input: unknown): Request {
     'plugins.import': ['request_key', 'selection_ref'],
     'plugins.enable': ['request_key', 'installation_id'], 'plugins.disable': ['request_key', 'installation_id'],
     'plugins.uninstall': ['request_key', 'installation_id'], 'operations.get': ['operation_id'],
+    // screen.stop 走与其他变更方法相同的 request_key 幂等机制（可重复调用），外加会话编号
+    'screen.stop': ['request_key', 'session_id'],
   }
   const required = Object.hasOwn(fields, request.method) ? fields[request.method] : undefined
   const params = request.params as Record<string, unknown>
@@ -112,7 +120,7 @@ function parseRequest(input: unknown): Request {
   return request as unknown as Request
 }
 
-/** Candidate 0.3 producer. The caller must already be a trusted in-process/IPC adapter. */
+/** Candidate 0.4 producer. The caller must already be a trusted in-process/IPC adapter. */
 export class RuntimeHost {
   readonly instanceId = randomUUID()
   private revision = 0
@@ -151,6 +159,7 @@ export class RuntimeHost {
     }
     this.connection = adapter.device() ? 'offline' : 'unpaired'
     adapter.observePlugins?.(() => this.changed())
+    adapter.observeScreen?.(() => this.changed())
     this.operations = readOperations(this.operationsFile)
     if (existsSync(this.markerFile)) this.state = 'reconciling'
   }
@@ -241,8 +250,11 @@ export class RuntimeHost {
   }
   getState(): Record<string, unknown> {
     const device = this.startupFailure ? this.recoveryDevice : this.adapter.device()
+    // 契约 2.25（候选 0.4）：只在有画面会话时出现；故障只读模式下不查询适配器
+    const screen = this.startupFailure ? null : this.adapter.screenSummary?.() ?? null
     return { instance_id: this.instanceId, revision: this.revision, supervisor: this.supervisor,
       state: this.state, connection: this.connection, ...(device ? { device } : {}),
+      ...(screen ? { screen } : {}),
       ...(['reconciling', 'blocked'].includes(this.state) ? { blocked_reason: this.startupFailure?.message ?? (this.state === 'reconciling' && this.confirmingRecovery
         ? '正在确认上次的执行是否已退出；确认后将自动恢复，原配对和任务结果保留，不会重复执行。'
         : '旧执行尚未确认停止，请停止 Runtime 后重试；原配对和任务结果保留，不会重复执行。') } : {}) }
@@ -427,6 +439,11 @@ export class RuntimeHost {
       return
     }
     switch (request.method) {
+      case 'screen.stop':
+        // 契约 2.25：本机停止/拒绝查看。与执行状态无关，可重复调用；未就绪时按不支持拒绝
+        if (!this.adapter.screenStop) throw new ManagementError(3, '画面查看管理尚未就绪')
+        this.adapter.screenStop(request.params.session_id!)
+        break
       case 'start':
         if (this.state === 'running') return
         if (this.state !== 'stopped') throw new ManagementError(11, 'Runtime尚未安全停止')

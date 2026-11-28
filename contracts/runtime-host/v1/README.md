@@ -1,6 +1,6 @@
 # Runtime Host v1：schema 与 fixture
 
-状态：候选交付0.3（2026-10-09），补齐插件列表水位与实际版本展示；**未共同冻结、未接入生产**。架构基线为[共同契约v2.0](../../../docs/system/runner-desktop-runtime-integration-contract.md)。Desktop对候选0.1/0.2的历史审阅不替代本批重新消费验证。
+状态：候选交付0.4（2026-11-28），按[共同契约 2.25](../../../docs/system/runner-desktop-runtime-integration-contract.md)加入桌面实时画面的管理面：host-state 可选 `screen`、管理方法 `screen.stop`；**未共同冻结、未接入生产**。架构基线为[共同契约v2.0](../../../docs/system/runner-desktop-runtime-integration-contract.md)。Desktop对候选0.1/0.2的历史审阅不替代本批重新消费验证。
 
 本批只覆盖管理、插件描述/清单与工具输出内容。H2设备binding、workspace grant、claim/permit与长占用wire仍由既定工作流交付，不替代已有Device API结果/ACK。`.schema.json`是格式来源，无新生产依赖、类型生成框架或第二套任务Agent loop。
 
@@ -8,7 +8,17 @@
 
 2026-10-09用户限定当前第一部分仅Runtime UI＋我们自己的CLI插件安装管理。首期plugins.import实现只接纳支持的第一方离线包；第三方skill返回明确不支持，不执行安装/依赖构建/源码上传。skill的documents/entries/code_map、手册优先AI流程和fixture仍保留，作为第二部分契约，暂不开发。保留这些格式不等于首期可安装skill，UI不显示可用的第三方导入入口。
 
-范围和验收以[Runtime计划](../../../docs/plans/plan-runtime-plugin-host.md#第一部分runtime-ui与第一方cli插件)为准；0.3不开放新的业务能力或第三方安装。
+范围和验收以[Runtime计划](../../../docs/plans/plan-runtime-plugin-host.md#第一部分runtime-ui与第一方cli插件)为准；0.3/0.4不开放新的业务能力或第三方安装。
+
+## 候选0.3迁移到0.4
+
+加性变更（[共同契约 2.25](../../../docs/system/runner-desktop-runtime-integration-contract.md)）：
+
+- host-state 新增可选 `screen`（`{session_id, state: connecting|streaming|locked|renewing, degraded, started_at, seconds_since_renewal}`），只在有画面会话时出现；字段名沿用 host-state 的 snake_case。
+- 管理方法新增 `screen.stop`，params 为 `request_key + session_id`，与其他变更方法共用 request_key 幂等；返回 operation，operation 名为 `screen.stop`。
+- 信令 `status` 的 `state` 取值扩展属 Device API/画面协议（设计 5.4），不在本目录登记。
+
+旧消费端（候选0.3的严格键集合解码）遇到带 `screen` 的新 host-state 会解码失败并持续重试刷新，状态停留在最后一份好的快照；已用冻结副本测试固定该行为。旧消费端不会发出 `screen.stop`，管理方法枚举扩展对它无影响。0.3未冻结未上线，0.4在同目录替代它；api_major/schema_version仍为1，架构契约仍v2.0。
 
 ## 候选0.2迁移到0.3
 

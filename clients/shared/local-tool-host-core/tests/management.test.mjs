@@ -520,3 +520,97 @@ test('observer exceptions cannot interrupt execution or leak pairing fields', as
   assert.ok(events.every(event => Object.keys(event).sort().join(',') === 'event,instance_id,revision'))
   assert.ok(events.every((event, i) => i === 0 || event.revision >= events[i - 1].revision))
 })
+
+// 契约 2.25（wire 候选 0.4）：管理方法 screen.stop 与 host-state 可选 screen
+
+test('screen.stop ends the viewing session, dedups by request key and stays queryable', async t => {
+  const a = adapter(); a.identity = { device_id: 'isolated-device' }
+  const stops = []
+  a.screenStop = sessionId => stops.push(sessionId)
+  const { host } = await open(t, a)
+  const first = await request(host, 'screen.stop', { request_key: 'screen-1', session_id: 'sess-1' })
+  await new Promise(resolve => setTimeout(resolve, 5))
+  assert.equal(first.code, 0)
+  assert.equal(first.result.operation, 'screen.stop')
+  assert.equal((await request(host, 'operations.get', { operation_id: first.result.operation_id })).result.status, 'succeeded')
+  const repeated = await request(host, 'screen.stop', { request_key: 'screen-1', session_id: 'sess-1' })
+  assert.equal(repeated.result.operation_id, first.result.operation_id)
+  assert.deepEqual(stops, ['sess-1'], 'the same request key must not stop twice')
+  const again = await request(host, 'screen.stop', { request_key: 'screen-2', session_id: 'sess-1' })
+  await new Promise(resolve => setTimeout(resolve, 5))
+  assert.notEqual(again.result.operation_id, first.result.operation_id, 'a new request key is a new operation')
+  assert.equal((await request(host, 'operations.get', { operation_id: again.result.operation_id })).result.status, 'succeeded')
+  assert.deepEqual(stops, ['sess-1', 'sess-1'], 'a new request key stops again; an unknown session id is a no-op')
+  const queried = await request(host, 'operations.get', { operation_id: first.result.operation_id })
+  assert.equal(queried.result.operation, 'screen.stop')
+  assert.equal(queried.result.status, 'succeeded')
+})
+
+test('screen.stop rejects missing or extra params and a same-key different session', async t => {
+  const a = adapter()
+  let stopped = 0
+  a.screenStop = () => { stopped++ }
+  const { host } = await open(t, a)
+  assert.equal((await request(host, 'screen.stop', { request_key: 'screen-bad' })).code, 1)
+  assert.equal((await request(host, 'screen.stop', { request_key: 'screen-extra', session_id: 's', extra: 'x' })).code, 1)
+  await request(host, 'screen.stop', { request_key: 'screen-conflict', session_id: 'sess-a' })
+  assert.equal((await request(host, 'screen.stop', { request_key: 'screen-conflict', session_id: 'sess-b' })).code, 10)
+  await new Promise(resolve => setTimeout(resolve, 5))
+  assert.equal(stopped, 1, 'only the accepted intent reaches the adapter')
+})
+
+test('screen.stop follows the reboot-registration freeze like every other new mutation', async t => {
+  const a = adapter(); a.identity = { device_id: 'isolated-device' }
+  let stopped = 0
+  a.screenStop = () => { stopped++ }
+  const home = mkdtempSync(join(tmpdir(), 'aid-core-screen-reg-'))
+  const host = await RuntimeHost.open({ home, version: 'test', supervisor: 'runtime_app', adapter: a })
+  try {
+    await host.inspectConnectionRecovery(async owns => ({ owns }), false, true)
+    assert.equal((await request(host, 'screen.stop', { request_key: 'screen-reg', session_id: 'sess-1' })).code, 11)
+    assert.equal(stopped, 0)
+  } finally { await host.dispose().catch(() => {}); rmSync(home, { recursive: true, force: true }) }
+})
+
+test('screen summary appears in getState, changes bump the shared revision and ends by disappearing', async t => {
+  const a = adapter()
+  let screenChanged
+  a.observeScreen = fn => { screenChanged = fn }
+  a.screenSummary = () => ({ session_id: 'sess-1', state: 'streaming', degraded: false, started_at: 1_000, seconds_since_renewal: 0 })
+  const { host } = await open(t, a)
+  const state = (await request(host, 'getState')).result
+  assert.deepEqual(state.screen, { session_id: 'sess-1', state: 'streaming', degraded: false, started_at: 1_000, seconds_since_renewal: 0 })
+  const before = state.revision
+  screenChanged()
+  assert.ok((await request(host, 'getState')).result.revision > before, 'screen visibility changes refresh the interface')
+  a.screenSummary = () => null
+  screenChanged()
+  const ended = (await request(host, 'getState')).result
+  assert.equal(Object.hasOwn(ended, 'screen'), false)
+  const blockedHome = mkdtempSync(join(tmpdir(), 'aid-core-screen-blocked-'))
+  const bHost = await RuntimeHost.open({ home: blockedHome, version: 'test', supervisor: 'runtime_app', readOnlyOnFailure: true,
+    adapter: { ...a, device: () => undefined, initialize() { throw new ManagementError(11, '初始化失败') } } })
+  try {
+    a.screenSummary = () => ({ session_id: 'sess-2', state: 'streaming', degraded: false, started_at: null, seconds_since_renewal: null })
+    assert.equal(Object.hasOwn(bHost.getState(), 'screen'), false, 'read-only failure mode never queries the adapter for screen state')
+  } finally { await bHost.dispose().catch(() => {}); rmSync(blockedHome, { recursive: true, force: true }) }
+})
+
+test('screen.stop operations reload through the same persisted whitelist after reopen', async t => {
+  const a = adapter(); a.identity = { device_id: 'isolated-device' }
+  a.screenStop = () => {}
+  const home = mkdtempSync(join(tmpdir(), 'aid-core-screen-persist-'))
+  const host = await RuntimeHost.open({ home, version: 'test', supervisor: 'cli', adapter: a })
+  const first = await request(host, 'screen.stop', { request_key: 'screen-persist', session_id: 'sess-9' })
+  await new Promise(resolve => setTimeout(resolve, 5))
+  assert.equal(first.code, 0)
+  await host.dispose()
+  const reopened = await RuntimeHost.open({ home, version: 'test', supervisor: 'cli', adapter: a })
+  try {
+    const reloaded = await request(reopened, 'operations.get', { operation_id: first.result.operation_id })
+    assert.equal(reloaded.result.operation, 'screen.stop')
+    assert.equal(reloaded.result.status, 'succeeded')
+    const repeated = await request(reopened, 'screen.stop', { request_key: 'screen-persist', session_id: 'sess-9' })
+    assert.equal(repeated.result.operation_id, first.result.operation_id, 'reopen keeps the request-key dedup for screen.stop')
+  } finally { await reopened.dispose(); rmSync(home, { recursive: true, force: true }) }
+})

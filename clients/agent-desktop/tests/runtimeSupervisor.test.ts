@@ -6,7 +6,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { RuntimeSupervisor, parseRuntimeRequest } from '../electron/runtimeSupervisor.js'
+import { RuntimeSupervisor, parseRuntimeRequest, parseRuntimeScreenHostFrame } from '../electron/runtimeSupervisor.js'
 
 const host = `
 let state='stopped', importing; const ops=new Map();
@@ -318,5 +318,109 @@ test('renderer management requests cannot supply backend credential or environme
   for (const key of ['AID_BOSS_SERVER_URL', 'AID_BOSS_SERVER_TOKEN', 'env', 'token']) {
     assert.throws(() => parseRuntimeRequest({ request_id: 'renderer-env', method: 'start',
       params: { request_key: 'start', [key]: 'fixture-cannot-inject-main-environment' } }), /无效/)
+  }
+})
+
+// ---- 契约 2.25：runtime_screen 私有帧与 screen.stop ----
+
+function screenSupervisor(child: ChildProcess & { sent: Record<string, unknown>[] }, options: { frames?: unknown[]; screenCapture?: boolean; args?: string[] } = {}) {
+  // describe（握手与读取请求）自动应答；其余 H1 请求由测试用 respond() 手动应答
+  child.send = ((message: Record<string, unknown>, callback?: (error: Error | null) => void) => {
+    child.sent.push(message); callback?.(null)
+    if (message.method === 'describe') queueMicrotask(() => child.emit('message', { request_id: message.request_id, method: 'describe', code: 0, error: '', result: description }))
+    return true
+  }) as ChildProcess['send']
+  return new RuntimeSupervisor({
+    nodeExecutable: process.execPath, hostEntry: 'controlled', home: os.tmpdir(), supervisor: 'desktop',
+    spawnChild: (_node, args) => { if (options.args) options.args.push(...args); return child },
+    takeSelectedPackage: async () => { throw new Error('no selection') },
+    onEvent: () => {}, onDisconnect: () => {},
+    ...(options.frames ? { onScreenFrame: frame => { options.frames!.push(frame) } } : {}),
+    ...(options.screenCapture ? { screenCapture: true } : {}),
+  })
+}
+
+test('runtime_screen host frames are validated and delivered to the screen handler', async () => {
+  const { child } = controlledHost()
+  const frames: unknown[] = []
+  const supervisor = screenSupervisor(child, { frames })
+  try {
+    await supervisor.request({ request_id: 'describe', method: 'describe', params: {} })
+    child.emit('message', { event: 'runtime_screen', version: 1, action: 'open', session_id: 'sess-1', stun_urls: ['stun:stun.example:3478'] })
+    child.emit('message', { event: 'runtime_screen', version: 1, action: 'send', session_id: 'sess-1', message: { kind: 'answer', sdp: 'v=0' } })
+    child.emit('message', { event: 'runtime_screen', version: 1, action: 'close', session_id: 'sess-1' })
+    await flush()
+    assert.deepEqual(frames, [
+      { event: 'runtime_screen', version: 1, action: 'open', session_id: 'sess-1', stun_urls: ['stun:stun.example:3478'] },
+      { event: 'runtime_screen', version: 1, action: 'send', session_id: 'sess-1', message: { kind: 'answer', sdp: 'v=0' } },
+      { event: 'runtime_screen', version: 1, action: 'close', session_id: 'sess-1' },
+    ])
+    for (const bad of [
+      { event: 'runtime_screen', version: 1, action: 'open', session_id: 'sess-1' },
+      { event: 'runtime_screen', version: 1, action: 'open', session_id: 'sess-1', stun_urls: 'stun:example' },
+      { event: 'runtime_screen', version: 1, action: 'send', session_id: 'sess-1', message: { kind: 'not-a-page-message' } },
+      { event: 'runtime_screen', version: 1, action: 'send', session_id: 'sess-1' },
+      { event: 'runtime_screen', version: 1, action: 'close', session_id: 'sess-1', extra: true },
+      { event: 'runtime_screen', version: 2, action: 'close', session_id: 'sess-1' },
+      { event: 'runtime_screen', version: 1, action: 'close', session_id: '' },
+      { event: 'runtime_screen', version: 1, action: 'pause', session_id: 'sess-1' },
+    ]) child.emit('message', bad)
+    await flush()
+    assert.equal(frames.length, 3, 'invalid frames are dropped without reaching the handler')
+    assert.equal(parseRuntimeScreenHostFrame({ event: 'runtime_screen', version: 1, action: 'send', session_id: 's', message: { kind: 'degrade' } })?.action, 'send')
+    assert.equal(parseRuntimeScreenHostFrame({ event: 'runtime_screen', version: 1, action: 'close', session_id: 'x'.repeat(201) }), null)
+    assert.equal(parseRuntimeScreenHostFrame({ event: 'runtime_screen', version: 1, action: 'close', session_id: 's', stun_urls: [] }), null)
+  } finally { if (child.connected) child.disconnect() }
+})
+
+test('screen page frames forward to the Host only after validation and with a live child', async () => {
+  const { child } = controlledHost()
+  const supervisor = screenSupervisor(child)
+  try {
+    await supervisor.request({ request_id: 'describe', method: 'describe', params: {} })
+    assert.equal(supervisor.sendScreenFrame({ event: 'runtime_screen', version: 1, session_id: 'sess-1', kind: 'offer', sdp: 'v=0' }), true)
+    assert.equal(supervisor.sendScreenFrame({ event: 'runtime_screen', version: 1, session_id: 'sess-1', kind: 'window-crashed' }), true)
+    assert.deepEqual(child.sent.filter(frame => (frame as Record<string, unknown>).event === 'runtime_screen'), [
+      { event: 'runtime_screen', version: 1, session_id: 'sess-1', kind: 'offer', sdp: 'v=0' },
+      { event: 'runtime_screen', version: 1, session_id: 'sess-1', kind: 'window-crashed' },
+    ])
+    for (const bad of [
+      { event: 'runtime_screen', version: 1, session_id: 'sess-1', kind: 'unknown-kind' },
+      { event: 'runtime_screen', version: 1, session_id: '', kind: 'offer' },
+      { event: 'runtime_screen', version: 2, session_id: 'sess-1', kind: 'connected' },
+      null,
+    ]) assert.equal(supervisor.sendScreenFrame(bad), false, 'invalid page frames are dropped')
+    assert.equal(child.sent.filter(frame => (frame as Record<string, unknown>).event === 'runtime_screen').length, 2)
+  } finally { if (child.connected) child.disconnect() }
+  assert.equal(supervisor.sendScreenFrame({ event: 'runtime_screen', version: 1, session_id: 'sess-1', kind: 'connected' }), false, 'no forwarding without a live Host')
+})
+
+test('screen.stop passes validation and forwards to the Host; unknown methods stay rejected', async () => {
+  const { child, respond } = controlledHost()
+  const supervisor = screenSupervisor(child)
+  try {
+    await supervisor.request({ request_id: 'describe', method: 'describe', params: {} })
+    const reply = supervisor.request({ request_id: 'ui-screen', method: 'screen.stop', params: { request_key: 'rk-1', session_id: 'sess-1' } })
+    await flush()
+    const forwarded = child.sent.find(request => (request as Record<string, unknown>).method === 'screen.stop') as Record<string, unknown>
+    assert.deepEqual({ ...forwarded, request_id: 'any' }, { request_id: 'any', method: 'screen.stop', params: { request_key: 'rk-1', session_id: 'sess-1' } })
+    respond({ operation_id: 'screen-op', operation: 'screen.stop', status: 'succeeded', code: 0, error: '' })
+    const settled = await reply
+    assert.equal(settled.code, 0)
+    assert.deepEqual(settled.result, { operation_id: 'screen-op', operation: 'screen.stop', status: 'succeeded', code: 0, error: '' })
+    assert.throws(() => parseRuntimeRequest({ request_id: 'ui', method: 'screen.stop', params: { session_id: 's' } }), /参数无效/)
+    assert.throws(() => parseRuntimeRequest({ request_id: 'ui', method: 'screen.pause', params: { request_key: 'k', session_id: 's' } }), /无效/)
+  } finally { if (child.connected) child.disconnect() }
+})
+
+test('screen capture capability is declared through the spawn arguments only when configured', async () => {
+  for (const screenCapture of [true, false]) {
+    const { child } = controlledHost()
+    const args: string[] = []
+    const supervisor = screenSupervisor(child, { screenCapture, args })
+    try {
+      await supervisor.request({ request_id: 'describe', method: 'describe', params: {} })
+      assert.equal(args.includes('--screen-capture=1'), screenCapture)
+    } finally { if (child.connected) child.disconnect() }
   }
 })

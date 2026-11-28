@@ -345,5 +345,81 @@
         "selection_ref": "selected-zip-1"
       }
     }
+  },
+  {
+    "name": "screen_stop_request",
+    "schema": "management-request.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "screen-1",
+      "method": "screen.stop",
+      "params": {
+        "request_key": "screen-once-1",
+        "session_id": "sess-1"
+      }
+    }
+  },
+  {
+    "name": "screen_stop_response",
+    "schema": "management-response.schema.json",
+    "valid": true,
+    "value": {
+      "request_id": "screen-1",
+      "method": "screen.stop",
+      "result": {
+        "operation_id": "screen-op-1",
+        "operation": "screen.stop",
+        "status": "running",
+        "code": 0,
+        "error": ""
+      },
+      "code": 0,
+      "error": ""
+    }
+  },
+  {
+    "name": "screen_streaming_host",
+    "schema": "host-state.schema.json",
+    "valid": true,
+    "value": {
+      "instance_id": "host-B-1",
+      "revision": 7,
+      "supervisor": "runtime_app",
+      "state": "running",
+      "connection": "online",
+      "device": {
+        "device_id": "device-B",
+        "name": "专用执行电脑"
+      },
+      "screen": {
+        "session_id": "sess-1",
+        "state": "streaming",
+        "degraded": false,
+        "started_at": 1730000000000,
+        "seconds_since_renewal": 0
+      }
+    }
+  },
+  {
+    "name": "screen_renewing_host",
+    "schema": "host-state.schema.json",
+    "valid": true,
+    "value": {
+      "instance_id": "host-B-1",
+      "revision": 8,
+      "supervisor": "runtime_app",
+      "state": "running",
+      "connection": "online",
+      "device": {
+        "device_id": "device-B"
+      },
+      "screen": {
+        "session_id": "sess-1",
+        "state": "renewing",
+        "degraded": true,
+        "started_at": 1730000000000,
+        "seconds_since_renewal": 12
+      }
+    }
   }
 ]

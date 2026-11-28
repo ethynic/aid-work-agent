@@ -1,4 +1,4 @@
-export type ManagementMethod = 'describe' | 'getState' | 'plugins.list' | 'operations.get' | 'start' | 'stop' | 'pair' | 'plugins.import' | 'plugins.enable' | 'plugins.disable' | 'plugins.uninstall'
+export type ManagementMethod = 'describe' | 'getState' | 'plugins.list' | 'operations.get' | 'start' | 'stop' | 'pair' | 'plugins.import' | 'plugins.enable' | 'plugins.disable' | 'plugins.uninstall' | 'screen.stop'
 export interface ManagementRequest { request_id: string; method: ManagementMethod; params: Record<string, string> }
 /** H3 supplies this port from the trusted preload; no executable, path or business invocation. */
 export interface RuntimeManagementPort {
@@ -18,16 +18,22 @@ export interface ConnectionDiagnosis {
   service_verified: boolean; can_preserve: boolean; can_reconfigure: boolean; requires_reboot: boolean
 }
 export interface ConnectionRecoveryResult { version: 1; status: 'complete' | 'action_required'; diagnosis: ConnectionDiagnosis; new_device: boolean }
+/** 契约 2.25：画面会话摘要（host-state 可选 screen；只在有画面会话时出现） */
+export interface ScreenState {
+  session_id: string; state: 'connecting' | 'streaming' | 'locked' | 'renewing'
+  degraded: boolean; started_at: number | null; seconds_since_renewal: number | null
+}
 export interface HostState {
   instance_id: string; revision: number; supervisor: 'cli' | 'desktop' | 'runtime_app'
   state: 'stopped' | 'starting' | 'running' | 'draining' | 'reconciling' | 'blocked'
   connection: 'unpaired' | 'connecting' | 'online' | 'offline' | 'revoked'
   device?: { device_id: string; name?: string }; blocked_reason?: string
+  screen?: ScreenState
 }
 export interface PluginSummary { installation_id: string; plugin_id: string; display_name: string; release_id: string; enabled: boolean; ready: boolean; reason?: string; version?: string }
 export interface PluginList { instance_id: string; revision: number; plugins: PluginSummary[] }
 export interface Description { api_major: 1; host_version: string; features: string[]; instance_id: string; revision: number }
-export interface ManagementOperation { operation_id: string; operation: 'start' | 'stop' | 'pair' | 'import' | 'enable' | 'disable' | 'uninstall'; status: 'running' | 'succeeded' | 'failed' | 'reconciling'; code: number; error: string; message?: string }
+export interface ManagementOperation { operation_id: string; operation: 'start' | 'stop' | 'pair' | 'import' | 'enable' | 'disable' | 'uninstall' | 'screen.stop'; status: 'running' | 'succeeded' | 'failed' | 'reconciling'; code: number; error: string; message?: string }
 export interface ManagementResponse { request_id: string; method: ManagementMethod; code: number; error: string; result: Description | HostState | PluginList | ManagementOperation | null }
 export interface HostEvent { event: 'state_changed'; instance_id: string; revision: number }
 
@@ -49,10 +55,18 @@ export function decodeConnectionRecoveryResult(value: unknown): ConnectionRecove
   return { version: 1, status: value.status as ConnectionRecoveryResult['status'], diagnosis: decodeConnectionDiagnosis(value.diagnosis), new_device: value.new_device }
 }
 export function isHostState(value: unknown): value is HostState {
-  if (!object(value) || !keys(value, ['instance_id', 'revision', 'supervisor', 'state', 'connection'], ['device', 'blocked_reason']) || !revision(value)) return false
+  if (!object(value) || !keys(value, ['instance_id', 'revision', 'supervisor', 'state', 'connection'], ['device', 'blocked_reason', 'screen']) || !revision(value)) return false
   if (!member(value.supervisor, ['cli', 'desktop', 'runtime_app']) || !member(value.state, ['stopped', 'starting', 'running', 'draining', 'reconciling', 'blocked']) || !member(value.connection, ['unpaired', 'connecting', 'online', 'offline', 'revoked'])) return false
   if (Object.prototype.hasOwnProperty.call(value, 'blocked_reason') && !text(value.blocked_reason)) return false
-  return !Object.prototype.hasOwnProperty.call(value, 'device') || (object(value.device) && keys(value.device, ['device_id'], ['name']) && text(value.device.device_id) && (!Object.prototype.hasOwnProperty.call(value.device, 'name') || text(value.device.name)))
+  if (Object.prototype.hasOwnProperty.call(value, 'device') && !(object(value.device) && keys(value.device, ['device_id'], ['name']) && text(value.device.device_id) && (!Object.prototype.hasOwnProperty.call(value.device, 'name') || text(value.device.name)))) return false
+  return !Object.prototype.hasOwnProperty.call(value, 'screen') || isScreenState(value.screen)
+}
+/** 契约 2.25：screen 在场时校验形状；缺席照旧通过 */
+function isScreenState(value: unknown): value is ScreenState {
+  if (!object(value) || !keys(value, ['session_id', 'state', 'degraded', 'started_at', 'seconds_since_renewal'])) return false
+  if (!text(value.session_id) || !member(value.state, ['connecting', 'streaming', 'locked', 'renewing']) || typeof value.degraded !== 'boolean') return false
+  if (value.started_at !== null && !Number.isSafeInteger(value.started_at)) return false
+  return value.seconds_since_renewal === null || (Number.isSafeInteger(value.seconds_since_renewal) && value.seconds_since_renewal >= 0)
 }
 export function isPluginList(value: unknown): value is PluginList {
   return object(value) && keys(value, ['instance_id', 'revision', 'plugins']) && revision(value) && Array.isArray(value.plugins) && value.plugins.every((plugin) => object(plugin) && keys(plugin, ['installation_id', 'plugin_id', 'display_name', 'release_id', 'enabled', 'ready'], ['reason', 'version']) && ['installation_id', 'plugin_id', 'display_name', 'release_id'].every((key) => text(plugin[key])) && typeof plugin.enabled === 'boolean' && typeof plugin.ready === 'boolean' && (!Object.prototype.hasOwnProperty.call(plugin, 'version') || text(plugin.version)) && (!Object.prototype.hasOwnProperty.call(plugin, 'reason') || text(plugin.reason)))
@@ -61,7 +75,7 @@ export function isDescription(value: unknown): value is Description {
   return object(value) && keys(value, ['api_major', 'host_version', 'features', 'instance_id', 'revision']) && value.api_major === 1 && text(value.host_version) && revision(value) && Array.isArray(value.features) && value.features.every(text) && new Set(value.features).size === value.features.length
 }
 export function isOperation(value: unknown): value is ManagementOperation {
-  if (!object(value) || !keys(value, ['operation_id', 'operation', 'status', 'code', 'error'], ['message']) || !text(value.operation_id) || !integer(value.code) || typeof value.error !== 'string' || !member(value.operation, ['start', 'stop', 'pair', 'import', 'enable', 'disable', 'uninstall']) || !member(value.status, ['running', 'succeeded', 'failed', 'reconciling'])) return false
+  if (!object(value) || !keys(value, ['operation_id', 'operation', 'status', 'code', 'error'], ['message']) || !text(value.operation_id) || !integer(value.code) || typeof value.error !== 'string' || !member(value.operation, ['start', 'stop', 'pair', 'import', 'enable', 'disable', 'uninstall', 'screen.stop']) || !member(value.status, ['running', 'succeeded', 'failed', 'reconciling'])) return false
   if (Object.prototype.hasOwnProperty.call(value, 'message') && !text(value.message)) return false
   return value.status === 'failed' ? value.code > 0 && text(value.error) : value.code === 0 && value.error === ''
 }

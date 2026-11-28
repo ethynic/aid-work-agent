@@ -90,6 +90,15 @@ export class FakeCloud {
   /** parallel_only 当前在途请求数与历史峰值（断言任一时刻至多 1 个在途并行领取） */
   private parallelOnlyActive = 0
   maxConcurrentParallelOnly = 0
+  // ---- 契约 2.25 画面注入口（缺省全部关闭 = 旧服务端，无任何画面行为） ----
+  /** 心跳响应是否带 screen_stream: {version: 1}（服务端支持标记） */
+  screenSupport = false
+  /** 心跳响应携带的 screen_session 通知；null = 不带（旧服务端或查询失败） */
+  screenNotice: { id: string; state: 'pending' | 'streaming' | 'ended' } | null = null
+  /** Runtime 发来的信令（按到达顺序记录请求体） */
+  readonly screenSignals: Array<{ session_id: string; type: string; payload: unknown; at: number }> = []
+  /** 会话表：读取接口按 session_id 应答（signals 按游标过滤） */
+  readonly screenSessions = new Map<string, { state: string; end_reason?: string; stun_urls?: string[]; signals: Array<{ seq: number; type: string; payload: unknown }> }>()
 
   get baseUrl(): string {
     const addr = this.server!.address() as AddressInfo
@@ -261,7 +270,32 @@ export class FakeCloud {
         selected: true,
         server_time: new Date().toISOString(),
         ...(this.parallelClaimSupported ? { parallel_claim: true } : {}),
+        ...(this.screenSupport ? { screen_stream: { version: 1 } } : {}),
+        ...(this.screenNotice ? { screen_session: this.screenNotice } : {}),
       })
+      return
+    }
+
+    // 契约 2.25：设备侧画面接口（设计 5.3）的最小 fake：会话读取 + 信令追加
+    if (path === '/api/local-tools/runtime/screen/session' && req.method === 'POST') {
+      const body = await this.readBody(req)
+      const sessionId = String(body['session_id'] ?? '')
+      const session = this.screenSessions.get(sessionId)
+      if (!session) {
+        this.sendJson(res, 404, { detail: { error: 'SCREEN_SESSION_NOT_FOUND', message: '画面会话不存在' } })
+        return
+      }
+      const afterSeq = Number(body['after_seq'] ?? 0)
+      this.sendJson(res, 200, {
+        session: { id: sessionId, state: session.state, ...(session.end_reason ? { end_reason: session.end_reason } : {}), ...(session.stun_urls ? { stun_urls: session.stun_urls } : {}) },
+        signals: session.signals.filter(signal => signal.seq > afterSeq),
+      })
+      return
+    }
+    if (path === '/api/local-tools/runtime/screen/signal' && req.method === 'POST') {
+      const body = await this.readBody(req)
+      this.screenSignals.push({ session_id: String(body['session_id'] ?? ''), type: String(body['type'] ?? ''), payload: body['payload'], at: Date.now() })
+      this.sendJson(res, 200, { success: true, seq: this.screenSignals.length })
       return
     }
 

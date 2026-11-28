@@ -446,3 +446,24 @@ describe('Runtime production consumer', () => {
     expect(controller.view.operation?.status).toBe('succeeded')
   })
 })
+
+// ---- 契约 2.25：画面停止走既有变更通道 ----
+describe('Runtime screen stop', () => {
+  it('sends screen.stop with an auto request key and tracks the returned operation', async () => {
+    const { port } = makePort()
+    const controller = create(port)
+    await controller.connect()
+    await controller.stopScreen('sess-9')
+    const sent = vi.mocked(port.request).mock.calls.map(([request]) => request).find(request => request.method === 'screen.stop')
+    expect(sent?.params.session_id).toBe('sess-9')
+    expect(sent?.params.request_key).toBeTruthy()
+    expect(controller.view.operation?.operation).toBe('screen.stop')
+    expect(controller.view.operation?.status).toBe('succeeded')
+  })
+  it('never sends screen.stop without a connection', async () => {
+    const { port } = makePort()
+    const controller = create(port)
+    await controller.stopScreen('sess-9')
+    expect(vi.mocked(port.request)).not.toHaveBeenCalled()
+  })
+})

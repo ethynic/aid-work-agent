@@ -1,18 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import RuntimeManagementPage from '../RuntimeManagementPage.vue'
-import type { ConnectionDiagnosis, ManagementRequest, RuntimeManagementPort } from '../contracts'
+import type { ConnectionDiagnosis, ManagementRequest, RuntimeManagementPort, ScreenState } from '../contracts'
 
 const wrappers: VueWrapper[] = []
 afterEach(() => { wrappers.forEach((wrapper) => wrapper.unmount()); wrappers.length = 0; localStorage.clear(); document.body.innerHTML = '' })
-function mountPage(options: { features?: string[]; state?: string; ready?: boolean; reason?: string | null; version?: string; pairReject?: boolean; recovery?: boolean; registration?: ConnectionDiagnosis | null; automatic?: boolean; connection?: string; unpaired?: boolean; server?: string | null } = {}) {
+function mountPage(options: { features?: string[]; state?: string; ready?: boolean; reason?: string | null; version?: string; pairReject?: boolean; recovery?: boolean; registration?: ConnectionDiagnosis | null; automatic?: boolean; connection?: string; unpaired?: boolean; server?: string | null; screen?: ScreenState | null; revision?: number } = {}) {
   const requests: ManagementRequest[] = []
   const port: RuntimeManagementPort = {
     request: vi.fn(async (request) => {
       requests.push(request)
       const base = { request_id: request.request_id, method: request.method, code: 0, error: '' }
-      if (request.method === 'describe') return { ...base, result: { api_major: 1, host_version: '0.2.14', features: options.features ?? ['events', 'first_party_plugins'], instance_id: 'host-one', revision: 1 } }
-      if (request.method === 'getState') return { ...base, result: { instance_id: 'host-one', revision: 1, state: options.state ?? 'stopped', supervisor: 'runtime_app', connection: options.connection ?? 'offline', ...(!options.unpaired ? { device: { device_id: 'device-one', name: '测试设备' } } : {}), ...(options.state === 'reconciling' ? { blocked_reason: '历史执行事实缺少结案证明' } : {}) } }
+      if (request.method === 'describe') return { ...base, result: { api_major: 1, host_version: '0.2.14', features: options.features ?? ['events', 'first_party_plugins'], instance_id: 'host-one', revision: options.revision ?? 1 } }
+      if (request.method === 'getState') return { ...base, result: { instance_id: 'host-one', revision: options.revision ?? 1, state: options.state ?? 'stopped', supervisor: 'runtime_app', connection: options.connection ?? 'offline', ...(!options.unpaired ? { device: { device_id: 'device-one', name: '测试设备' } } : {}), ...(options.state === 'reconciling' ? { blocked_reason: '历史执行事实缺少结案证明' } : {}), ...(options.screen ? { screen: options.screen } : {}) } }
       if (request.method === 'plugins.list') return { ...base, result: { instance_id: 'host-one', revision: 1, plugins: [{ installation_id: 'installed-one', plugin_id: 'weixin', display_name: '微信', release_id: 'opaque-release', enabled: true, ready: options.ready ?? false, ...(options.reason === null ? {} : { reason: options.reason ?? '请登录微信' }), ...(options.version ? { version: options.version } : {}) }] } }
       if (request.method === 'pair' && options.pairReject) return { ...base, code: 11, error: '历史执行事实缺少结案证明', result: null }
       return { ...base, result: { operation_id: 'operation-one', operation: request.method.replace('plugins.', ''), status: 'succeeded', code: 0, error: '' } }
@@ -29,7 +29,7 @@ function mountPage(options: { features?: string[]; state?: string; ready?: boole
   if ('registration' in options) port.registrationStatus = vi.fn(async () => options.registration ?? null)
   const wrapper = mount(RuntimeManagementPage, { props: { port }, attachTo: document.body })
   wrappers.push(wrapper)
-  return { wrapper, port, requests }
+  return { wrapper, port, requests, options }
 }
 function button(wrapper: VueWrapper, text: string) { const found = wrapper.findAll('button').find((element) => element.text() === text); if (!found) throw new Error(`Missing button ${text}`); return found }
 
@@ -294,5 +294,77 @@ describe('Runtime management page', () => {
     const { wrapper, requests, port } = mountPage({ state: 'running' }); await flushPromises(); wrapper.unmount()
     expect(vi.mocked(port.observe)).toHaveBeenCalledOnce()
     expect(requests.some((request) => request.method === 'stop')).toBe(false)
+  })
+})
+
+// ---- 契约 2.25：本机画面横幅 ----
+
+const screenState = (state: ScreenState['state'], extra: Partial<ScreenState> = {}): ScreenState =>
+  ({ session_id: 'sess-1', state, degraded: false, started_at: state === 'connecting' ? null : Date.parse('2026-11-28T10:00:00+08:00'), seconds_since_renewal: state === 'renewing' ? 12 : null, ...extra })
+
+describe('Runtime screen banner', () => {
+  it('offers reject while connecting and states that nothing is captured yet', async () => {
+    const { wrapper, requests } = mountPage({ automatic: true, connection: 'online', state: 'running', registration: null, screen: screenState('connecting') })
+    await flushPromises()
+    expect(wrapper.text()).toContain('收到远程查看请求')
+    expect(wrapper.text()).toContain('尚未采集画面')
+    expect(wrapper.get('.inline-notice.error').exists()).toBe(true)
+    await button(wrapper, '拒绝').trigger('click'); await flushPromises()
+    const sent = requests.find(request => request.method === 'screen.stop')
+    expect(sent?.params.session_id).toBe('sess-1')
+    expect(sent?.params.request_key).toBeTruthy()
+    expect(requests.some(request => request.method !== 'screen.stop' && request.params.session_id === 'sess-1')).toBe(false)
+  })
+
+  it('shows the viewing banner in red with start time, duration and a stop button while streaming', async () => {
+    const { wrapper, requests } = mountPage({ automatic: true, connection: 'online', state: 'running', registration: null, screen: screenState('streaming') })
+    await flushPromises()
+    expect(wrapper.text()).toContain('正在远程查看本机画面')
+    expect(wrapper.text()).toContain('已观看')
+    expect(wrapper.get('.inline-notice.error').text()).toContain('停止查看')
+    await button(wrapper, '停止查看').trigger('click'); await flushPromises()
+    expect(requests.some(request => request.method === 'screen.stop')).toBe(true)
+    expect(wrapper.text()).not.toContain('拒绝')
+  })
+
+  it('adds the locked screen note without changing the stop action', async () => {
+    const { wrapper } = mountPage({ automatic: true, connection: 'online', state: 'running', registration: null, screen: screenState('locked') })
+    await flushPromises()
+    expect(wrapper.text()).toContain('正在远程查看本机画面')
+    expect(wrapper.text()).toContain('本机已锁屏，解锁后自动恢复')
+    expect(button(wrapper, '停止查看').exists()).toBe(true)
+  })
+
+  it('turns the banner yellow while waiting for server confirmation and explains the auto stop', async () => {
+    const { wrapper, requests } = mountPage({ automatic: true, connection: 'online', state: 'running', registration: null, screen: screenState('renewing') })
+    await flushPromises()
+    const banner = wrapper.get('.inline-notice.warning')
+    expect(banner.text()).toContain('已 12 秒没有收到服务器确认')
+    expect(banner.text()).toContain('超过 30 秒会自动停止')
+    expect(banner.text()).toContain('不会影响这台电脑上的任务')
+    await button(wrapper, '停止查看').trigger('click'); await flushPromises()
+    expect(requests.some(request => request.method === 'screen.stop')).toBe(true)
+  })
+
+  it('marks the degraded quality title and keeps the task unaffected note', async () => {
+    const { wrapper } = mountPage({ automatic: true, connection: 'online', state: 'running', registration: null, screen: screenState('streaming', { degraded: true }) })
+    await flushPromises()
+    expect(wrapper.text()).toContain('正在远程查看本机画面（已降低画质）')
+    expect(wrapper.text()).toContain('任务不受影响')
+  })
+
+  it('removes the banner once the screen session ends', async () => {
+    vi.useFakeTimers()
+    try {
+      const { wrapper, port, options } = mountPage({ automatic: true, connection: 'online', state: 'running', registration: null, screen: screenState('streaming') })
+      await flushPromises()
+      expect(wrapper.text()).toContain('正在远程查看本机画面')
+      options.screen = null
+      options.revision = 2
+      vi.mocked(port.observe).mock.calls[0]![0]({ event: 'state_changed', instance_id: 'host-one', revision: 2 })
+      await vi.advanceTimersByTimeAsync(101); await flushPromises()
+      expect(wrapper.text()).not.toContain('正在远程查看本机画面')
+      expect(wrapper.text()).not.toContain('停止查看')
+    } finally { vi.useRealTimers() }
   })
 })

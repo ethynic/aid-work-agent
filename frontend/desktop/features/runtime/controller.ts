@@ -272,6 +272,10 @@ export class RuntimeController {
       }
     } finally { if (generation === this.generation) this.view.busy = false }
   }
+  /** 本机停止/拒绝画面查看（契约 2.25）：走既有变更通道，mutate 自动补 request_key；可重复调用 */
+  async stopScreen(sessionId: string) {
+    await this.mutate('screen.stop', { session_id: sessionId })
+  }
   async importPackage() {
     if (!this.supportsPlugins || !this.view.connected || this.view.busy || this.recovery.busy || this.intent || this.view.operation?.status === 'running') return
     const generation = this.generation

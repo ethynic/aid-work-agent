@@ -27,6 +27,20 @@
           <button v-if="view.state?.device && ['starting', 'running', 'reconciling'].includes(view.state.state)" type="button" class="runtime-secondary" :disabled="cannotStop" @click="controller.mutate('stop')">停止执行</button>
         </div>
       </div>
+      <!-- 契约 2.25：本机画面横幅（设计 §10）。「拒绝」「停止查看」都发起 screen.stop，Host 按阶段区分 rejected/stopped -->
+      <div v-if="view.state?.screen" :class="['inline-notice', view.state.screen.state === 'renewing' ? 'warning' : 'error']" role="alert">
+        <template v-if="view.state.screen.state === 'connecting'">
+          <p>收到远程查看请求，正在建立连接。此时尚未采集画面，拒绝后不会开始。</p>
+          <div class="runtime-actions runtime-screen-actions"><button type="button" class="runtime-secondary" :disabled="view.busy || recovery.busy" @click="stopScreen">拒绝</button></div>
+        </template>
+        <template v-else>
+          <p>{{ screenTitle }}{{ screenTiming }}</p>
+          <p v-if="view.state.screen.state === 'renewing'">已 {{ view.state.screen.seconds_since_renewal ?? 0 }} 秒没有收到服务器确认，超过 30 秒会自动停止画面。自动停止的只是画面，不会影响这台电脑上的任务。</p>
+          <p v-if="view.state.screen.state === 'locked'">本机已锁屏，解锁后自动恢复。</p>
+          <div class="runtime-actions runtime-screen-actions"><button type="button" class="runtime-secondary" :disabled="view.busy || recovery.busy" @click="stopScreen">停止查看</button></div>
+        </template>
+        <p v-if="view.state.screen.degraded">本机正在执行任务、资源不足，已降低画面画质；任务不受影响。</p>
+      </div>
       <p v-if="recovery.error" class="field-error" role="alert">{{ recovery.error }}</p>
       <p v-if="recovery.newDevice && recovery.diagnosis?.service_verified" class="runtime-muted" role="status">{{ recovery.diagnosis.summary }}</p>
       <p v-if="recovery.diagnosis && !recovery.diagnosis.service_verified" class="runtime-muted">{{ recovery.diagnosis.summary }}</p>
@@ -197,6 +211,22 @@ async function retryConnection() {
   else if (controller.supportsRecovery) await controller.diagnoseConnection()
   else await controller.refresh()
 }
+// 画面横幅的时长按秒走（契约 2.25）；开始时间取自 host-state 的 started_at
+const screenNow = ref(Date.now())
+const screenTicker = setInterval(() => { screenNow.value = Date.now() }, 1000)
+onUnmounted(() => clearInterval(screenTicker))
+const screenTitle = computed(() => view.state?.screen?.degraded ? '正在远程查看本机画面（已降低画质）' : '正在远程查看本机画面')
+const screenTiming = computed(() => {
+  const startedAt = view.state?.screen?.started_at
+  if (!startedAt) return ''
+  const seconds = Math.max(0, Math.floor((screenNow.value - startedAt) / 1000))
+  const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+  return `，自 ${new Date(startedAt).toLocaleTimeString()} 起已观看 ${clock}`
+})
+async function stopScreen() {
+  const sessionId = view.state?.screen?.session_id
+  if (sessionId) await controller.stopScreen(sessionId)
+}
 const needsRecovery = computed(() => !!view.error || view.state?.state === 'blocked' || view.state?.state === 'reconciling' || view.state?.connection === 'revoked')
 const recoveryDetailsVisible = computed(() => recoveryExpanded.value || needsRecovery.value || recovery.busy || !!recovery.diagnosis || !!recovery.error)
 const recoveryMode = ref<ConnectionRecoveryInput['mode'] | ''>('')
@@ -209,7 +239,7 @@ const cannotStop = computed(() => !view.connected || view.busy || recovery.busy 
 const canPair = computed(() => controller.automaticConnection ? !recovery.busy && !view.busy && !view.connecting : !cannotAct.value && view.state?.state === 'stopped')
 const stateLabels = { stopped: '已停止', starting: '启动中', running: '运行中', draining: '收尾中', reconciling: '待核对', blocked: '已阻断' }
 const connectionLabels = { unpaired: '未配对', connecting: '连接中', online: '在线', offline: '离线', revoked: '授权已撤回' }
-const operationLabels = { start: '启动', stop: '停止', pair: '配对', import: '安装 / 升级', enable: '启用', disable: '停用', uninstall: '卸载' }
+const operationLabels = { start: '启动', stop: '停止', pair: '配对', import: '安装 / 升级', enable: '启用', disable: '停用', uninstall: '卸载', 'screen.stop': '停止画面查看' }
 const operationStatusLabels = { running: '处理中', succeeded: '已完成', failed: '失败', reconciling: '待核对' }
 async function pair() {
   if (!canPair.value) return
@@ -289,6 +319,7 @@ onUnmounted(() => { form.pairing_code = ''; recoveryForm.pairing_code = ''; cont
 @media (max-width: 760px) { .runtime-plugin-list > li { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 14px; }.runtime-plugin-state { grid-column: 1; }.runtime-plugin-actions { grid-column: 2; grid-row: 1 / span 2; } }
 @media (max-width: 480px) { .runtime-plugin-list > li { grid-template-columns: minmax(0, 1fr); }.runtime-plugin-actions { grid-column: 1; grid-row: auto; } }
 .runtime-page > .inline-notice { margin-top: 20px; }.runtime-plugin-list .inline-notice { margin-top: 14px; }
+.runtime-connection .inline-notice { margin-top: 14px; }.runtime-screen-actions { margin: 8px 0 0; }
 .runtime-operation-id { color: var(--d-text-muted); font: 11px var(--d-font-mono); overflow-wrap: anywhere; }
 .runtime-recovery-steps { padding-left: 24px; line-height: 1.8; overflow-wrap: anywhere; }.runtime-confirm { display: flex; align-items: center; gap: 8px; }
 @media (max-width: 620px) { .runtime-panel { padding: 16px; }.runtime-section-heading { align-items: flex-start; flex-direction: column; }.runtime-facts { grid-template-columns: 1fr; }.runtime-page { padding: 20px; } }
